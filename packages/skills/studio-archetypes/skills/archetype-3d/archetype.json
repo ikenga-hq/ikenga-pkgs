@@ -1,0 +1,28 @@
+{
+  "id": "archetype-3d",
+  "name": "3D Motion Graphics & Multi-View Anchor Archetype",
+  "version": "0.1.0",
+  "description": "Procedural 3D typography, beat-synced visualizer meshes, and multi-angle 3D character/anchor plates for Blender and fal.ai generation.",
+  "default_engine": "blender",
+  "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
+  "blocks": [
+    {
+      "id": "hook.3d-typography",
+      "kind": "hook",
+      "name": "3D Kinetic Title",
+      "default_renderer": "blender"
+    },
+    {
+      "id": "beat.3d-visualizer",
+      "kind": "beat",
+      "name": "Beat-Synced 3D Mesh",
+      "default_renderer": "blender"
+    },
+    {
+      "id": "anchor.3d-character-pack",
+      "kind": "anchor",
+      "name": "Multi-Angle 3D Character Anchors",
+      "default_renderer": "blender"
+    }
+  ]
+}

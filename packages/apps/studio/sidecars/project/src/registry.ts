@@ -16,9 +16,12 @@
 import { hyperframesAdapter } from './renderers/hyperframes.js';
 import { excalidrawAdapter } from './renderers/excalidraw.js';
 import { falAdapter } from './renderers/fal.js';
+import { BlenderAdapter } from './renderers/blender.js';
 import type { RendererAdapter } from './renderers/types.js';
 
-const ADAPTERS: RendererAdapter[] = [hyperframesAdapter, excalidrawAdapter, falAdapter];
+export const blenderAdapter = new BlenderAdapter();
+
+const ADAPTERS: RendererAdapter[] = [hyperframesAdapter, excalidrawAdapter, falAdapter, blenderAdapter];
 
 const BY_ID = new Map<string, RendererAdapter>(ADAPTERS.map((a) => [a.id, a]));
 
@@ -70,6 +73,8 @@ export function resolveEngine(contentPath: string): string {
       return 'hyperframes';
     case 'excalidraw':
       return 'excalidraw';
+    case 'blend':
+      return 'blender';
     case 'tsx':
       throw new EngineResolutionError('engine-not-available-in-p1', 'remotion is P2');
     case '':

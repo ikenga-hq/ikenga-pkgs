@@ -151,5 +151,38 @@ export function exportTools(sidecar: SidecarClient): ToolDef[] {
           platform: args.platform,
         }),
     },
+    {
+      name: 'export.davinci_timeline',
+      description:
+        'Export project timeline to DaVinci Resolve format (OpenTimelineIO .otio, FCPXML, or Python script). Quantizes cell durations into timecode frames, aligns video tracks with narration and music audio tracks, and includes clip metadata. Returns { ok:true, format, outputPath, clipCount }.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string' },
+          format: {
+            type: 'string',
+            enum: ['otio', 'fcpxml', 'python_script'],
+            description: 'Output format preset for DaVinci Resolve integration.',
+          },
+          outputPath: {
+            type: 'string',
+            description: 'Optional output filepath. Defaults to exports/timeline.<otio|fcpxml|py>.',
+          },
+          fps: {
+            type: 'number',
+            description: 'Target frame rate (default 24).',
+          },
+        },
+        required: ['projectId'],
+        additionalProperties: false,
+      },
+      handler: (args) =>
+        callSidecar(sidecar, 'export.davinci_timeline', {
+          projectId: args.projectId,
+          format: args.format || 'otio',
+          outputPath: args.outputPath,
+          fps: args.fps || 24,
+        }),
+    },
   ];
 }
