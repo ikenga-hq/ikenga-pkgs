@@ -1,6 +1,11 @@
 {
   "name": "@ikenga/pkg-meetings",
   "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/apps/meetings"
+  },
   "description": "Ikenga Meetings app: local recording controls, synchronized transcript player, and meeting intelligence.",
   "license": "Apache-2.0",
   "type": "module",

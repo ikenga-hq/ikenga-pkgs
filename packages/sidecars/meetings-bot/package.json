@@ -1,6 +1,11 @@
 {
   "name": "@ikenga/pkg-meetings-bot",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/sidecars/meetings-bot"
+  },
   "description": "Ikenga meeting recorder sidecar managing local own-machine capture, whisper.cpp STT engine, and Playwright bot runners.",
   "license": "Apache-2.0",
   "type": "module",

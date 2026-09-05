@@ -1,6 +1,11 @@
 {
   "name": "@ikenga/pkg-browser",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/sidecars/playwright-browser"
+  },
   "private": false,
   "description": "Playwright verb engine behind Ikenga's /iyke/browser/* contract \u2014 replaces the Rust chromiumoxide Chrome engine (ADR-018). Managed (dedicated profile) + Attach (everyday Chrome via the official Playwright extension).",
   "license": "Apache-2.0",

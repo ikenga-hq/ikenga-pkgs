@@ -1,6 +1,11 @@
 {
   "name": "@ikenga/mcp-meetings",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/mcp/meetings"
+  },
   "mcpName": "dev.ikenga/mcp-meetings",
   "description": "Model Context Protocol (MCP) server for querying meeting transcripts, search, summaries, and recording controls.",
   "license": "Apache-2.0",
