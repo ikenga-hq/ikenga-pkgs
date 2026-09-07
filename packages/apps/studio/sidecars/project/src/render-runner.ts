@@ -50,6 +50,14 @@ import {
   resolveEngineWithRequest,
 } from './registry.js';
 import type { RenderContext, RenderOptions } from './renderers/types.js';
+import { resolveVideoModel } from './renderers/fal.js';
+import {
+  reserve as reserveSpend,
+  settle as settleSpend,
+  voidEntry as voidSpend,
+  voidByRef as voidSpendByRef,
+  voidOrphanedReservations,
+} from './spend.js';
 
 type Db = Parameters<typeof markStarted>[0];
 
@@ -63,6 +71,13 @@ export interface ProjectLookup {
   aspectRatio(projectId: string): AspectRatio | undefined;
   /** Project-default resolution (already derived from aspect when absent on disk). */
   resolution(projectId: string): { w: number; h: number } | undefined;
+  /**
+   * The open project document's `metadata` bag — the spend gate reads the
+   * hand-authored `spend_ceiling_usd` out of it (WP-12). Optional so existing
+   * lookups (the exporter's) keep type-checking without one; a missing
+   * implementation just falls back to the built-in default ceiling.
+   */
+  projectMetadata?(projectId: string): Record<string, unknown> | undefined;
 }
 
 export interface RenderRunnerDeps {
@@ -74,11 +89,35 @@ export interface RenderRunnerDeps {
 export interface EnqueueOptions extends RenderOptions {
   engine?: string;
   range?: { start_ms?: number; end_ms?: number };
+  /**
+   * WP-12 — the `spend_ledger` reservation this render owns, when it is on a
+   * metered engine. Written into the queue row's `options` blob at enqueue and
+   * read back by `runOne` to settle (on success) or void (on failure/cancel).
+   * Absent for free engines, which never reserve.
+   */
+  spend_entry_id?: string;
 }
 
 export type EnqueueResult =
-  | { ok: true; recordId: string; engine: string }
-  | { ok: false; error: string; message?: string };
+  | { ok: true; recordId: string; engine: string; spend?: SpendDisclosure }
+  | { ok: false; error: string; message?: string; spend?: SpendDisclosure };
+
+/**
+ * What a paid enqueue discloses about the ledger — returned on BOTH arms.
+ *
+ * On success it is the receipt ("this shot reserved $0.56; $18.20 left"); on a
+ * `spend-ceiling-exceeded` refusal it is the evidence. Present only for
+ * metered engines: a Blender or HyperFrames render costs nothing and gets no
+ * ledger row, so it gets no disclosure either.
+ */
+export interface SpendDisclosure {
+  estimate_usd: number;
+  basis: string;
+  ceiling_usd: number;
+  ceiling_source: 'env' | 'project' | 'default';
+  committed_usd: number;
+  remaining_usd: number;
+}
 
 export interface IngestExternalOptions {
   /** Path to the mp4/png the filmmaker produced and dropped on disk. */
@@ -128,6 +167,13 @@ export class RenderRunner {
    */
   recover(): void {
     reapOrphanRenderPids();
+    // WP-12 — release reservations belonging to rows we are about to requeue.
+    // Those rows will re-reserve when they run, so leaving the old entries
+    // `reserved` would double-count them against the ceiling permanently: a
+    // project could be strangled by nothing but a history of crashes. Must run
+    // BEFORE the running → queued flip below, since it selects on the very
+    // statuses that flip is about to rewrite.
+    voidOrphanedReservations(this.db);
     const rows = listQueue(this.db);
     for (const row of rows) {
       if (row.status === 'running') {
@@ -210,6 +256,49 @@ export class RenderRunner {
     }
 
     const recordId = randomUUID();
+
+    // WP-12 — the spend gate. Metered engines only: `requires_network` is the
+    // same bit registry.ts uses for the auto-resolution consent guard, so a
+    // future Veo/Runway/Kling adapter is covered here the day it is registered
+    // without touching this call site.
+    //
+    // The gate runs at ENQUEUE, not in the drain loop, for the same reason the
+    // G2 capability check does: a render that must not happen should never
+    // become a queued row. It also means a 14-shot batch is priced as a batch —
+    // shot 9 sees shots 1–8 already reserved and refuses, rather than all 14
+    // sailing through because none of them has billed yet.
+    let spend: SpendDisclosure | undefined;
+    let spendEntryId: string | undefined;
+    if (adapter.capabilities.requires_network) {
+      const reservation = reserveSpend(this.db, {
+        projectId,
+        refId: recordId,
+        kind: 'render',
+        engine,
+        // Priced against the same id the adapter will actually call, resolved
+        // through fal's own override chain so the gate and the invoice agree.
+        model_id: resolveVideoModel(cell, { variant: opts.variant }),
+        projectMetadata: this.lookup.projectMetadata?.(projectId),
+        resolution: opts.resolution ?? this.lookup.resolution(projectId),
+        durationMs: durationMs ?? cell.duration_ms,
+      });
+      spend = {
+        estimate_usd: reservation.estimate_usd,
+        basis: reservation.basis,
+        ceiling_usd: reservation.ceiling_usd,
+        ceiling_source: reservation.ceiling_source,
+        committed_usd: reservation.committed_usd,
+        remaining_usd: reservation.remaining_usd,
+      };
+      if (!reservation.ok) {
+        // Terminal. No queue row is written, and there is no argument the
+        // caller can change to get past this — raising the ceiling is a human
+        // act (project metadata or STUDIO_SPEND_CEILING_USD).
+        return { ok: false, error: reservation.error, message: reservation.message, spend };
+      }
+      spendEntryId = reservation.entryId;
+    }
+
     dbEnqueue(this.db, {
       recordId,
       projectId,
@@ -220,10 +309,13 @@ export class RenderRunner {
         resolution: opts.resolution,
         variant: opts.variant,
         range: opts.range,
+        // Carried in the options blob so `runOne` can settle or void the
+        // reservation without a second lookup keyed on record_id.
+        spend_entry_id: spendEntryId,
       },
     });
     this.kick();
-    return { ok: true, recordId, engine };
+    return { ok: true, recordId, engine, spend };
   }
 
   status(recordId: string): { ok: true; record: RenderQueueRow } | { ok: false; error: string; message?: string } {
@@ -248,6 +340,11 @@ export class RenderRunner {
       ctrl.abort();
     } else {
       // Still queued — mark cancelled directly so the worker skips it.
+      // Release its spend reservation too (WP-12): this row will never reach
+      // `runOne`, so nothing else would ever give the budget back. Voiding by
+      // `ref_id` rather than parsing the options blob keeps this path honest
+      // even for a row whose options are malformed.
+      voidSpendByRef(this.db, recordId);
       markDone(this.db, recordId, 'cancelled');
       this.emitDone(row, 'cancelled');
     }
@@ -477,8 +574,24 @@ export class RenderRunner {
   }
 
   private async runOne(row: RenderQueueRow): Promise<void> {
+    // Parsed FIRST so every failure path below — including the two that bail
+    // before an adapter or project is resolved — can release this row's spend
+    // reservation (WP-12). A reservation that outlives its render is budget
+    // held against work that will never bill.
+    let opts: EnqueueOptions = {};
+    try {
+      opts = JSON.parse(row.options) as EnqueueOptions;
+    } catch {
+      opts = {};
+    }
+    /** Release this row's reservation, if it has one. Safe to call twice. */
+    const releaseSpend = (): void => {
+      if (opts.spend_entry_id) voidSpend(this.db, opts.spend_entry_id);
+    };
+
     const adapter = getAdapter(row.engine);
     if (!adapter) {
+      releaseSpend();
       markDone(this.db, row.record_id, 'failed', { error: `no adapter for ${row.engine}` });
       this.emitDone(row, 'failed', undefined, `no adapter for ${row.engine}`);
       return;
@@ -487,17 +600,11 @@ export class RenderRunner {
     const root = this.lookup.projectRoot(row.project_id);
     const cell = this.lookup.cell(row.project_id, row.cell_id);
     if (!root || !cell) {
+      releaseSpend();
       const msg = !root ? 'project not open' : `cell ${row.cell_id} not found`;
       markDone(this.db, row.record_id, 'failed', { error: msg });
       this.emitDone(row, 'failed', undefined, msg);
       return;
-    }
-
-    let opts: EnqueueOptions = {};
-    try {
-      opts = JSON.parse(row.options) as EnqueueOptions;
-    } catch {
-      opts = {};
     }
 
     const aspect: AspectRatio = opts.aspect_ratio ?? this.lookup.aspectRatio(row.project_id) ?? '16:9';
@@ -574,6 +681,10 @@ export class RenderRunner {
         }),
         variant: record.variant,
       });
+      // WP-12 — reconcile the reservation. `record.cost_actual` is usually
+      // undefined (fal rarely reports a cost), in which case the entry settles
+      // at its estimate rather than collapsing to zero — see spend.ts `totals`.
+      if (opts.spend_entry_id) settleSpend(this.db, opts.spend_entry_id, record.cost_actual);
       this.emitDone(row, 'done', outputPath);
       // Best-effort poster extraction (Issue 3): write a single PNG frame next
       // to the mp4 so Canvas tiles + Composition clips can show a real
@@ -583,6 +694,13 @@ export class RenderRunner {
         try { await extractPoster(outputPath); } catch { /* best-effort */ }
       }
     } catch (e) {
+      // WP-12 — a render that threw or was cancelled gives its reservation
+      // back. Best-effort and deliberately unconditional across both branches:
+      // the honest default for work that did not complete is that it did not
+      // bill. A provider that charged for a failed job would show up as an
+      // invoice/ledger gap, which is the right place to notice it — far better
+      // than permanently holding budget for every failed experiment.
+      releaseSpend();
       const cancelled = (e as Error & { cancelled?: boolean }).cancelled === true || controller.signal.aborted;
       if (cancelled) {
         markDone(this.db, row.record_id, 'cancelled');

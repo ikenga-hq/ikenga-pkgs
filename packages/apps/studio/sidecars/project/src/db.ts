@@ -132,6 +132,35 @@ const MIGRATIONS: string[] = [
    );
    CREATE UNIQUE INDEX IF NOT EXISTS project_session_path_idx ON project_session(path);
    CREATE INDEX IF NOT EXISTS project_session_open_idx ON project_session(closed_at);`,
+  // WP-12 / Plan 16 D-b — the spend ledger behind the paid-render ceiling.
+  //
+  // A separate table rather than a column on `render_queue`, for two reasons.
+  // First, not every paid call is a queued render: `anchor.generate` bills fal
+  // for a still and never inserts a queue row at all, and it is exactly that
+  // door the Round-3 experiments spent through. Second, the ledger's lifecycle
+  // is its own — reserve at call time, settle or void at completion — and does
+  // not match the queue row's, which has no state for "money committed but the
+  // job hasn't started".
+  //
+  // `estimate_usd` is always populated; `actual_usd` is the provider's reported
+  // figure and is usually NULL (fal rarely returns one), which is why every sum
+  // over this table reads COALESCE(actual_usd, estimate_usd). See spend.ts.
+  `CREATE TABLE IF NOT EXISTS spend_ledger (
+     entry_id     TEXT PRIMARY KEY,
+     project_id   TEXT NOT NULL,
+     ref_id       TEXT,
+     kind         TEXT NOT NULL CHECK (kind IN ('render','still')),
+     engine       TEXT NOT NULL,
+     model_id     TEXT,
+     estimate_usd REAL NOT NULL,
+     actual_usd   REAL,
+     state        TEXT NOT NULL CHECK (state IN ('reserved','settled','void')),
+     basis        TEXT,
+     created_at   INTEGER NOT NULL,
+     settled_at   INTEGER
+   );
+   CREATE INDEX IF NOT EXISTS spend_ledger_project_idx ON spend_ledger(project_id, state);
+   CREATE INDEX IF NOT EXISTS spend_ledger_ref_idx     ON spend_ledger(ref_id);`,
 ];
 
 export function resolvePkgDataDir(): string {

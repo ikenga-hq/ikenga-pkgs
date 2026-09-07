@@ -188,6 +188,7 @@ const EXTENDED_METHODS = new Set<string>([
   'render.read_poster',
   'render.list_posters',
   'render.ingest_external',
+  'spend.status',
   'export.compose',
   'export.status',
   'export.list',

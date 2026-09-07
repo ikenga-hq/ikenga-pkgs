@@ -150,6 +150,8 @@ export type RpcMethod =
   | 'render.read_poster'
   | 'render.list_posters'
   | 'render.ingest_external'
+  // spend.* (WP-12 / Plan 16 D-b) — read-only; there is deliberately no set_ceiling
+  | 'spend.status'
   // export.* (WP-07c / G-38)
   | 'export.compose'
   | 'export.status'

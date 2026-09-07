@@ -106,8 +106,15 @@ function resolveOutputPath(cell: Cell, ctx: RenderContext): string {
   return join(dir, `${cell.uid}.${suffix}.mp4`);
 }
 
-/** Resolve the video model id (call override → cell metadata → env → default). */
-function resolveVideoModel(
+/**
+ * Resolve the video model id (call override → cell metadata → env → default).
+ *
+ * Exported so the spend gate (spend.ts, via RenderRunner.enqueue) can price a
+ * render BEFORE dispatching it. The gate calls this without `flags` — it only
+ * needs the pricing tier, and the i2v/t2v suffix does not change the rate —
+ * so the two call sites can never disagree about which model is being billed.
+ */
+export function resolveVideoModel(
   cell: Cell,
   opts: RenderOptions,
   flags?: { hasImage?: boolean },

@@ -36,6 +36,7 @@ import {
 } from '@ikenga/studio-schema';
 
 import { describeDb, openDb } from './db.js';
+import { status as spendStatus } from './spend.js';
 import {
   CellLRU,
   enqueue,
@@ -284,6 +285,11 @@ function buildHandlers(db: Db): BuiltHandlers {
       const p = open.get(projectId)?.project;
       return p ? defaultResolution(p) : undefined;
     },
+    // WP-12 — where the hand-authored `spend_ceiling_usd` lives. Read from the
+    // in-memory project document, so editing storyboard.json and reopening the
+    // project takes effect without a sidecar restart.
+    projectMetadata: (projectId) =>
+      open.get(projectId)?.project.metadata as Record<string, unknown> | undefined,
   };
 
   const runner = new RenderRunner({ db, lookup, writer: stdoutEventWriter });
@@ -486,6 +492,13 @@ function buildHandlers(db: Db): BuiltHandlers {
           prompt: params.prompt as string,
           seed: params.seed as number | undefined,
           model: params.model as string | undefined,
+          // WP-12 — this is a metered fal call; it goes through the same
+          // ledger and the same ceiling as a queued render.
+          spend: {
+            db,
+            projectId: params.projectId as string,
+            projectMetadata: lookup.projectMetadata?.(params.projectId as string),
+          },
         });
         if (r.project) syncOpenProject(params.projectId as string, r.project);
         return r.result;
@@ -550,6 +563,21 @@ function buildHandlers(db: Db): BuiltHandlers {
           model_id: params.model_id as string | undefined,
           cost_actual: params.cost_actual as number | undefined,
         });
+
+      // ── spend.* (WP-12 / Plan 16 D-b) ──
+      //
+      // Read-only by design. There is no `spend.set_ceiling` verb and there
+      // must not be one: a ceiling an agent can raise is not a ceiling. The
+      // two ways to change it are both human acts — edit
+      // `metadata.spend_ceiling_usd` in the project's storyboard.json, or set
+      // STUDIO_SPEND_CEILING_USD in the sidecar's environment.
+      case 'spend.status':
+        return spendStatus(
+          db,
+          params.projectId as string,
+          lookup.projectMetadata?.(params.projectId as string),
+          typeof params.limit === 'number' ? params.limit : undefined,
+        );
 
       // ── export.* (WP-07c / G-38) ──
       case 'export.compose':
