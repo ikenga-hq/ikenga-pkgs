@@ -163,7 +163,12 @@ export async function openDb(dbPath?: string, driver?: DbDriver): Promise<Databa
       const { Database: BunDb } = await import('bun:sqlite');
       db = new BunDb(target) as unknown as Database;
     } else {
-      // Dynamic import so this module is typecheck-safe even before deps are installed
+      // Dynamic import so this module is typecheck-safe even before deps are installed.
+      // The @ts-ignore is load-bearing, not decoration: better-sqlite3 was dropped
+      // from package.json by the Bun migration (7e068a6), so without it `tsc` fails
+      // with TS2307 on any machine where a transitive copy doesn't happen to be
+      // present. Matches the bun:sqlite branch above, which already has one.
+      // @ts-ignore better-sqlite3 is an optional Node-only fallback, not a declared dep
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mod: any = await import('better-sqlite3');
       const Ctor = mod.default ?? mod;

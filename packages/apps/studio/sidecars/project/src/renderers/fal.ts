@@ -271,17 +271,101 @@ async function resolveImageRefUrl(cell: Cell, ctx: RenderContext): Promise<Image
 }
 
 /**
+ * Upload one project-local file and return a fetchable url. `http(s)` passes
+ * through untouched. Shares the path-resolution convention with
+ * `resolveImageRefUrl`: an assets-relative id first, then project-root
+ * relative, then absolute / `file://`.
+ */
+async function uploadLocalRef(uri: string, ctx: RenderContext): Promise<string> {
+  if (/^https?:\/\//i.test(uri)) return uri;
+
+  let abs: string;
+  if (uri.startsWith('file://')) abs = fileURLToPath(uri);
+  else if (isAbsolute(uri)) abs = uri;
+  else {
+    const underAssets = resolve(ctx.projectRoot, 'assets', uri);
+    abs = existsSync(underAssets) ? underAssets : resolve(ctx.projectRoot, uri);
+  }
+  if (!existsSync(abs)) {
+    throw new Error(`fal_upload reference not found on disk: ${uri}`);
+  }
+  const ext = abs.toLowerCase().split('.').pop() ?? '';
+  const mime =
+    ext === 'png' ? 'image/png'
+    : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+    : ext === 'mp4' ? 'video/mp4'
+    : 'application/octet-stream';
+  return fal.storage.upload(new Blob([readFileSync(abs)], { type: mime }));
+}
+
+/**
+ * Resolve `metadata.fal_upload` — a map of *input field name* → *project-local
+ * path* — into a map of field name → fetchable url.
+ *
+ * **Why this exists.** `metadata.fal_input` already lets a cell pass verbatim
+ * fields to any fal endpoint, which is what keeps this adapter model-agnostic
+ * as endpoint shapes drift. But verbatim only works for values that are
+ * already URLs, and the whole Blender-authored workflow produces LOCAL files:
+ * a rendered plate, a mask derived from a stand-in, a keyframe. `fal_upload`
+ * closes that gap without the adapter having to know what any particular
+ * endpoint's fields mean.
+ *
+ * That generality is deliberate — it makes every shape we proved reachable
+ * from a cell with no further adapter work:
+ *
+ *   inpaint          { image_url: <plate>, mask_url: <mask> }
+ *   first+last frame { start_image_url: <first>, end_image_url: <last> }
+ *   video inpaint    { video_url: <slate>, mask_video_url: <mask slate> }
+ *
+ * Uploads run in parallel; a single failure fails the render rather than
+ * silently downgrading, because these fields are load-bearing (a mask that
+ * quietly goes missing produces a plausible-looking wrong shot, and this lane
+ * spends real money per attempt).
+ */
+async function resolveUploadMap(
+  cell: Cell,
+  ctx: RenderContext,
+): Promise<Record<string, string>> {
+  const spec = (cell.metadata as Record<string, unknown> | undefined)?.fal_upload;
+  if (!spec || typeof spec !== 'object') return {};
+
+  const entries = Object.entries(spec as Record<string, unknown>).filter(
+    (e): e is [string, string] => typeof e[1] === 'string' && e[1].length > 0,
+  );
+  const urls = await Promise.all(entries.map(([, uri]) => uploadLocalRef(uri, ctx)));
+  return Object.fromEntries(entries.map(([field], i) => [field, urls[i]!]));
+}
+
+/**
+ * Read `metadata.fal_loras` — the identity mechanism.
+ *
+ * A character LoRA is the only thing that reliably holds one person across
+ * shots; a fixed seed does not (it controls noise, not subject, so a changed
+ * conditioning image re-invents the character). LoRAs are family-bound: a FLUX
+ * LoRA applies to FLUX endpoints only, and most video endpoints accept none —
+ * which is why the working pipeline puts the LoRA in the *keyframes* and lets
+ * a video model interpolate between them.
+ */
+export function readLoras(cell: Cell): Array<Record<string, unknown>> | undefined {
+  const raw = (cell.metadata as Record<string, unknown> | undefined)?.fal_loras;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return raw.filter((l): l is Record<string, unknown> => !!l && typeof l === 'object');
+}
+
+/**
  * Build the fal model input. Field names are model-dependent and drift; these
  * are the common fal video-model fields. Unknown fields a given model doesn't
  * accept are ignored server-side / surfaced as a validation error the caller
  * sees as a failed render.
  */
-function buildVideoInput(args: {
+export function buildVideoInput(args: {
   cell: Cell;
   imageUrl?: string;
   aspect?: AspectRatio;
+  /** Field → url from `metadata.fal_upload`, already uploaded. */
+  uploads?: Record<string, string>;
 }): Record<string, unknown> {
-  const { cell, imageUrl, aspect } = args;
+  const { cell, imageUrl, aspect, uploads } = args;
   const input: Record<string, unknown> = { prompt: cell.prompt };
   const negative = readNegativePrompt(cell);
   if (negative) input.negative_prompt = negative;
@@ -302,6 +386,16 @@ function buildVideoInput(args: {
   if (extra && typeof extra === 'object') {
     Object.assign(input, extra as Record<string, unknown>);
   }
+
+  // Identity, then uploaded refs. Uploads land LAST so a resolved local file
+  // always wins over a same-named literal in `fal_input` — otherwise a stale
+  // hand-written url would silently shadow the plate the pipeline just
+  // rendered, which is the worst kind of wrong: it renders, it costs money,
+  // and it looks plausible.
+  const loras = readLoras(cell);
+  if (loras) input.loras = loras;
+  if (uploads) Object.assign(input, uploads);
+
   return input;
 }
 
@@ -397,10 +491,16 @@ export const falAdapter: RendererAdapter = {
         },
       });
     }
+    // Blender-authored refs (plate / mask / first + last keyframe / slate).
+    // Unlike the anchor image above, a failure here is FATAL: these fields are
+    // load-bearing, and a render that quietly proceeds without its mask or its
+    // end keyframe produces a plausible-looking wrong shot at full cost.
+    const uploads = await resolveUploadMap(cell, ctx);
+
     // Resolve the model AFTER the image ref so image-to-video can switch to the
     // i2v sibling endpoint (see resolveVideoModel).
     const model = resolveVideoModel(cell, opts, { hasImage: !!imageUrl });
-    const input = buildVideoInput({ cell, imageUrl, aspect });
+    const input = buildVideoInput({ cell, imageUrl, aspect, uploads });
 
     const outPath = resolveOutputPath(cell, ctx);
 
@@ -518,6 +618,14 @@ export const falAdapter: RendererAdapter = {
         request_id: requestId,
         elapsed_ms: finishedAtMs - startedAtMs,
         ...(imageRef.uploadError ? { image_ref_error: imageRef.uploadError } : {}),
+        // Which Blender-authored refs and which identity LoRA produced this
+        // shot. Recorded by FIELD NAME (source paths, not the throwaway upload
+        // urls) so a render is reconstructable months later — a fal storage url
+        // expires, `renders/blender/hifi/shot-01_first.png` does not.
+        ...(Object.keys(uploads).length
+          ? { fal_uploads: (cell.metadata as Record<string, unknown>)?.fal_upload }
+          : {}),
+        ...(readLoras(cell) ? { loras: readLoras(cell) } : {}),
       },
     };
     return record;
