@@ -97,13 +97,84 @@ async function resolveKey(ctx: RenderContext): Promise<string | undefined> {
 }
 
 /** Resolve a unique output path under `rendersDir/fal/<rungDir>/`. */
-function resolveOutputPath(cell: Cell, ctx: RenderContext): string {
+function resolveOutputPath(cell: Cell, ctx: RenderContext, kind: FalOutputKind = 'video'): string {
   const dir = join(ctx.rendersDir, 'fal', rungDir(cell.rung));
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const base = join(dir, `${cell.uid}.mp4`);
+  // The extension is decided BEFORE the call, from the resolved kind — not
+  // sniffed from the response afterwards. By the time a response arrives the
+  // job has billed, so an output path that only becomes correct in hindsight
+  // is not a recovery, it is a receipt.
+  const ext = kind === 'still' ? 'png' : 'mp4';
+  const base = join(dir, `${cell.uid}.${ext}`);
   if (!existsSync(base)) return base;
   const suffix = randomUUID().slice(0, 8);
-  return join(dir, `${cell.uid}.${suffix}.mp4`);
+  return join(dir, `${cell.uid}.${suffix}.${ext}`);
+}
+
+/**
+ * What a cell's fal render PRODUCES — a moving clip, or a single frame.
+ *
+ * Mode C needs both from this one adapter. A shot is three fal calls: two FLUX
+ * inpaints that paint the character into the start and end plates, then one
+ * Kling O1 that interpolates between the two frames those produced. Before
+ * this existed the adapter could only do the third — it resolved a video model,
+ * called `extractVideoUrl` on the response and wrote `<cell>.mp4` — so a cell
+ * pointed at `fal-ai/flux-lora/inpainting` would call the endpoint, BILL, get
+ * back `images[0].url`, and then fail extracting a video url from it.
+ *
+ * Resolution order is explicit-first because guessing from a model id is how
+ * you get a wrong answer that costs money:
+ *   1. `cell.metadata.fal_output` — 'still' | 'video', always wins
+ *   2. inferred from the resolved model id (the patterns below)
+ *   3. 'video' — the prior behaviour, so existing cells are unaffected
+ */
+export type FalOutputKind = 'still' | 'video';
+
+/** Endpoint families that return an image rather than a clip. */
+const STILL_MODEL_PATTERNS = [
+  /\/inpainting(\/|$)/,
+  /\/fill(\/|$)/,
+  /\/edit(\/|$)/,
+  /^fal-ai\/flux(-|\/)/,
+  /seedream/,
+];
+
+function inferKind(model: string): FalOutputKind {
+  // A model that names an explicit video endpoint is video regardless of family
+  // — `fal-ai/flux-...-to-video` must not be caught by the flux pattern.
+  if (/(^|\/)(image|video|text)-to-video(\/|$)/.test(model)) return 'video';
+  return STILL_MODEL_PATTERNS.some((re) => re.test(model)) ? 'still' : 'video';
+}
+
+/**
+ * Resolve BOTH the model id and what it produces, in one place.
+ *
+ * Single entry point on purpose: the spend gate prices a render before
+ * dispatch (spend.ts, via RenderRunner.enqueue) and the adapter dispatches it.
+ * If those two resolved the model differently, the ledger would bill one
+ * endpoint and the invoice would show another — so both call this.
+ */
+export function resolveFalModel(
+  cell: Cell,
+  opts: RenderOptions,
+  flags?: { hasImage?: boolean },
+): { model: string; kind: FalOutputKind } {
+  const meta = cell.metadata as Record<string, unknown> | undefined;
+  const declared = meta?.fal_output;
+  const explicit: FalOutputKind | undefined =
+    declared === 'still' || declared === 'video' ? declared : undefined;
+
+  // A still never wants the image-to-video auto-switch, and its default model
+  // is the image default rather than the video one.
+  if (explicit === 'still') {
+    const override = opts.variant || (typeof meta?.fal_model === 'string' ? meta.fal_model : '')
+      || process.env.FAL_IMAGE_MODEL || '';
+    const raw = override || FAL_IMAGE_MODEL_DEFAULT;
+    return { model: raw.includes('/') ? raw : `fal-ai/${raw}`, kind: 'still' };
+  }
+
+  const model = resolveVideoModel(cell, opts, flags);
+  return { model, kind: explicit ?? inferKind(model) };
 }
 
 /**
@@ -371,18 +442,26 @@ export function buildVideoInput(args: {
   aspect?: AspectRatio;
   /** Field → url from `metadata.fal_upload`, already uploaded. */
   uploads?: Record<string, string>;
+  /** 'still' suppresses the anchor image_url — see below. */
+  kind?: FalOutputKind;
 }): Record<string, unknown> {
-  const { cell, imageUrl, aspect, uploads } = args;
+  const { cell, imageUrl, aspect, uploads, kind = 'video' } = args;
   const input: Record<string, unknown> = { prompt: cell.prompt };
   const negative = readNegativePrompt(cell);
   if (negative) input.negative_prompt = negative;
-  if (imageUrl) input.image_url = imageUrl;
+  // The anchor's image_url conditions a video render. On an INPAINT it would
+  // collide with `fal_upload`'s own image_url (the plate) — and uploads land
+  // last, so the plate would win silently while the anchor did nothing. Leaving
+  // it off makes the plate the only thing that can occupy that field.
+  if (imageUrl && kind !== 'still') input.image_url = imageUrl;
   if (typeof cell.seed === 'number') input.seed = cell.seed;
   // aspect_ratio is honored by text-to-video models but REJECTED by the
   // image-to-video sibling (which derives framing from the image), so only set
   // it for text-to-video renders. A cell can still force the field verbatim via
   // metadata.fal_input if a specific i2v model needs it.
-  if (!imageUrl && aspect) input.aspect_ratio = aspect;
+  // Stills derive their framing from the plate they are painting into, so an
+  // aspect_ratio here is at best ignored and at worst a 422.
+  if (!imageUrl && aspect && kind !== 'still') input.aspect_ratio = aspect;
   // Model-specific extras (aspect_ratio / duration / num_frames / start_image_url …)
   // differ per fal model and a *hard 422* on an unaccepted field is common — e.g.
   // `fal-ai/ltx-video/image-to-video` rejects both aspect_ratio and duration (it
@@ -506,10 +585,10 @@ export const falAdapter: RendererAdapter = {
 
     // Resolve the model AFTER the image ref so image-to-video can switch to the
     // i2v sibling endpoint (see resolveVideoModel).
-    const model = resolveVideoModel(cell, opts, { hasImage: !!imageUrl });
-    const input = buildVideoInput({ cell, imageUrl, aspect, uploads });
+    const { model, kind } = resolveFalModel(cell, opts, { hasImage: !!imageUrl });
+    const input = buildVideoInput({ cell, imageUrl, aspect, uploads, kind });
 
-    const outPath = resolveOutputPath(cell, ctx);
+    const outPath = resolveOutputPath(cell, ctx, kind);
 
     // Never submit a fal job after the signal already aborted. The simple
     // subscribe API submits (and bills) server-side on call, and ctx.signal is
@@ -582,16 +661,21 @@ export const falAdapter: RendererAdapter = {
       });
     }
 
-    const videoUrl = extractVideoUrl(res.data);
-    if (!videoUrl) {
+    // A still model returns `images[0].url`; a video model returns `video.url`.
+    // Pulling the wrong one out is not a soft failure — the job has already
+    // billed by this point — so the error names which kind was expected.
+    const mediaUrl = kind === 'still' ? extractImageUrl(res.data) : extractVideoUrl(res.data);
+    if (!mediaUrl) {
       throw new Error(
-        `[fal] model ${model} returned no video url (data keys: ${Object.keys(
-          (res.data as Record<string, unknown>) ?? {},
-        ).join(', ') || 'none'})`,
+        `[fal] model ${model} returned no ${kind === 'still' ? 'image' : 'video'} url ` +
+          `(resolved kind: ${kind}; data keys: ${Object.keys(
+            (res.data as Record<string, unknown>) ?? {},
+          ).join(', ') || 'none'}). ` +
+          `If this model produces the other kind, set cell.metadata.fal_output.`,
       );
     }
 
-    await downloadTo(videoUrl, outPath, ctx.signal);
+    await downloadTo(mediaUrl, outPath, ctx.signal);
     if (!existsSync(outPath) || statSync(outPath).size === 0) {
       throw new Error(`[fal] downloaded output missing or empty at ${outPath}`);
     }
@@ -609,7 +693,7 @@ export const falAdapter: RendererAdapter = {
       engine_version: undefined,
       variant: opts.variant ?? 'default',
       status: 'done',
-      output: { uri: outPath, mime: 'video/mp4' },
+      output: { uri: outPath, mime: kind === 'still' ? 'image/png' : 'video/mp4' },
       // Pass the real cost through unchanged (undefined when fal returns none —
       // the common case for video models). Forcing a 0 here made the Ledger
       // display every fal render as free despite real credit spend.

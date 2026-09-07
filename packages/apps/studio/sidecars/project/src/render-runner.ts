@@ -50,7 +50,7 @@ import {
   resolveEngineWithRequest,
 } from './registry.js';
 import type { RenderContext, RenderOptions } from './renderers/types.js';
-import { resolveVideoModel } from './renderers/fal.js';
+import { resolveFalModel } from './renderers/fal.js';
 import {
   reserve as reserveSpend,
   settle as settleSpend,
@@ -270,14 +270,20 @@ export class RenderRunner {
     let spend: SpendDisclosure | undefined;
     let spendEntryId: string | undefined;
     if (adapter.capabilities.requires_network) {
+      const falResolved = engine === 'fal'
+        ? resolveFalModel(cell, { variant: opts.variant })
+        : { model: undefined as string | undefined, kind: 'video' as const };
       const reservation = reserveSpend(this.db, {
         projectId,
         refId: recordId,
-        kind: 'render',
         engine,
         // Priced against the same id the adapter will actually call, resolved
         // through fal's own override chain so the gate and the invoice agree.
-        model_id: resolveVideoModel(cell, { variant: opts.variant }),
+        // `kind` matters as much as the model: an inpaint bills per megapixel
+        // and a clip bills per video-second, so a still priced as video would
+        // be wrong by an order of magnitude in either direction.
+        model_id: falResolved.model,
+        kind: falResolved.kind === 'still' ? 'still' : 'render',
         projectMetadata: this.lookup.projectMetadata?.(projectId),
         resolution: opts.resolution ?? this.lookup.resolution(projectId),
         durationMs: durationMs ?? cell.duration_ms,
