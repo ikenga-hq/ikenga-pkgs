@@ -50,7 +50,7 @@ import {
   resolveEngineWithRequest,
 } from './registry.js';
 import type { RenderContext, RenderOptions } from './renderers/types.js';
-import { resolveFalModel } from './renderers/fal.js';
+import { resolveFalModel, resolveFalDurationMs } from './renderers/fal.js';
 import {
   reserve as reserveSpend,
   settle as settleSpend,
@@ -330,7 +330,12 @@ export class RenderRunner {
         kind: falResolved.kind === 'still' ? 'still' : 'render',
         projectMetadata: this.lookup.projectMetadata?.(projectId),
         resolution: opts.resolution ?? this.lookup.resolution(projectId),
-        durationMs: durationMs ?? cell.duration_ms,
+        // Price the duration the MODEL will receive, not the cell's authored
+        // length — `metadata.fal_input.duration` is merged verbatim into the
+        // request body and is what fal bills. See resolveFalDurationMs.
+        durationMs: engine === 'fal'
+          ? resolveFalDurationMs(cell, { variant: opts.variant, range: opts.range })
+          : durationMs ?? cell.duration_ms,
       });
       spend = {
         estimate_usd: reservation.estimate_usd,

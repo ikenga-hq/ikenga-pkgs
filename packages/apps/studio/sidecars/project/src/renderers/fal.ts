@@ -178,6 +178,51 @@ export function resolveFalModel(
 }
 
 /**
+ * How long the clip the model is actually asked for will be, in ms.
+ *
+ * The spend gate prices per video-second, so this decides the bill. It is
+ * exported and shared with `RenderRunner.enqueue` for the same reason
+ * `resolveFalModel` is: the gate must price the request the adapter will
+ * actually send, not a different one.
+ *
+ * Precedence, and both legs matter:
+ *
+ *   1. `metadata.fal_input.duration` — SECONDS, string or number. This is the
+ *      field `buildVideoInput` merges verbatim into the request body, so it is
+ *      literally what the model receives and what fal bills. Verified
+ *      2026-09-08: a cell with `duration: "5"` produced a 5.08s clip.
+ *   2. the render's explicit `range`
+ *   3. `cell.duration_ms` — the cell's authored length
+ *
+ * Reading only (3), as the gate first did, is wrong in BOTH directions. It
+ * over-charged a 6s cell trimmed to `duration: "5"` (the harmless direction,
+ * and the one we happened to hit), and it would have under-charged a 5s cell
+ * carrying `duration: "10"` by half — the direction that costs money and that
+ * a ceiling exists to catch.
+ *
+ * A non-finite or non-positive value falls through rather than being honoured:
+ * a typo must not become a free render.
+ */
+export function resolveFalDurationMs(
+  cell: Cell,
+  opts: RenderOptions & { range?: { start_ms?: number; end_ms?: number } } = {},
+): number | undefined {
+  const extra = (cell.metadata as Record<string, unknown> | undefined)?.fal_input;
+  if (extra && typeof extra === 'object') {
+    const raw = (extra as Record<string, unknown>).duration;
+    const secs = typeof raw === 'string' ? Number(raw) : typeof raw === 'number' ? raw : NaN;
+    if (Number.isFinite(secs) && secs > 0) return secs * 1000;
+  }
+  if (opts.range && typeof opts.range.end_ms === 'number') {
+    const ms = opts.range.end_ms - (opts.range.start_ms ?? 0);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return typeof cell.duration_ms === 'number' && cell.duration_ms > 0
+    ? cell.duration_ms
+    : undefined;
+}
+
+/**
  * Resolve the video model id (call override → cell metadata → env → default).
  *
  * Exported so the spend gate (spend.ts, via RenderRunner.enqueue) can price a

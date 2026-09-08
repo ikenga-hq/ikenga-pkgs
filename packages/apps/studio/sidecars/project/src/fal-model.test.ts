@@ -18,7 +18,7 @@
 
 import assert from 'node:assert/strict';
 
-import { resolveFalModel } from './renderers/fal.js';
+import { resolveFalModel, resolveFalDurationMs } from './renderers/fal.js';
 import type { Cell } from '@ikenga/studio-schema';
 
 let passed = 0;
@@ -97,6 +97,53 @@ test('a value containing a slash passes through UNqualified — a known sharp ed
   // rediscovered: pass fal model ids in full.
   assert.equal(resolveFalModel(cell({ fal_output: 'still', fal_model: 'flux/schnell' }), {}).model,
                'flux/schnell');
+});
+
+// -- duration: what the gate prices ----------------------------------------
+//
+// Kling O1 bills per video-second, so this number IS the bill. Getting it from
+// the cell's authored length instead of the request body was wrong in both
+// directions -- see resolveFalDurationMs.
+
+function durCell(metadata: Record<string, unknown>, duration_ms?: number): Cell {
+  return { uid: 'c1', metadata, duration_ms } as unknown as Cell;
+}
+
+test('fal_input.duration wins -- it is what the model receives and fal bills', () => {
+  // The observed case: a 6s cell trimmed to 5s produced a 5.08s clip while the
+  // gate charged 6s.
+  assert.equal(resolveFalDurationMs(durCell({ fal_input: { duration: '5' } }, 6000)), 5000);
+});
+
+test('a LONGER declared duration is honoured too -- the direction that costs money', () => {
+  // The gate would previously have charged 5s for a 10s render, under-pricing
+  // by half. A ceiling exists to catch exactly this.
+  assert.equal(resolveFalDurationMs(durCell({ fal_input: { duration: 10 } }, 5000)), 10000);
+});
+
+test('an explicit range is used when no duration is declared', () => {
+  assert.equal(
+    resolveFalDurationMs(durCell({}, 6000), { range: { start_ms: 1000, end_ms: 4000 } }), 3000);
+});
+
+test('fal_input.duration outranks the range -- the body wins over the request', () => {
+  assert.equal(
+    resolveFalDurationMs(durCell({ fal_input: { duration: '8' } }, 6000),
+                         { range: { start_ms: 0, end_ms: 3000 } }), 8000);
+});
+
+test('falls back to the cell length when nothing is declared', () => {
+  assert.equal(resolveFalDurationMs(durCell({}, 6000)), 6000);
+});
+
+test('a garbage duration falls through rather than becoming a free render', () => {
+  assert.equal(resolveFalDurationMs(durCell({ fal_input: { duration: 'abc' } }, 6000)), 6000);
+  assert.equal(resolveFalDurationMs(durCell({ fal_input: { duration: 0 } }, 6000)), 6000);
+  assert.equal(resolveFalDurationMs(durCell({ fal_input: { duration: -3 } }, 6000)), 6000);
+});
+
+test('no duration anywhere is undefined, so the estimator uses its own default', () => {
+  assert.equal(resolveFalDurationMs(durCell({})), undefined);
 });
 
 console.log(`\n${passed} passed`);
