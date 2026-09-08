@@ -255,6 +255,50 @@ export class RenderRunner {
       };
     }
 
+    // A cell may declare that it consumes the OUTPUT of other cells —
+    // `metadata.depends_on: ['<uid>', …]`. Mode C's clip cell is the case that
+    // motivated this: it interpolates between two keyframes produced by two
+    // other cells, and a clip built from an unreviewed keyframe is a $0.56 job
+    // that renders a plausible video with no character in it.
+    //
+    // The dependency must be APPROVED, not merely rendered. `Cell.approved` is
+    // already the schema's "a human has looked at this" bit, and the generation
+    // step here is stochastic — the same plate and mask return a figure or an
+    // empty crucible run to run — so "an output exists" carries almost no
+    // information about whether it is usable.
+    //
+    // This lives at ENQUEUE, next to the spend gate and the G2 capability
+    // check, for the reason those do: a render that must not happen should
+    // never become a queued row. A gate that lives in a helper script guards
+    // only the people who run that script, and `composition.render` reaches
+    // this function without passing through any of them.
+    const dependsOn = (cell.metadata as Record<string, unknown> | undefined)?.depends_on;
+    if (Array.isArray(dependsOn)) {
+      for (const dep of dependsOn) {
+        if (typeof dep !== 'string') continue;
+        const depCell = this.lookup.cell(projectId, dep);
+        if (!depCell) {
+          return {
+            ok: false,
+            error: 'dependency-not-found',
+            message: `cell ${cellId} depends_on ${dep}, which is not in this project`,
+          };
+        }
+        if (!depCell.approved) {
+          return {
+            ok: false,
+            error: 'dependency-not-approved',
+            message:
+              `cell ${cellId} depends_on ${dep}, which is not approved. ` +
+              `Its output is an input to this render, and generation here is stochastic — ` +
+              `an existing output is not evidence of a usable one. ` +
+              `Review ${dep} and mark it approved (storyboard.set_approved) before enqueuing this. ` +
+              `This refusal cannot be overridden from a tool call.`,
+          };
+        }
+      }
+    }
+
     const recordId = randomUUID();
 
     // WP-12 — the spend gate. Metered engines only: `requires_network` is the

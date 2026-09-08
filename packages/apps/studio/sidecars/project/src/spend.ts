@@ -382,11 +382,30 @@ export function reserve(db: Db, input: ReserveInput): ReserveResult {
     };
   }
 
+  // Check-and-insert in ONE statement, so the ceiling test and the reservation
+  // cannot be separated.
+  //
+  // The read-then-insert this replaced was safe within a process — reserve() is
+  // synchronous and JS is single-threaded — and unsafe across them. Nothing
+  // stops two sidecars sharing a studio.db (three ran side by side during this
+  // pipeline's own build), and two of them could each read a total under the
+  // ceiling and each insert, landing over it. A money gate that holds only
+  // while exactly one process is running is not a gate; it is a convention.
+  //
+  // SQLite evaluates the WHERE against the table at write time, so the sum is
+  // taken under the same lock as the insert. `changes === 0` means the ceiling
+  // moved underneath us — someone else reserved first — which is a refusal,
+  // not an error.
   const entryId = randomUUID();
-  db.prepare(
+  const res = db.prepare(
     `INSERT INTO spend_ledger
        (entry_id, project_id, ref_id, kind, engine, model_id, estimate_usd, actual_usd, state, basis, created_at, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'reserved', ?, ?, NULL)`,
+     SELECT ?, ?, ?, ?, ?, ?, ?, NULL, 'reserved', ?, ?, NULL
+      WHERE (
+        SELECT COALESCE(SUM(CASE WHEN state = 'settled'  THEN COALESCE(actual_usd, estimate_usd)
+                                 WHEN state = 'reserved' THEN estimate_usd END), 0)
+          FROM spend_ledger WHERE project_id = ? AND state != 'void'
+      ) + ? <= ?`,
   ).run(
     entryId,
     input.projectId,
@@ -397,7 +416,31 @@ export function reserve(db: Db, input: ReserveInput): ReserveResult {
     est.usd,
     est.basis,
     Date.now(),
+    input.projectId,
+    est.usd,
+    ceiling.usd,
   );
+
+  if (res.changes === 0) {
+    const now = totals(db, input.projectId);
+    return {
+      ok: false,
+      error: 'spend-ceiling-exceeded',
+      message:
+        `This ${input.kind} is estimated at $${est.usd.toFixed(4)} (${est.basis}). ` +
+        `Project ${input.projectId} is at $${now.committed_usd.toFixed(4)} against a ` +
+        `$${ceiling.usd.toFixed(2)} ceiling (source: ${ceiling.source}) — another writer ` +
+        `reserved between this call's check and its insert. Refusing. ` +
+        `Raising the ceiling is a human act (${CEILING_METADATA_KEY} in project metadata, ` +
+        `or ${CEILING_ENV}); this refusal cannot be overridden from a tool call.`,
+      estimate_usd: est.usd,
+      basis: est.basis,
+      ceiling_usd: ceiling.usd,
+      ceiling_source: ceiling.source,
+      committed_usd: now.committed_usd,
+      remaining_usd: usd(Math.max(0, ceiling.usd - now.committed_usd)),
+    };
+  }
 
   return {
     ok: true,

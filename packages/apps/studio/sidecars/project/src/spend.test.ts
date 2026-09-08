@@ -323,6 +323,44 @@ test('crash recovery voids reservations for rows that will be requeued', () => {
   );
 });
 
+test('the ceiling test and the reservation are ONE statement', () => {
+  // Regression for a cross-process race. reserve() used to read the total,
+  // compare, then insert; two sidecars sharing a studio.db could each read a
+  // total under the ceiling and each insert, landing over it. Asserting on the
+  // SQL shape is not possible from here, so this asserts the property that
+  // shape exists to guarantee: a reservation that would breach the ceiling
+  // leaves the ledger EXACTLY as it was, with no partial row.
+  const proj = 'proj-atomic';
+  const meta = { spend_ceiling_usd: 1.0 };
+  const first = reserve(db, {
+    projectId: proj, refId: 'a', kind: 'render', engine: 'fal',
+    model_id: KLING, projectMetadata: meta, durationMs: 5000,
+  });
+  assert.ok(first.ok);
+  const before = totals(db, proj);
+  const second = reserve(db, {
+    projectId: proj, refId: 'b', kind: 'render', engine: 'fal',
+    model_id: KLING, projectMetadata: meta, durationMs: 5000,
+  });
+  assert.equal(second.ok, false, '$0.56 + $0.56 must not fit under $1.00');
+  assert.deepEqual(totals(db, proj), before, 'a refused reserve must write nothing');
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM spend_ledger WHERE ref_id = 'b'`)
+    .get() as { n: number };
+  assert.equal(row.n, 0, 'a refused reserve must leave no row at all, not a voided one');
+});
+
+test('a reservation that exactly hits the ceiling is allowed', () => {
+  // `<=`, not `<`. A ceiling of $0.56 must permit one $0.56 render, or the
+  // number a human authored is not the number the gate enforces.
+  const r = reserve(db, {
+    projectId: 'proj-exact', refId: 'x', kind: 'render', engine: 'fal',
+    model_id: KLING, projectMetadata: { spend_ceiling_usd: 0.56 }, durationMs: 5000,
+  });
+  assert.ok(r.ok, 'exactly at the ceiling should fit');
+  assert.equal(totals(db, 'proj-exact').committed_usd, 0.56);
+});
+
 test('status reports the ceiling, its source, and what is left', () => {
   delete process.env[CEILING_ENV];
   const s = status(db, P, META);
