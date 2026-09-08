@@ -13,12 +13,19 @@
 
 import assert from 'node:assert/strict';
 
-import { buildVideoInput, readLoras } from './fal.js';
+import { buildVideoInput, readLoras, resolveKey, falAdapter } from './fal.js';
 import type { Cell } from '@ikenga/studio-schema';
+import type { RenderContext } from './types.js';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
   fn();
+  passed += 1;
+  console.log(`  ok - ${name}`);
+}
+
+async function testAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  await fn();
   passed += 1;
   console.log(`  ok - ${name}`);
 }
@@ -33,7 +40,7 @@ function cellWith(metadata: Record<string, unknown>, extra: Partial<Cell> = {}):
   } as unknown as Cell;
 }
 
-function main(): number {
+async function main(): Promise<number> {
   console.log('\nfal.ts — input shaping\n');
 
   // ── metadata.fal_loras → input.loras ───────────────────────────────────
@@ -121,8 +128,87 @@ function main(): number {
     );
   });
 
+  // ── WP-17: Stronghold vault key resolution ────────────────────────────
+  await testAsync('resolveKey: resolves studio.fal from ctx.vault.get when present', async () => {
+    const origEnv = process.env.FAL_KEY;
+    delete process.env.FAL_KEY;
+    try {
+      const mockCtx = {
+        vault: { get: async (k: string) => (k === 'studio.fal' ? 'key-from-vault' : undefined) },
+      } as unknown as RenderContext;
+      const key = await resolveKey(mockCtx);
+      assert.equal(key, 'key-from-vault');
+    } finally {
+      if (origEnv !== undefined) process.env.FAL_KEY = origEnv;
+    }
+  });
+
+  await testAsync('resolveKey: falls back to FAL_KEY env when vault returns undefined', async () => {
+    const origEnv = process.env.FAL_KEY;
+    process.env.FAL_KEY = 'key-from-env';
+    try {
+      const mockCtx = {
+        vault: { get: async () => undefined },
+      } as unknown as RenderContext;
+      const key = await resolveKey(mockCtx);
+      assert.equal(key, 'key-from-env');
+    } finally {
+      if (origEnv !== undefined) process.env.FAL_KEY = origEnv;
+      else delete process.env.FAL_KEY;
+    }
+  });
+
+  await testAsync('resolveKey: handles vault throwing by falling back to env', async () => {
+    const origEnv = process.env.FAL_KEY;
+    process.env.FAL_KEY = 'key-from-env';
+    try {
+      const mockCtx = {
+        vault: {
+          get: async () => {
+            throw new Error('vault-locked');
+          },
+        },
+      } as unknown as RenderContext;
+      const key = await resolveKey(mockCtx);
+      assert.equal(key, 'key-from-env');
+    } finally {
+      if (origEnv !== undefined) process.env.FAL_KEY = origEnv;
+      else delete process.env.FAL_KEY;
+    }
+  });
+
+  await testAsync('falAdapter.validate: surfaces fal-key-missing warning when no key in vault or env', async () => {
+    const origEnv = process.env.FAL_KEY;
+    delete process.env.FAL_KEY;
+    try {
+      const mockCtx = {
+        aspectRatio: '16:9',
+        vault: { get: async () => undefined },
+      } as unknown as RenderContext;
+      const diags = await falAdapter.validate(cellWith({}), mockCtx);
+      assert.ok(diags.some((d) => d.code === 'fal-key-missing'));
+    } finally {
+      if (origEnv !== undefined) process.env.FAL_KEY = origEnv;
+    }
+  });
+
+  await testAsync('falAdapter.validate: clears fal-key-missing warning when vault supplies key', async () => {
+    const origEnv = process.env.FAL_KEY;
+    delete process.env.FAL_KEY;
+    try {
+      const mockCtx = {
+        aspectRatio: '16:9',
+        vault: { get: async (k: string) => (k === 'studio.fal' ? 'key-from-vault' : undefined) },
+      } as unknown as RenderContext;
+      const diags = await falAdapter.validate(cellWith({}), mockCtx);
+      assert.ok(!diags.some((d) => d.code === 'fal-key-missing'));
+    } finally {
+      if (origEnv !== undefined) process.env.FAL_KEY = origEnv;
+    }
+  });
+
   console.log(`\n${passed} passed`);
   return 0;
 }
 
-process.exit(main());
+main().then((code) => process.exit(code));

@@ -85,7 +85,7 @@ function nowIso(): string {
 }
 
 /** Read the fal key from the vault, falling back to FAL_KEY env. */
-async function resolveKey(ctx: RenderContext): Promise<string | undefined> {
+export async function resolveKey(ctx: RenderContext): Promise<string | undefined> {
   let fromVault: string | undefined;
   try {
     // Vault key follows the studio.<adapter> convention (veo/kling/runway).

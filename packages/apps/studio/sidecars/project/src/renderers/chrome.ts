@@ -59,7 +59,7 @@ function scanCacheForChrome(): string | null {
   // Directory names look like `linux-148.0.7778.167`. Sort by the embedded
   // version descending so we pick the newest installed build.
   const builds = entries
-    .filter((e) => /^[a-z]+-\d+\.\d+\.\d+/.test(e))
+    .filter((e) => /^[a-z0-9_]+-\d+\.\d+\.\d+/i.test(e))
     .map((e) => {
       const verMatch = e.match(/-(\d+)\.(\d+)\.(\d+)\.(\d+)/);
       const key = verMatch
@@ -70,9 +70,19 @@ function scanCacheForChrome(): string | null {
     .sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
 
   for (const b of builds) {
-    // puppeteer's linux layout: <build>/chrome-linux64/chrome
-    const candidate = join(chromeRoot, b.dir, 'chrome-linux64', 'chrome');
-    if (existsSync(candidate)) return candidate;
+    const candidates = [
+      // Windows layout: <build>/chrome-win64/chrome.exe
+      join(chromeRoot, b.dir, 'chrome-win64', 'chrome.exe'),
+      join(chromeRoot, b.dir, 'chrome-win32', 'chrome.exe'),
+      // Linux layout: <build>/chrome-linux64/chrome
+      join(chromeRoot, b.dir, 'chrome-linux64', 'chrome'),
+      // macOS layout
+      join(chromeRoot, b.dir, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+      join(chromeRoot, b.dir, 'chrome-mac-x64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }
