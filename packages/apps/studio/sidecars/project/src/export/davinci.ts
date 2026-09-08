@@ -484,8 +484,6 @@ try:
 
     # Create new timeline for this export
     timeline = mp.CreateEmptyTimeline(${timelineNameLiteral})
-    if not timeline:
-        timeline = proj.GetCurrentTimeline()
 
     clips_data = ${JSON.stringify(clipsPayload)}
     downbeats = ${JSON.stringify(downbeats)}
@@ -496,13 +494,21 @@ try:
     media_items = []
     path_to_item = {}
     for item in clips_data:
-        if item["mediaPath"] and os.path.exists(item["mediaPath"]):
-            imported = mp.ImportMedia([item["mediaPath"]])
+        m_path = item["mediaPath"]
+        if m_path and os.path.exists(m_path) and m_path not in path_to_item:
+            imported = mp.ImportMedia([m_path])
             if imported:
                 media_items.extend(imported)
-                path_to_item[item["mediaPath"]] = imported[0]
+                path_to_item[m_path] = imported[0]
 
-    if media_items:
+    if not timeline and media_items:
+        timeline = mp.CreateTimelineFromClips(${timelineNameLiteral}, media_items)
+    if not timeline:
+        timeline = proj.GetCurrentTimeline()
+    if timeline:
+        proj.SetCurrentTimeline(timeline)
+
+    if timeline and media_items:
         # G-53: append with explicit frame-quantized timeline positions so
         # the live timeline matches the FCPXML fallback's boundary math
         # instead of relying on Resolve's own back-to-back append order.
@@ -524,20 +530,21 @@ try:
 
     # Inject Beat Markers (gated by enableBeatSync — G-75 #7)
     markers_count = 0
-    for db in downbeats:
-        frame = round((db / 1000.0) * fps)
-        timeline.AddMarker(frame, "Blue", "Downbeat", "Bar start", 1)
-        markers_count += 1
+    if timeline:
+        for db in downbeats:
+            frame = round((db / 1000.0) * fps)
+            timeline.AddMarker(frame, "Blue", "Downbeat", "Bar start", 1)
+            markers_count += 1
 
-    for beat in beats:
-        frame = round((beat / 1000.0) * fps)
-        timeline.AddMarker(frame, "Purple", "Beat", "Beat", 1)
-        markers_count += 1
+        for beat in beats:
+            frame = round((beat / 1000.0) * fps)
+            timeline.AddMarker(frame, "Purple", "Beat", "Beat", 1)
+            markers_count += 1
 
-    for onset in onsets:
-        frame = round((onset / 1000.0) * fps)
-        timeline.AddMarker(frame, "Yellow", "Transient", "Cut point", 1)
-        markers_count += 1
+        for onset in onsets:
+            frame = round((onset / 1000.0) * fps)
+            timeline.AddMarker(frame, "Yellow", "Transient", "Cut point", 1)
+            markers_count += 1
 
     print(json.dumps({
         "ok": True,
