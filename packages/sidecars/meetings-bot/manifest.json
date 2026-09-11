@@ -8,7 +8,6 @@
     "name": "Royalti, Inc.",
     "key": "royalti"
   },
-  "//": "WP-11/WP-03/WP-02: source of truth for the meetings recorder. NOTE: the com.ikenga.meetings app cannot call this package's sidecar \u2014 pkg_sidecar_call requires the sidecar to belong to the calling pkg \u2014 so the app bundles this source into its own package via packages/apps/meetings/sidecars/bot/build.sh and declares it there. This manifest remains for standalone/bot use.",
   "sidecars": [
     {
       "name": "pa-com-ikenga-sidecar-meetings-bot-runner",
