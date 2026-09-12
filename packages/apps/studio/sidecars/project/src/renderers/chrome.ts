@@ -62,6 +62,24 @@
  *    constraint on buildId shape, so neither do we: any `<prefix>-<buildId>`
  *    dir is a candidate, and a buildId that isn't dot-separated digits just
  *    sorts last instead of being discarded.
+ *
+ * Two follow-ups from the review of the headless-shell addition:
+ *
+ *  - The shell scan used to pick the newest shell build independently of the
+ *    Chrome build `resolveChromeExecutable()` hands the Excalidraw adapter,
+ *    which breaks the G24 "one Chrome, one version" pin the moment the two
+ *    trees hold different newest builds (a pruned/interrupted shell install
+ *    is enough: HF would render on 148 while Excalidraw captures on 152, with
+ *    nothing in the render record to say so). The shell scan now takes a
+ *    `preferBuildId` and returns the shell build that MATCHES the resolved
+ *    Chrome's buildId when one is installed, falling back to newest only when
+ *    that build is absent.
+ *  - `resolveHeadlessShellExecutable()` used to memoize its *negative* result,
+ *    so an operator who installed `chrome-headless-shell` after the first
+ *    failed render kept getting the old answer until the sidecar restarted.
+ *    Only successes are memoized now (same policy as
+ *    `resolveChromeExecutable()`, which throws without caching and therefore
+ *    re-scans).
  */
 
 import { existsSync, readdirSync } from 'node:fs';
@@ -71,6 +89,9 @@ import puppeteer from 'puppeteer';
 
 let cachedSync: string | null = null;
 let cachedAsync: string | null = null;
+// Successes only — a miss is NOT memoized, so installing the shell build takes
+// effect on the next render rather than after a sidecar restart.
+let cachedShell: string | null = null;
 
 function cacheDir(): string {
   return (
@@ -79,10 +100,27 @@ function cacheDir(): string {
   );
 }
 
+/**
+ * Hint for "the headless shell is missing". Exported because the HyperFrames
+ * adapter has to throw the same actionable text: `browsers install chrome`
+ * does NOT bring the shell build, so an operator told only about Chrome fixes
+ * one error and lands straight back on the ETIMEDOUT preflight failure.
+ */
+export const HEADLESS_SHELL_INSTALL_HINT =
+  'Run `npx puppeteer browsers install chrome-headless-shell` to download it. ' +
+  'The HyperFrames adapter REQUIRES that build on Windows — full Chrome never ' +
+  "answers HyperFrames' `<exe> --version` preflight there (g61).";
+
 const INSTALL_HINT =
   'Run `npx puppeteer browsers install chrome` (or `pnpm rebuild puppeteer`) ' +
   'to download the pinned Chrome. This is the single Chrome shared by the ' +
-  'HyperFrames + Excalidraw renderer adapters (G24).';
+  'HyperFrames + Excalidraw renderer adapters (G24). ' +
+  HEADLESS_SHELL_INSTALL_HINT;
+
+/** `<cacheDir>/chrome-headless-shell` — the tree the shell scan walks. */
+export function headlessShellCacheDir(): string {
+  return join(cacheDir(), 'chrome-headless-shell');
+}
 
 /**
  * The platform-dir prefixes puppeteer's cache uses (`Cache.installationDir()`
@@ -97,6 +135,35 @@ const RELATIVE_EXECUTABLE_PATH: Record<string, string> = {
   mac_arm: join('chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
   win32: join('chrome-win32', 'chrome.exe'),
   win64: join('chrome-win64', 'chrome.exe'),
+};
+
+/**
+ * The same table for puppeteer's OTHER managed browser, `chrome-headless-shell`
+ * (`<cacheDir>/chrome-headless-shell/<platform>-<buildId>/…`).
+ *
+ * WP-32 live-found (g61): the HyperFrames CLI preflights whatever binary it is
+ * given with `<exe> --version` under a 5s timeout, and **full Chrome on Windows
+ * never answers `--version` on stdout** — the probe times out and HF aborts
+ * with "Chrome cannot start … (signal SIGKILL, ETIMEDOUT)" even though the
+ * binary is perfectly good (hand-reproduced 2026-09-12; the headless shell
+ * answers the same probe in milliseconds). So HF is pointed at the headless
+ * shell when one is installed; on win32 a miss is a hard error (see
+ * `resolveHyperframesBrowser()` in hyperframes.ts — the Chrome fallback there
+ * reproduces the g61 failure), on POSIX it falls back to full Chrome.
+ * The Excalidraw adapter keeps using full Chrome — it drives puppeteer
+ * in-process and never runs that probe.
+ *
+ * There is no `linux_arm` headless-shell build in puppeteer's catalogue, so
+ * that prefix is deliberately absent: the scan returns null on Linux ARM and
+ * the caller falls back to Chrome rather than pointing at a path that cannot
+ * exist.
+ */
+const RELATIVE_HEADLESS_SHELL_PATH: Record<string, string> = {
+  linux: join('chrome-headless-shell-linux64', 'chrome-headless-shell'),
+  mac: join('chrome-headless-shell-mac-x64', 'chrome-headless-shell'),
+  mac_arm: join('chrome-headless-shell-mac-arm64', 'chrome-headless-shell'),
+  win32: join('chrome-headless-shell-win32', 'chrome-headless-shell.exe'),
+  win64: join('chrome-headless-shell-win64', 'chrome-headless-shell.exe'),
 };
 
 /** Every prefix we know how to turn into an executable path. */
@@ -177,7 +244,53 @@ export function scanCacheForChrome(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string | null {
-  const chromeRoot = join(cacheDir(), 'chrome');
+  return scanCacheForBrowser('chrome', RELATIVE_EXECUTABLE_PATH, platform, arch)?.path ?? null;
+}
+
+/**
+ * The same scan against puppeteer's `chrome-headless-shell` cache tree.
+ * Returns null when no host-runnable build is installed (including every
+ * Linux-ARM box, which has no such build) — callers fall back to full Chrome.
+ *
+ * `preferBuildId` keeps the G24 one-version pin honest: when the cache holds
+ * a shell build with the same buildId as the Chrome the Excalidraw adapter
+ * will launch, that build wins over a newer one, so the two renderer adapters
+ * never end up on two different Chrome engines. Newest-wins is the fallback
+ * for when the matching build simply is not installed.
+ *
+ * Exported for the same reason as `scanCacheForChrome`: so tests can drive it
+ * against a fake cache tree per platform.
+ */
+export function scanCacheForHeadlessShell(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  preferBuildId?: string,
+): string | null {
+  return (
+    scanCacheForBrowser(
+      'chrome-headless-shell',
+      RELATIVE_HEADLESS_SHELL_PATH,
+      platform,
+      arch,
+      preferBuildId,
+    )?.path ?? null
+  );
+}
+
+/** One installed browser build: the executable plus the buildId it came from. */
+interface BrowserInstall {
+  path: string;
+  buildId: string;
+}
+
+function scanCacheForBrowser(
+  browserDir: string,
+  relativeExecutablePath: Record<string, string>,
+  platform: NodeJS.Platform,
+  arch: string,
+  preferBuildId?: string,
+): BrowserInstall | null {
+  const chromeRoot = join(cacheDir(), browserDir);
   if (!existsSync(chromeRoot)) return null;
   let entries: string[];
   try {
@@ -186,9 +299,10 @@ export function scanCacheForChrome(
     return null;
   }
   const prefixes = hostPlatformPrefixes(platform, arch);
-  // Sort by host-arch preference first (a native build beats a newer
-  // emulated one), then by the embedded version descending so we pick the
-  // newest installed build (numerically, not lexically — see versionKey()).
+  // Sort by an explicitly-pinned buildId first (the G24 cross-adapter pin),
+  // then by host-arch preference (a native build beats a newer emulated one),
+  // then by the embedded version descending so we pick the newest installed
+  // build (numerically, not lexically — see versionKey()).
   const builds = entries
     .map((e) => {
       const m = e.match(BUILD_DIR_RE);
@@ -196,21 +310,56 @@ export function scanCacheForChrome(
       const [, platformPrefix, buildId] = m;
       const rank = prefixes.indexOf(platformPrefix!);
       if (rank === -1) return null; // build for another OS/arch — unrunnable here
-      const relExe = RELATIVE_EXECUTABLE_PATH[platformPrefix!];
+      const relExe = relativeExecutablePath[platformPrefix!];
       if (!relExe) return null;
-      return { dir: e, relExe, rank, key: versionKey(buildId!) };
+      return {
+        dir: e,
+        relExe,
+        buildId: buildId!,
+        rank,
+        key: versionKey(buildId!),
+        pinned: preferBuildId !== undefined && buildId === preferBuildId,
+      };
     })
-    .filter((b): b is { dir: string; relExe: string; rank: number; key: string } => b !== null)
+    .filter((b): b is NonNullable<typeof b> => b !== null)
     .sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       if (a.rank !== b.rank) return a.rank - b.rank;
       return a.key < b.key ? 1 : a.key > b.key ? -1 : 0;
     });
 
   for (const b of builds) {
     const candidate = join(chromeRoot, b.dir, b.relExe);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) return { path: candidate, buildId: b.buildId };
   }
   return null;
+}
+
+/**
+ * The buildId embedded in an installed-browser path
+ * (`…/chrome/win64-152.0.7977.54/chrome-win64/chrome.exe` → `152.0.7977.54`),
+ * or undefined when the path has no `<platform>-<buildId>` segment. Scanned
+ * back-to-front so a cache ROOT that happens to look like a build dir cannot
+ * shadow the real one.
+ */
+export function buildIdFromInstallPath(p: string | null | undefined): string | undefined {
+  if (!p) return undefined;
+  const segments = p.split(/[\\/]/);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const m = segments[i]!.match(BUILD_DIR_RE);
+    if (m) return m[2];
+  }
+  return undefined;
+}
+
+/**
+ * The buildId of the Chrome the renderers will actually use — the memoized
+ * one when `resolveChromeExecutable()` has already answered (that is the exact
+ * binary `excalidraw.ts` launches), else whatever the scan would return now.
+ * Undefined when no Chrome is installed, which simply disables the pin.
+ */
+function resolvedChromeBuildId(): string | undefined {
+  return buildIdFromInstallPath(cachedSync ?? scanCacheForChrome());
 }
 
 /**
@@ -228,6 +377,28 @@ export function resolveChromeExecutable(): string {
     throw new Error(`Pinned Chrome not found in ${join(cacheDir(), 'chrome')}. ${INSTALL_HINT}`);
   }
   cachedSync = found;
+  return found;
+}
+
+/**
+ * Resolve the installed `chrome-headless-shell` for the host — preferring the
+ * build that matches the resolved Chrome's buildId (G24: one Chrome, one
+ * version across both renderer adapters), else the newest installed — or null
+ * when none is installed. Unlike `resolveChromeExecutable()` this does NOT
+ * throw: the caller (the HyperFrames adapter) decides what a miss means.
+ *
+ * Only a HIT is memoized. Memoizing the miss meant an operator who installed
+ * the shell build after a failed render kept getting the stale "not installed"
+ * answer for the life of a supervised, long-running sidecar.
+ */
+export function resolveHeadlessShellExecutable(): string | null {
+  if (cachedShell) return cachedShell;
+  const found = scanCacheForHeadlessShell(
+    process.platform,
+    process.arch,
+    resolvedChromeBuildId(),
+  );
+  if (found) cachedShell = found;
   return found;
 }
 

@@ -29,7 +29,7 @@
 // the parent-mirror in theme.ts; applyDocumentTheme wrote data-theme='light'|
 // 'dark' and clobbered the Dusk Wood palette (Wave 0 root-cause fix).
 import { App, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
-import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ErrorCode, LoggingMessageNotificationSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import type { StudioEventName, StudioEventPayloadMap } from './mcp-types';
@@ -351,14 +351,76 @@ interface HostCallResult {
   isError?: boolean;
 }
 
-async function callHostTool(name: string, args: Record<string, unknown> = {}): Promise<HostCallResult> {
+/** Subset of the MCP-apps SDK's `RequestOptions` a caller may want to override
+ *  per-call. `timeout` replaces the SDK's `DEFAULT_REQUEST_TIMEOUT_MSEC` (60s);
+ *  `maxTotalTimeout` is a hard ceiling even when progress notifications reset
+ *  the rolling timeout (not used by any host.* call today, but accepted for
+ *  parity with the SDK's own option shape).
+ *
+ *  `signal` lets a caller abandon a long user-paced call (see
+ *  {@link openFolder}) instead of sitting on the promise until the ceiling
+ *  expires. Two things about it are load-bearing and easy to get wrong:
+ *
+ *   1. Aborting is **client-side only**. `Protocol.request`'s abort path
+ *      deletes the response handler and sends `notifications/cancelled`; the
+ *      shell's in-flight work (`openDialog`, `pkg_studio_request_project_
+ *      access`) is not abortable, so a native dialog already on screen STAYS
+ *      on screen and a grant the user then confirms is still written.
+ *   2. The rejection is **indistinguishable from a real timeout by code**:
+ *      the SDK wraps a non-`McpError` abort reason in
+ *      `McpError(ErrorCode.RequestTimeout, String(reason))`, so
+ *      {@link isHostCallTimeout} answers `true` for a user cancel too. A
+ *      caller that offers a cancel affordance must remember that it cancelled
+ *      (a ref/flag checked before the timeout branch) rather than trying to
+ *      recover the intent from the error. */
+export interface HostCallOptions {
+  timeout?: number;
+  maxTotalTimeout?: number;
+  signal?: AbortSignal;
+}
+
+async function callHostTool(
+  name: string,
+  args: Record<string, unknown> = {},
+  options?: HostCallOptions,
+): Promise<HostCallResult> {
   if (!_app) {
     throw new Error(`[studio] callHostTool(${name}) before connectBridge() resolved`);
   }
   // The MCP App's callServerTool returns the spec's CallToolResult shape;
   // we narrow to HostCallResult since that's the contract the shell-side
   // dispatchHostCall honours (text + optional structuredContent + isError).
-  return (await _app.callServerTool({ name, arguments: args })) as HostCallResult;
+  return (await _app.callServerTool({ name, arguments: args }, options)) as HostCallResult;
+}
+
+/** True when `e` is the MCP-apps SDK's own request-timeout rejection (the
+ *  `App.callServerTool` promise rejects with `McpError(ErrorCode.RequestTimeout,
+ *  …)` when the host doesn't answer within the call's timeout — see
+ *  `HostCallOptions.timeout` / `DEFAULT_REQUEST_TIMEOUT_MSEC` in the SDK).
+ *
+ *  What this is for: telling "the host never answered" apart from "the host
+ *  answered with a failure", so the caller can say something TRUE about the
+ *  state the user is in — for `host.openFolder`, that the picker/grant dialog
+ *  is probably still open and a grant they already confirmed was still
+ *  written host-side (WP-04 live round:
+ *  `plans/studio/verify/2026-09-12-wp32-live/wp04/verdict.md` "Live-found
+ *  gap"). It is explicitly NOT a recovery seam: the timed-out response is the
+ *  only carrier of the picked path, and nothing on the host side of
+ *  `host.openFolder` writes the project registry (no `project.open`; see
+ *  shell `dispatchHostCall`'s `host.openFolder` branch, which only does
+ *  `openDialog` + `pkg_studio_request_project_access`), so after a timeout the
+ *  iframe genuinely does not know which folder was picked and must not guess.
+ *
+ *  Also note (see `HostCallOptions.signal`) that a caller-initiated abort
+ *  rejects with this same code — a `true` here means "no answer", not
+ *  necessarily "the deadline expired".
+ *
+ *  Reads `.code` off an `McpError` instance, and falls back to a duck-typed
+ *  `.code` check on any other object so this still answers correctly if a
+ *  bundler duplicates the McpError class across module instances. */
+export function isHostCallTimeout(e: unknown): boolean {
+  if (e instanceof McpError) return e.code === ErrorCode.RequestTimeout;
+  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === ErrorCode.RequestTimeout;
 }
 
 /** Invoke one of the pkg's OWN MCP-server tools (e.g. 'archetype.list',
@@ -395,6 +457,23 @@ export function openLink(url: string): Promise<HostCallResult> {
   return callHostTool('host.openLink', { url });
 }
 
+/** `host.openFolder` pops the OS folder picker, then (WP-04) the shell's native
+ *  per-folder grant dialog — both are user-paced, not host-paced. The SDK's
+ *  default request timeout (60s, `DEFAULT_REQUEST_TIMEOUT_MSEC`) is sized for
+ *  host-side work, not "wait for a human to click through two native dialogs";
+ *  a slow user hits it even though the host finishes the grant write correctly
+ *  (verdict: `plans/studio/verify/2026-09-12-wp32-live/wp04/verdict.md` "Live-
+ *  found gap"). Give this ONE call a ceiling generous enough that only an
+ *  actually-stuck host trips it — nothing else calls callHostTool with a
+ *  custom timeout, so this doesn't loosen anything else's contract.
+ *
+ *  A ceiling this long is only honest if the UI says it is waiting and offers
+ *  a way out: the caller MUST render a visible waiting state for the whole
+ *  await and pass a `signal` it can abort (the Launcher's open-folder banner
+ *  does both). Without that, a dialog the user never answers leaves the
+ *  calling surface inert for ten minutes with no explanation. */
+const OPEN_FOLDER_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 /** Trust-gate seam for the Launcher's "Open folder…" affordance (10-wp07-
  *  iframe.md commit 11 — "calls host.openFolder()"). Same shape as every
  *  other `host.*` call: routed through the shell's `dispatchHostCall`. The
@@ -402,9 +481,21 @@ export function openLink(url: string): Promise<HostCallResult> {
  *  project_access`, WP-04) isn't wired yet — in standalone/dev this call
  *  simply rejects (no `_app`) or the shell responds `isError` until the real
  *  command lands; the Launcher's own dialog is the mocked trust-gate UX for
- *  now (launcher.md §"API"). */
-export function openFolder(): Promise<HostCallResult> {
-  return callHostTool('host.openFolder', {});
+ *  now (launcher.md §"API"). See {@link isHostCallTimeout} for how a caller
+ *  should react if this still times out, and `HostCallOptions.signal` for what
+ *  `signal` does and does not cancel (client side only — a native dialog
+ *  already on screen stays there, and a grant confirmed after the abort is
+ *  still written host-side). */
+export function openFolder(options?: { signal?: AbortSignal }): Promise<HostCallResult> {
+  return callHostTool(
+    'host.openFolder',
+    {},
+    {
+      timeout: OPEN_FOLDER_TIMEOUT_MS,
+      maxTotalTimeout: OPEN_FOLDER_TIMEOUT_MS,
+      signal: options?.signal,
+    },
+  );
 }
 
 /** Result of {@link sendToChi}. Mirrors the shell's `host.sendToActiveSession`

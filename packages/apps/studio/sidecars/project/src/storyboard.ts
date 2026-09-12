@@ -36,7 +36,16 @@ import { readProject, writeProjectAtomic } from './storyboard-fs.js';
 
 export interface StoryboardResult {
   result: Record<string, unknown>;
-  /** Updated project document when a mutation persisted; undefined for reads. */
+  /**
+   * The project document this call ended up holding.
+   *
+   * For a mutation it is the newly persisted document. For a READ it is the
+   * document just parsed off disk — reads return it too (WP-32 / g58) so
+   * index.ts can refresh its in-memory open-project copy from the same parse,
+   * instead of letting an out-of-band edit leave the exporter and the render
+   * runner on a stale cache. Undefined only when the call never got as far as
+   * parsing the document.
+   */
   project?: Project;
 }
 
@@ -57,6 +66,7 @@ export function read(projectRoot: string): StoryboardResult {
       project,
       cellIndex: project.cells.map((c) => ({ uid: c.uid, beat_id: c.beat_id, rung: c.rung })),
     },
+    project,
   };
 }
 
@@ -64,9 +74,9 @@ export function readCell(projectRoot: string, cellId: string): StoryboardResult 
   const project = readProject(projectRoot);
   const cell = project.cells.find((c) => c.uid === cellId);
   if (!cell) {
-    return { result: { ok: false, error: 'cell-not-found', message: cellId } };
+    return { result: { ok: false, error: 'cell-not-found', message: cellId }, project };
   }
-  return { result: { ok: true, cell } };
+  return { result: { ok: true, cell }, project };
 }
 
 export function listCells(
@@ -77,7 +87,7 @@ export function listCells(
   let cells = project.cells;
   if (filter.beat_id) cells = cells.filter((c) => c.beat_id === filter.beat_id);
   if (filter.rung) cells = cells.filter((c) => c.rung === filter.rung);
-  return { result: { ok: true, cells } };
+  return { result: { ok: true, cells }, project };
 }
 
 /** Absolute on-disk path of a cell's authored source (content_path is stored
@@ -97,12 +107,15 @@ export function readCellContent(projectRoot: string, cellId: string): Storyboard
   const project = readProject(projectRoot);
   const cell = project.cells.find((c) => c.uid === cellId);
   if (!cell) {
-    return { result: { ok: false, error: 'cell-not-found', message: cellId } };
+    return { result: { ok: false, error: 'cell-not-found', message: cellId }, project };
   }
   const abs = absContentPath(projectRoot, cell);
   const exists = existsSync(abs);
   const html = exists ? readFileSync(abs, 'utf8') : '';
-  return { result: { ok: true, cellId, content_path: cell.content_path, exists, html } };
+  return {
+    result: { ok: true, cellId, content_path: cell.content_path, exists, html },
+    project,
+  };
 }
 
 /**

@@ -27,7 +27,14 @@
 //  - build dirs whose buildId isn't a 4-part version are a low-priority
 //    fallback, not invisible;
 //  - the two exported (memoized) resolvers that hyperframes.ts/excalidraw.ts
-//    actually call are exercised, not just the inner scan.
+//    actually call are exercised, not just the inner scan;
+//  - the headless-shell scan must honour the G24 one-version pin: the shell
+//    build matching the resolved Chrome's buildId beats a newer one, so HF and
+//    Excalidraw cannot end up on two Chrome engines (newest-wins stays the
+//    fallback when the matching build is absent);
+//  - resolveHeadlessShellExecutable() must NOT memoize a miss — installing the
+//    shell build has to take effect on the next render, not after a sidecar
+//    restart.
 //
 // Everything runs against a fake `chrome/` cache tree (mirroring
 // @puppeteer/browsers' `<platform>-<buildId>/<relative-exe-path>` layout) —
@@ -41,7 +48,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveChromeExecutable, resolveChromeExecutableAsync, scanCacheForChrome } from './chrome.js';
+import {
+  buildIdFromInstallPath,
+  resolveChromeExecutable,
+  resolveChromeExecutableAsync,
+  resolveHeadlessShellExecutable,
+  scanCacheForChrome,
+  scanCacheForHeadlessShell,
+} from './chrome.js';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -81,6 +95,19 @@ const MAC_X64_EXE = join(
 /** Create `<root>/chrome/<dirName>/<relExePath>` as a (non-empty) file. */
 function makeBuild(root: string, dirName: string, relExePath: string): void {
   const full = join(root, 'chrome', dirName, relExePath);
+  mkdirSync(join(full, '..'), { recursive: true });
+  writeFileSync(full, 'fake-binary');
+}
+
+const SHELL_WIN64_EXE = join('chrome-headless-shell-win64', 'chrome-headless-shell.exe');
+const SHELL_WIN32_EXE = join('chrome-headless-shell-win32', 'chrome-headless-shell.exe');
+const SHELL_LINUX_EXE = join('chrome-headless-shell-linux64', 'chrome-headless-shell');
+const SHELL_MAC_ARM_EXE = join('chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
+const SHELL_MAC_X64_EXE = join('chrome-headless-shell-mac-x64', 'chrome-headless-shell');
+
+/** Create `<root>/chrome-headless-shell/<dirName>/<relExePath>` as a file. */
+function makeShellBuild(root: string, dirName: string, relExePath: string): void {
+  const full = join(root, 'chrome-headless-shell', dirName, relExePath);
   mkdirSync(join(full, '..'), { recursive: true });
   writeFileSync(full, 'fake-binary');
 }
@@ -402,6 +429,10 @@ async function main(): Promise<number> {
           const msg = (err as Error).message;
           assert.match(msg, /Pinned Chrome not found in /);
           assert.match(msg, /npx puppeteer browsers install chrome/);
+          // …and it names the OTHER managed browser too: `install chrome`
+          // does not bring the headless shell, which the HF adapter needs
+          // (and on Windows cannot work without).
+          assert.match(msg, /npx puppeteer browsers install chrome-headless-shell/);
           return true;
         },
       );
@@ -447,6 +478,207 @@ async function main(): Promise<number> {
       }
     },
   );
+
+  // ── chrome-headless-shell scan (WP-32 / g61) ────────────────────────────
+  //
+  // Why this exists at all: the HyperFrames CLI preflights the binary it is
+  // handed with `<exe> --version` under a 5s timeout, and full Chrome on
+  // Windows never answers that — hand-measured on the live box, the probe
+  // dies with "signal SIGKILL, ETIMEDOUT" while the headless shell answers in
+  // milliseconds. So the HF adapter needs the shell build, which lives in a
+  // sibling cache tree with its own per-platform layout.
+  test('scanCacheForHeadlessShell: finds a win64-* build at chrome-headless-shell-win64/chrome-headless-shell.exe', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'win64-152.0.7977.54', SHELL_WIN64_EXE);
+      const found = scanCacheForHeadlessShell('win32', 'x64');
+      assert.ok(found, 'expected a match for a win64-* headless-shell build');
+      assert.ok(
+        slash(found!).endsWith(
+          'win64-152.0.7977.54/chrome-headless-shell-win64/chrome-headless-shell.exe',
+        ),
+        found!,
+      );
+    });
+  });
+
+  test('scanCacheForHeadlessShell: covers the win32 / linux / mac layouts too', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'win32-148.0.7778.167', SHELL_WIN32_EXE);
+      assert.ok(slash(scanCacheForHeadlessShell('win32', 'ia32')!).endsWith(
+        'chrome-headless-shell-win32/chrome-headless-shell.exe',
+      ));
+    });
+    withFakeCache((root) => {
+      makeShellBuild(root, 'linux-148.0.7778.167', SHELL_LINUX_EXE);
+      assert.ok(slash(scanCacheForHeadlessShell('linux', 'x64')!).endsWith(
+        'chrome-headless-shell-linux64/chrome-headless-shell',
+      ));
+    });
+    withFakeCache((root) => {
+      makeShellBuild(root, 'mac_arm-148.0.7778.167', SHELL_MAC_ARM_EXE);
+      assert.ok(slash(scanCacheForHeadlessShell('darwin', 'arm64')!).endsWith(
+        'chrome-headless-shell-mac-arm64/chrome-headless-shell',
+      ));
+    });
+    withFakeCache((root) => {
+      makeShellBuild(root, 'mac-148.0.7778.167', SHELL_MAC_X64_EXE);
+      assert.ok(slash(scanCacheForHeadlessShell('darwin', 'x64')!).endsWith(
+        'chrome-headless-shell-mac-x64/chrome-headless-shell',
+      ));
+    });
+  });
+
+  test('scanCacheForHeadlessShell: picks the newest build numerically (99 vs 100), like the chrome scan', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'win64-99.0.1.1', SHELL_WIN64_EXE);
+      makeShellBuild(root, 'win64-100.0.1.1', SHELL_WIN64_EXE);
+      assert.ok(slash(scanCacheForHeadlessShell('win32', 'x64')!).includes('win64-100.0.1.1/'));
+    });
+  });
+
+  test('scanCacheForHeadlessShell: ignores a build for another OS (mac_arm tree on a win32 host)', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'mac_arm-152.0.7977.54', SHELL_MAC_ARM_EXE);
+      assert.equal(scanCacheForHeadlessShell('win32', 'x64'), null);
+    });
+  });
+
+  test('scanCacheForHeadlessShell: returns null on Linux ARM (puppeteer ships no shell build there) so the caller falls back to Chrome', () => {
+    withFakeCache((root) => {
+      // Even with a linux_arm-shaped dir present, that prefix is not in the
+      // headless-shell table — there is no such build to install.
+      makeShellBuild(root, 'linux_arm-152.0.7977.54', SHELL_LINUX_EXE);
+      assert.equal(scanCacheForHeadlessShell('linux', 'arm64'), null);
+    });
+  });
+
+  test('scanCacheForHeadlessShell: returns null when the chrome-headless-shell tree does not exist', () => {
+    withFakeCache((root) => {
+      makeBuild(root, 'win64-152.0.7977.54', WIN64_EXE); // only full Chrome installed
+      assert.equal(scanCacheForHeadlessShell('win32', 'x64'), null);
+    });
+  });
+
+  // ── the G24 one-version pin across the two renderer adapters ─────────────
+  //
+  // HF renders on the headless shell, Excalidraw captures on full Chrome. If
+  // the shell scan just takes "newest", a cache whose newest shell build was
+  // pruned (or whose install was interrupted) silently puts the two adapters
+  // on two Chrome engines — and nothing in the render record says which.
+  test('scanCacheForHeadlessShell: prefers the shell build matching the resolved Chrome buildId over a newer one', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'win64-148.0.7778.167', SHELL_WIN64_EXE);
+      makeShellBuild(root, 'win64-152.0.7977.54', SHELL_WIN64_EXE); // newer
+      const found = scanCacheForHeadlessShell('win32', 'x64', '148.0.7778.167');
+      assert.ok(found);
+      assert.ok(slash(found!).includes('win64-148.0.7778.167/'), found!);
+    });
+  });
+
+  test('scanCacheForHeadlessShell: falls back to the newest shell build when the pinned buildId is not installed', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'win64-148.0.7778.167', SHELL_WIN64_EXE);
+      makeShellBuild(root, 'win64-152.0.7977.54', SHELL_WIN64_EXE);
+      const found = scanCacheForHeadlessShell('win32', 'x64', '999.0.0.1');
+      assert.ok(found);
+      assert.ok(slash(found!).includes('win64-152.0.7977.54/'), found!);
+    });
+  });
+
+  test('scanCacheForHeadlessShell: the pin never outranks host-runnability (a foreign-OS match is still skipped)', () => {
+    withFakeCache((root) => {
+      makeShellBuild(root, 'mac_arm-148.0.7778.167', SHELL_MAC_ARM_EXE);
+      assert.equal(scanCacheForHeadlessShell('win32', 'x64', '148.0.7778.167'), null);
+    });
+  });
+
+  test('scanCacheForHeadlessShell: a pinned build dir whose executable is missing falls through to a real one', () => {
+    withFakeCache((root) => {
+      mkdirSync(join(root, 'chrome-headless-shell', 'win64-148.0.7778.167'), { recursive: true });
+      makeShellBuild(root, 'win64-152.0.7977.54', SHELL_WIN64_EXE);
+      const found = scanCacheForHeadlessShell('win32', 'x64', '148.0.7778.167');
+      assert.ok(found);
+      assert.ok(slash(found!).includes('win64-152.0.7977.54/'), found!);
+    });
+  });
+
+  test('buildIdFromInstallPath: reads the buildId out of an installed-browser path, or undefined', () => {
+    assert.equal(
+      buildIdFromInstallPath('/home/u/.cache/puppeteer/chrome/linux-152.0.7977.54/chrome-linux64/chrome'),
+      '152.0.7977.54',
+    );
+    assert.equal(
+      buildIdFromInstallPath(
+        'C:\\c\\puppeteer\\chrome-headless-shell\\win64-148.0.7778.167\\chrome-headless-shell-win64\\chrome-headless-shell.exe',
+      ),
+      '148.0.7778.167',
+    );
+    // A cache root that itself looks like a build dir must not shadow the real
+    // one (scanned back-to-front).
+    assert.equal(
+      buildIdFromInstallPath('/builds/win64-1.2.3.4/cache/chrome/win64-152.0.7977.54/chrome-win64/chrome.exe'),
+      '152.0.7977.54',
+    );
+    assert.equal(buildIdFromInstallPath('/usr/bin/chromium'), undefined);
+    assert.equal(buildIdFromInstallPath(null), undefined);
+  });
+
+  test('resolveHeadlessShellExecutable: a miss is not memoized, the chrome buildId is pinned, a hit is memoized', () => {
+    // This resolver reads the real host platform, so seed the host's own
+    // layout. On Linux ARM there is no shell build by construction — null is
+    // the correct, non-throwing answer there.
+    const linuxArm =
+      process.platform === 'linux' && (process.arch === 'arm64' || process.arch === 'arm');
+    /** The host's shell-build dir prefix + relative exe, or null on Linux ARM. */
+    const hostShell = (version: string): { dir: string; relExe: string } | null => {
+      switch (process.platform) {
+        case 'win32':
+          return process.arch === 'ia32'
+            ? { dir: `win32-${version}`, relExe: SHELL_WIN32_EXE }
+            : { dir: `win64-${version}`, relExe: SHELL_WIN64_EXE };
+        case 'darwin':
+          return process.arch === 'arm64'
+            ? { dir: `mac_arm-${version}`, relExe: SHELL_MAC_ARM_EXE }
+            : { dir: `mac-${version}`, relExe: SHELL_MAC_X64_EXE };
+        case 'linux':
+          return linuxArm ? null : { dir: `linux-${version}`, relExe: SHELL_LINUX_EXE };
+        default:
+          return { dir: `linux-${version}`, relExe: SHELL_LINUX_EXE };
+      }
+    };
+
+    // ── 1. nothing installed → null, and that null must NOT stick ──────────
+    // The old code memoized the miss, so an operator who ran
+    // `npx puppeteer browsers install chrome-headless-shell` after a failed
+    // render kept getting the stale answer until the sidecar restarted.
+    withFakeCache(() => {
+      assert.equal(resolveHeadlessShellExecutable(), null, 'expected a miss on an empty cache');
+    });
+
+    // ── 2. now installed → picked up with no restart, and pinned to the
+    //       buildId resolveChromeExecutable() already memoized above
+    //       (hostBuild()'s 152.0.7977.54), not merely the newest shell build.
+    let first: string | null = null;
+    withFakeCache((root) => {
+      const pinned = hostShell('152.0.7977.54');
+      const newer = hostShell('999.0.0.1');
+      if (pinned) makeShellBuild(root, pinned.dir, pinned.relExe);
+      if (newer) makeShellBuild(root, newer.dir, newer.relExe);
+      first = resolveHeadlessShellExecutable();
+      if (pinned) {
+        assert.ok(first, 'a shell build installed after the first miss must be found');
+        assert.ok(existsSync(first!));
+        assert.ok(
+          slash(first!).includes(`${pinned.dir}/`),
+          `expected the Chrome-matching build ${pinned.dir}, got ${first}`,
+        );
+      } else {
+        assert.equal(first, null);
+      }
+    });
+    // ── 3. a HIT is memoized (the adapter calls this once per render) ───────
+    assert.equal(resolveHeadlessShellExecutable(), first);
+  });
 
   console.log(`\n${passed} passed`);
   return 0;
