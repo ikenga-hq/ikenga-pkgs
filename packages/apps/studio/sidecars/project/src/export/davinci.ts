@@ -47,6 +47,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import type { Project, Cell, RenderRecord } from '@ikenga/studio-schema';
 
@@ -381,7 +382,7 @@ export function generateFcpxml(
       .reduce((max, c) => Math.max(max, c.durationFrames), 1);
     resourceElements += `
     <asset id="${id}" name="${escapeXmlAttr(uri.split(/[\\/]/).pop() || uri)}" start="0/${fps}s" duration="${durationFramesForAsset}/${fps}s" hasVideo="1" hasAudio="1" format="r1">
-      <media-rep kind="original-media" src="${escapeXmlAttr('file://' + uri)}" />
+      <media-rep kind="original-media" src="${escapeXmlAttr(pathToFileURL(uri).href)}" />
     </asset>`;
   }
 
