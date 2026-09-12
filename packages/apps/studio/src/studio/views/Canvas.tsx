@@ -86,6 +86,7 @@ import {
 } from '../__mocks__/cells';
 import { COMPOSITION_TIMELINE } from '../__mocks__/composition';
 import { buildTimelineModel, clipAt } from '../lib/composition-model';
+import { deleteCellControlName, nextLaneIndex } from '../lib/canvas-model';
 import { EmptyState } from '../components/EmptyState';
 
 // ─── Density ────────────────────────────────────────────────────────────
@@ -414,6 +415,15 @@ export function CanvasView() {
   const refreshRenders = useStoryboardStore((s) => s.refreshRenders);
   const bumpActivePoll = useStoryboardStore((s) => s.bumpActivePoll);
   const refetchStoryboard = useStoryboardStore((s) => s.refetch);
+  // NOTE (found while closing G-103, deliberately NOT fixed here): this is a
+  // PRESENTATION list and its fallback is wider than it reads.
+  // `selectHasRealCells` is `source === 'real' && cells.length > 0`, so a REAL
+  // project with zero cells (fresh scaffold, or after deleting the last shot)
+  // renders the 10-card demo fixture — and the `displayCells.length === 0`
+  // EmptyState below can therefore never fire for one. Nothing that WRITES may
+  // read this list (see `createCell`'s index note); the display half is a
+  // separate defect, it spans the five other views that share the selector, and
+  // it wants its own gap id rather than a drive-by change under a canvas fix.
   const displayCells = useMemo<MockCell[]>(
     () => (hasRealCells ? hydratedCells.map(toDisplayCell) : MOCK_CELLS),
     [hasRealCells, hydratedCells],
@@ -777,7 +787,27 @@ export function CanvasView() {
       uid,
       beat_id: beatId,
       rung: newRung,
-      index: displayCells.length,
+      // G-103 — end-of-lane is ONE piece of arithmetic AND one board, shared
+      // with the node canvas's create path.
+      //
+      // The arithmetic: this was `displayCells.length`, which collides on a
+      // board whose indexes run past the cell count (the sidecar's delete does
+      // not reindex, so any delete leaves such a gap): with 5 cells at indexes
+      // 0,1,2,3,5 it wrote 4 and landed the new shot second-to-last instead of
+      // at the end. `nextLaneIndex` = max(maxIndex + 1, length) is correct on
+      // both a gapped board and a fresh scaffold (every index 0 there, where
+      // max + 1 alone would collide).
+      //
+      // The board: `hydratedCells`, NOT `displayCells`. `displayCells` falls
+      // back to the 10-entry `__mocks__/cells.ts` presentation fixture whenever
+      // `hasRealCells` is false — which includes a REAL project with zero cells
+      // — so feeding it here re-opened the same divergence one level down: the
+      // first cell created on a fresh real board would have been written at
+      // `index: 10` while the canvas wrote 0. `hydratedCells` is the array
+      // `storyboard.create_cell` actually appends to on both boards (real
+      // cells in real mode, the mock MCP's own cells in demo mode), so the two
+      // surfaces now agree by construction and not by coincidence.
+      index: nextLaneIndex(hydratedCells),
       label,
       time: { start: 0, end: 0 },
       frames: { start: 0, end: 0 },
@@ -991,11 +1021,18 @@ export function CanvasView() {
           </span>
         )}
 
-        {/* delete (hover / focus revealed) — real storyboard.delete_cell */}
+        {/* delete (hover / focus revealed) — real storyboard.delete_cell.
+            G-102: the name carries the uid, through the SAME helper the node
+            canvas uses. `item.beat` alone is not unique on a real board — all
+            five cells on the WP-32 fixture read `beat-hello`, so this button
+            rendered five times with the identical accessible name, on the
+            DEFAULT view (`canvasMode` starts at 'rail'). `title` takes the same
+            string because the hover tooltip is the only identification a
+            sighted pointer user gets from a ✕ that is revealed on hover. */}
         <button
           type="button"
-          aria-label={`Delete cell ${item.beat}`}
-          title="Delete cell"
+          aria-label={deleteCellControlName(item)}
+          title={deleteCellControlName(item)}
           onClick={(e) => {
             e.stopPropagation();
             cellMutation.clearError();

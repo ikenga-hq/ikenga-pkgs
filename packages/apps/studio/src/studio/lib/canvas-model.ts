@@ -346,24 +346,53 @@ export function orderChanged(before: string[], after: string[]): boolean {
 // cell SHAPE, so `storyboard.json` gains the same fields whichever surface made
 // it and the `cells/changed` event re-hydrates both.
 //
-// One field deliberately DIFFERS, and the difference is not an oversight:
-// `index`. The Rail sends `displayCells.length` (views/Canvas.tsx). This module
-// sends `nextLaneIndex` = max(maxIndex + 1, length). Those agree on an unbroken
-// board and diverge on a board with a gap — which is exactly the board the
-// delete seam below creates, since the sidecar's `deleteCell`
+// `index` used to be the one field that DIFFERED, and the divergence was a real
+// defect (G-103). The Rail sent `displayCells.length`; this module sends
+// `nextLaneIndex` = max(maxIndex + 1, length). Those agree on an unbroken board
+// and diverge on a board with a GAP — which is exactly the board the delete
+// seam below creates, since the sidecar's `deleteCell`
 // (sidecars/project/src/storyboard.ts) does not reindex. Delete the index-3 of
-// 8 shots and the Rail's next create sends `length` = 7, colliding with the
-// surviving index-7 cell (laneShots sorts on index, so it lands second-to-last);
-// this one sends 8, the true end of the lane. Parity of shape, NOT of that
-// arithmetic — and the node canvas's answer is the correct one.
+// 8 shots and the Rail's next create sent `length` = 7, colliding with the
+// surviving index-7 cell (laneShots sorts on index, so the new shot landed
+// second-to-last instead of at the end). Live-confirmed on the WP-32 fixture:
+// from the canvas, a create on a gapped 5-cell board wrote index 5 = max(4)+1,
+// where the Rail's arithmetic would have written 4 and collided
+// (`g61/5-verdict.md` t6).
 //
-// The Rail builds its cell inline in JSX-land and has NOT been refactored to
-// call `buildNewLaneCell` (a Rail change, outside this seam's blast radius), so
-// nothing in the type system keeps the two literals aligned. What does keep
-// them honest is the key-set + value lock in `canvas-links.test.ts`: a field
-// added or a default changed on either side fails a written-down contract
-// instead of surfacing only as the sidecar's `CellSchema.safeParse`
-// 'invalid-args' in the node-canvas error banner.
+// So `views/Canvas.tsx`'s create call now routes through `nextLaneIndex` too —
+// a one-expression change at the call site, deliberately NOT a refactor of the
+// Rail's inline cell literal into `buildNewLaneCell` (that is a Rail change,
+// outside this seam's blast radius). End-of-lane is now ONE piece of
+// arithmetic, so the two surfaces cannot disagree about where a new shot goes.
+//
+// ONE function was not enough on its own, because the two surfaces were also
+// feeding it DIFFERENT BOARDS. The Rail's first cut passed `displayCells`, its
+// PRESENTATION list — and `displayCells` is `hasRealCells ? hydratedCells.map(
+// toDisplayCell) : MOCK_CELLS`, where `selectHasRealCells` is
+// `source === 'real' && cells.length > 0`. Two boards where that is the wrong
+// input:
+//   • a REAL project with zero cells (a fresh scaffold, or after deleting the
+//     last shot) → `hasRealCells` false → the 10-entry `__mocks__/cells.ts`
+//     fixture, none of which carry `raw`, so both terms collapse to `length`
+//     and the Rail would write `index: 10` for the FIRST cell on disk while the
+//     canvas wrote 0;
+//   • the demo board → the same 10-entry display fixture, while
+//     `storyboard.create_cell` actually appends to the mock MCP's own 6-cell
+//     array (`__mocks__/mcp.ts`), so the Rail wrote 10 into a board whose
+//     end-of-lane is 6.
+// Both surfaces therefore pass the array the create RPC APPENDS TO — the
+// storyboard store's `cells` (`selectHydratedCells`), which is the real board
+// in real mode and the mock MCP's board in demo mode. `nextLaneIndex` stays
+// tolerant of a missing `index` so a hand-edited or presentation-shaped board
+// can still be passed without throwing, but nothing in the app passes one now.
+//
+// Because the Rail still builds its cell inline in JSX-land, nothing in the
+// type system keeps the two literals aligned. What does keep them honest is the
+// key-set + value lock in `canvas-links.test.ts`: a field added or a default
+// changed on either side fails a written-down contract instead of surfacing
+// only as the sidecar's `CellSchema.safeParse` 'invalid-args' in the node-canvas
+// error banner. The shared index arithmetic is pinned in
+// `canvas-controls.test.ts`.
 
 /** The Rail's default label when the user types nothing in the New cell dialog. */
 export const NEW_CELL_LABEL = 'new beat';
@@ -376,14 +405,25 @@ const slugifyBeat = (s: string) =>
 const rnd6 = () => Math.random().toString(36).slice(2, 8);
 
 /**
- * The `Cell.index` a new shot gets so it lands at the END of the lane.
+ * The `Cell.index` a new shot gets so it lands at the END of the lane. The ONE
+ * answer for both create surfaces (the canvas toolbar and the Rail's modal) —
+ * see the G-103 note above.
  *
- * The Rail uses `displayCells.length`, which is right on a fresh scaffold
- * (every index is 0 there) but collides on a board whose indexes have already
- * been written past the cell count — a reorder that left a gap, or a delete.
- * Taking the max of the two is end-of-lane in both cases and never duplicates
- * an existing ordinal, which matters because `laneShots` sorts on `index` and
- * a duplicate would fall back to storyboard order.
+ * `length` alone (what the Rail sent) is right on a fresh scaffold — every
+ * index is 0 there, so `max + 1` would be 1 and collide — but wrong on a board
+ * whose indexes have already been written past the cell count: a reorder that
+ * left a gap, or a delete. `max + 1` alone is right there and wrong on the
+ * scaffold. Taking the max of the two is end-of-lane in BOTH cases and never
+ * duplicates an existing ordinal, which matters because `laneShots` sorts on
+ * `index` and a duplicate falls back to storyboard order.
+ *
+ * Tolerant of a missing/non-finite `index` (counted as 0), because a
+ * hand-edited `storyboard.json` can omit it and a presentation projection never
+ * had it — on such a board the two terms collapse back to `length`. That
+ * tolerance is a guard, NOT a supported call shape: both call sites pass the
+ * storyboard store's schema cells, i.e. the array `storyboard.create_cell`
+ * appends to. See the G-103 note above for why passing a presentation list was
+ * itself the second half of the bug.
  */
 export function nextLaneIndex(cells: Array<{ index?: number }>): number {
   if (cells.length === 0) return 0;
@@ -434,6 +474,100 @@ export function buildNewLaneCell(params: {
     },
     last_edited: now(),
   } as unknown as Cell;
+}
+
+// ─── naming the destructive controls (G-102, live-fixed 2026-09-12) ──────
+//
+// The node canvas renders one delete control PER SHOT, so their accessible
+// names are the only thing distinguishing five destructive buttons from each
+// other — for a screen reader and for a UI driver that resolves a control by
+// name and then clicks it. Getting this wrong is a wrong-shot delete, not a
+// cosmetic a11y nit.
+//
+// The names used to be keyed on `beatNameOf` alone, on the written assumption
+// that `beat_id` "carries a random suffix, so it is unique per cell". That is
+// true only of cells this FE created (`buildNewLaneCell` appends `rnd6()`); it
+// is FALSE for every cell an archetype chain or an agent authored. The live
+// fixture is the disproof: all five of its cells carry `beat_id = beat-hello`,
+// so the graph surface rendered FIVE buttons named exactly
+// `Delete cell beat-hello` — the precise ambiguity the old comment set out to
+// avoid (`g61/5-verdict.md`, `g61/5-graphmode-dom.txt` refs e62/e71/e81/e91/e101).
+// `label` is no better and often worse: this surface's create path hardcodes
+// `NEW_CELL_LABEL`, so three creates give three shots all labelled 'new beat'.
+//
+// `Cell.uid` is the only project-unique identifier on the record, so it goes in
+// the name — the beat stays in front of it because that is the human-readable
+// half and it matches the Rail's `DisplayCell.beat`. The three names below are
+// the DRIVER-FACING CONTRACT; they are pinned by `canvas-controls.test.ts` and
+// listed in the `views/NodeCanvas.tsx` header.
+
+/**
+ * The human-readable half of a shot's identity — `DisplayCell.beat`'s own
+ * expression (`storyboard-store.ts` `toDisplayCell`). NOT unique on a real
+ * board, which is the whole G-102 note above.
+ *
+ * Accepts EITHER shape, so the two surfaces can share one name helper and
+ * genuinely announce the same shot the same way:
+ *   • a schema `Cell` (the node canvas) → `beat_id || label || uid`;
+ *   • the Rail's `DisplayCell` / `MockCell`, which carries the already-computed
+ *     `beat` and no `beat_id` / `label` at all. Without the `beat` branch,
+ *     handing this function a display cell silently falls through to `uid`,
+ *     which is how a "shared" helper can still produce two different strings
+ *     for the same shot.
+ * `beat` is checked first and is by construction the same string the other
+ * branch would derive, so the two inputs agree for any real cell.
+ */
+export function beatNameOf(cell: {
+  uid: string;
+  beat?: string | null;
+  beat_id?: string | null;
+  label?: string | null;
+}): string {
+  return cell.beat || cell.beat_id || cell.label || cell.uid;
+}
+
+/**
+ * Accessible name (and hover tooltip) for a per-shot delete control —
+ * `Delete cell <beat> (<uid>)`.
+ *
+ * Used by ALL THREE per-shot delete controls in the pkg: the node canvas's
+ * expanded card and collapsed strip — a driver must not have to know which
+ * state a card is in — and the RAIL's hover-revealed ✕. The Rail matters most,
+ * not least: `canvasMode` defaults to `'rail'`, so it is the surface a human
+ * lands on, it is the one the WP-32 gate calls "currently the only working
+ * surface", and its ✕ was the only delete the live round drove end-to-end with
+ * a real OS mouse (`g61/5-verdict.md`). Leaving it on `Delete cell ${beat}`
+ * would have left five identical destructive controls on the DEFAULT view
+ * while claiming G-102 was closed.
+ *
+ * It is also the `title`, not just the `aria-label`: on the live fixture every
+ * cell's `beat` is `beat-hello` and every canvas-created shot's label is
+ * `new beat`, so a bare `Delete cell` tooltip is the one affordance a sighted
+ * pointer user gets and it identified nothing.
+ */
+export function deleteCellControlName(cell: {
+  uid: string;
+  beat?: string | null;
+  beat_id?: string | null;
+  label?: string | null;
+}): string {
+  return `Delete cell ${beatNameOf(cell)} (${cell.uid})`;
+}
+
+/**
+ * Accessible name for the ARMED confirm dialog. Deliberately not the same
+ * string as the button that opened it: they coexist in the tree (the per-shot
+ * button is still rendered behind the modal), and a driver resolving
+ * `Delete cell beat-hello (uid)` must not be able to land on the dialog's own
+ * container node instead of the button.
+ *
+ * The dialog's two buttons keep their unqualified `Cancel delete cell` /
+ * `Confirm delete cell` names: the dialog is modal and singleton, so exactly
+ * one of each exists while it is open, and its own name plus its printed uid
+ * line already say which shot is at stake.
+ */
+export function deleteConfirmDialogName(target: { uid: string; beat: string }): string {
+  return `Confirm deleting cell ${target.beat} (${target.uid})`;
 }
 
 // ─── the DOM contract with the <Canvas> primitive (live fix, 2026-09-12) ──

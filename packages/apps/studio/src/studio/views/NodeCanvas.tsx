@@ -59,6 +59,66 @@
  *   path (`render.ingest_external` writes a done row and never extracts a
  *   poster), so the media slot must still say something instead of going
  *   blank.
+ * - G-102 / G-103 / G-104 (live fixes, 2026-09-12) — the three defects the live
+ *   round found in this surface's create/delete affordances:
+ *     · G-102 every destructive control's accessible name AND tooltip carry
+ *       the cell UID (`deleteCellControlName`), because `beat_id` is NOT
+ *       unique on a real board — the fixture's five cells all read
+ *       `beat-hello` and produced five identically-named delete buttons. The
+ *       Rail's own ✕ goes through the same helper (`views/Canvas.tsx`); it is
+ *       the default view, so fixing only this surface would have left the
+ *       defect exactly where a human meets it.
+ *     · G-103 end-of-lane index arithmetic is now ONE function
+ *       (`nextLaneIndex`), shared with the Rail's create path in
+ *       `views/Canvas.tsx`, and both call sites hand it the SAME board (the
+ *       storyboard store's cells — the array the create RPC appends to), so a
+ *       gapped board, a fresh real board and the demo board all get the same
+ *       index from either surface.
+ *     · G-104 the status line and the toolbar are pinned to the PANE WRAPPER
+ *       rather than passed as `<Canvas>` children, and neither the wrapper nor
+ *       the layer can be scrolled (`overflow: clip`, and the edge SVG's pan
+ *       transform moved onto an inner `<g>` so the element contributes no
+ *       overflow). **This is hazard removal, not a diagnosis** — a later live
+ *       round re-observed the bars unpainted with the nodes correctly
+ *       positioned, so the stage-inflation story does not explain the symptom
+ *       and G-104 may well survive this change. Read the chrome-layer comment
+ *       in the JSX below before claiming it is closed.
+ *
+ * ─── Driver-facing strings (the a11y names this surface is addressed by) ──
+ *
+ * A UI driver resolves a control by accessible name and then clicks it, so
+ * these are a contract, not copy — and the destructive ones are a contract
+ * about WHICH SHOT gets written. Changing one breaks the runbook; keep this
+ * table and `../lib/canvas-controls.test.ts` in step with the JSX.
+ *
+ *   surface / role              accessible name
+ *   ---------------------------|---------------------------------------------
+ *   canvas root (application)  | `Studio node canvas`
+ *   toolbar create button      | `New cell` — its TEXT reads `+ New cell`, and
+ *                              | the Rail header's own button is named
+ *                              | `+ New cell`: two different controls that
+ *                              | only the accessible name tells apart (G-103).
+ *   per-shot delete, expanded  | `Delete cell <beat> (<uid>)`
+ *   per-shot delete, collapsed | the same string, deliberately — a driver must
+ *                              | not have to know which state the card is in.
+ *   per-shot delete, RAIL      | the same string again (`views/Canvas.tsx`'s
+ *                              | hover-revealed ✕). The two surfaces are never
+ *                              | mounted at once — `canvasMode` is one or the
+ *                              | other — so one name per shot per view, and a
+ *                              | runbook line resolves on either. All three
+ *                              | also use it as their `title`, so the hover
+ *                              | tooltip says which shot too.
+ *   confirm dialog (dialog)    | `Confirm deleting cell <beat> (<uid>)` —
+ *                              | different from the button that opened it,
+ *                              | which is still in the tree behind the modal.
+ *   confirm dialog buttons     | `Cancel delete cell` / `Confirm delete cell`
+ *                              | — unqualified on purpose, the modal is a
+ *                              | singleton.
+ *   error banner dismiss       | `Dismiss cell error`
+ *
+ * `<beat>` is the Rail's `DisplayCell.beat` (`beat_id || label || uid`) and is
+ * NOT unique on a real board; `<uid>` is what makes each name unique. Both come
+ * from `../lib/canvas-model`'s name helpers, never an inline template here.
  *
  * ─── What this file deliberately does NOT do yet ──────────────────────────
  * - Rendering-ladder row 2 (expanded → `<video>` via `render.read_bytes`) is
@@ -126,7 +186,10 @@ import {
   KEY_BRIDGE_SKIP_SELECTOR,
   NODE_NODRAG_SELECTOR,
   PIPELINE_STAGES,
+  beatNameOf,
   buildNewLaneCell,
+  deleteCellControlName,
+  deleteConfirmDialogName,
   deriveShotStage,
   doneRecordIdByUid,
   doneRecordIdsFor,
@@ -246,7 +309,7 @@ function onNodeRootMouseDown(e: React.MouseEvent<HTMLDivElement>): void {
  *
  * The FIRST guard is the portal guard, and it is not defensive padding: React
  * dispatches capture-phase handlers along the FIBER path, and `ConfirmDialog`
- * is a JSX child of `<Canvas>` that portals to `<body>`. Without it, a mousedown
+ * is a JSX child of this wrapper that portals to `<body>`. Without it, a mousedown
  * on non-interactive text inside the ARMED delete dialog (its uid line) ran this
  * handler and moved focus to the canvas root — re-arming precisely what the
  * dialog's focus trap exists to prevent: its Escape/Tab trap is a NATIVE
@@ -1195,8 +1258,8 @@ export function NodeCanvas() {
   const bridgeCanvasKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement | null;
     // Portal guard, same reason as `focusCanvasSurface`: ConfirmDialog is a
-    // React child of <Canvas> but a DOM child of <body>, and its keys belong to
-    // its own focus trap.
+    // React child of this wrapper but a DOM child of <body>, and its keys
+    // belong to its own focus trap.
     if (!t || !e.currentTarget.contains(t)) return;
     if (t.closest?.(KEY_BRIDGE_SKIP_SELECTOR)) return;
     const root = surfaceRef.current?.querySelector<HTMLElement>('.ikenga-canvas');
@@ -1471,20 +1534,6 @@ export function NodeCanvas() {
    *  parent render. */
   const closeConfirm = useCallback(() => setConfirmDelete(null), []);
 
-  /** The name a destructive control is announced by. Must be the Rail's
-   *  `DisplayCell.beat` (`beat_id || label || uid`, storyboard-store.ts) and NOT
-   *  `label`: this surface's only create path hardcodes NEW_CELL_LABEL with no
-   *  label input, so three '+ New cell' clicks give three shots all labelled
-   *  'new beat'. Keying the accessible name on `label` would render three
-   *  identical "Delete cell new beat" buttons — an ambiguous target for a UI
-   *  driver (a destructive write to the wrong shot) and three indistinguishable
-   *  destructive controls for a screen reader. `beat_id` carries a random
-   *  suffix, so it is unique per cell. */
-  const beatNameOf = useCallback(
-    (cell: Cell) => cell.beat_id || cell.label || cell.uid,
-    [],
-  );
-
   // ─── rendering ─────────────────────────────────────────────────────────
 
   const renderItem = useCallback((item: CanvasNodeItem, state: ItemRenderState) => {
@@ -1677,13 +1726,18 @@ export function NodeCanvas() {
                 ▾
               </button>
               {/* Same delete seam as the expanded card — a collapsed strip must
-                  not be a state where the shot can't be removed. */}
+                  not be a state where the shot can't be removed — and the same
+                  uid-qualified name, so a driver never has to know which state
+                  it is looking at (G-102). `title` is the same string: the
+                  strip shows only `NN · label`, and every canvas-created shot
+                  is labelled `new beat`, so a bare `Delete cell` tooltip left
+                  a pointer user with nothing identifying at all. */}
               <button
                 type="button"
-                aria-label={`Delete cell ${beatNameOf(cell)}`}
+                aria-label={deleteCellControlName(cell)}
                 onClick={(e) => { e.stopPropagation(); requestDeleteCell(cell.uid, beatNameOf(cell)); }}
                 className="rounded border border-soft px-1 text-[8px] text-fg-faint hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                title="Delete cell"
+                title={deleteCellControlName(cell)}
               >
                 <span aria-hidden>✕</span>
               </button>
@@ -1729,13 +1783,16 @@ export function NodeCanvas() {
                 ▴
               </button>
               {/* G-61 b5 — real `storyboard.delete_cell`, behind the same
-                  confirm the Rail asks for. */}
+                  confirm the Rail asks for. Name AND tooltip carry the uid
+                  (G-102): the fixture's five cells all share `beat_id`, so a
+                  bare `Delete cell` tooltip identified the shot no better than
+                  the old beat-only accessible name did. */}
               <button
                 type="button"
-                aria-label={`Delete cell ${beatNameOf(cell)}`}
+                aria-label={deleteCellControlName(cell)}
                 onClick={(e) => { e.stopPropagation(); requestDeleteCell(cell.uid, beatNameOf(cell)); }}
                 className="rounded border border-soft px-1 py-px font-mono text-[7.5px] text-fg-faint hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                title="Delete cell"
+                title={deleteCellControlName(cell)}
               >
                 <span aria-hidden>✕</span>
               </button>
@@ -1859,7 +1916,7 @@ export function NodeCanvas() {
   }, [
     selectedNodeId, renderStatusMap, doneIdByUid, batchedPosterIds, viewport.scale, liveSrcdocUids, toggleLiveSrcdoc,
     collapsedSet, toggleCollapsed, shotStage, groupOfShot, cellHtml, rollup, cells.length,
-    activeGroup, toggleMembership, toggleGroupCollapsed, fountain, requestDeleteCell, beatNameOf,
+    activeGroup, toggleMembership, toggleGroupCollapsed, fountain, requestDeleteCell,
   ]);
 
   return (
@@ -1869,53 +1926,68 @@ export function NodeCanvas() {
     // pointer. See `focusCanvasSurface`. `onKeyDown` is the other half: a click
     // on a NODE ends with focus on the node (Canvas's roving selection), which
     // fails that same gate — see `bridgeCanvasKey`.
+    //
+    // `overflow-clip`, NOT `overflow-hidden`: this box is the anchor for the
+    // chrome layer below, and `hidden` would make it a SCROLL CONTAINER — one
+    // that is programmatically scrollable with no scrollbar to admit it. `clip`
+    // clips identically and cannot scroll at all, so nothing (the primitive's
+    // post-selection focus, a `scrollIntoView`, a driver) can translate the
+    // bars out of the pane. See the chrome-layer comment for the rest.
     <div
       ref={surfaceRef}
-      className="relative h-full w-full overflow-hidden bg-base"
+      className="relative h-full w-full overflow-clip bg-base"
       onMouseDownCapture={focusCanvasSurface}
       onKeyDown={bridgeCanvasKey}
     >
-      {/* Edge layer — pans/zooms with the canvas. */}
+      {/* Edge layer — pans/zooms with the canvas.
+          The pan/zoom transform is on the inner <g>, NOT on the <svg> element.
+          As a CSS transform on the element it translated the svg's own 100%×100%
+          box by `viewport.y` (548 px on the live fixture's persisted viewport),
+          which hung out of the bottom of the wrapper and gave the wrapper real
+          scrollable overflow — reintroducing, one level up, exactly the hazard
+          the chrome layer was moved here to escape. An SVG `transform`
+          attribute on a child is clipped to the outermost <svg>'s viewport
+          (`overflow: hidden` is its initial value), so the element's box stays
+          the pane and contributes nothing. The rendered geometry is unchanged:
+          there is no `viewBox`, so one user unit is one px, and the attribute
+          form is already relative to the user-space origin — `transformOrigin:
+          '0 0'` was only ever compensating for the CSS form's 50%/50% default. */}
       {showEdges && (
-        <svg
-          className="pointer-events-none absolute inset-0 z-0 h-full w-full"
-          style={{
-            transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
-            transformOrigin: '0 0',
-          }}
-        >
-          {edges.map((e) => {
-            const pFrom = effectiveLayout[e.from as ItemId];
-            if (!pFrom) return null;
-            let x2: number;
-            let y2: number;
-            if (e.toPoint) {
-              x2 = e.toPoint.x;
-              y2 = e.toPoint.y;
-            } else {
-              const pTo = e.to ? effectiveLayout[e.to as ItemId] : undefined;
-              if (!pTo) return null;
-              x2 = pTo.x + pTo.w / 2;
-              y2 = pTo.y;
-            }
-            const x1 = pFrom.x + pFrom.w / 2;
-            const y1 = pFrom.y + pFrom.h;
-            const isTether = e.type === 'tether';
+        <svg className="pointer-events-none absolute inset-0 z-0 h-full w-full">
+          <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+            {edges.map((e) => {
+              const pFrom = effectiveLayout[e.from as ItemId];
+              if (!pFrom) return null;
+              let x2: number;
+              let y2: number;
+              if (e.toPoint) {
+                x2 = e.toPoint.x;
+                y2 = e.toPoint.y;
+              } else {
+                const pTo = e.to ? effectiveLayout[e.to as ItemId] : undefined;
+                if (!pTo) return null;
+                x2 = pTo.x + pTo.w / 2;
+                y2 = pTo.y;
+              }
+              const x1 = pFrom.x + pFrom.w / 2;
+              const y1 = pFrom.y + pFrom.h;
+              const isTether = e.type === 'tether';
 
-            return (
-              <line
-                key={e.id}
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
-                stroke={e.color || 'var(--border-soft)'}
-                strokeWidth={isTether ? 1.5 : 1}
-                strokeDasharray={isTether ? '4 3' : e.type === 'stage' ? '2 2' : undefined}
-                opacity={0.65}
-              />
-            );
-          })}
+              return (
+                <line
+                  key={e.id}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={e.color || 'var(--border-soft)'}
+                  strokeWidth={isTether ? 1.5 : 1}
+                  strokeDasharray={isTether ? '4 3' : e.type === 'stage' ? '2 2' : undefined}
+                  opacity={0.65}
+                />
+              );
+            })}
+          </g>
         </svg>
       )}
 
@@ -1943,9 +2015,105 @@ export function NodeCanvas() {
         onSelectionChange={handleSelectionChange}
         ariaLabel="Studio node canvas"
         className="h-full w-full"
-      >
+      />
+
+      {/*
+        The CHROME LAYER (G-104 — hazard removal, 2026-09-12. NOT a diagnosis.)
+
+        Everything below is pinned to the PANE WRAPPER, as a sibling of
+        `<Canvas>` rather than a child of it, and no box between these bars and
+        the pane can scroll.
+
+        ─── What is actually established, and what is not ──────────────────
+
+        OBSERVED: the status line and the toolbar are in the a11y tree with
+        working handlers — `/iyke/click` actuated `New cell` and it created a
+        cell on disk — and are not painted anywhere in the window
+        (`g61/5f-graph-pane-bottomright.png`, `g61/7-gate.md` G-104).
+
+        NOT ESTABLISHED: why. The first fix pass wrote the mechanism down as
+        "`.ikenga-canvas` is an `overflow: hidden` scroll container that the
+        un-positioned node roots (G-86) had inflated to ~13 pane-heights, and
+        something scrolled it". A LATER ROUND FALSIFIES THAT as the explanation:
+        `reload-b3/verdict.md` observed the bars still unpainted AFTER the node
+        roots were positioned, with all five shot nodes and the three node rows
+        visible on screen at once. Had `.ikenga-canvas` been scrolled by a
+        pane-height, those nodes — children of `.ikenga-canvas-stage`, inside
+        the same box — would have left the window with the bars. They did not.
+        That verdict's own words: "G-104 therefore survives the G-86 fix and
+        needs its own pass — it is not a consequence of the stacked-node stage
+        inflation alone."
+
+        So treat G-104 as OPEN. What remains plausible, none of it settled:
+          • the wrapper's box extends below the pane's visible clip on the HOST
+            side (the pkg iframe element taller than the region the shell
+            paints), in which case anything anchored to the bottom edge is out
+            of view and nothing in this file can fix it. In-iframe the height
+            chain is clean — `html, body, #root { height: 100% }` →
+            `App` `flex h-full flex-col` → pane `flex min-h-0 flex-1` →
+            `views/Canvas.tsx`'s `section flex h-full flex-col` → `min-h-0
+            flex-1` → this wrapper `h-full` — so the box SHOULD be the pane;
+          • the capture was not the pane's own bottom-right (pane 1 is the left
+            of two, so the window's bottom-right is pane 2);
+          • a paint/compositing interaction with `.ikenga-canvas-stage`'s
+            `will-change: transform` and the layer's `backdrop-blur`.
+
+        ONE READ SETTLES IT and the next live round should take it before
+        touching layout again: in the iframe, compare the toolbar's
+        `getBoundingClientRect()` with `window.innerHeight/innerWidth` and with
+        the wrapper's own rect. Bottom inside the viewport ⇒ the bars are
+        painted where they belong and the capture or the host clip is the
+        problem, not this file. Outside ⇒ an in-iframe layout cause survives
+        and the next lever is anchoring the toolbar to the TOP edge (the
+        primitive's own `.ikenga-canvas-bar` idiom), which is visible under
+        every hypothesis above but changes the design, so it is not taken
+        pre-emptively. Note `/iyke/logs` returns nothing for this pkg (G-93),
+        so that read needs a temporary on-screen readout, not a console.log.
+
+        ─── What this placement DOES buy, regardless ───────────────────────
+
+        Two hazards are real independent of which one caused the symptom, and
+        both are now gone:
+
+          • `props.children` render as a direct child of `.ikenga-canvas`, which
+            `canvas.css` styles `position: absolute; inset: 0;
+            overflow: hidden` — a scroll container that is programmatically
+            scrollable with no scrollbar to admit it, and whose
+            `.ikenga-canvas-stage` child (overflow VISIBLE, nodes laid out in
+            canvas space well past the pane) gives it a real scrollTop range on
+            an ordinary board. Anything that scrolls it — the primitive's own
+            post-selection `?.focus()` (no `preventScroll`), a browser
+            focus-scroll, a pane focus trap, `scrollIntoView` from a driver —
+            translates every absolutely-positioned child by the scroll amount,
+            unrecoverably. The bars were such children. That this did not
+            happen in `reload-b3` does not make it safe to leave.
+          • Even at scroll offset 0, the bars' containing block was an element
+            whose box the primitive owns and whose overflow the consumer's own
+            `renderItem` inflates. Chrome that must ALWAYS be reachable cannot
+            be positioned against that.
+
+        The wrapper is a sound anchor only because it is made unscrollable
+        explicitly: `overflow-clip` (not `hidden`) there and on this layer, so
+        neither is a scroll container at all, and the edge SVG's pan transform
+        moved onto an inner `<g>` so that element's box no longer hangs
+        `viewport.y` px out of the wrapper and hands it scrollable overflow.
+        "Its children are all absolutely positioned" is NOT sufficient on its
+        own — absolute positioning does not prevent overflow, which is how the
+        transformed SVG produced exactly the hazard this layer was moved to
+        escape, one level up.
+
+        It is `pointer-events-none` with each interactive bar opting back in, so
+        the layer never eats a drag on the board underneath it. Being outside
+        `.ikenga-canvas` also means the primitive's root mousedown (which clears
+        the selection for any target that isn't an item — its
+        `.ikenga-canvas-bar` / `.home-palette` exemptions are home-page classes)
+        never sees these clicks at all. The per-bar `stopPropagation` is kept
+        anyway: it is what made `+ Group` work while they were inside, and it
+        keeps the invariant if anything ever re-parents them.
+      */}
+      <div className="pointer-events-none absolute inset-0 z-20 overflow-clip">
         {/* Honest status line: where layout is being written, and any failure. */}
-        <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-soft bg-surface/90 px-2 py-1 font-mono text-[9px] text-fg-faint backdrop-blur">
+        <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-soft bg-surface/90 px-2 py-1 font-mono text-[9px] text-fg-faint backdrop-blur">
           <span title="Authored layout is persisted to the project, not the browser">
             {persistMode === 'rpc'
               ? 'layout → .studio/canvas.json'
@@ -1991,49 +2159,16 @@ export function NodeCanvas() {
           </div>
         )}
 
-        {/* Delete confirm — the Rail confirms before `storyboard.delete_cell`,
-            so this surface does too rather than inventing a second policy, and
-            through the same focus-trapped modal shape (see ConfirmDialog: a bare
-            in-canvas div would leave Escape meaning "clear selection"). */}
-        {confirmDelete && (
-          <ConfirmDialog title="Delete cell" onClose={closeConfirm}>
-            <h2 className="font-display text-[12px] font-semibold text-fg">Delete this cell?</h2>
-            <p className="mt-1 text-[10px] leading-relaxed text-fg-muted">
-              <span className="font-mono text-fg">{confirmDelete.beat}</span>{' '}
-              <span className="font-mono text-fg-faint">({confirmDelete.uid})</span> will be removed
-              from the storyboard. Its render files on disk are left in place.
-            </p>
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                aria-label="Cancel delete cell"
-                onClick={closeConfirm}
-                className="rounded px-2 py-0.5 text-[10px] text-fg-muted hover:bg-raised hover:text-fg"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                aria-label="Confirm delete cell"
-                disabled={mutationBusy}
-                onClick={() => void deleteCell(confirmDelete.uid)}
-                className="rounded bg-[color-mix(in_oklab,var(--danger)_18%,transparent)] px-2 py-0.5 text-[10px] text-[var(--danger)] ring-1 ring-inset ring-[color-mix(in_oklab,var(--danger)_40%,transparent)] hover:bg-[color-mix(in_oklab,var(--danger)_26%,transparent)] disabled:opacity-50"
-              >
-                {mutationBusy ? 'Deleting…' : 'Delete cell'}
-              </button>
-            </div>
-          </ConfirmDialog>
-        )}
-
-        {/* The toolbar is a CHILD of the canvas surface, and the primitive's
-            root mousedown clears the selection for any target that isn't an
-            item (its `.ikenga-canvas-bar` / `.home-palette` exemptions are
-            home-page classes). Left alone, `+ Group` would lose the shot it is
-            supposed to seed from and `Ungroup` would unmount itself on the way
-            down. Stop the gesture here instead. */}
+        {/* The toolbar. `stopPropagation` on mousedown is vestigial now that it
+            sits outside `.ikenga-canvas` (the primitive's root handler can no
+            longer see these clicks at all) but is kept deliberately: it is what
+            made `+ Group` reachable while the bar was inside — a mousedown that
+            reached the primitive re-selected the board and unmounted the button,
+            which renders only while a GROUP is selected — and it keeps that
+            invariant if anything re-parents this bar. */}
         <div
           onMouseDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-md border border-soft bg-surface/90 p-1 backdrop-blur shadow-md font-mono text-[10px]"
+          className="pointer-events-auto absolute bottom-3 right-3 flex items-center gap-1 rounded-md border border-soft bg-surface/90 p-1 backdrop-blur shadow-md font-mono text-[10px]"
         >
           <button
             type="button"
@@ -2113,7 +2248,54 @@ export function NodeCanvas() {
             Reset
           </button>
         </div>
-      </Canvas>
+      </div>
+
+      {/* Delete confirm — the Rail confirms before `storyboard.delete_cell`, so
+          this surface does too rather than inventing a second policy, and
+          through the same focus-trapped modal shape (see ConfirmDialog: a bare
+          in-canvas div would leave Escape meaning "clear selection").
+
+          Rendered at wrapper level, OUTSIDE the chrome layer: it portals to
+          <body>, so the layer's `pointer-events-none` would not reach it anyway,
+          and keeping it out of a layer that exists to be click-through avoids
+          implying otherwise. It is still a React child of this wrapper, which is
+          exactly why `focusCanvasSurface` / `bridgeCanvasKey` need their
+          `contains()` portal guards — React dispatches along the FIBER path.
+
+          `deleteConfirmDialogName` (G-102) gives the dialog an accessible name
+          that identifies the shot AND differs from the per-shot button that
+          opened it — that button is still in the tree behind the modal, so one
+          shared string would give a name-resolving driver two candidates for a
+          destructive click. */}
+      {confirmDelete && (
+        <ConfirmDialog title={deleteConfirmDialogName(confirmDelete)} onClose={closeConfirm}>
+          <h2 className="font-display text-[12px] font-semibold text-fg">Delete this cell?</h2>
+          <p className="mt-1 text-[10px] leading-relaxed text-fg-muted">
+            <span className="font-mono text-fg">{confirmDelete.beat}</span>{' '}
+            <span className="font-mono text-fg-faint">({confirmDelete.uid})</span> will be removed
+            from the storyboard. Its render files on disk are left in place.
+          </p>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              aria-label="Cancel delete cell"
+              onClick={closeConfirm}
+              className="rounded px-2 py-0.5 text-[10px] text-fg-muted hover:bg-raised hover:text-fg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              aria-label="Confirm delete cell"
+              disabled={mutationBusy}
+              onClick={() => void deleteCell(confirmDelete.uid)}
+              className="rounded bg-[color-mix(in_oklab,var(--danger)_18%,transparent)] px-2 py-0.5 text-[10px] text-[var(--danger)] ring-1 ring-inset ring-[color-mix(in_oklab,var(--danger)_40%,transparent)] hover:bg-[color-mix(in_oklab,var(--danger)_26%,transparent)] disabled:opacity-50"
+            >
+              {mutationBusy ? 'Deleting…' : 'Delete cell'}
+            </button>
+          </div>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
