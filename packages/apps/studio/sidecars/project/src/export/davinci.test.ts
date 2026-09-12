@@ -140,6 +140,17 @@ async function main(): Promise<number> {
       assert.doesNotMatch(spine, /<asset-clip[^>]*\bsrc=/, 'asset-clip must never carry a bare src=');
       // Every declared asset carries a <media-rep> with the actual file src.
       assert.match(resources, /<media-rep kind="original-media" src="file:\/\//);
+      // G-81 (Round 17, live): the src must be a real RFC 8089 file URL
+      // (`file:///C:/...` on Windows, `file:///home/...` on POSIX), never
+      // `file://` + a raw OS path. Resolve 19.1 percent-encodes backslashes
+      // in the malformed form and fails every media lookup with
+      // `CreateFileW error 2`, so ImportTimelineFromFile returns None.
+      const srcs = allAttrValues(resources, 'media-rep', 'src');
+      assert.ok(srcs.length >= 1, 'expected at least one media-rep src');
+      for (const src of srcs) {
+        assert.match(src, /^file:\/\/\//, `media-rep src must start with file:/// — got ${src}`);
+        assert.doesNotMatch(src, /\\/, `media-rep src must not contain backslashes — got ${src}`);
+      }
     });
 
     test('generateFcpxml: same source file used twice dedupes to one <asset>', () => {
