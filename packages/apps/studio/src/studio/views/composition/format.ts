@@ -76,6 +76,12 @@ export function baseName(p: string | undefined): string {
  * lacking timestamps, the later list position) wins. Mirrors foldRenderStatus's
  * recency intent but keeps the full record (id/output/finished_at/engine) the
  * records table + byte-playback need.
+ *
+ * This is a BEST-EVER-STATUS pick (done > running > queued > failed), not a
+ * most-recent-attempt one — exactly what the filmstrip poster / byte-playback
+ * want (the best mp4 we have, even a stale one). It is deliberately NOT used
+ * for the "N / M rendered" banner any more (G-106) — see `latestRecordByUid`
+ * below for that.
  */
 export function recordByUid(records: RenderRecord[]): Record<string, RenderRecord> {
   const out: Record<string, RenderRecord> = {};
@@ -99,6 +105,67 @@ export function recordByUid(records: RenderRecord[]): Record<string, RenderRecor
     if (better) out[r.cell_uid] = r;
   }
   return out;
+}
+
+/**
+ * Latest render record per cell uid, by RECENCY ALONE — finished_at (or,
+ * lacking that, started_at) most-recent wins; among ties, or when neither
+ * timestamp parses, the later list-position wins. NEVER ranks by status, so
+ * a cell that failed after an earlier success reports the FAILED record here,
+ * unlike `recordByUid` above.
+ *
+ * Mirrors the recency rule `lib/canvas-model.ts`'s `doneRecordIdByUid` uses
+ * (most-recent-finished-wins, `>=` so a tie favours the later list entry) —
+ * reimplemented rather than imported because that module filters to `done`
+ * records only and keeps its timestamp helper (`recordTimeMs`) private, and
+ * the banner below needs every status, failed included.
+ *
+ * Fixes G-106: the "N / M rendered" banner was built on `recordByUid`'s
+ * best-EVER-status pick, so a cell that failed after once succeeding kept
+ * reporting its old `done` record and the banner could never show a
+ * regression. This reports what the cell's MOST RECENT render attempt
+ * actually did.
+ */
+export function latestRecordByUid(records: RenderRecord[]): Record<string, RenderRecord> {
+  const out: Record<string, RenderRecord> = {};
+  const bestT: Record<string, number> = {};
+  for (const r of records) {
+    if (!r || !r.cell_uid) continue;
+    const v = r.finished_at ?? r.started_at;
+    const t = v ? Date.parse(v) : NaN;
+    const tm = Number.isFinite(t) ? t : 0;
+    const prev = bestT[r.cell_uid];
+    if (prev === undefined || tm >= prev) {
+      bestT[r.cell_uid] = tm;
+      out[r.cell_uid] = r;
+    }
+  }
+  return out;
+}
+
+/** Counts backing the Composition "N / M rendered" banner (G-106): how many
+ *  cells' LATEST render attempt is done, and how many are failed — never a
+ *  best-ever-status pick. `latestByUid` should come from `latestRecordByUid`
+ *  above; `clips` supplies the fallback `status` (itself `foldRenderStatus`'d,
+ *  active-over-terminal) for a cell with no render record at all yet. */
+export interface RenderCounts {
+  rendered: number;
+  failed: number;
+  total: number;
+}
+
+export function renderCounts(
+  clips: readonly { uid: string; status?: RenderStatus }[],
+  latestByUid: Record<string, RenderRecord>,
+): RenderCounts {
+  let rendered = 0;
+  let failed = 0;
+  for (const c of clips) {
+    const st = latestByUid[c.uid]?.status ?? c.status;
+    if (st === 'done') rendered += 1;
+    else if (st === 'failed') failed += 1;
+  }
+  return { rendered, failed, total: clips.length };
 }
 
 /** Copy text to the clipboard, with an execCommand fallback for the sandboxed
