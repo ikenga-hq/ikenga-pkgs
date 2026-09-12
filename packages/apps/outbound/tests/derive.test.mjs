@@ -177,6 +177,7 @@ function histRow(over = {}) {
 // Anchor "now" for deterministic 60-day window tests.
 // Use a fixed past date so relative comparisons are stable.
 // All "inside 60d" dates are set to within 60 days of 2026-06-10.
+const TEST_NOW = new Date('2026-06-10T12:00:00Z').getTime();
 const INSIDE_60D = '2026-06-01 10:00:00';   // 9 days before 2026-06-10
 const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
 
@@ -184,7 +185,8 @@ const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
   // 1. Empty history → honest '—' freshness + '—' previously-featured.
   const { freshness, previouslyFeatured } = newsletterHistorySignals(
     { subject: 'Hello', body: 'Hello https://royalti.io/blog/a', section: 'slug-a' },
-    []
+    [],
+    TEST_NOW
   );
   eq(freshness.value, '—', 'empty history: freshness value is —');
   eq(freshness.sub, 'no sent history', 'empty history: freshness sub correct');
@@ -198,7 +200,8 @@ const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
   const rows = [histRow({ subject: 'You can deliver from Royalti now', sent_at: INSIDE_60D })];
   const { freshness } = newsletterHistorySignals(
     { subject: 'You can deliver from Royalti now' },
-    rows
+    rows,
+    TEST_NOW
   );
   eq(freshness.tone, 'warn', 'repeat inside 60d: tone is warn');
   eq(freshness.value, 'Repeat', 'repeat inside 60d: value is Repeat');
@@ -210,7 +213,8 @@ const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
   const rows = [histRow({ subject: 'You can deliver from Royalti now', sent_at: OUTSIDE_60D })];
   const { freshness } = newsletterHistorySignals(
     { subject: 'You can deliver from Royalti now' },
-    rows
+    rows,
+    TEST_NOW
   );
   eq(freshness.tone, 'ok', 'repeat outside 60d: tone is ok');
   eq(freshness.value, 'Fresh', 'repeat outside 60d: value is Fresh');
@@ -222,7 +226,8 @@ const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
   const rows = [histRow({ subject: 'Different subject entirely', sent_at: INSIDE_60D })];
   const { freshness } = newsletterHistorySignals(
     { subject: 'Schema patches that unblocked tenant 590' },
-    rows
+    rows,
+    TEST_NOW
   );
   eq(freshness.tone, 'ok', 'no subject match: tone ok');
   eq(freshness.value, 'Fresh', 'no subject match: value Fresh');
@@ -233,7 +238,8 @@ const OUTSIDE_60D = '2026-03-01 10:00:00';  // ~101 days before 2026-06-10
   const rows = [histRow({ subject: '  YOU CAN DELIVER FROM ROYALTI NOW  ', sent_at: INSIDE_60D })];
   const { freshness } = newsletterHistorySignals(
     { subject: 'you can deliver from royalti now' },
-    rows
+    rows,
+    TEST_NOW
   );
   eq(freshness.tone, 'warn', 'normalised subject: still matches');
 }
