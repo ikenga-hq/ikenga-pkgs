@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  buildResolvePythonScript,
   escapeXmlAttr,
   generateFcpxml,
   msToFrames,
@@ -284,6 +285,98 @@ async function main(): Promise<number> {
     test('sanitizeFilenameComponent: strips path separators and colons from a title-derived filename', () => {
       const s = sanitizeFilenameComponent('My/Weird:Title*With?Chars');
       assert.doesNotMatch(s, /[\\/:*?"<>|]/);
+    });
+
+    // ── G-77: JSON payloads must be json.loads-wrapped Python literals ─────
+    // JSON.stringify output interpolated bare into Python source is invalid
+    // Python (null/true/false are NameErrors). Found live 2026-09-11: every
+    // unseeded cell's `seed: null` crashed the generated script with
+    // `name 'null' is not defined` the moment Resolve was actually running.
+    test('buildResolvePythonScript: payload interpolations are json.loads string literals, never bare JSON (G-77)', () => {
+      const cells = [fakeCell({ uid: 'c1', duration_ms: 1000 })]; // seed unset → payload contains JSON null
+      const renders = new Map<string, RenderRecord>([['c1', fakeRecord(videoA)]]);
+      const project = fakeProject({
+        audio_analysis: { bpm: 120, downbeats: [0], beats: [500], onsets: [250] },
+      } as never);
+      const script = buildResolvePythonScript(cells, renders, project, tmpDir, 'TL G77', 30, true);
+      for (const v of ['clips_data', 'downbeats', 'beats', 'onsets']) {
+        assert.match(
+          script,
+          new RegExp(`${v} = json\\.loads\\("`),
+          `${v} must decode from a json.loads string literal`,
+        );
+        assert.doesNotMatch(
+          script,
+          new RegExp(`${v} = \\[`),
+          `${v} must never be a bare interpolated JSON literal`,
+        );
+      }
+      // The G-77 crash signature — a bare JSON object/array emitted as Python.
+      assert.doesNotMatch(script, /clips_data = \[\{/, 'JSON.stringify payload leaked bare into Python');
+    });
+
+    test('buildResolvePythonScript: null seed / missing model survive the round-trip through json.loads', () => {
+      const cells = [fakeCell({ uid: 'c1', duration_ms: 1000 })];
+      const renders = new Map<string, RenderRecord>([['c1', fakeRecord(videoA)]]);
+      const project = fakeProject();
+      const script = buildResolvePythonScript(cells, renders, project, tmpDir, 'TL', 30, true);
+      // The clips payload line must be a single well-formed json.loads(...) call
+      // whose argument is a double-quoted Python string literal (JSON string
+      // syntax is a subset of Python's), so json.loads can decode it 1:1.
+      const m = script.match(/clips_data = json\.loads\("(?:[^"\\]|\\.)*"\)/);
+      assert.ok(m, 'clips_data payload must be a quoted string literal');
+      // The unseeded cell renders `seed: null` inside that literal — allowed
+      // there (escaped as \" inside the Python string), decoded to Python
+      // None at runtime.
+      assert.match(m![0], /\\?"seed\\?":null/);
+    });
+
+    // ── G-79: CreateTimelineFromClips is the primary population path ──────
+    // Found live on Resolve 19.1/Windows: AppendToTimeline returns a
+    // non-empty list while silently placing nothing (UI shows "0 Clip").
+    test('buildResolvePythonScript: populates via CreateTimelineFromClips with an absolute-recordFrame base probe, AppendToTimeline only as fallback (G-79)', () => {
+      const cells = [fakeCell({ uid: 'c1', duration_ms: 1000 })];
+      const renders = new Map<string, RenderRecord>([['c1', fakeRecord(videoA)]]);
+      const script = buildResolvePythonScript(cells, renders, fakeProject(), tmpDir, 'TL', 30, true);
+      // Primary: CTFC with clip_infos built from a learned base.
+      assert.match(script, /timeline = mp\.CreateTimelineFromClips\(/, 'CreateTimelineFromClips must be the primary population path');
+      // Base learning: existing timeline first, then a throwaway probe.
+      assert.match(script, /GetTimelineByIndex\(1\)/);
+      assert.match(script, /__ikenga_base_probe__/);
+      assert.match(script, /mp\.DeleteTimelines\(\[probe_tl\]\)/);
+      // Fallback kept for builds where append works — but AFTER CTFC.
+      const ctfcAt = script.indexOf('CreateTimelineFromClips');
+      const appendAt = script.indexOf('mp.AppendToTimeline(');
+      assert.ok(ctfcAt > -1 && appendAt > -1 && ctfcAt < appendAt, 'CTFC must precede the AppendToTimeline fallback');
+      // A None timeline is reported honestly, never crashed into (G-75 #5 spirit).
+      assert.match(script, /TIMELINE_CREATE_FAILED/);
+    });
+
+    // ── G-78: live quantization uses the project's runtime frame rate ─────
+    // Found live: the caller's fps (30) quantized markers into a 24fps
+    // project timeline — every marker landed 25% late in wall-clock time.
+    test('buildResolvePythonScript: reads timelineFrameRate at runtime and quantizes markers/record positions with it (G-78)', () => {
+      const cells = [fakeCell({ uid: 'c1', duration_ms: 1000 })];
+      const renders = new Map<string, RenderRecord>([['c1', fakeRecord(videoA)]]);
+      const project = fakeProject({
+        audio_analysis: { bpm: 120, downbeats: [0], beats: [500], onsets: [250] },
+      } as never);
+      const script = buildResolvePythonScript(cells, renders, project, tmpDir, 'TL', 30, true);
+      assert.match(script, /GetSetting\("timelineFrameRate"\)/);
+      // Marker frames are computed from proj_fps, never the caller fps.
+      assert.match(script, /round\(\(db \/ 1000\.0\) \* proj_fps\)/);
+      assert.match(script, /round\(\(beat \/ 1000\.0\) \* proj_fps\)/);
+      assert.match(script, /round\(\(onset \/ 1000\.0\) \* proj_fps\)/);
+      // Record positions are base + ms quantized at the runtime fps.
+      assert.match(script, /base \+ round\(\(item\["startMs"\] \/ 1000\.0\) \* proj_fps\)/);
+      // The payload carries absolute startMs so the runtime fps can be applied
+      // (escaped as \" inside the json.loads string literal).
+      assert.match(script, /\\?"startMs\\?":0/);
+      // Success reports the effective frame rate and what actually landed.
+      assert.match(script, /"clipsPlaced": clips_placed/);
+      assert.match(script, /"frameRate": proj_fps/);
+      // And does NOT quantize markers at the caller fps anymore.
+      assert.doesNotMatch(script, /round\(\(db \/ 1000\.0\) \* fps\)/);
     });
 
     // ── outputPath resolution mirrors export.compose (G-75 #9) ────────────
