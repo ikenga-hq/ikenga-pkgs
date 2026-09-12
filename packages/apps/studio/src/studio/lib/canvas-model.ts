@@ -5,7 +5,8 @@
 // pan/zoom primitive.
 
 import type { Placement } from '@ikenga/contract/canvas';
-import type { Cell, RenderStatus } from '../mcp-types';
+import { rungDir } from '../mcp-types';
+import type { Cell, RenderStatus, Rung } from '../mcp-types';
 
 // ─── the pipeline (Plan 25 "node model" table) ───────────────────────────
 //
@@ -190,4 +191,101 @@ export function orderChanged(before: string[], after: string[]): boolean {
   if (before.length !== after.length) return true;
   for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) return true;
   return false;
+}
+
+// ─── creating a shot at the end of the lane (G-61 behaviour 5) ───────────
+//
+// The Rail owns the same two seams (`storyboard.create_cell` /
+// `storyboard.delete_cell`); the node canvas calls the SAME RPCs with the same
+// cell SHAPE, so `storyboard.json` gains the same fields whichever surface made
+// it and the `cells/changed` event re-hydrates both.
+//
+// One field deliberately DIFFERS, and the difference is not an oversight:
+// `index`. The Rail sends `displayCells.length` (views/Canvas.tsx). This module
+// sends `nextLaneIndex` = max(maxIndex + 1, length). Those agree on an unbroken
+// board and diverge on a board with a gap — which is exactly the board the
+// delete seam below creates, since the sidecar's `deleteCell`
+// (sidecars/project/src/storyboard.ts) does not reindex. Delete the index-3 of
+// 8 shots and the Rail's next create sends `length` = 7, colliding with the
+// surviving index-7 cell (laneShots sorts on index, so it lands second-to-last);
+// this one sends 8, the true end of the lane. Parity of shape, NOT of that
+// arithmetic — and the node canvas's answer is the correct one.
+//
+// The Rail builds its cell inline in JSX-land and has NOT been refactored to
+// call `buildNewLaneCell` (a Rail change, outside this seam's blast radius), so
+// nothing in the type system keeps the two literals aligned. What does keep
+// them honest is the key-set + value lock in `canvas-links.test.ts`: a field
+// added or a default changed on either side fails a written-down contract
+// instead of surfacing only as the sidecar's `CellSchema.safeParse`
+// 'invalid-args' in the node-canvas error banner.
+
+/** The Rail's default label when the user types nothing in the New cell dialog. */
+export const NEW_CELL_LABEL = 'new beat';
+/** The Rail's default rung (its `newRung` initial state). */
+export const NEW_CELL_RUNG: Rung = '2_hifi';
+
+const slugifyBeat = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'beat';
+
+const rnd6 = () => Math.random().toString(36).slice(2, 8);
+
+/**
+ * The `Cell.index` a new shot gets so it lands at the END of the lane.
+ *
+ * The Rail uses `displayCells.length`, which is right on a fresh scaffold
+ * (every index is 0 there) but collides on a board whose indexes have already
+ * been written past the cell count — a reorder that left a gap, or a delete.
+ * Taking the max of the two is end-of-lane in both cases and never duplicates
+ * an existing ordinal, which matters because `laneShots` sorts on `index` and
+ * a duplicate would fall back to storyboard order.
+ */
+export function nextLaneIndex(cells: Array<{ index?: number }>): number {
+  if (cells.length === 0) return 0;
+  let max = -1;
+  for (const c of cells) {
+    const i = typeof c.index === 'number' && Number.isFinite(c.index) ? c.index : 0;
+    if (i > max) max = i;
+  }
+  return Math.max(max + 1, cells.length);
+}
+
+/**
+ * A minimal valid Cell, the same shape the Rail's `createCell` sends (the Rail
+ * still builds its own copy inline — see the section note above for why, and
+ * for the test that pins this shape so the two can't drift silently).
+ * The sidecar's `CellSchema.parse` fills the rest (shot_type, renderer,
+ * approved, …) — hence the cast, exactly as the Rail casts.
+ *
+ * `suffix` / `now` are injectable so the test can assert the derived strings
+ * (uid, beat_id, content_path) instead of asserting around randomness.
+ */
+export function buildNewLaneCell(params: {
+  index: number;
+  label?: string;
+  rung?: Rung;
+  suffix?: () => string;
+  now?: () => string;
+}): Cell {
+  const label = (params.label ?? '').trim() || NEW_CELL_LABEL;
+  const rung = params.rung ?? NEW_CELL_RUNG;
+  const suffix = params.suffix ?? rnd6;
+  const now = params.now ?? (() => new Date().toISOString());
+  const beatId = `${slugifyBeat(label)}-${suffix()}`;
+  const uid = `${beatId}-${suffix()}`;
+  return {
+    uid,
+    beat_id: beatId,
+    rung,
+    index: params.index,
+    label,
+    time: { start: 0, end: 0 },
+    frames: { start: 0, end: 0 },
+    content_path: `cells/${rungDir(rung)}/${uid}/content.html`,
+    rungs: {
+      '0_beat_sheet': { status: 'pending' },
+      '1_lofi': { status: 'pending' },
+      '2_hifi': { status: 'pending' },
+    },
+    last_edited: now(),
+  } as unknown as Cell;
 }

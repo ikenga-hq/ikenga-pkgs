@@ -25,9 +25,14 @@ import assert from 'node:assert/strict';
 import { parseFountain } from './fountain';
 import { deriveBeatShotLinks, computeLinking, otioSceneOf } from './tag-linking';
 import {
+  GRID_SNAP,
+  NEW_CELL_LABEL,
+  NEW_CELL_RUNG,
+  buildNewLaneCell,
   inLaneBand,
   laneOrderFrom,
   laneSlot,
+  nextLaneIndex,
   orderChanged,
   stripDerived,
 } from './canvas-model';
@@ -224,6 +229,128 @@ test('non-cell keys are never mistaken for orphans (groups included)', () => {
   const swept = sweepOrphans(doc, new Set(), isCellKey, NOW);
   assert.deepEqual(Object.keys(swept.layout).sort(), ['group-g1', 'node-script', 'stage-render']);
   assert.deepEqual(swept.orphans, {});
+});
+
+// ── G-61 behaviour 5 ────────────────────────────────────────────────────
+//
+// The node canvas gained the Rail's two write seams (create at the end of the
+// lane / delete a shot). Only the parts that carry a decision are headlessly
+// testable: WHERE a new shot lands and WHAT a default cell is. The RPC pair
+// itself (`storyboard.create_cell` / `storyboard.delete_cell`) is the Rail's,
+// called unchanged.
+
+console.log('\nG-61 b5 · create at the end of the lane');
+
+test('an empty board starts at index 0', () => {
+  assert.equal(nextLaneIndex([]), 0);
+});
+
+test('a fresh scaffold (every index 0) appends at the cell count — same as the Rail', () => {
+  assert.equal(nextLaneIndex([{ index: 0 }, { index: 0 }, { index: 0 }]), 3);
+});
+
+test('an ordered board appends after the highest index', () => {
+  assert.equal(nextLaneIndex([{ index: 0 }, { index: 1 }, { index: 2 }]), 3);
+});
+
+test('a board whose indexes run past the cell count still lands at the END', () => {
+  // e.g. cells 0 and 7 after a delete — the Rail's `length` would be 2, which
+  // sorts BEFORE 7 and so is not the end of the lane.
+  assert.equal(nextLaneIndex([{ index: 0 }, { index: 7 }]), 8);
+});
+
+test('a missing or non-finite index counts as 0 rather than poisoning the max', () => {
+  assert.equal(nextLaneIndex([{ index: 0 }, {}, { index: Number.NaN }]), 3);
+});
+
+test('a new cell carries the Rail defaults and a content_path derived from its uid', () => {
+  let n = 0;
+  const cell = buildNewLaneCell({
+    index: 4,
+    suffix: () => (n++ === 0 ? 'aaa111' : 'bbb222'),
+    now: () => '2026-09-12T00:00:00.000Z',
+  });
+  assert.equal(cell.label, NEW_CELL_LABEL);
+  assert.equal(cell.rung, NEW_CELL_RUNG);
+  assert.equal(cell.index, 4);
+  assert.equal(cell.beat_id, 'new-beat-aaa111');
+  assert.equal(cell.uid, 'new-beat-aaa111-bbb222');
+  // `rungDir` maps the rung id to its on-disk dir ('2_hifi' → 'hifi'), exactly
+  // as the Rail's createCell does.
+  assert.equal(cell.content_path, `cells/hifi/${cell.uid}/content.html`);
+  assert.equal(cell.last_edited, '2026-09-12T00:00:00.000Z');
+});
+
+test('a typed label is slugified into beat_id and kept verbatim as the label', () => {
+  const cell = buildNewLaneCell({ index: 0, label: '  Cold Open / Hook!  ', suffix: () => 'zz9999' });
+  assert.equal(cell.label, 'Cold Open / Hook!');
+  assert.equal(cell.beat_id, 'cold-open-hook-zz9999');
+});
+
+test('a new cell is not PLACED — it takes its lane slot from the index alone', () => {
+  // Create writes NO authored placement. Asserted against an independently
+  // built derived map (the shape the view recomputes every render), not against
+  // itself — `stripDerived(m, m)` is `{}` for any m, so a self-comparison would
+  // pass even if `laneSlot` returned garbage.
+  const board = [{ index: 0 }, { index: 1 }];
+  const fresh = buildNewLaneCell({ index: nextLaneIndex(board), suffix: () => 'fr3sh1' });
+  assert.equal(fresh.index, 2);
+
+  const derived = {
+    a: laneSlot(0, false),
+    b: laneSlot(1, false),
+    [fresh.uid]: laneSlot(2, false),
+  };
+  assert.equal(inLaneBand(derived[fresh.uid]), true);
+
+  // What `createCellAtLaneEnd` actually leaves in `doc.layout`: nothing for the
+  // new uid. A regression that seeded a placement so the node renders before
+  // the refetch lands would put the uid in here and fail this.
+  const layoutAfterCreate = { a: laneSlot(0, false) };
+  assert.equal(fresh.uid in stripDerived(layoutAfterCreate, derived), false);
+
+  // And if something DID write the derived slot, it is still not authored…
+  assert.deepEqual(stripDerived({ [fresh.uid]: laneSlot(2, false) }, derived), {});
+
+  // …while a slot the user dragged off survives — the control that proves the
+  // two assertions above are load-bearing rather than vacuous.
+  const nudged = { ...laneSlot(2, false), x: laneSlot(2, false).x + GRID_SNAP };
+  assert.deepEqual(stripDerived({ [fresh.uid]: nudged }, derived), { [fresh.uid]: nudged });
+});
+
+test('the built cell key set is LOCKED to the Rail\'s inline literal', () => {
+  // The Rail (views/Canvas.tsx `createCell`) builds its own copy of this
+  // literal and was not refactored to call `buildNewLaneCell`, so nothing in
+  // the type system keeps the two aligned — `Cell` is reached through a cast on
+  // both sides precisely because the schema's defaulted fields are absent here.
+  // This pins the contract: add a field to one surface and this fails, instead
+  // of the sidecar's CellSchema rejecting one surface's cells at runtime.
+  const cell = buildNewLaneCell({ index: 0, suffix: () => 'aaa111', now: () => 'T' });
+  assert.deepEqual(
+    Object.keys(cell as unknown as Record<string, unknown>).sort(),
+    [
+      'beat_id',
+      'content_path',
+      'frames',
+      'index',
+      'label',
+      'last_edited',
+      'rung',
+      'rungs',
+      'time',
+      'uid',
+    ],
+  );
+  assert.deepEqual(cell.time, { start: 0, end: 0 });
+  assert.deepEqual(cell.frames, { start: 0, end: 0 });
+  assert.deepEqual(cell.rungs, {
+    '0_beat_sheet': { status: 'pending' },
+    '1_lofi': { status: 'pending' },
+    '2_hifi': { status: 'pending' },
+  });
+  // Not asserted as equal to the Rail's: `index`. See the section note in
+  // canvas-model.ts — the Rail sends `displayCells.length`, this sends
+  // max(maxIndex+1, length), and the divergence on a gapped board is deliberate.
 });
 
 console.log(`\n${passed} passed`);

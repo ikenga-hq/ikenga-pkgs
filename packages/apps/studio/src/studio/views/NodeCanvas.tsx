@@ -36,8 +36,13 @@
  *   a poster, expanded un-rendered ones a live draft, and that is the whole
  *   ladder this surface claims.
  * - The plan's per-kind ACTIONS table (breakdown.run / anchor.generate /
- *   render / retry / export.compose) is not wired. The only mutations this
- *   canvas performs are the lane reorder and its own layout.
+ *   render / retry / export.compose) is not wired. This canvas mutates
+ *   `storyboard.json` through exactly THREE seams and no others — the lane
+ *   reorder (`storyboard.reorder_cells`), and G-61 b5's create / delete
+ *   (`storyboard.create_cell` / `storyboard.delete_cell`), both of which are
+ *   the Rail's RPCs called unchanged. Everything else it writes is its own
+ *   layout in `.studio/canvas.json`. If you are auditing which surfaces can
+ *   remove a shot, this one can.
  * - D-25-4's stage rollup ships only its uncontroversial half (counts primary,
  *   a failed member promotes a warning). The founder decision is still open.
  * - No `createObjectURL` happens in this file, so there is nothing here to
@@ -48,6 +53,7 @@
  */
 
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Canvas, type ItemId, type Placement, type Viewport, type ItemRenderState } from '@ikenga/contract/canvas';
 
 import {
@@ -65,6 +71,7 @@ import { subscribeStudioEvent } from '../bridge';
 import { parseFountain, type FountainDoc } from '../lib/fountain';
 import { deriveBeatShotLinks } from '../lib/tag-linking';
 import { buildDraftDoc } from '../lib/draft-doc';
+import { useAsyncAction } from '../lib/use-async-action';
 import {
   emptyCanvasDoc,
   normalizeCanvasDoc,
@@ -78,10 +85,12 @@ import {
   LANE_X0,
   LANE_STEP,
   PIPELINE_STAGES,
+  buildNewLaneCell,
   deriveShotStage,
   inLaneBand,
   laneOrderFrom,
   laneSlot,
+  nextLaneIndex,
   orderChanged,
   rollupStages,
   stageNodeId,
@@ -147,6 +156,109 @@ function serializeDoc(doc: CanvasDoc): string {
 
 const localKey = (projectId: string) => `ikenga:studio:canvas-doc:${projectId}`;
 
+/**
+ * Focus-trapped confirm, mirroring the Rail's `Modal` (views/Canvas.tsx) —
+ * aria-modal, initial focus, a Tab cycle, a backdrop that dismisses, and an
+ * Escape handler.
+ *
+ * The Escape handler is not optional decoration here. The canvas primitive
+ * registers a WINDOW-level keydown where Escape means "exit edit mode + clear
+ * selection" (`@ikenga/contract/canvas`'s use-pan-zoom). Left to bubble, the
+ * universal dismiss gesture would silently drop the user's canvas selection and
+ * leave an ARMED delete dialog open. `stopPropagation` in this bubble-phase
+ * listener keeps the key from ever reaching that window listener.
+ *
+ * Portalled to <body> for the same reason the Rail portals: it escapes the
+ * canvas transform (an absolutely-positioned child of the pan/zoom surface is
+ * not reliably on top, or even on screen) and the app's pane-level focus trap.
+ *
+ * Kept local rather than imported: the Rail's `Modal` is module-private to
+ * views/Canvas.tsx, and hoisting it into a shared module is a Rail edit outside
+ * this seam. The two should be merged when something next touches both.
+ */
+function ConfirmDialog({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  const focusablesIn = (el: HTMLElement) =>
+    Array.from(
+      el.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((f) => f.offsetParent !== null);
+
+  // Initial focus, ONCE. Deliberately not folded into the keydown effect below:
+  // that one depends on `onClose`, and re-running it on every parent render
+  // (mutationBusy flipping, a viewport nudge) would yank focus back to the first
+  // control while the user is tabbing.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const opener = document.activeElement as HTMLElement | null;
+    (focusablesIn(el)[0] ?? el).focus();
+    // Hand focus back on Cancel/Escape. After a successful delete the opener is
+    // gone from the DOM and `focus()` on a detached node is a no-op, which is
+    // the right answer there too.
+    return () => opener?.focus?.();
+  }, []);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const focusables = () => focusablesIn(el);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Never let the canvas primitive's window-level Escape see this.
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const f = focusables();
+      if (f.length === 0) return;
+      const first = f[0];
+      const last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        last.focus();
+        e.preventDefault();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        first.focus();
+        e.preventDefault();
+      }
+    };
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[color-mix(in_oklab,var(--bg-sunken)_82%,transparent)] p-4"
+      onMouseDown={onClose}
+    >
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-lg border border-soft bg-surface p-4 text-fg shadow-xl outline-none"
+      >
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function NodeCanvas() {
   const project = useProjectStore(selectOpenProject);
   const projectDoc = useStoryboardStore(selectHydratedProject);
@@ -172,6 +284,18 @@ export function NodeCanvas() {
   const [cellHtml, setCellHtml] = useState<Record<string, { html: string; exists: boolean } | 'loading' | 'error'>>({});
   const [fountain, setFountain] = useState<FountainDoc | null>(null);
   const [reorderBusy, setReorderBusy] = useState(false);
+
+  // G-61 behaviour 5 — the create / delete seams, through the SAME
+  // `useAsyncAction` + `storyboardApi` pair the Rail uses, so one busy/error
+  // shape covers both mutations and `storyboard.json` changes identically
+  // whichever surface made the edit.
+  const cellMutation = useAsyncAction();
+  const [confirmDelete, setConfirmDelete] = useState<{ uid: string; beat: string } | null>(null);
+  /** True once a create/delete on this surface resolved against the MOCK client.
+   *  The mutation genuinely succeeded — against the in-memory demo board, not
+   *  disk. See the create/delete block below for why this is a status line and
+   *  not a gate. */
+  const [demoWrite, setDemoWrite] = useState(false);
 
   const viewport = doc.viewport ?? DEFAULT_VIEWPORT;
 
@@ -703,6 +827,10 @@ export function NodeCanvas() {
     contentRequested.current.clear();
     setCellHtml({});
     setLiveSrcdocUids([]);
+    // …and any cell-mutation state, which described the OLD board: a confirm
+    // armed on a uid that is no longer on screen, and the demo-board notice.
+    setConfirmDelete(null);
+    setDemoWrite(false);
   }, [project?.project_id]);
 
   // ─── mutations ─────────────────────────────────────────────────────────
@@ -892,6 +1020,96 @@ export function NodeCanvas() {
     setDoc((prev) => ({ ...prev, lane_collapsed: !prev.lane_collapsed }));
   }, []);
 
+  // ─── create / delete a shot (G-61 behaviour 5) ─────────────────────────
+  //
+  // Same two RPCs the Rail calls, same refetch afterwards. Nothing about the
+  // canvas is involved: a new cell takes its lane slot from `Cell.index` like
+  // every other shot (no authored placement is written), and a deleted one
+  // leaves its placement behind as a D-25-2 tombstone rather than being swept
+  // here — the cells refetch and the `cells/changed` event do the rest, on both
+  // surfaces at once.
+  //
+  // MOCK MODE — deliberately NOT gated on `client.mode === 'real'`, unlike
+  // `commitLaneReorder` above. The asymmetry is real and worth stating, because
+  // it reads like an oversight:
+  //   • `storyboard.reorder_cells` has NO case in `__mocks__/mcp.ts`, so calling
+  //     it on the demo board throws a raw 'unknown tool' — the guard there is
+  //     what keeps a demo drag from raising a meaningless banner.
+  //   • `storyboard.create_cell` / `storyboard.delete_cell` DO have cases
+  //     (they mutate the module-level MOCK_CELLS and emit `cells/changed`), and
+  //     the Rail calls them ungated. Demo-board create/delete is a working,
+  //     intended demo affordance; gating it HERE would make the same gesture
+  //     work in the Rail and fail on the canvas, on the same board.
+  // What is genuinely wrong in mock mode is silence: `getMcpClient` degrades to
+  // the mock when the studio MCP server is slow or crash-looping (it re-probes
+  // every PROBE_RETRY_MS), so a create can appear to succeed, write nothing to
+  // disk, and be erased seconds later when the real client comes back. So the
+  // mode is recorded and reported on the status line instead of being swallowed.
+  const {
+    run: runCellMutation,
+    busy: mutationBusy,
+    error: mutationError,
+    clearError: clearMutationError,
+  } = cellMutation;
+
+  const createCellAtLaneEnd = useCallback(async () => {
+    if (mutationBusy) return;
+    const cell = buildNewLaneCell({ index: nextLaneIndex(cellsRef.current) });
+    await runCellMutation(
+      async (client) => {
+        await storyboardApi.create_cell(client, cell);
+        setDemoWrite(client.mode !== 'real');
+        await useStoryboardStore.getState().refetch();
+        // Select it here AND in shared state, so the Cell view opens on the
+        // same shot if the user switches — the Rail's `setCellUid` half. The
+        // Rail also flips the focused pane to the Cell view; this surface
+        // deliberately does not, because the request was for a cell ON the
+        // canvas and yanking the pane away would lose the arrangement in view.
+        setCellUid(cell.uid);
+        setSelectedNodeId(cell.uid);
+      },
+      { onError: (err) => `Couldn't create the cell — ${(err as Error).message}` },
+    );
+  }, [mutationBusy, runCellMutation, setCellUid]);
+
+  const deleteCell = useCallback(async (uid: string) => {
+    if (mutationBusy) return;
+    await runCellMutation(
+      async (client) => {
+        await storyboardApi.delete_cell(client, uid);
+        setDemoWrite(client.mode !== 'real');
+        if (selectedCellUid === uid) setCellUid(null);
+        setSelectedNodeId((prev) => (prev === uid ? null : prev));
+        await useStoryboardStore.getState().refetch();
+        setConfirmDelete(null);
+      },
+      { onError: (err) => `Couldn't delete the cell — ${(err as Error).message}` },
+    );
+  }, [mutationBusy, runCellMutation, selectedCellUid, setCellUid]);
+
+  const requestDeleteCell = useCallback((uid: string, beat: string) => {
+    clearMutationError();
+    setConfirmDelete({ uid, beat });
+  }, [clearMutationError]);
+
+  /** Stable so the confirm's focus trap isn't torn down and rebuilt on every
+   *  parent render. */
+  const closeConfirm = useCallback(() => setConfirmDelete(null), []);
+
+  /** The name a destructive control is announced by. Must be the Rail's
+   *  `DisplayCell.beat` (`beat_id || label || uid`, storyboard-store.ts) and NOT
+   *  `label`: this surface's only create path hardcodes NEW_CELL_LABEL with no
+   *  label input, so three '+ New cell' clicks give three shots all labelled
+   *  'new beat'. Keying the accessible name on `label` would render three
+   *  identical "Delete cell new beat" buttons — an ambiguous target for a UI
+   *  driver (a destructive write to the wrong shot) and three indistinguishable
+   *  destructive controls for a screen reader. `beat_id` carries a random
+   *  suffix, so it is unique per cell. */
+  const beatNameOf = useCallback(
+    (cell: Cell) => cell.beat_id || cell.label || cell.uid,
+    [],
+  );
+
   // ─── rendering ─────────────────────────────────────────────────────────
 
   const renderItem = useCallback((item: CanvasNodeItem, state: ItemRenderState) => {
@@ -1054,6 +1272,17 @@ export function NodeCanvas() {
               >
                 ▾
               </button>
+              {/* Same delete seam as the expanded card — a collapsed strip must
+                  not be a state where the shot can't be removed. */}
+              <button
+                type="button"
+                aria-label={`Delete cell ${beatNameOf(cell)}`}
+                onClick={(e) => { e.stopPropagation(); requestDeleteCell(cell.uid, beatNameOf(cell)); }}
+                className="rounded border border-soft px-1 text-[8px] text-fg-faint hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                title="Delete cell"
+              >
+                <span aria-hidden>✕</span>
+              </button>
             </span>
           </div>
         );
@@ -1093,6 +1322,17 @@ export function NodeCanvas() {
                 title="Collapse this shot to a strip"
               >
                 ▴
+              </button>
+              {/* G-61 b5 — real `storyboard.delete_cell`, behind the same
+                  confirm the Rail asks for. */}
+              <button
+                type="button"
+                aria-label={`Delete cell ${beatNameOf(cell)}`}
+                onClick={(e) => { e.stopPropagation(); requestDeleteCell(cell.uid, beatNameOf(cell)); }}
+                className="rounded border border-soft px-1 py-px font-mono text-[7.5px] text-fg-faint hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                title="Delete cell"
+              >
+                <span aria-hidden>✕</span>
               </button>
             </div>
           </div>
@@ -1191,7 +1431,7 @@ export function NodeCanvas() {
   }, [
     selectedNodeId, renderStatusMap, viewport.scale, liveSrcdocUids, toggleLiveSrcdoc,
     collapsedSet, toggleCollapsed, shotStage, groupOfShot, cellHtml, rollup, cells.length,
-    activeGroup, toggleMembership, toggleGroupCollapsed, fountain,
+    activeGroup, toggleMembership, toggleGroupCollapsed, fountain, requestDeleteCell, beatNameOf,
   ]);
 
   return (
@@ -1266,8 +1506,75 @@ export function NodeCanvas() {
                 : 'layout not persisted'}
           </span>
           {reorderBusy && <span className="text-[var(--info)]">writing order…</span>}
+          {mutationBusy && <span className="text-[var(--info)]">writing cells…</span>}
+          {/* A create/delete that resolved against the MOCK client succeeded —
+              against the in-memory demo board, not disk. Say so: otherwise a
+              degraded probe (studio MCP server slow / crash-looping) makes a
+              create look like it landed, and the shot vanishes when the real
+              client comes back on the next retry window. */}
+          {demoWrite && !mutationBusy && (
+            <span
+              className="text-[var(--warning)]"
+              title="This surface's last create/delete ran against the demo board. Nothing was written to storyboard.json — either there is no project on disk, or the studio MCP server did not answer its probe."
+            >
+              cells → demo board (not on disk)
+            </span>
+          )}
           {persistError && <span className="text-[var(--danger)]" title={persistError}>save failed</span>}
         </div>
+
+        {/* G-61 b5 — create/delete failures are real MCP errors; say so rather
+            than leaving a button that looks like it did nothing. */}
+        {mutationError && (
+          <div
+            role="alert"
+            className="pointer-events-auto absolute left-3 top-3 z-20 flex max-w-[min(420px,60%)] items-center gap-2 rounded-md border border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_12%,var(--bg-surface))] px-2 py-1 font-mono text-[10px] text-[var(--danger)] shadow-md backdrop-blur"
+          >
+            <span className="truncate" title={mutationError}>{mutationError}</span>
+            <button
+              type="button"
+              aria-label="Dismiss cell error"
+              onClick={clearMutationError}
+              className="ml-auto rounded border border-soft px-1 py-px text-fg-muted hover:text-fg"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Delete confirm — the Rail confirms before `storyboard.delete_cell`,
+            so this surface does too rather than inventing a second policy, and
+            through the same focus-trapped modal shape (see ConfirmDialog: a bare
+            in-canvas div would leave Escape meaning "clear selection"). */}
+        {confirmDelete && (
+          <ConfirmDialog title="Delete cell" onClose={closeConfirm}>
+            <h2 className="font-display text-[12px] font-semibold text-fg">Delete this cell?</h2>
+            <p className="mt-1 text-[10px] leading-relaxed text-fg-muted">
+              <span className="font-mono text-fg">{confirmDelete.beat}</span>{' '}
+              <span className="font-mono text-fg-faint">({confirmDelete.uid})</span> will be removed
+              from the storyboard. Its render files on disk are left in place.
+            </p>
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                aria-label="Cancel delete cell"
+                onClick={closeConfirm}
+                className="rounded px-2 py-0.5 text-[10px] text-fg-muted hover:bg-raised hover:text-fg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                aria-label="Confirm delete cell"
+                disabled={mutationBusy}
+                onClick={() => void deleteCell(confirmDelete.uid)}
+                className="rounded bg-[color-mix(in_oklab,var(--danger)_18%,transparent)] px-2 py-0.5 text-[10px] text-[var(--danger)] ring-1 ring-inset ring-[color-mix(in_oklab,var(--danger)_40%,transparent)] hover:bg-[color-mix(in_oklab,var(--danger)_26%,transparent)] disabled:opacity-50"
+              >
+                {mutationBusy ? 'Deleting…' : 'Delete cell'}
+              </button>
+            </div>
+          </ConfirmDialog>
+        )}
 
         <div className="pointer-events-auto absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-md border border-soft bg-surface/90 p-1 backdrop-blur shadow-md font-mono text-[10px]">
           <button
@@ -1280,6 +1587,16 @@ export function NodeCanvas() {
             title="Collapse the sequence lane to a single strip (D-25-5)"
           >
             Lane {doc.lane_collapsed ? 'strip' : 'full'}
+          </button>
+          <button
+            type="button"
+            aria-label="New cell"
+            disabled={mutationBusy}
+            onClick={() => void createCellAtLaneEnd()}
+            className="rounded border border-soft px-2 py-0.5 text-fg-muted hover:text-fg disabled:opacity-50"
+            title="Add an empty cell at the end of the sequence lane (same defaults as the Rail's New cell)"
+          >
+            {mutationBusy ? 'Adding…' : '+ New cell'}
           </button>
           <button
             type="button"
