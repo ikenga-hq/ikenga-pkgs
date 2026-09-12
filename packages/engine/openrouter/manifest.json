@@ -13,9 +13,10 @@
   "ui": {},
 
   "permissions": {
-    "net.http": ["https://openrouter.ai/api/**"],
+    "net": ["https://openrouter.ai/api/**"],
     "fs.read": ["$pkg_data/sessions/**"],
-    "fs.write": ["$pkg_data/sessions/**"]
+    "fs.write": ["$pkg_data/sessions/**"],
+    "vault.keys": ["OPENROUTER_API_KEY"]
   },
 
   "settings": {
@@ -24,8 +25,8 @@
         "key": "model",
         "type": "string",
         "label": "Default model",
-        "default": "anthropic/claude-3.7-sonnet",
-        "description": "OpenRouter model identifier (e.g. anthropic/claude-3.7-sonnet, deepseek/deepseek-r1, meta-llama/llama-3.3-70b-instruct)."
+        "default": "openrouter/auto",
+        "description": "OpenRouter model identifier (e.g. openrouter/auto, anthropic/claude-3.7-sonnet, deepseek/deepseek-r1, meta-llama/llama-3.3-70b-instruct)."
       },
       {
         "key": "base_url",
@@ -43,14 +44,14 @@
       "streaming": true,
       "toolUse": true,
       "thinking": true,
-      "artifacts": true,
-      "fileAttachments": true,
-      "imageInput": true,
-      "slashCommands": true,
+      "artifacts": false,
+      "fileAttachments": false,
+      "imageInput": false,
+      "slashCommands": false,
       "modelSwitching": true,
-      "promptCaching": true,
-      "agenticTools": true,
-      "mcp": true,
+      "promptCaching": false,
+      "agenticTools": false,
+      "mcp": false,
       "sessionResume": true
     },
     "onboarding": {

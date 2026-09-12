@@ -59,6 +59,31 @@ installer does not yet materialize the npm deps the sidecar needs at runtime
 (`better-sqlite3`, `esbuild`, …). Use the **dev-mount** path above for a working
 runtime today; the installer dep-materialization feature is the top CLI follow-up.
 
+## Env vars
+
+| Var | Where | Effect |
+|-----|-------|--------|
+| `STUDIO_TRUST_STUB` | sidecar (`sidecars/project/`) | `=1` auto-grants trust prompts (WP-04 stub); the grant is never recorded as durable trust. See `fixtures/sample/README.md` for a runnable example. |
+| `STUDIO_SIDECAR_PATH` | MCP server (`mcp/`) | Overrides the sidecar binary path the MCP spawns (default: `../../sidecars/project/dist/sidecar.js` relative to the MCP bundle). |
+| `STUDIO_SUPPRESS_EVENTS` | read by the MCP server (`mcp/`); **armed on the shell**, not in your terminal — see below | `=1` (the exact string; any other non-empty value logs an "OFF" line and changes nothing) drops sidecar `event` frames at the relay instead of forwarding them as `logging/message` (WP-32 poll-fallback test knob), so the iframe has to fall back to polling. Observable on the MCP's stderr: an armed line at startup, a line on the **first** dropped frame, a running count every 50 frames, and a total on shutdown. Default: unchanged, every event is forwarded. |
+| `FAL_KEY` | sidecar (fal.ai adapter) | Fallback credential for headless / stdio-driven runs when the `studio.fal` vault key isn't available (see "The fal.ai adapter" above). |
+
+> **Arming `STUDIO_SUPPRESS_EVENTS`.** The MCP server is a child of the **shell**
+> process, not of the terminal you run `ikenga dev` / `cli dev` from — exporting the
+> var in that terminal does nothing. The shell composes the MCP child's env from its
+> own inherited process env, then `<app_data_dir>/workspace.env`, then the project's
+> `.env` / `.env.local`, then settings secrets, then the manifest's `mcp[0].env`
+> block. So arm it by **launching the shell** with the var set, or by adding
+> `STUDIO_SUPPRESS_EVENTS=1` to `workspace.env` or to the project's `.env`; then
+> re-register / restart the pkg so the MCP child respawns, and confirm the armed line
+> on the MCP's stderr **before** recording a poll-fallback result — a missing armed
+> line means the knob is off, not that suppression is working silently.
+>
+> Note the flip side of that `.env` layer: it is unfiltered, so a Studio project
+> folder you didn't author can set this key and quietly degrade that session to
+> poll-only, with the shell-log armed line as the only trace. An armed line you
+> didn't arm is a project-`.env` finding, not a shell bug.
+
 ## Cross-refs
 
 - Plan + history: `plans/studio/` (workspace meta-repo)
