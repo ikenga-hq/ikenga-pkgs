@@ -28,6 +28,37 @@
  *   rail uses. The `beat_id` FK is not consulted — it is null on every real
  *   project, which is the whole point of the gap.
  * - G-58: free placement never writes `Cell.index`.
+ * - WP-32 (live fix, 2026-09-12): the surface is physically usable. Three
+ *   things the canvas primitive leaves to its consumer and this file was not
+ *   doing — every node root now carries the DOM contract (`nodeRootProps`:
+ *   `position: absolute`, its `placement.h`, and the `data-canvas-item`
+ *   hit-test hook), so nodes land where the layout says instead of stacking in
+ *   document flow, and are selectable + draggable; the layout handed to
+ *   `<Canvas>` is ONE object pinned for the life of the mount
+ *   (`syncLayoutBox`), so a re-derived-but-identical layout can no longer
+ *   re-fire `use-pan-zoom`'s auto-fit and snap the user's pan/zoom back; and a
+ *   click focuses the surface so the keyboard pan/zoom alternative is
+ *   reachable. Auto-fit is left with exactly two triggers — once per project
+ *   open, and the Reset button. The primitive's THIRD trigger, its
+ *   `window.resize` → `autoFit(true)` listener, is on by default
+ *   (`autoFitOnResize = true` in `use-pan-zoom`) and is switched OFF at the
+ *   `<Canvas>` call below: maximising or resizing the shell window is not a
+ *   request to throw away the pan/zoom the user set to inspect a shot, and it
+ *   reproduced exactly the snap-back class `wp29/verdict.md` recorded. The
+ *   toolbar zoom drives the primitive instead of writing a mirror it never
+ *   reads. Mechanism + live evidence in the `canvas-model.ts` sections.
+ * - G-61 b2 (live fix, 2026-09-12): every "has this shot rendered / which
+ *   poster?" answer comes from the polled `render.list` records in the
+ *   storyboard store, via `doneRecordIdByUid` — the same source the Rail has
+ *   always used. This file previously read `Cell.renders`, which no sidecar
+ *   writer populates, so the canvas showed `✓ Ready` (fed by `render.list`)
+ *   over a `Not rendered` media slot on a shot whose poster PNG was on disk.
+ *   Do not reintroduce a `Cell.renders` read here; see the decision note in
+ *   `../lib/canvas-model.ts`. The status text is the FLOOR under the poster,
+ *   never an alternative to it: a done record with no PNG on disk is a normal
+ *   path (`render.ingest_external` writes a done row and never extracts a
+ *   poster), so the media slot must still say something instead of going
+ *   blank.
  *
  * ─── What this file deliberately does NOT do yet ──────────────────────────
  * - Rendering-ladder row 2 (expanded → `<video>` via `render.read_bytes`) is
@@ -54,12 +85,20 @@
 
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Canvas, type ItemId, type Placement, type Viewport, type ItemRenderState } from '@ikenga/contract/canvas';
+import {
+  Canvas,
+  type CanvasHandle,
+  type ItemId,
+  type Placement,
+  type Viewport,
+  type ItemRenderState,
+} from '@ikenga/contract/canvas';
 
 import {
   useStoryboardStore,
   selectHydratedCells,
   selectHydratedProject,
+  selectRenderRecords,
   selectRenderStatus,
 } from '../storyboard-store';
 import { useProjectStore, selectOpenProject } from '../project-store';
@@ -84,17 +123,24 @@ import {
   LANE_STRIP_H,
   LANE_X0,
   LANE_STEP,
+  KEY_BRIDGE_SKIP_SELECTOR,
+  NODE_NODRAG_SELECTOR,
   PIPELINE_STAGES,
   buildNewLaneCell,
   deriveShotStage,
+  doneRecordIdByUid,
+  doneRecordIdsFor,
   inLaneBand,
+  isCanvasPanZoomKey,
   laneOrderFrom,
   laneSlot,
   nextLaneIndex,
+  nodeRootProps,
   orderChanged,
   rollupStages,
   stageNodeId,
   stripDerived,
+  syncLayoutBox,
   type StageId,
 } from '../lib/canvas-model';
 import type { Cell, Anchor, ScriptBeat } from '../mcp-types';
@@ -126,7 +172,20 @@ const MAX_LIVE_SRCDOC_PANES = 2;
 /** Below this scale we skip media entirely (D-25-3 cap 4) — and, with it, the
  *  poster batch, so a zoomed-out board costs nothing. */
 const LOD_MEDIA_MIN_SCALE = 0.45;
+/** Hard ceiling on one poster batch. Sits UNDER both downstream limits:
+ *  `views/composition/CellPoster.tsx`'s blob cache is a 50-entry LRU that
+ *  evicts while the batch is still resolving (so a 60-id batch would revoke
+ *  its own first 10 posters), and the sidecar truncates `render.list_posters`
+ *  at 100 ids without reporting it. A tile past the cap is not handed a
+ *  recordId at all, so it shows its status text instead of opening a solo
+ *  round trip — see the poster section for the full argument. */
+const POSTER_BATCH_MAX = 48;
 const SAVE_DEBOUNCE_MS = 400;
+/** How long the layout must hold still after a project open before the one
+ *  automatic auto-fit is taken. Long enough for a late cells/anchors/script
+ *  fetch to be inside the fit; short enough that the board never sits at the
+ *  default viewport. */
+const FIT_SETTLE_MS = 250;
 
 const SCRIPT_NODE_ID = 'node-script';
 const NON_CELL_PREFIXES = ['stage-', 'beat-', 'anchor-', 'group-'];
@@ -155,6 +214,56 @@ function serializeDoc(doc: CanvasDoc): string {
 }
 
 const localKey = (projectId: string) => `ikenga:studio:canvas-doc:${projectId}`;
+
+/**
+ * Mousedown on an in-card control (Draft / ▴ / ▾ / ✕ / ± group / a group's
+ * collapse toggle) must never reach the canvas primitive's root handler, which
+ * would select-and-begin-drag the card underneath it. For `± group` that is not
+ * cosmetic: the button only renders while a GROUP node is selected, so a
+ * mousedown that re-selected the shot would unmount the button before its click
+ * landed (`wp29/verdict.md` — the whole button path to membership was dead).
+ *
+ * Module scope on purpose: `renderItem` is a `useCallback`, and a hook-created
+ * handler would have to join its dependency list.
+ */
+function onNodeRootMouseDown(e: React.MouseEvent<HTMLDivElement>): void {
+  const t = e.target as HTMLElement | null;
+  if (t?.closest?.(NODE_NODRAG_SELECTOR)) e.stopPropagation();
+}
+
+/**
+ * WCAG 2.5.7 — `use-pan-zoom`'s arrow-pan / +/- zoom branch is gated on
+ * `document.activeElement === canvasRef.current`, and a real click never
+ * satisfies it: the primitive calls `preventDefault()` in its own mousedown,
+ * which cancels the browser's default focus-on-mousedown for its `tabIndex={0}`
+ * root. So nothing but a Tab landing could arm the keyboard alternative to
+ * dragging. Focus it ourselves, in the CAPTURE phase (before the primitive's
+ * bubble-phase handler), and leave real controls alone so they keep their own
+ * focus. An item click still ends up focusing the item — the primitive moves
+ * focus there in a rAF, which is its WCAG 2.4.3 roving-selection behaviour, and
+ * `bridgeCanvasKey` below is what keeps the keyboard branch reachable from
+ * there.
+ *
+ * The FIRST guard is the portal guard, and it is not defensive padding: React
+ * dispatches capture-phase handlers along the FIBER path, and `ConfirmDialog`
+ * is a JSX child of `<Canvas>` that portals to `<body>`. Without it, a mousedown
+ * on non-interactive text inside the ARMED delete dialog (its uid line) ran this
+ * handler and moved focus to the canvas root — re-arming precisely what the
+ * dialog's focus trap exists to prevent: its Escape/Tab trap is a NATIVE
+ * listener on the dialog div, so with focus outside it Escape reached
+ * `use-pan-zoom`'s window handler instead and cleared the canvas selection under
+ * an open delete confirm, while Tab walked into the board behind the modal. The
+ * dialog's own bubble-phase `stopPropagation` cannot help — this already ran.
+ * `contains()` is the test: the portalled node is not a DOM descendant of the
+ * wrapper even though it IS a React descendant.
+ */
+function focusCanvasSurface(e: React.MouseEvent<HTMLDivElement>): void {
+  const t = e.target as HTMLElement | null;
+  if (!t || !e.currentTarget.contains(t)) return;
+  if (t.closest?.(NODE_NODRAG_SELECTOR)) return;
+  const root = e.currentTarget.querySelector<HTMLElement>('.ikenga-canvas');
+  if (root && document.activeElement !== root) root.focus({ preventScroll: true });
+}
 
 /**
  * Focus-trapped confirm, mirroring the Rail's `Modal` (views/Canvas.tsx) —
@@ -264,6 +373,11 @@ export function NodeCanvas() {
   const projectDoc = useStoryboardStore(selectHydratedProject);
   const cells = useStoryboardStore(selectHydratedCells);
   const renderStatusMap = useStoryboardStore(selectRenderStatus);
+  /** The polled `render.list` rows — the SAME store slice the Rail's poster
+   *  prefetch reads (views/Canvas.tsx). `Cell.renders`, which this file used
+   *  to read, is never written by the sidecar; see the note above
+   *  `doneRecordIdByUid` in lib/canvas-model.ts. */
+  const renderRecords = useStoryboardStore(selectRenderRecords);
   const anchors = useAnchorsStore(selectAnchors);
   const selectedCellUid = useSharedStore(selectCellUid);
   const setCellUid = useSharedStore((s) => s.setCellUid);
@@ -427,6 +541,11 @@ export function NodeCanvas() {
           // Our own write echoing back through the watcher — not a remote edit.
           if (serialized === lastSavedRef.current) return;
           lastSavedRef.current = serialized;
+          // …and a remote edit whose CONTENT matches what we already hold is
+          // not news either: re-`setDoc`ing it would hand every downstream memo
+          // a fresh identity for nothing, which is half of the snap-back loop
+          // (`docRef` is assigned during render, so it is current here).
+          if (serialized === serializeDoc(docRef.current)) return;
           setDoc(incoming);
         } catch {
           // Transient read failure — keep what we have rather than blanking it.
@@ -504,15 +623,25 @@ export function NodeCanvas() {
     return hidden;
   }, [doc.groups]);
 
+  /** cell uid → id of its latest DONE render record, from the live
+   *  `render.list` rows. One map feeds all three consumers: the stage chip
+   *  (`deriveShotStage`), the stage rollup, and the tile poster — so a done
+   *  render can never be visible to one of them and invisible to another,
+   *  which is exactly how the canvas ended up with a `✓ Ready` beacon over a
+   *  `Not rendered` media slot (g61/2-poster-verdict.md). */
+  const doneIdByUid = useMemo(() => doneRecordIdByUid(renderRecords), [renderRecords]);
+
   const shotStage = useMemo(() => {
     const m = new Map<string, StageId>();
-    for (const c of cells) m.set(c.uid, deriveShotStage(c, renderStatusMap[c.uid]));
+    for (const c of cells) {
+      m.set(c.uid, deriveShotStage(c, renderStatusMap[c.uid], Boolean(doneIdByUid[c.uid])));
+    }
     return m;
-  }, [cells, renderStatusMap]);
+  }, [cells, renderStatusMap, doneIdByUid]);
 
   const rollup = useMemo(
-    () => rollupStages(cells, (uid) => renderStatusMap[uid]),
-    [cells, renderStatusMap],
+    () => rollupStages(cells, (uid) => renderStatusMap[uid], (uid) => Boolean(doneIdByUid[uid])),
+    [cells, renderStatusMap, doneIdByUid],
   );
 
   const items = useMemo<CanvasNodeItem[]>(() => {
@@ -610,9 +739,10 @@ export function NodeCanvas() {
     return derived;
   }, [projectDoc, laneShots, doc.lane_collapsed, doc.groups, laneOrdinal, anchors]);
 
-  /** What the primitive actually gets: derived defaults with the authored
-   *  placements laid on top, then collapse applied to the height. */
-  const effectiveLayout = useMemo(() => {
+  /** Derived defaults with the authored placements laid on top, then collapse
+   *  applied to the height. NOT what the primitive gets — that is the pinned
+   *  box below. */
+  const computedLayout = useMemo(() => {
     const computed: Record<ItemId, Placement> = {};
     for (const [id, p] of Object.entries(derivedLayout)) computed[id as ItemId] = p;
     for (const [id, p] of Object.entries(doc.layout)) computed[id as ItemId] = p;
@@ -622,6 +752,97 @@ export function NodeCanvas() {
     }
     return computed;
   }, [derivedLayout, doc.layout, doc.collapsed]);
+
+  /**
+   * ONE layout object, handed to the primitive for the life of the mount and
+   * mutated in place to track `computedLayout`. Its identity is the fix for the
+   * viewport snap-back loop: `use-pan-zoom`'s `autoFit` is a `useCallback` keyed
+   * on the layout OBJECT, and its effect re-fires on every new identity — so a
+   * `canvas.write` echoing back through the fs watcher (`cells/changed` →
+   * storyboard refetch → new `cells` array → new lane order → re-derived but
+   * IDENTICAL layout) used to snap a live pan/zoom back inside ~300 ms
+   * (`wp29/verdict.md`). With the identity pinned — AND the primitive's
+   * default `window.resize → autoFit(true)` listener switched off at the
+   * `<Canvas>` call (`autoFitOnResize={false}`), which was a second live path
+   * into the same snap-back — auto-fit fires only where this file asks for it:
+   * once per project open, and on Reset.
+   *
+   * Mutated during render on purpose (same pattern as the `*Ref.current =`
+   * lines below, and idempotent under a StrictMode double render): the box has
+   * to be current at render time, because Canvas reads `layout[id]` while
+   * rendering and a one-frame-late box would lag every drag.
+   */
+  const layoutBoxRef = useRef<Record<ItemId, Placement>>({});
+  const layoutRevRef = useRef(0);
+  if (syncLayoutBox(layoutBoxRef.current, computedLayout)) layoutRevRef.current += 1;
+  const effectiveLayout = layoutBoxRef.current;
+  const layoutRev = layoutRevRef.current;
+
+  /**
+   * The ONLY automatic auto-fit: once per project open, as soon as the board
+   * has something to fit. The primitive's own mount fit runs before any cell
+   * has loaded (empty layout → it returns early), and with the identity above
+   * pinned it can no longer re-fire by accident — so the fit has to be asked
+   * for here, explicitly, or a freshly opened project would sit at the default
+   * `{x:0,y:0,scale:1}` viewport.
+   *
+   * `layoutRev` is in the deps so this re-evaluates while the board is still
+   * filling — cells, anchors and the script can each land after the first
+   * paint, and a fit taken before them would leave real nodes off-screen — so
+   * the timer re-arms until the layout has been STABLE for `FIT_SETTLE_MS`.
+   * `fittedForRef` is then what makes it once-per-project rather than
+   * once-per-content-change: after that single fit, a drag, a reorder, a
+   * created cell or an agent rewrite never moves the user's viewport again.
+   *
+   * Gated on the PROJECT and on the layout having content — deliberately NOT on
+   * `hydratedFor`. `hydratedFor` is about persistence: it stays null when
+   * `canvas.read` throws (studio MCP server slow or crash-looping — the
+   * degraded state the `cells → demo board` notice exists for), and gating the
+   * fit on it meant that in exactly that state NO automatic fit ever ran. The
+   * board then paints at model coordinates (the derived box is ~x 40..1440,
+   * y 40..900) at scale 1 with nodes off-screen, and only the Reset button
+   * recovers it — while the primitive's own mount fit had already returned early
+   * against an empty layout and, with the identity pinned above, can no longer
+   * re-fire. A failed layout READ is not a reason to leave the board unfitted;
+   * the nodes are derived from `cells`, which arrived regardless.
+   *
+   * It IS held while the storyboard store is still fetching, which is a
+   * different thing: the derived layout carries the pipeline-stage row and the
+   * script node from the first render, so the box is never actually empty, and
+   * without this a slow `storyboard.list` would let the one fit land on the
+   * bare scaffold (a wide, 64-unit-tall box) and pin `fittedForRef` there. The
+   * store sets `loading` true at the start of every fetch, so the effect's
+   * cleanup disarms the settle timer until real content is in.
+   */
+  const canvasHandleRef = useRef<CanvasHandle | null>(null);
+  /** The wrapper around the primitive — the only handle this file has on the
+   *  canvas ROOT element (the primitive keeps its own ref private and exposes
+   *  just `autoFit`). Used to focus the surface for the keyboard zoom bridge. */
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const fittedForRef = useRef<string | null>(null);
+  const storyboardLoading = useStoryboardStore((s) => s.loading);
+  useEffect(() => {
+    const pid = project?.project_id ?? null;
+    if (!pid) {
+      fittedForRef.current = null;
+      return;
+    }
+    if (fittedForRef.current === pid) return;
+    if (storyboardLoading) return;
+    if (Object.keys(layoutBoxRef.current).length === 0) return;
+    const t = setTimeout(() => {
+      fittedForRef.current = pid;
+      canvasHandleRef.current?.autoFit(false);
+    }, FIT_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [project?.project_id, storyboardLoading, layoutRev]);
+
+  /** Reset = re-fit the board (the primitive owns the live pan/scale; its
+   *  `viewport` prop is a mirror it never reads back). Also what a
+   *  double-click on empty canvas does, per the primitive. */
+  const resetViewport = useCallback(() => {
+    canvasHandleRef.current?.autoFit(true);
+  }, []);
 
   // Refs, so the drag handler reads the CURRENT model without re-identifying
   // itself (and re-registering with the primitive) on every render.
@@ -725,6 +946,18 @@ export function NodeCanvas() {
     // a coordinate, not a node. (The previous version aimed at a `lane-slot-N`
     // id that was never in the layout, so the renderer bailed and no tether
     // could ever draw.)
+    //
+    // This branch is the reason the dep list carries `layoutRev` and NOT
+    // `effectiveLayout`: the layout box's identity is pinned for the life of the
+    // mount, so listing it is listing a constant. With only the pinned object in
+    // the deps, a free-place drop changed nothing this memo watches — `items`
+    // and `derivedLayout` don't depend on `doc.layout`, `doc.groups` /
+    // `doc.lane_collapsed` survive the `{...prev, layout}` spread, and on an
+    // idle board `renderRecords` keeps its identity — so the tether never
+    // appeared after a drop out of the band, and a stale one kept drawing (with
+    // freshly-read coordinates) after a drop back INTO it, until some unrelated
+    // dep changed. `layoutRev` is bumped by `syncLayoutBox` exactly when a
+    // placement really moved, which is exactly when this memo has new work.
     laneShots.forEach((c, idx) => {
       if (!visible.has(c.uid)) return;
       const p = effectiveLayout[c.uid as ItemId];
@@ -740,24 +973,76 @@ export function NodeCanvas() {
     });
 
     return list;
-  }, [showEdges, items, projectDoc, beatShotLinks, cells, shotStage, selectedNodeId, laneShots, effectiveLayout, doc.lane_collapsed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `effectiveLayout` is
+    // the pinned box (a constant identity); `layoutRev` is its real change signal.
+  }, [showEdges, items, projectDoc, beatShotLinks, cells, shotStage, selectedNodeId, laneShots, layoutRev, doc.lane_collapsed]);
 
   // ─── posters: ONE render.list_posters for the board (not N+1) ──────────
+  //
+  // Ids come from `doneIdByUid` (live `render.list` records), NOT from
+  // `Cell.renders` — that field is never written, so this list was permanently
+  // empty, `prefetchPosters` was never called from this file and no
+  // `<CellPoster>` ever mounted on a canvas tile, while the Rail's identical
+  // seam worked (live evidence + census in
+  // `plans/studio/verify/2026-09-12-wp32-live/g61/2-poster-verdict.md`).
+  //
+  // The batch is still ONE call per done-set: the effect keys off the JOINED
+  // id string, so a pan, a selection, a re-render or an adaptive render poll
+  // that leaves the done-set unchanged fires nothing at all (and `fetchBatch`
+  // dedupes cached/in-flight ids on top of that).
+  //
+  // TWO gates, and both are why "one call per done-set" is a true statement
+  // rather than an aspiration:
+  //
+  // 1. LOD. Below `LOD_MEDIA_MIN_SCALE` the set is empty, so a zoomed-out
+  //    board costs zero round trips — and NO tile shows a poster, because
+  //    `renderItem` has already collapsed to the LOD chip. Note this couples
+  //    the poster to the zoom the board OPENS at, which auto-fit chooses from
+  //    the pane width (`use-pan-zoom` fits against `clientWidth - 320` for the
+  //    edit-mode palette gutter, minus 40 of padding) against a derived board
+  //    ~1440 units wide. A ~1680 CSS px pane fits at ~0.94 and posters show; a
+  //    ~900 px pane fits at ~0.39, below the 0.45 floor, and every tile
+  //    legitimately renders the chip with no fetch at all. A verification pass
+  //    must therefore READ THE ZOOM % label in the toolbar (or zoom in first)
+  //    before concluding a poster is missing — "no img in the DOM" at 39 % is
+  //    the LOD contract working, not this seam failing.
+  //
+  // 2. CAP. The list is board-wide (no viewport culling — the LOD gate is the
+  //    only cull this surface has), so it is capped at `POSTER_BATCH_MAX`
+  //    before it reaches `prefetchPosters`, and a tile whose id did not make
+  //    the batch is NOT given a `recordId`. Both halves matter: without the
+  //    cap a >50-done board self-evicts inside its own resolving batch
+  //    (CellPoster's LRU), and without the mount gate the evicted/over-cap
+  //    tiles each fire a solo single-id `render.list_posters` through
+  //    `<CellPoster>`'s microtask fallback — the exact N+1 this seam exists to
+  //    prevent. Over-cap tiles fall back to their status text instead, which
+  //    is honest; the ceiling sits under both CellPoster's 50-entry cache and
+  //    the sidecar's silent 100-id truncation. (A real board is 5-60 shots, so
+  //    this is a ceiling, not a routine path. Per-viewport culling is the
+  //    better answer if boards ever get big enough to notice.)
   const visibleDoneRecordIds = useMemo(() => {
     if (viewport.scale < LOD_MEDIA_MIN_SCALE) return [] as string[];
-    const ids: string[] = [];
+    const shotUids: string[] = [];
     for (const item of items) {
       if (item.kind !== 'shot') continue;
-      const cell = item.data as Cell | undefined;
-      const done = cell?.renders?.slice().reverse().find((r) => r.status === 'done');
-      if (done?.id) ids.push(done.id);
+      shotUids.push(item.id);
     }
-    return ids;
-  }, [items, viewport.scale]);
+    return doneRecordIdsFor(shotUids, doneIdByUid, POSTER_BATCH_MAX);
+  }, [items, doneIdByUid, viewport.scale]);
 
+  const visibleDoneIdsKey = visibleDoneRecordIds.join(',');
   useEffect(() => {
-    if (visibleDoneRecordIds.length > 0) prefetchPosters(visibleDoneRecordIds);
-  }, [visibleDoneRecordIds]);
+    if (!visibleDoneIdsKey) return;
+    prefetchPosters(visibleDoneIdsKey.split(','));
+  }, [visibleDoneIdsKey]);
+
+  /** The ids the batch above actually covers. `renderItem` mounts a
+   *  `<CellPoster>` only for these, so no tile can slip past the cap and open
+   *  its own single-id round trip. */
+  const batchedPosterIds = useMemo(
+    () => new Set(visibleDoneIdsKey ? visibleDoneIdsKey.split(',') : []),
+    [visibleDoneIdsKey],
+  );
 
   // ─── live srcdoc panes (WP-30, D-25-3) ─────────────────────────────────
 
@@ -843,8 +1128,98 @@ export function NodeCanvas() {
     ));
   }, []);
 
-  const setViewport = useCallback((fn: (v: Viewport) => Viewport) => {
-    setDoc((prev) => ({ ...prev, viewport: fn(prev.viewport ?? DEFAULT_VIEWPORT) }));
+  /**
+   * Toolbar zoom. It CANNOT be a write to `doc.viewport`: the primitive owns
+   * the live pan/scale and never reads its `viewport` prop back, so writing the
+   * mirror moved the percentage label, the edge overlay and the LOD threshold
+   * while the nodes stayed where they were — a zoom that lies (the gap file's
+   * "the +/-/Reset controls update the percentage with no visual change", and
+   * an LOD floor that could fire at a real scale of 0.7).
+   *
+   * So drive the primitive's OWN zoom: its `use-pan-zoom` keydown handler
+   * implements `Equal` / `Minus` in ±0.1 steps, gated on the canvas root having
+   * focus. That is the only zoom seam a consumer has until `CanvasHandle` grows
+   * something better than `autoFit`; the resulting scale comes back through
+   * `onViewportChange`, so the label, the edges and the LOD floor all follow the
+   * real viewport for the first time.
+   *
+   * Focus is BORROWED, not taken. Satisfying the primitive's focus gate means
+   * moving DOM focus to the canvas root; leaving it there broke the control for
+   * the keyboard user it exists to serve — Tab to `+`, press Enter, and the
+   * second Enter went nowhere because focus was now on the surface, with the
+   * user's place in the tab order (and a screen reader's button context) gone.
+   * So restore whatever was focused once the synthetic keys are dispatched.
+   */
+  const nudgeZoom = useCallback((dir: 'in' | 'out') => {
+    const root = surfaceRef.current?.querySelector<HTMLElement>('.ikenga-canvas');
+    if (!root) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
+    root.focus({ preventScroll: true });
+    const code = dir === 'in' ? 'Equal' : 'Minus';
+    const key = dir === 'in' ? '=' : '-';
+    for (let step = 0; step < 2; step++) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code, key }));
+    }
+    // Synchronous dispatch, so the primitive's window handler has already run.
+    if (prevFocus && prevFocus !== root && prevFocus !== document.body) {
+      prevFocus.focus?.({ preventScroll: true });
+    }
+  }, []);
+
+  /**
+   * WCAG 2.5.7, the other half. `focusCanvasSurface` gives the surface focus on
+   * a click on EMPTY canvas — but a click on a node ends with focus on the node
+   * (Canvas re-focuses the selected item in a rAF, after our capture handler
+   * ran), and on this board a shot is usually already selected because the
+   * cross-view selection effect keeps it in sync with the Rail. So the state in
+   * which the primitive's keyboard gate (`document.activeElement ===
+   * canvasRef.current`) is satisfied was "the last click was on empty canvas" —
+   * and the gesture the DoD actually names, click a shot then keyboard-zoom out
+   * to find its neighbour, stayed dead.
+   *
+   * Bridge it here. This is a BUBBLE-phase React handler on the wrapper, so it
+   * runs while the native event is still travelling: the primitive's listener is
+   * on `window`, which the event reaches after React's root container. Focusing
+   * the surface here therefore makes the SAME event satisfy the gate a moment
+   * later — no re-dispatch, which would double every step.
+   *
+   * Space is bridged the other way round: the primitive arms its pan-grab only
+   * while `document.activeElement === document.body`, which nothing on this
+   * surface leaves true any more, so space+drag (the only left-button pan
+   * gesture — `editMode` is pinned `true`, which makes Canvas's own
+   * `!editMode && !itemEl` pan branch unreachable) was permanently dead and a
+   * trackpad with no middle button had no pointer pan at all. Blur to `<body>`
+   * so the primitive's handler for this same keydown arms, and restore focus to
+   * the surface on keyup so the arrow bridge above keeps working afterwards.
+   */
+  const bridgeCanvasKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement | null;
+    // Portal guard, same reason as `focusCanvasSurface`: ConfirmDialog is a
+    // React child of <Canvas> but a DOM child of <body>, and its keys belong to
+    // its own focus trap.
+    if (!t || !e.currentTarget.contains(t)) return;
+    if (t.closest?.(KEY_BRIDGE_SKIP_SELECTOR)) return;
+    const root = surfaceRef.current?.querySelector<HTMLElement>('.ikenga-canvas');
+    if (!root) return;
+
+    if (isCanvasPanZoomKey(e.code, e.key)) {
+      if (document.activeElement === root) return; // the gate is already satisfied
+      root.focus({ preventScroll: true });
+      e.preventDefault(); // no document scroll on the way through
+      return;
+    }
+
+    if (e.code === 'Space' && !e.repeat) {
+      if (document.activeElement === document.body) return; // primitive arms it itself
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      e.preventDefault();
+      const restore = (ev: KeyboardEvent) => {
+        if (ev.code !== 'Space') return;
+        window.removeEventListener('keyup', restore);
+        surfaceRef.current?.querySelector<HTMLElement>('.ikenga-canvas')?.focus({ preventScroll: true });
+      };
+      window.addEventListener('keyup', restore);
+    }
   }, []);
 
   /**
@@ -1120,10 +1495,11 @@ export function NodeCanvas() {
     if (scale < LOD_MEDIA_MIN_SCALE) {
       return (
         <div
-          className={[
-            'h-full w-full rounded border bg-surface p-2 flex items-center justify-between font-mono text-[10px]',
+          {...nodeRootProps(state.placement, [
+            'rounded border bg-surface p-2 flex items-center justify-between font-mono text-[10px]',
             isSelected ? 'border-[var(--achievement)] ring-2 ring-[var(--achievement)]' : 'border-soft',
-          ].join(' ')}
+          ].join(' '))}
+          onMouseDown={onNodeRootMouseDown}
         >
           <span className="truncate font-semibold text-fg">{item.title}</span>
           <span className="text-[8px] uppercase tracking-wider text-fg-faint">{item.kind}</span>
@@ -1137,11 +1513,12 @@ export function NodeCanvas() {
       const failed = rollup.failed[stageId] ?? 0;
       return (
         <div
-          className={[
-            'h-full w-full rounded-md border border-dashed p-3 flex flex-col justify-between',
+          {...nodeRootProps(state.placement, [
+            'rounded-md border border-dashed p-3 flex flex-col justify-between',
             'bg-[color-mix(in_oklab,var(--info)_8%,var(--bg-surface))]',
             isSelected ? 'border-[var(--achievement)]' : 'border-[var(--info)]',
-          ].join(' ')}
+          ].join(' '))}
+          onMouseDown={onNodeRootMouseDown}
           title={
             failed > 0
               ? `${count} shot${count === 1 ? '' : 's'} at this stage · ${failed} failed`
@@ -1171,7 +1548,13 @@ export function NodeCanvas() {
 
     if (item.kind === 'script') {
       return (
-        <div className="h-full w-full rounded-md border border-soft bg-surface p-3 flex flex-col justify-between shadow-sm">
+        <div
+          {...nodeRootProps(
+            state.placement,
+            'rounded-md border border-soft bg-surface p-3 flex flex-col justify-between shadow-sm',
+          )}
+          onMouseDown={onNodeRootMouseDown}
+        >
           <div className="flex items-center justify-between">
             <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--agent)]">Screenplay</span>
             <span className="font-mono text-[9px] text-fg-faint">{item.subtitle}</span>
@@ -1186,7 +1569,13 @@ export function NodeCanvas() {
 
     if (item.kind === 'beat') {
       return (
-        <div className="h-full w-full rounded-md border border-soft bg-surface p-2.5 flex flex-col justify-between shadow-sm">
+        <div
+          {...nodeRootProps(
+            state.placement,
+            'rounded-md border border-soft bg-surface p-2.5 flex flex-col justify-between shadow-sm',
+          )}
+          onMouseDown={onNodeRootMouseDown}
+        >
           <div className="flex items-center justify-between font-mono text-[9px]">
             <span className="text-[var(--achievement)] font-semibold truncate">{item.title}</span>
             <span className="text-fg-faint">#beat</span>
@@ -1200,11 +1589,12 @@ export function NodeCanvas() {
       const g = item.data as CanvasGroup;
       return (
         <div
-          className={[
-            'h-full w-full rounded-md border-2 border-dashed p-2.5 flex flex-col justify-between',
+          {...nodeRootProps(state.placement, [
+            'rounded-md border-2 border-dashed p-2.5 flex flex-col justify-between',
             'bg-[color-mix(in_oklab,var(--achievement)_7%,var(--bg-surface))]',
             isSelected ? 'border-[var(--achievement)]' : 'border-[color-mix(in_oklab,var(--achievement)_45%,transparent)]',
-          ].join(' ')}
+          ].join(' '))}
+          onMouseDown={onNodeRootMouseDown}
         >
           <div className="flex items-center justify-between font-mono text-[9px]">
             <span className="uppercase tracking-wider text-[var(--achievement)]">Group</span>
@@ -1226,7 +1616,13 @@ export function NodeCanvas() {
     if (item.kind === 'anchor') {
       const anc = item.data as Anchor | undefined;
       return (
-        <div className="h-full w-full rounded-md border border-[var(--border)] bg-surface p-2.5 flex flex-col justify-between shadow-sm">
+        <div
+          {...nodeRootProps(
+            state.placement,
+            'rounded-md border border-[var(--border)] bg-surface p-2.5 flex flex-col justify-between shadow-sm',
+          )}
+          onMouseDown={onNodeRootMouseDown}
+        >
           <div className="flex items-center justify-between font-mono text-[9px]">
             <span className="text-[var(--agent)] uppercase">{anc?.kind ?? '3D Anchor'}</span>
             <span className="text-fg-faint">#ref</span>
@@ -1243,7 +1639,14 @@ export function NodeCanvas() {
       const cell = item.data as Cell | undefined;
       if (!cell) return null;
       const status = renderStatusMap[cell.uid];
-      const doneRecord = cell.renders?.slice().reverse().find((r) => r.status === 'done');
+      // Live `render.list` record id, same map the poster batch above prefetched
+      // — NOT `cell.renders`, which the sidecar never writes.
+      const doneRecordId = doneIdByUid[cell.uid];
+      // ...but only ASK for a poster when the board-wide batch covered this id.
+      // An id past `POSTER_BATCH_MAX` would otherwise open its own single-id
+      // `render.list_posters` through CellPoster's microtask fallback, which is
+      // the N+1 the batch exists to avoid. It keeps its status text instead.
+      const posterRecordId = doneRecordId && batchedPosterIds.has(doneRecordId) ? doneRecordId : null;
       const isLiveSrcdoc = liveSrcdocUids.includes(item.id);
       const isHtmlCell = cell.content_path?.endsWith('.html');
       const isCollapsed = collapsedSet.has(item.id);
@@ -1254,10 +1657,11 @@ export function NodeCanvas() {
       if (isCollapsed) {
         return (
           <div
-            className={[
-              'h-full w-full rounded-md border bg-surface px-2 flex items-center justify-between gap-2 font-mono text-[10px]',
+            {...nodeRootProps(state.placement, [
+              'rounded-md border bg-surface px-2 flex items-center justify-between gap-2 font-mono text-[10px]',
               isSelected ? 'border-[var(--achievement)] ring-2 ring-[var(--achievement)]' : 'border-soft',
-            ].join(' ')}
+            ].join(' '))}
+            onMouseDown={onNodeRootMouseDown}
           >
             <span className="truncate text-fg">
               {String(Number(item.index) + 1).padStart(2, '0')} · {cell.label || cell.uid}
@@ -1290,10 +1694,11 @@ export function NodeCanvas() {
 
       return (
         <div
-          className={[
-            'h-full w-full rounded-md border bg-surface p-2 flex flex-col justify-between transition-shadow shadow-sm hover:shadow-md cursor-pointer',
+          {...nodeRootProps(state.placement, [
+            'rounded-md border bg-surface p-2 flex flex-col justify-between transition-shadow shadow-sm hover:shadow-md cursor-pointer',
             isSelected ? 'border-[var(--achievement)] ring-2 ring-[var(--achievement)]' : 'border-soft',
-          ].join(' ')}
+          ].join(' '))}
+          onMouseDown={onNodeRootMouseDown}
         >
           {/* Header */}
           <div className="flex items-center justify-between gap-1 border-b border-soft pb-1">
@@ -1371,12 +1776,32 @@ export function NodeCanvas() {
                   draft · weaker than the render
                 </span>
               </div>
-            ) : doneRecord?.id ? (
-              <CellPoster recordId={doneRecord.id} alt={item.title} className="absolute inset-0 h-full w-full object-cover" />
             ) : (
-              <span className="font-mono text-[9px] text-fg-faint">
-                {status === 'running' ? 'Rendering…' : status === 'queued' ? 'Queued' : 'Not rendered'}
-              </span>
+              <>
+                {/* Status text is the FLOOR, not the alternative: `<CellPoster>`
+                    returns null both while the batch is in flight AND on a
+                    confirmed miss, and a confirmed miss is a NORMAL path — a
+                    poster only exists where ffmpeg extracted one, and
+                    `render.ingest_external` writes a `done` row without ever
+                    calling extractPoster, so every Track-B handoff clip is a
+                    done record with no PNG. Rendering the poster INSTEAD of the
+                    text left those tiles as an empty sunken box with no label
+                    at all. The poster layers over the text when there is one
+                    (same shape as the Rail, which keeps its tint + glyph under
+                    the frame). */}
+                <span className="font-mono text-[9px] text-fg-faint">
+                  {status === 'running'
+                    ? 'Rendering…'
+                    : status === 'queued'
+                      ? 'Queued'
+                      : doneRecordId
+                        ? 'No poster'
+                        : 'Not rendered'}
+                </span>
+                {posterRecordId && (
+                  <CellPoster recordId={posterRecordId} alt={item.title} className="absolute inset-0 h-full w-full object-cover" />
+                )}
+              </>
             )}
           </div>
 
@@ -1424,18 +1849,32 @@ export function NodeCanvas() {
     }
 
     return (
-      <div className="h-full w-full rounded border border-soft bg-surface p-2">
+      <div
+        {...nodeRootProps(state.placement, 'rounded border border-soft bg-surface p-2')}
+        onMouseDown={onNodeRootMouseDown}
+      >
         <span className="text-[11px] font-medium text-fg">{item.title}</span>
       </div>
     );
   }, [
-    selectedNodeId, renderStatusMap, viewport.scale, liveSrcdocUids, toggleLiveSrcdoc,
+    selectedNodeId, renderStatusMap, doneIdByUid, batchedPosterIds, viewport.scale, liveSrcdocUids, toggleLiveSrcdoc,
     collapsedSet, toggleCollapsed, shotStage, groupOfShot, cellHtml, rollup, cells.length,
     activeGroup, toggleMembership, toggleGroupCollapsed, fountain, requestDeleteCell, beatNameOf,
   ]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-base">
+    // `onMouseDownCapture` — WCAG 2.5.7: give the canvas surface DOM focus on a
+    // real click so the primitive's arrow-pan / +/- zoom branch (gated on
+    // `document.activeElement === canvasRef.current`) is reachable without a
+    // pointer. See `focusCanvasSurface`. `onKeyDown` is the other half: a click
+    // on a NODE ends with focus on the node (Canvas's roving selection), which
+    // fails that same gate — see `bridgeCanvasKey`.
+    <div
+      ref={surfaceRef}
+      className="relative h-full w-full overflow-hidden bg-base"
+      onMouseDownCapture={focusCanvasSurface}
+      onKeyDown={bridgeCanvasKey}
+    >
       {/* Edge layer — pans/zooms with the canvas. */}
       {showEdges && (
         <svg
@@ -1481,6 +1920,7 @@ export function NodeCanvas() {
       )}
 
       <Canvas<CanvasNodeItem>
+        ref={canvasHandleRef}
         items={items}
         itemId={(it) => it.id as ItemId}
         itemKind={(it) => it.kind}
@@ -1489,6 +1929,14 @@ export function NodeCanvas() {
         editMode
         selectedId={(selectedNodeId as ItemId) ?? null}
         gridSnap={GRID_SNAP}
+        // The primitive's third auto-fit trigger, OFF. `use-pan-zoom` defaults
+        // this to true and registers `window.resize → autoFit(true)`, so
+        // maximising or resizing the shell window threw away whatever pan/zoom
+        // the user had set to inspect a shot — the same snap-back class
+        // `wp29/verdict.md` recorded, reached by resize instead of by a
+        // re-identified layout. The intent auto-fit serves is already covered
+        // by the once-per-project-open fit and the Reset button.
+        autoFitOnResize={false}
         renderItem={renderItem}
         onLayoutChange={handleLayoutChange}
         onViewportChange={handleViewportChange}
@@ -1528,6 +1976,7 @@ export function NodeCanvas() {
         {mutationError && (
           <div
             role="alert"
+            onMouseDown={(e) => e.stopPropagation()}
             className="pointer-events-auto absolute left-3 top-3 z-20 flex max-w-[min(420px,60%)] items-center gap-2 rounded-md border border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_12%,var(--bg-surface))] px-2 py-1 font-mono text-[10px] text-[var(--danger)] shadow-md backdrop-blur"
           >
             <span className="truncate" title={mutationError}>{mutationError}</span>
@@ -1576,7 +2025,16 @@ export function NodeCanvas() {
           </ConfirmDialog>
         )}
 
-        <div className="pointer-events-auto absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-md border border-soft bg-surface/90 p-1 backdrop-blur shadow-md font-mono text-[10px]">
+        {/* The toolbar is a CHILD of the canvas surface, and the primitive's
+            root mousedown clears the selection for any target that isn't an
+            item (its `.ikenga-canvas-bar` / `.home-palette` exemptions are
+            home-page classes). Left alone, `+ Group` would lose the shot it is
+            supposed to seed from and `Ungroup` would unmount itself on the way
+            down. Stop the gesture here instead. */}
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="pointer-events-auto absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-md border border-soft bg-surface/90 p-1 backdrop-blur shadow-md font-mono text-[10px]"
+        >
           <button
             type="button"
             onClick={toggleLaneCollapsed}
@@ -1631,7 +2089,7 @@ export function NodeCanvas() {
           <div className="h-4 w-px bg-soft" />
           <button
             type="button"
-            onClick={() => setViewport((v) => ({ ...v, scale: Math.min(2.0, v.scale * 1.2) }))}
+            onClick={() => nudgeZoom('in')}
             className="h-6 w-6 rounded hover:bg-raised text-fg flex items-center justify-center font-bold"
             title="Zoom in"
           >
@@ -1640,7 +2098,7 @@ export function NodeCanvas() {
           <span className="px-1 text-fg-muted tabular-nums">{Math.round(viewport.scale * 100)}%</span>
           <button
             type="button"
-            onClick={() => setViewport((v) => ({ ...v, scale: Math.max(0.25, v.scale / 1.2) }))}
+            onClick={() => nudgeZoom('out')}
             className="h-6 w-6 rounded hover:bg-raised text-fg flex items-center justify-center font-bold"
             title="Zoom out"
           >
@@ -1648,9 +2106,9 @@ export function NodeCanvas() {
           </button>
           <button
             type="button"
-            onClick={() => setViewport(() => DEFAULT_VIEWPORT)}
+            onClick={resetViewport}
             className="rounded px-2 py-0.5 hover:bg-raised text-fg-muted hover:text-fg"
-            title="Reset viewport"
+            title="Reset viewport — re-fit the whole board (the one place auto-fit still runs on demand)"
           >
             Reset
           </button>

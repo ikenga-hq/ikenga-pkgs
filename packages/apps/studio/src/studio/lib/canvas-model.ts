@@ -8,6 +8,123 @@ import type { Placement } from '@ikenga/contract/canvas';
 import { rungDir } from '../mcp-types';
 import type { Cell, RenderStatus, Rung } from '../mcp-types';
 
+// ─── done renders: the live record source (G-61 b2, live-fixed 2026-09-12) ─
+//
+// `Cell.renders` is DECLARED by the persisted document schema
+// (`shared/schema.ts` — `renders: z.array(RenderRecordSchema).default([])`)
+// but NOTHING WRITES IT. The render runner in `sidecars/project/src` writes
+// `render_queue` rows plus files on disk and never folds a finished record
+// back onto the cell, so a real project's `storyboard.json` still reads
+// `renders: []` on every cell after a successful render — live-verified over
+// two full render runs in
+// `plans/studio/verify/2026-09-12-wp32-live/g61/2-poster-verdict.md`.
+//
+// That dead field is why the node canvas never showed a poster while the Rail
+// always did: the Rail sources done records from the polled `render.list`
+// records in the storyboard store (`views/Canvas.tsx`), the canvas read
+// `Cell.renders`. Both surfaces now read the SAME store, through the two
+// functions below.
+//
+// DECISION (WP-32): `Cell.renders` is LEFT ON THE TYPE as a documented-
+// unpopulated field, not deleted. It is not an FE-only type — `Cell` comes
+// from `@ikenga/studio-schema`, which is the on-disk document contract the
+// sidecar parses with `CellSchema`, so removing it is a persisted-schema
+// change (and `sidecars/project/src/export/davinci.ts:655` still reads it,
+// the same dead-field bug in the DaVinci export, out of this task's scope).
+// No code under `src/studio/` reads it any more; anything needing
+// "has this shot rendered?" or "which record's poster?" uses these.
+
+/** Structural shape of the fields these helpers read off a `RenderRecord`, so
+ *  the derivation is testable without constructing a full schema record. */
+export interface DoneRenderRecordLike {
+  id?: string;
+  cell_uid?: string;
+  status?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+const recordTimeMs = (r: DoneRenderRecordLike): number => {
+  const v = r.finished_at ?? r.started_at;
+  const t = v ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? t : 0;
+};
+
+/**
+ * cell uid → id of that cell's LATEST DONE render record.
+ *
+ * `done` only — a queued/running/failed row has no poster and no finished
+ * frame, and treating one as a done render is the Round-2 defect the Breakdown
+ * header calls out. Among several done records the most-recently-finished
+ * wins; lacking timestamps, the later list position does (`>=`), matching
+ * `views/composition/format.ts`'s `recordByUid` recency intent.
+ *
+ * Deliberately NOT `recordByUid` itself: that one returns the best record of
+ * ANY status (it ranks, it does not filter), so its result still has to be
+ * status-checked by every caller. Posters and stage derivation both want the
+ * done record or nothing, so the filter lives here once.
+ */
+export function doneRecordIdByUid(
+  records: readonly DoneRenderRecordLike[] | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const best: Record<string, number> = {};
+  for (const r of records ?? []) {
+    if (!r || r.status !== 'done') continue;
+    if (typeof r.cell_uid !== 'string' || !r.cell_uid) continue;
+    if (typeof r.id !== 'string' || !r.id) continue;
+    const t = recordTimeMs(r);
+    const prev = best[r.cell_uid];
+    if (prev !== undefined && t < prev) continue;
+    best[r.cell_uid] = t;
+    out[r.cell_uid] = r.id;
+  }
+  return out;
+}
+
+/**
+ * The record ids to hand `prefetchPosters` for a set of visible shots — one
+ * batched `render.list_posters` for the whole board, never one per tile
+ * (review §2.5; the batching contract itself was proven live, it was only
+ * never exercised from the canvas because its input was the dead field).
+ *
+ * Order follows `uids`, duplicates are dropped, and a shot with no done render
+ * contributes nothing — so the returned array joined is a stable identity for
+ * "the current done-set" and the caller can fire exactly once per change.
+ *
+ * `limit` CAPS the batch, and it is not cosmetic. Two hard ceilings sit
+ * downstream of this list and both fail silently when it overruns them:
+ *   • `views/composition/CellPoster.tsx`'s blob cache is a 50-entry LRU, and
+ *     `bump()` evicts DURING the resolving batch — so a 60-id batch leaves the
+ *     first 10 posters decoded, cached, evicted and revoked. Those tiles then
+ *     re-request one id at a time through `<CellPoster>`'s own microtask
+ *     fallback (an N+1 burst), and because their effect deps are unchanged the
+ *     poster simply disappears instead.
+ *   • the sidecar truncates `render.list_posters` at 100 ids without saying so
+ *     (`sidecars/project/src/render-runner.ts`), so ids past 100 come back as
+ *     honest misses that are then cached as misses forever.
+ * A caller with more done shots than the cap must therefore hand over a
+ * PREFIX and let the rest fall back to their status text — never the whole
+ * board. An un-capped call is still allowed (tests, small fixed sets).
+ */
+export function doneRecordIdsFor(
+  uids: Iterable<string>,
+  doneIdByUid: Record<string, string>,
+  limit?: number,
+): string[] {
+  const cap = limit === undefined ? Number.POSITIVE_INFINITY : Math.max(0, limit);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const uid of uids) {
+    if (ids.length >= cap) break;
+    const id = doneIdByUid[uid];
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
 // ─── the pipeline (Plan 25 "node model" table) ───────────────────────────
 //
 // The plan's fixed pipeline is "~6: script → breakdown → anchors → generate →
@@ -46,12 +163,40 @@ export const stageNodeId = (id: StageId): string => `stage-${id}`;
  *   • queued/running is generation in flight;
  *   • a done render has rendered;
  *   • `approved` on top of a done render is what export composes from.
- * `failed`/`cancelled` deliberately report `generate` — that is where the work
- * stalled, and the stage node's own warning affordance is what flags it.
+ * `failed`/`cancelled` report `generate` ONLY for a shot with nothing to show
+ * — that is where the work stalled, and the stage node's own warning
+ * affordance is what flags it. A failure ON TOP of an earlier successful take
+ * is a different fact and reports differently: `hasDoneRender` wins, so the
+ * chip reads `render`/`export` (what the shot HAS) and `rollupStages` puts the
+ * `1 failed` warning on that stage instead of `generate`. This is reachable on
+ * a real board — `render.list` rows come back created_at DESC and
+ * `foldRenderStatus` (`lib/composition-model.ts`) lets a later-iterated
+ * non-active row win, so a shot whose history is failed(t1) → done(t2) folds
+ * to status `failed` while `doneRecordIdByUid` still reports its done id.
+ * Intended: the warning follows the chip, so the two never disagree about
+ * where the shot is. Pinned by the `(failed, true)` / `(cancelled, true)`
+ * cases in `canvas-links.test.ts`.
+ *
+ * `hasDoneRender` is "did this shot EVER finish a render", from the live
+ * `render.list` records (`doneRecordIdByUid` above) — it used to be read off
+ * `Cell.renders`, which nothing populates, so this branch was unreachable on
+ * every real project and a re-queued shot that had already rendered reported
+ * `generate`. It is a REQUIRED parameter, not an optional one defaulting to
+ * `false`, precisely so a future caller cannot reintroduce that silent dead
+ * input: omitting the source is now a compile error.
+ *
+ * Branch order is unchanged from WP-28: a finished render outranks a render
+ * currently in flight, so a shot re-rendering over an existing take reads
+ * `render`/`export` (what it HAS) rather than `generate` (what it is doing).
+ * The in-flight fact is carried by the render beacon and the tile's own status
+ * line, not by the stage chip.
  */
-export function deriveShotStage(cell: Cell, status: RenderStatus | undefined): StageId {
+export function deriveShotStage(
+  cell: Cell,
+  status: RenderStatus | undefined,
+  hasDoneRender: boolean,
+): StageId {
   if (status === 'done') return cell.approved ? 'export' : 'render';
-  const hasDoneRender = (cell.renders ?? []).some((r) => r.status === 'done');
   if (hasDoneRender) return cell.approved ? 'export' : 'render';
   if (status === 'queued' || status === 'running') return 'generate';
   const authored = Boolean(cell.prompt?.trim() || cell.action?.trim() || cell.intent?.trim());
@@ -71,6 +216,7 @@ export interface StageRollup {
 export function rollupStages(
   cells: Cell[],
   statusOf: (uid: string) => RenderStatus | undefined,
+  hasDoneRenderOf: (uid: string) => boolean,
 ): StageRollup {
   const counts = {} as Record<StageId, number>;
   const failed = {} as Record<StageId, number>;
@@ -80,7 +226,7 @@ export function rollupStages(
   }
   for (const c of cells) {
     const status = statusOf(c.uid);
-    const stage = deriveShotStage(c, status);
+    const stage = deriveShotStage(c, status, hasDoneRenderOf(c.uid));
     counts[stage] += 1;
     if (status === 'failed') failed[stage] += 1;
   }
@@ -289,3 +435,165 @@ export function buildNewLaneCell(params: {
     last_edited: now(),
   } as unknown as Cell;
 }
+
+// ─── the DOM contract with the <Canvas> primitive (live fix, 2026-09-12) ──
+//
+// `@ikenga/contract/canvas`'s Canvas.tsx clones what `renderItem` returns and
+// injects ONLY `left / top / width` inline, plus `data-id`. Two consequences
+// the consumer — not the primitive — has to satisfy, both of which WP-32's
+// live round found unsatisfied on this surface:
+//
+//   1. POSITIONING. The injected left/top are inert unless the card root is
+//      `position: absolute`. The bundled canvas.css supplies that only for the
+//      shell-home classes (`.home-widget` / `.home-greeting`); every studio
+//      node root was `h-full w-full …`, so all of them stacked in document
+//      flow at one pane-height each and exactly ONE node was on screen
+//      (`plans/studio/verify/2026-09-12-wp32-live/g61/gap-canvas-unpositioned/`).
+//      Height is NOT injected either, so the root must take it from
+//      `state.placement.h` — `h-full` resolved against the stage, not the node.
+//   2. HIT-TESTING. Canvas' `ITEM_SELECTOR` is
+//      `'.home-widget, .home-greeting, [data-canvas-item]'`, tested with
+//      `closest()` before `onSelectionChange` / `beginDrag`. A root carrying
+//      none of the three can never be selected or dragged, which killed the
+//      lane reorder, free placement, group membership and the `+ group` button
+//      path in one stroke (`wp28/verdict.md`, `wp29/verdict.md`).
+//
+// Both live here rather than inline in the view so a headless test can assert
+// them, and so a new node kind gets them by construction.
+
+/** Positioning class every node root must carry — see (1) above. */
+export const NODE_POSITION_CLASS = 'absolute';
+
+/** Hit-test attribute every node root must carry — see (2) above. */
+export const CANVAS_ITEM_ATTR = 'data-canvas-item';
+
+/**
+ * In-card controls that must NOT start a canvas gesture. `closest()`-matched
+ * in the node root's own mousedown, which stops propagation so the primitive's
+ * root handler never sees it. Without this the `+ group` / `− group` button is
+ * unclickable by construction: mousedown inside a shot card would re-select
+ * that shot, `activeGroup` (gated on a GROUP being selected) would go null, and
+ * the button would unmount before its click could land.
+ */
+export const NODE_NODRAG_SELECTOR = 'button,a,input,select,textarea,iframe,[data-canvas-nodrag]';
+
+export interface NodeRootProps {
+  className: string;
+  style: { height: number };
+  'data-canvas-item': string;
+}
+
+/**
+ * The props every `renderItem` root spreads. `className` leads with the
+ * positioning class so the consumer's own classes can still win later in the
+ * list; `style.height` is merged UNDER the primitive's injected left/top/width
+ * (Canvas spreads the consumer style last), so both survive.
+ */
+export function nodeRootProps(placement: Placement, className: string): NodeRootProps {
+  return {
+    className: className ? `${NODE_POSITION_CLASS} ${className}` : NODE_POSITION_CLASS,
+    style: { height: placement.h },
+    [CANVAS_ITEM_ATTR]: '',
+  } as NodeRootProps;
+}
+
+/** Content equality for a whole layout map (identity-blind). */
+export function layoutsEqual(
+  a: Record<string, Placement>,
+  b: Record<string, Placement>,
+): boolean {
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    if (!(k in b)) return false;
+    if (!placementsEqual(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * Mutate `box` in place until its CONTENT equals `next`; return whether
+ * anything actually changed.
+ *
+ * The point is the IDENTITY. `use-pan-zoom.ts` declares
+ * `autoFit = useCallback(…, [layout, editMode, setPan])` and then keeps
+ * `useEffect(() => autoFit(true), [editMode, autoFit])`, so a layout object
+ * that is merely re-derived — same numbers, new object — re-fires auto-fit and
+ * snaps the user's pan/zoom back. On this surface every `canvas.write` echoed
+ * through the fs watcher as `cells/changed` → storyboard refetch → new `cells`
+ * array → new lane order → new derived layout, which is why 8 middle-drags of
+ * 1360 px moved the board 138 px and a `-` click reverted inside ~300 ms
+ * (`wp29/verdict.md`, `wp29/zoom-snapback-samples.txt`).
+ *
+ * Handing the primitive ONE box whose identity never changes moves auto-fit
+ * back under the consumer's control (once per project open, plus Reset) while
+ * keeping placements current: Canvas re-reads `layout[id]` on every render, and
+ * `use-drag-snap`/`autoFit` read it through refs at gesture/call time, so a
+ * mutated box is as fresh as a replaced one. Idempotent, so a StrictMode
+ * double-render is harmless.
+ */
+export function syncLayoutBox(
+  box: Record<string, Placement>,
+  next: Record<string, Placement>,
+): boolean {
+  let changed = false;
+  for (const k of Object.keys(box)) {
+    if (!(k in next)) {
+      delete box[k];
+      changed = true;
+    }
+  }
+  for (const k of Object.keys(next)) {
+    const p = next[k];
+    if (!placementsEqual(box[k], p)) {
+      box[k] = p;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// ─── (3) the keyboard bridge ────────────────────────────────────────────────
+//
+// `use-pan-zoom`'s arrow-pan / ±-zoom branch is gated on
+// `document.activeElement === canvasRef.current`, and Canvas's own item
+// mousedown MOVES focus to the clicked item in a rAF (its WCAG 2.4.3
+// roving-selection behaviour). So after any click on a node — which is the
+// normal state of this board, since the cross-view selection effect keeps a
+// shot selected — the keyboard alternative to dragging is unreachable: the
+// focused element is the node, not the surface. Consumer-side fix: a keydown
+// handler on the surface wrapper hands the surface focus when one of the keys
+// the primitive implements arrives at a node, so the SAME native event reaches
+// the primitive's window listener (which runs after React's bubble phase)
+// already satisfying the gate.
+//
+// The two constants live here so the set can be asserted against the
+// primitive's implemented codes without a DOM.
+
+/** Keys `use-pan-zoom` acts on while the canvas ROOT holds focus. Arrows are
+ *  matched on `event.key`, zoom on `event.code` — exactly as the primitive
+ *  reads them (`use-pan-zoom.js`: `switch (e.key)` with an `e.code` default
+ *  branch for `Equal`/`NumpadAdd`/`Minus`/`NumpadSubtract`). */
+export const CANVAS_PAN_ZOOM_KEYS: readonly string[] = [
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'Equal',
+  'NumpadAdd',
+  'Minus',
+  'NumpadSubtract',
+];
+
+/** True for a keydown the focused canvas surface would act on. */
+export function isCanvasPanZoomKey(code: string, key: string): boolean {
+  return CANVAS_PAN_ZOOM_KEYS.includes(code) || CANVAS_PAN_ZOOM_KEYS.includes(key);
+}
+
+/**
+ * Targets the bridge must leave alone: everything that owns its own arrow /
+ * space semantics. `NODE_NODRAG_SELECTOR` already names the controls that live
+ * inside a node (a `button` treats Space as activation, an `input` treats
+ * arrows as caret movement), plus contenteditable for the same reason.
+ */
+export const KEY_BRIDGE_SKIP_SELECTOR = `${NODE_NODRAG_SELECTOR},[contenteditable="true"]`;
