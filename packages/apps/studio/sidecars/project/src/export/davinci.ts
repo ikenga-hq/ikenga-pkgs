@@ -293,6 +293,7 @@ except Exception:
 interface QuantizedClip {
   cell: Cell;
   clipUri: string; // '' when no usable render (renders as a <gap>)
+  startMs: number; // absolute clip start in ms — re-quantized at runtime for the live path (G-78)
   startFrame: number;
   durationFrames: number;
 }
@@ -320,7 +321,7 @@ function quantizeClips(
     const endFrame = msToFrames(currentTimeMs + durationMs, fps);
     const durationFrames = Math.max(0, endFrame - startFrame);
 
-    clips.push({ cell, clipUri, startFrame, durationFrames });
+    clips.push({ cell, clipUri, startMs: currentTimeMs, startFrame, durationFrames });
     currentTimeMs += durationMs;
   }
 
@@ -449,6 +450,7 @@ export function buildResolvePythonScript(
     return {
       uid: clip.cell.uid,
       mediaPath: clip.clipUri || null,
+      startMs: clip.startMs,
       startFrame: clip.startFrame,
       durationFrames: clip.durationFrames,
       prompt: clip.cell.prompt || '',
@@ -482,16 +484,24 @@ try:
     mp = proj.GetMediaPool()
     root_folder = mp.GetRootFolder()
 
-    # Create new timeline for this export
-    timeline = mp.CreateEmptyTimeline(${timelineNameLiteral})
-    if not timeline:
-        timeline = proj.GetCurrentTimeline()
-
-    clips_data = ${JSON.stringify(clipsPayload)}
-    downbeats = ${JSON.stringify(downbeats)}
-    beats = ${JSON.stringify(beats)}
-    onsets = ${JSON.stringify(onsets)}
+    # JSON payloads arrive as Python string literals decoded by json.loads —
+    # JSON's null/true/false are NameErrors as bare Python literals (G-77).
+    clips_data = json.loads(${pyStringLiteral(JSON.stringify(clipsPayload))})
+    downbeats = json.loads(${pyStringLiteral(JSON.stringify(downbeats))})
+    beats = json.loads(${pyStringLiteral(JSON.stringify(beats))})
+    onsets = json.loads(${pyStringLiteral(JSON.stringify(onsets))})
     fps = ${fps}
+
+    # G-78: markers and record positions are quantized against the LIVE
+    # project's actual timeline frame rate, not the caller-requested fps —
+    # a 30fps quantization in a 24fps project shifts every marker 25% late.
+    proj_fps = None
+    try:
+        proj_fps = float(proj.GetSetting("timelineFrameRate"))
+    except Exception:
+        proj_fps = None
+    if not proj_fps or proj_fps <= 0:
+        proj_fps = fps
 
     media_items = []
     path_to_item = {}
@@ -502,40 +512,83 @@ try:
                 media_items.extend(imported)
                 path_to_item[item["mediaPath"]] = imported[0]
 
-    if media_items:
-        # G-53: append with explicit frame-quantized timeline positions so
-        # the live timeline matches the FCPXML fallback's boundary math
-        # instead of relying on Resolve's own back-to-back append order.
-        clip_infos = []
-        for item in clips_data:
-            media = path_to_item.get(item["mediaPath"])
-            if media is None:
-                continue
-            clip_infos.append({
-                "mediaPoolItem": media,
-                "startFrame": 0,
-                "endFrame": item["durationFrames"],
-                "recordFrame": item["startFrame"],
-            })
-        if clip_infos:
-            mp.AppendToTimeline(clip_infos)
-        else:
-            mp.AppendToTimeline(media_items)
+    # G-79 (found live on Resolve 19.1/Windows): AppendToTimeline returns a
+    # non-empty list while silently placing nothing. CreateTimelineFromClips
+    # both creates the timeline and honors per-clip absolute recordFrame, so
+    # it is the primary population path; the old create+append flow stays as
+    # the fallback for builds where append works.
+    timeline = None
+    clip_infos = []
 
-    # Inject Beat Markers (gated by enableBeatSync — G-75 #7)
+    # CreateTimelineFromClips recordFrame values are ABSOLUTE record frames;
+    # learn the project's timeline base first (shared by every timeline in a
+    # project). If no timeline exists yet, a throwaway teaches us, then dies.
+    base = None
+    tl_count = proj.GetTimelineCount() or 0
+    if tl_count > 0:
+        first = proj.GetTimelineByIndex(1)
+        if first:
+            base = first.GetStartFrame()
+    if base is None:
+        probe_tl = mp.CreateEmptyTimeline("__ikenga_base_probe__")
+        if probe_tl:
+            base = probe_tl.GetStartFrame()
+            mp.DeleteTimelines([probe_tl])
+    if base is None:
+        base = 0
+
+    for item in clips_data:
+        media = path_to_item.get(item["mediaPath"])
+        if media is None:
+            continue
+        clip_infos.append({
+            "mediaPoolItem": media,
+            # Whole-source-clip range: cell renders are exactly duration_ms
+            # long by construction, and conformance converts fps. Passing
+            # source-range frames computed at the caller's fps would truncate
+            # whenever the project frame rate differs.
+            "recordFrame": base + round((item["startMs"] / 1000.0) * proj_fps),
+        })
+    if clip_infos:
+        timeline = mp.CreateTimelineFromClips(${timelineNameLiteral}, clip_infos)
+    if not timeline:
+        timeline = mp.CreateEmptyTimeline(${timelineNameLiteral})
+        if timeline:
+            if clip_infos:
+                mp.AppendToTimeline(clip_infos)
+            elif media_items:
+                mp.AppendToTimeline(media_items)
+    if not timeline:
+        timeline = proj.GetCurrentTimeline()
+    if not timeline:
+        print(json.dumps({"ok": False, "error": "TIMELINE_CREATE_FAILED"}))
+        sys.exit(0)
+
+    # Honest population report (G-75 #5 spirit): some builds silently no-op
+    # the append fallback; surface what actually landed instead of claiming
+    # success on an empty timeline.
+    clips_placed = None
+    try:
+        placed = timeline.GetItemListInTrack("video", 1) or []
+        clips_placed = len(placed)
+    except Exception:
+        clips_placed = None
+
+    # Inject Beat Markers (gated by enableBeatSync — G-75 #7), quantized at
+    # the project's runtime frame rate (G-78).
     markers_count = 0
     for db in downbeats:
-        frame = round((db / 1000.0) * fps)
+        frame = round((db / 1000.0) * proj_fps)
         timeline.AddMarker(frame, "Blue", "Downbeat", "Bar start", 1)
         markers_count += 1
 
     for beat in beats:
-        frame = round((beat / 1000.0) * fps)
+        frame = round((beat / 1000.0) * proj_fps)
         timeline.AddMarker(frame, "Purple", "Beat", "Beat", 1)
         markers_count += 1
 
     for onset in onsets:
-        frame = round((onset / 1000.0) * fps)
+        frame = round((onset / 1000.0) * proj_fps)
         timeline.AddMarker(frame, "Yellow", "Transient", "Cut point", 1)
         markers_count += 1
 
@@ -543,7 +596,9 @@ try:
         "ok": True,
         "timelineName": ${timelineNameLiteral},
         "trackCount": {"video": 1, "audio": 0},
-        "markersCount": markers_count
+        "markersCount": markers_count,
+        "clipsPlaced": clips_placed,
+        "frameRate": proj_fps
     }))
 
 except Exception as e:
@@ -645,6 +700,10 @@ export async function exportDaVinciTimeline(
             timelineName: parsed.timelineName,
             trackCount: parsed.trackCount,
             markersCount: parsed.markersCount,
+            // G-79/G-78 honest-reporting fields: what actually landed in the
+            // live timeline, and the frame rate quantization used.
+            ...(parsed.clipsPlaced !== undefined ? { clipsPlaced: parsed.clipsPlaced } : {}),
+            ...(parsed.frameRate !== undefined ? { frameRate: parsed.frameRate } : {}),
           };
         }
         // G-75 #5: the script told us definitively that the live export
