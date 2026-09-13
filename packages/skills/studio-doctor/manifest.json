@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.studio-doctor",
   "name": "Studio Doctor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "ikenga_api": "1",
   "kind": "skill",
   "author": {

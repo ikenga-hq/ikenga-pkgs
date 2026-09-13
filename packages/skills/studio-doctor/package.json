@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/studio-doctor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Studio toolchain preflight — pure-shell check.sh that verifies the local render stack. Zero coupling; independently useful as a doctor/preflight skill.",
   "keywords": [
     "claude",

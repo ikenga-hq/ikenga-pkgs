@@ -1,5 +1,11 @@
 # @ikenga/studio-doctor
 
+## 0.2.2
+
+### Patch Changes
+
+- [#102](https://github.com/ikenga-hq/ikenga-pkgs/pull/102) [`d1f2efc`](https://github.com/ikenga-hq/ikenga-pkgs/commit/d1f2efc185406ca0eec66b6082e54f8760ede32b) Thanks [@nedjamez](https://github.com/nedjamez)! - check.sh finds Chromium the way the Studio sidecar does (explicit path, system browser, or the Puppeteer cache incl. `PUPPETEER_CACHE_DIR`), requires `chrome-headless-shell` on Windows (HyperFrames drives the headless shell there) with an install hint, and probes `python3`/`python`/`py` for a real 3.x interpreter before importing `librosa` — on Windows `python3` is frequently the Store alias stub, which made librosa report MISSING while installed.
+
 ## 0.2.1
 
 ### Patch Changes
