@@ -1,5 +1,11 @@
 # @ikenga/pkg-studio
 
+## 0.7.0
+
+### Minor Changes
+
+- [#105](https://github.com/ikenga-hq/ikenga-pkgs/pull/105) [`3ba20cd`](https://github.com/ikenga-hq/ikenga-pkgs/commit/3ba20cd30a8a8166aba8cbc9273f0d0a7c0c0999) Thanks [@nedjamez](https://github.com/nedjamez)! - Studio WP-32 close-out. The node canvas is now the sole Canvas surface (the 1D Rail is retired after the G-61 live re-clear): nodes are positioned and draggable, lane drops write `Cell.index`, groups and per-shot create/delete live on the canvas, posters and render status come from live render records, and the viewport no longer snaps back on every save. Sidecar: the open-project cache re-syncs on out-of-band `storyboard.json` edits; HyperFrames on Windows drives `chrome-headless-shell` (`npx puppeteer browsers install chrome-headless-shell`) and failed renders carry the full command + output tails; Chrome discovery handles win64/mac/linux Puppeteer cache layouts. MCP: `STUDIO_SUPPRESS_EVENTS=1` test knob, shutdown census on stdin EOF, connection-probe retry instead of a silent mock latch. Launcher: `host.openFolder` gets a user-paced timeout with a visible waiting state; Windows-safe fallback names. Sidecar trust: client side of the host-authenticated `/iyke/pkg-trust/project-access` relay (fails closed until the shell endpoint ships).
+
 ## 0.6.0
 
 ### Minor Changes

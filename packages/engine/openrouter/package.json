@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-engine-openrouter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenRouter unified engine adapter for Ikenga (Plan 24, WP-20).",
   "license": "Apache-2.0",
   "repository": {
