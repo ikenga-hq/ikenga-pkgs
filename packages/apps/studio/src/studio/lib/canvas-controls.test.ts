@@ -13,16 +13,20 @@
 //   • G-102 — five destructive controls with the IDENTICAL accessible name,
 //     because `beatNameOf`'s uniqueness assumption ("`beat_id` carries a random
 //     suffix") holds only for cells this FE created. All five cells on the live
-//     fixture read `beat_id = beat-hello`. BOTH surfaces are in scope: the Rail
-//     is the default view (`canvasMode` starts at 'rail') and the one whose ✕
-//     the live round drove with a real OS mouse, so a fix that reached only the
-//     node canvas would have left the defect where a human meets it.
+//     fixture read `beat_id = beat-hello`. Both surfaces were in scope when the
+//     defect was filed; the Rail was retired in WP-31 (see below), so the node
+//     canvas is now the only surface carrying a per-shot delete.
 //   • G-103 — two create controls that disagreed about a new shot's `index`,
 //     in TWO ways: different arithmetic (the Rail's `displayCells.length` vs
 //     the canvas's `max + 1`, which diverge on a gapped board) and different
-//     BOARDS (`displayCells` silently falls back to the 10-entry presentation
-//     fixture whenever `hasRealCells` is false — including a real project with
+//     BOARDS (`displayCells` silently fell back to the 10-entry presentation
+//     fixture whenever `hasRealCells` was false — including a real project with
 //     zero cells). Both halves have to be pinned or the surfaces re-diverge.
+//     The labelled create path in `views/Canvas.tsx` survives the Rail's
+//     retirement and still shares `nextLaneIndex` with the canvas toolbar.
+//   • WP-31 — the 1D Rail and the `canvasMode` view switcher are GONE, and
+//     `views/Canvas.tsx` renders `<NodeCanvas />` unconditionally. Pinned as a
+//     source assertion below so the switcher cannot creep back in.
 //   • G-104 — the canvas's own status line and toolbar are in the a11y tree
 //     with working handlers and are not painted anywhere in the window.
 //
@@ -65,7 +69,9 @@ function test(name: string, fn: () => void): void {
 
 const nodeCanvasSrc = (): string =>
   readFileSync(new URL('../views/NodeCanvas.tsx', import.meta.url), 'utf8');
-const railSrc = (): string =>
+/** `views/Canvas.tsx` — the Canvas VIEW: chrome + the labelled create path,
+ *  wrapped around `<NodeCanvas />`. (Until WP-31 it also carried the 1D Rail.) */
+const canvasViewSrc = (): string =>
   readFileSync(new URL('../views/Canvas.tsx', import.meta.url), 'utf8');
 
 /** The WP-32 live fixture, reduced to the fields the names read: five cells
@@ -173,32 +179,40 @@ test('G-102: both shot roots and the dialog go through the name helpers', () => 
   assert.ok(/aria-label="Cancel delete cell"/.test(src));
 });
 
-test('G-102: the RAIL`s per-shot delete is named the same way', () => {
-  const rail = railSrc();
-  // The default view. `aria-label={`Delete cell ${item.beat}`}` rendered five
-  // buttons with the identical name on the live fixture — the reported defect,
-  // on the only surface a human could use.
-  assert.ok(
-    /aria-label=\{deleteCellControlName\(item\)\}/.test(rail),
-    'the Rail delete control must take its name from canvas-model',
-  );
+test('WP-31: the Rail and the view switcher are gone from views/Canvas.tsx', () => {
+  const view = canvasViewSrc();
+  // The gate that permits this deletion:
+  // plans/studio/verify/2026-09-12-wp32-live/g61/7-gate.md §0 (2026-09-13) —
+  // G-61 behaviours 1–6 all PASS on the node canvas in their latest run.
+  assert.equal(/canvasMode/.test(view), false, '`canvasMode` state must be gone');
   assert.equal(
-    /aria-label=\{`Delete cell \$\{/.test(rail),
+    /aria-label="Canvas mode"/.test(view),
     false,
-    'the Rail must not name a destructive control with an inline beat-only template',
+    'the Canvas/Rail tablist switcher must be gone',
   );
-  assert.ok(/from '\.\.\/lib\/canvas-model'/.test(rail));
+  // …and the surface renders unconditionally, not behind a mode branch.
+  assert.ok(/<NodeCanvas \/>/.test(view), 'the node canvas must be rendered');
+  assert.equal(
+    /=== 'rail'|=== 'graph'/.test(view),
+    false,
+    'no surface may be gated on a canvas mode any more',
+  );
+  // The labelled create path survives — it is the only one in the product.
+  assert.ok(/\+ New cell/.test(view));
+  assert.ok(/storyboardApi\.create_cell/.test(view));
 });
 
 test('G-102: no per-shot delete keeps a shot-blind `Delete cell` tooltip', () => {
-  // The a11y name is not the affordance a mouse user gets. All three ✕ controls
-  // (two on the canvas, one on the Rail) must put the same identifying string
-  // in `title`, or five `beat-hello` cells still hover-tip identically — the
-  // Rail's is the worst case, since its ✕ is revealed by that very hover.
-  // Line-anchored so this targets the BUTTON attribute and not the Rail's
-  // singleton confirm `<Modal title="Delete cell">`, whose name is unambiguous
-  // (one dialog at a time) and whose body prints the beat and the uid.
-  for (const [file, src] of [['NodeCanvas.tsx', nodeCanvasSrc()], ['Canvas.tsx', railSrc()]] as const) {
+  // The a11y name is not the affordance a mouse user gets. Both ✕ controls on
+  // the canvas must put the same identifying string in `title`, or five
+  // `beat-hello` cells still hover-tip identically. Line-anchored so this
+  // targets the BUTTON attribute and not the singleton confirm
+  // `<Modal title="Delete cell">`, whose name is unambiguous (one dialog at a
+  // time) and whose body prints the beat and the uid.
+  for (const [file, src] of [
+    ['NodeCanvas.tsx', nodeCanvasSrc()],
+    ['Canvas.tsx', canvasViewSrc()],
+  ] as const) {
     assert.equal(
       /^\s*title="Delete cell"\s*$/m.test(src),
       false,
@@ -207,7 +221,6 @@ test('G-102: no per-shot delete keeps a shot-blind `Delete cell` tooltip', () =>
   }
   const titled = (nodeCanvasSrc().match(/title=\{deleteCellControlName\(cell\)\}/g) ?? []).length;
   assert.equal(titled, 2, `expected 2 identifying delete tooltips on the canvas, found ${titled}`);
-  assert.ok(/title=\{deleteCellControlName\(item\)\}/.test(railSrc()), 'the Rail ✕ needs one too');
 });
 
 // ── G-103 · one piece of end-of-lane arithmetic ─────────────────────────
@@ -239,12 +252,13 @@ test('G-103: nextLaneIndex is end-of-lane on a gapped board AND on a scaffold', 
 });
 
 test('G-103: both create surfaces ask nextLaneIndex, and agree', () => {
-  const rail = railSrc();
+  const rail = canvasViewSrc();
   const canvas = nodeCanvasSrc();
-  // The Rail's inline cell literal now routes through the shared function…
+  // The labelled create path's inline cell literal routes through the shared
+  // function…
   assert.ok(
     /index: nextLaneIndex\(hydratedCells\)/.test(rail),
-    'the Rail create call must take its index from nextLaneIndex',
+    'the labelled create call must take its index from nextLaneIndex',
   );
   // …and the arithmetic it used to carry is gone.
   assert.equal(
@@ -252,7 +266,7 @@ test('G-103: both create surfaces ask nextLaneIndex, and agree', () => {
     false,
     'displayCells.length must not be a Cell.index any more',
   );
-  assert.ok(/from '\.\.\/lib\/canvas-model'/.test(rail), 'the Rail must import the shared module');
+  assert.ok(/from '\.\.\/lib\/canvas-model'/.test(rail), 'the view must import the shared module');
   // The canvas path is unchanged and still the same function.
   assert.ok(/nextLaneIndex\(cellsRef\.current\)/.test(canvas));
   // One function, so the two cannot disagree — asserted on the value, not just
@@ -263,18 +277,23 @@ test('G-103: both create surfaces ask nextLaneIndex, and agree', () => {
 });
 
 test('G-103: and both ask it about the SAME board', () => {
-  const rail = railSrc();
+  const rail = canvasViewSrc();
   const canvas = nodeCanvasSrc();
   // One function over two different arrays is still two different answers, and
-  // that was the surviving half of G-103. `displayCells` is
-  // `hasRealCells ? hydratedCells.map(toDisplayCell) : MOCK_CELLS`, and
-  // `selectHasRealCells` is `source === 'real' && cells.length > 0` — so it is
-  // the 10-entry presentation fixture on a REAL project with zero cells, and on
-  // the demo board (where create_cell appends to the mock MCP's 6-cell array,
-  // not to that fixture).
-  assert.ok(
-    /const displayCells = useMemo<MockCell\[\]>\(\s*\n\s*\(\) => \(hasRealCells \? hydratedCells\.map\(toDisplayCell\) : MOCK_CELLS\)/.test(rail),
-    'premise: displayCells still falls back to the presentation fixture',
+  // that was the surviving half of G-103. The presentation list that caused it
+  // (`displayCells` = `hasRealCells ? hydratedCells.map(toDisplayCell) :
+  // MOCK_CELLS`, which is the 10-entry fixture on a REAL project with zero
+  // cells) went out with the Rail in WP-31 — the view no longer builds one at
+  // all, which closes the divergence by construction.
+  assert.equal(
+    /displayCells/.test(rail),
+    false,
+    'the Canvas view must not carry a presentation cell list any more',
+  );
+  assert.equal(
+    /MOCK_CELLS/.test(rail),
+    false,
+    'the Canvas view must not read the presentation fixture any more',
   );
   // Neither create path may read a presentation list.
   assert.equal(
