@@ -21,7 +21,15 @@
 import assert from 'node:assert/strict';
 
 import type { RenderRecord } from '../../mcp-types';
-import { latestRecordByUid, recordByUid, renderCounts } from './format';
+import {
+  POSTER_RETRY_AFTER_MS,
+  POSTER_RETRY_MAX_TRIES,
+  latestRecordByUid,
+  posterFetchIds,
+  recordByUid,
+  renderCounts,
+  type PosterMiss,
+} from './format';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -149,6 +157,76 @@ test('renderCounts: fully rendered when every cell\'s latest attempt is done', (
   const clips = [{ uid: 'a' }, { uid: 'b' }];
   const counts = renderCounts(clips, latestRecordByUid(records));
   assert.deepEqual(counts, { rendered: 2, failed: 0, total: 2 });
+});
+
+// ─── G-109: poster batch planning (the miss is provisional) ──────────────
+//
+// The sidecar marks a render row `done` and only THEN spawns ffmpeg to write
+// the poster PNG (`render-runner.ts`), so the batch fired the moment a cell
+// goes done routinely gets an honest `b64: null`. Live in `hf-win-b5/`: 3 of 4
+// freshly-done HyperFrames tiles read `No poster` for the rest of the session
+// because that null was cached as final. These pin the bounded retry AND the
+// no-op-once-settled property the one-call-per-done-set contract rests on.
+
+function planState(
+  cached: Record<string, true>,
+  misses: Record<string, PosterMiss>,
+  inFlight: string[] = [],
+) {
+  return {
+    cached: (id: string) => id in cached,
+    inFlight: (id: string) => inFlight.includes(id),
+    miss: (id: string) => misses[id],
+  };
+}
+
+test('posterFetchIds: uncached ids are fetched, deduped, in order', () => {
+  const plan = posterFetchIds(['r1', 'r2', 'r1', ''], planState({}, {}), 1_000);
+  assert.deepEqual(plan, ['r1', 'r2']);
+});
+
+test('posterFetchIds: a settled set costs NO round trip (the batching contract)', () => {
+  const state = planState({ r1: true, r2: true }, {});
+  assert.deepEqual(posterFetchIds(['r1', 'r2'], state, 1_000), []);
+});
+
+test('posterFetchIds: in-flight ids are never re-requested', () => {
+  assert.deepEqual(posterFetchIds(['r1'], planState({}, {}, ['r1']), 1_000), []);
+});
+
+test('posterFetchIds: a fresh miss is NOT retried immediately', () => {
+  const state = planState({ r1: true }, { r1: { at: 1_000, tries: 1 } });
+  assert.deepEqual(posterFetchIds(['r1'], state, 1_000 + POSTER_RETRY_AFTER_MS - 1), []);
+});
+
+test('posterFetchIds: a miss IS retried once the backoff has elapsed', () => {
+  const state = planState({ r1: true }, { r1: { at: 1_000, tries: 1 } });
+  assert.deepEqual(posterFetchIds(['r1'], state, 1_000 + POSTER_RETRY_AFTER_MS), ['r1']);
+});
+
+test('posterFetchIds: the retry is bounded - a spent miss settles for good', () => {
+  const state = planState({ r1: true }, { r1: { at: 1_000, tries: POSTER_RETRY_MAX_TRIES } });
+  assert.deepEqual(posterFetchIds(['r1'], state, 9_999_999), []);
+});
+
+test('posterFetchIds: an LRU-evicted id is fetchable again regardless of its miss', () => {
+  // `bump()` can evict a cache entry while the miss bookkeeping lingers; an id
+  // with no cache entry at all is a plain gap, not a settled miss.
+  const state = planState({}, { r1: { at: 1_000, tries: POSTER_RETRY_MAX_TRIES } });
+  assert.deepEqual(posterFetchIds(['r1'], state, 1_100), ['r1']);
+});
+
+test('posterFetchIds: the poll-tick re-plan for a half-written done set', () => {
+  // Two cells go done together; only one poster is on disk when the first
+  // batch runs. The next poll tick must re-ask for exactly the missing one.
+  const state = planState(
+    { hit: true, missing: true },
+    { missing: { at: 1_000, tries: 1 } },
+  );
+  assert.deepEqual(
+    posterFetchIds(['hit', 'missing'], state, 1_000 + POSTER_RETRY_AFTER_MS),
+    ['missing'],
+  );
 });
 
 console.log(`\n${passed} passed`);

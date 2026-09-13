@@ -169,10 +169,12 @@ export const stageNodeId = (id: StageId): string => `stage-${id}`;
  * is a different fact and reports differently: `hasDoneRender` wins, so the
  * chip reads `render`/`export` (what the shot HAS) and `rollupStages` puts the
  * `1 failed` warning on that stage instead of `generate`. This is reachable on
- * a real board — `render.list` rows come back created_at DESC and
- * `foldRenderStatus` (`lib/composition-model.ts`) lets a later-iterated
- * non-active row win, so a shot whose history is failed(t1) → done(t2) folds
- * to status `failed` while `doneRecordIdByUid` still reports its done id.
+ * a real board whenever a shot's LAST attempt failed after an earlier success
+ * — `foldRenderStatus` (`lib/composition-model.ts`) reports that most-recent
+ * `failed` while `doneRecordIdByUid` still reports the earlier done id. (Until
+ * G-109 the same branch was reached the wrong way round, by the fold picking
+ * the OLDER row out of a created_at DESC list; that is fixed, and the fold is
+ * recency-based now.)
  * Intended: the warning follows the chip, so the two never disagree about
  * where the shot is. Pinned by the `(failed, true)` / `(cancelled, true)`
  * cases in `canvas-links.test.ts`.

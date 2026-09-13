@@ -203,3 +203,70 @@ export function base64ToBlob(base64: string, mime: string): Blob {
   for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type: mime || 'video/mp4' });
 }
+
+// ─── poster fetch planning (G-109) ───────────────────────────────────────
+
+/** A recorded poster miss: when `render.list_posters` last reported no poster
+ *  for the id, and how many times we have asked. */
+export interface PosterMiss {
+  at: number;
+  tries: number;
+}
+
+export interface PosterFetchState {
+  /** Ids with a settled cache entry — a decoded poster OR a recorded miss. */
+  cached: (id: string) => boolean;
+  /** Ids with a request already in flight. */
+  inFlight: (id: string) => boolean;
+  /** The miss bookkeeping for an id, if it has ever missed. */
+  miss: (id: string) => PosterMiss | undefined;
+}
+
+/** How long to wait before re-asking for a poster that was reported missing. */
+export const POSTER_RETRY_AFTER_MS = 4_000;
+/** How many times a missing poster is re-asked for before it is a settled miss. */
+export const POSTER_RETRY_MAX_TRIES = 3;
+
+/**
+ * Which of `ids` should go into the next `render.list_posters` batch.
+ *
+ * Uncached + not-in-flight ids always go. The interesting half is the RETRY:
+ * the sidecar marks a render row `done` and only THEN spawns ffmpeg to extract
+ * the poster PNG (`render-runner.ts` — `markDone` … `emitDone` … best-effort
+ * `extractPoster`), so the first batch fired for a freshly-done record very
+ * often lands in the gap between the two and gets an honest `b64: null`. Before
+ * G-109 that null was cached forever and the tile read `No poster` for the rest
+ * of the session even though the PNG appeared a moment later — observed live on
+ * 3 of 4 HyperFrames tiles in `hf-win-b5/`.
+ *
+ * So a miss is retried a bounded number of times, no sooner than
+ * `retryAfterMs` after the last attempt; after `maxTries` it is a settled miss
+ * and the tile keeps its status-text fallback. Bounded on both axes on purpose:
+ * a poster that genuinely does not exist (a `failed` row, an ffmpeg-less box)
+ * must not turn the adaptive render poll into an endless request loop.
+ */
+export function posterFetchIds(
+  ids: readonly string[],
+  state: PosterFetchState,
+  now: number,
+  retryAfterMs: number = POSTER_RETRY_AFTER_MS,
+  maxTries: number = POSTER_RETRY_MAX_TRIES,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (state.inFlight(id)) continue;
+    if (!state.cached(id)) {
+      out.push(id);
+      continue;
+    }
+    const miss = state.miss(id);
+    if (!miss) continue; // a cached HIT — nothing to do.
+    if (miss.tries >= maxTries) continue; // settled miss.
+    if (now - miss.at < retryAfterMs) continue; // too soon.
+    out.push(id);
+  }
+  return out;
+}

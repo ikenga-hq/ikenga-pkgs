@@ -55,6 +55,8 @@ import {
   type DoneRenderRecordLike,
 } from './canvas-model';
 import { emptyCanvasDoc, sweepOrphans, ORPHAN_GRACE_MS } from './canvas-doc';
+import { foldRenderStatus } from './composition-model';
+import type { RenderStatus } from '../mcp-types';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -544,10 +546,11 @@ test('a failed render with no earlier take reports where the work stalled', () =
 
 test('a failed render ON TOP of an earlier take reports what the shot HAS', () => {
   // Newly reachable once `hasDoneRender` comes from the live records: a shot
-  // whose history is failed(t1) → done(t2) folds to status `failed`
-  // (`foldRenderStatus` lets a later-iterated non-active row win over an
-  // earlier one, and render.list returns created_at DESC) while
-  // `doneRecordIdByUid` still reports its done id. `hasDoneRender` wins, so
+  // whose LATEST attempt failed after an earlier success folds to status
+  // `failed` (post-G-109 the fold is recency-based, so this is now the honest
+  // done(t1) → failed(t2) history rather than the mis-ordered fold that used
+  // to reach it) while `doneRecordIdByUid` still reports its done id.
+  // `hasDoneRender` wins, so
   // the chip reads what the shot HAS, not where its last attempt died.
   assert.equal(deriveShotStage(shotCell('a'), 'failed', true), 'render');
   assert.equal(deriveShotStage(shotCell('a'), 'cancelled', true), 'render');
@@ -916,6 +919,82 @@ test('syncLayoutBox is idempotent (a StrictMode double render is harmless)', () 
   assert.equal(syncLayoutBox(box, next), true);
   assert.equal(syncLayoutBox(box, next), false);
   assert.equal(syncLayoutBox(box, next), false);
+});
+
+// ─── G-109: the tile's render status must follow the LATEST attempt ──────
+//
+// Live 2026-09-13 (`plans/studio/verify/2026-09-12-wp32-live/hf-win-b5/`): four
+// HyperFrames cells reached `done` with mp4 + poster on disk and the
+// Composition banner moved to `5/7 rendered`, but every canvas tile kept
+// reading `○ Standby`. `render.list` is `ORDER BY created_at DESC`, and
+// `foldRenderStatus` used to let the later-ITERATED (= older) row win, so a
+// cell whose history was failed(t1) -> done(t2) folded to `failed`.
+
+type FoldRow = [string, RenderStatus, string?];
+
+function fold(rows: FoldRow[]): Record<string, RenderStatus> {
+  const records = rows.map(([cell_uid, status, finished_at]) => ({
+    id: `${cell_uid}-${status}-${finished_at ?? 'none'}`,
+    cell_uid,
+    engine: 'hyperframes',
+    variant: 'default',
+    status,
+    finished_at,
+    metadata: {},
+  }));
+  return foldRenderStatus(records as unknown as Parameters<typeof foldRenderStatus>[0]);
+}
+
+test('foldRenderStatus: a newest-first list folds to the MOST RECENT attempt', () => {
+  // The live shape, verbatim: created_at DESC, so done(t2) comes FIRST.
+  const out = fold([
+    ['hello-hifi', 'done', '2026-09-13T03:29:12.306Z'],
+    ['hello-hifi', 'failed', '2026-09-12T21:04:00.000Z'],
+  ]);
+  assert.equal(out['hello-hifi'], 'done');
+});
+
+test('foldRenderStatus: order-independent - an oldest-first list folds the same', () => {
+  const out = fold([
+    ['hello-hifi', 'failed', '2026-09-12T21:04:00.000Z'],
+    ['hello-hifi', 'done', '2026-09-13T03:29:12.306Z'],
+  ]);
+  assert.equal(out['hello-hifi'], 'done');
+});
+
+test('foldRenderStatus: a regression is reported too (done then failed)', () => {
+  const out = fold([
+    ['a', 'failed', '2026-09-13T04:00:00.000Z'],
+    ['a', 'done', '2026-09-13T03:00:00.000Z'],
+  ]);
+  assert.equal(out['a'], 'failed');
+});
+
+test('foldRenderStatus: an in-flight row still outranks any terminal one', () => {
+  // A queued row carries neither started_at nor finished_at, so recency alone
+  // would let an old `done` mask a re-render that is running right now.
+  assert.equal(fold([['a', 'done', '2026-09-13T03:00:00.000Z'], ['a', 'queued']])['a'], 'queued');
+  assert.equal(fold([['a', 'queued'], ['a', 'done', '2026-09-13T03:00:00.000Z']])['a'], 'queued');
+  assert.equal(fold([['a', 'running'], ['a', 'failed', '2026-09-13T03:00:00.000Z']])['a'], 'running');
+});
+
+test('foldRenderStatus: untimestamped terminal rows keep the old later-wins rule', () => {
+  assert.equal(fold([['a', 'done'], ['a', 'failed']])['a'], 'failed');
+});
+
+test('G-109 end to end: the fold + done-map pair a tile reads for a re-rendered cell', () => {
+  // What the tile derives after the live re-render: done status (the beacon
+  // reads ✓ Ready), a poster id for the board batch, and the `render` chip.
+  const records = [
+    { id: 'r2', cell_uid: 'a', status: 'done', finished_at: '2026-09-13T03:29:12.306Z' },
+    { id: 'r1', cell_uid: 'a', status: 'failed', finished_at: '2026-09-12T21:04:00.000Z' },
+  ];
+  const status = foldRenderStatus(records as unknown as Parameters<typeof foldRenderStatus>[0])['a'];
+  const doneId = doneRecordIdByUid(records)['a'];
+  assert.equal(status, 'done', 'beacon reads Ready, not Standby');
+  assert.equal(doneId, 'r2', 'the newest done record is the one the poster batch asks for');
+  assert.deepEqual(doneRecordIdsFor(['a'], doneRecordIdByUid(records), 50), ['r2']);
+  assert.equal(deriveShotStage(shotCell('a'), status, Boolean(doneId)), 'render');
 });
 
 console.log(`\n${passed} passed`);

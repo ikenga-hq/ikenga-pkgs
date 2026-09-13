@@ -158,6 +158,7 @@ import {
   useStoryboardStore,
   selectHydratedCells,
   selectHydratedProject,
+  selectLastSyncedAt,
   selectRenderRecords,
   selectRenderStatus,
 } from '../storyboard-store';
@@ -1094,10 +1095,25 @@ export function NodeCanvas() {
   }, [items, doneIdByUid, viewport.scale]);
 
   const visibleDoneIdsKey = visibleDoneRecordIds.join(',');
+  // `lastSyncedAt` is in the deps ON PURPOSE, and it does NOT break the
+  // one-call-per-done-set contract g61-2-b4 verified: `prefetchPosters` →
+  // `fetchBatch` plans its ids through `posterFetchIds`, which returns an EMPTY
+  // list — and so issues no round trip at all — once every id in the set has
+  // settled as a hit or a spent miss. What the poll tick buys is the G-109
+  // retry: the sidecar marks a render row `done` and only then spawns ffmpeg to
+  // write the poster PNG, so the batch fired the instant a cell goes done often
+  // asks a few hundred ms too early and gets an honest `b64: null`. Without a
+  // later tick to re-ask, that provisional miss was the tile's final answer and
+  // it read `No poster` for the rest of the session (3 of 4 HyperFrames tiles,
+  // `hf-win-b5/verdict.md`). The retry is bounded in `posterFetchIds`
+  // (POSTER_RETRY_MAX_TRIES, no sooner than POSTER_RETRY_AFTER_MS apart), so a
+  // poster that truly does not exist costs a small fixed number of calls, never
+  // one per tick.
+  const lastSyncedAt = useStoryboardStore(selectLastSyncedAt);
   useEffect(() => {
     if (!visibleDoneIdsKey) return;
     prefetchPosters(visibleDoneIdsKey.split(','));
-  }, [visibleDoneIdsKey]);
+  }, [visibleDoneIdsKey, lastSyncedAt]);
 
   /** The ids the batch above actually covers. `renderItem` mounts a
    *  `<CellPoster>` only for these, so no tile can slip past the cap and open
