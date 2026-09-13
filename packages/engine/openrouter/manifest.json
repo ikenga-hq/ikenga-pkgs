@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.engine-openrouter",
   "name": "OpenRouter Engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "ikenga_api": "1",
   "kind": "engine",
 
