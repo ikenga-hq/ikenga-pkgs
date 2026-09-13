@@ -66,7 +66,7 @@ runtime today; the installer dep-materialization feature is the top CLI follow-u
 
 | Var | Where | Effect |
 |-----|-------|--------|
-| `STUDIO_TRUST_STUB` | sidecar (`sidecars/project/`) | `=1` auto-grants trust prompts (WP-04 stub); the grant is never recorded as durable trust. See `fixtures/sample/README.md` for a runnable example. |
+| `STUDIO_TRUST_STUB` | sidecar (`sidecars/project/`) | **Test-only; not set by the manifest since WP-04 closed** — `=1` auto-grants trust prompts; the grant is never recorded as durable trust. See `fixtures/sample/README.md` for a runnable example. |
 | `STUDIO_SIDECAR_PATH` | MCP server (`mcp/`) | Overrides the sidecar binary path the MCP spawns (default: `../../sidecars/project/dist/sidecar.js` relative to the MCP bundle). |
 | `STUDIO_SUPPRESS_EVENTS` | read by the MCP server (`mcp/`); **armed on the shell**, not in your terminal — see below | `=1` (the exact string; any other non-empty value logs an "OFF" line and changes nothing) drops sidecar `event` frames at the relay instead of forwarding them as `logging/message` (WP-32 poll-fallback test knob), so the iframe has to fall back to polling. Observable on the MCP's stderr: an armed line at startup, a line on the **first** dropped frame, a running count every 50 frames, and a total on shutdown. Default: unchanged, every event is forwarded. |
 | `FAL_KEY` | sidecar (fal.ai adapter) | Fallback credential for headless / stdio-driven runs when the `studio.fal` vault key isn't available (see "The fal.ai adapter" above). |

@@ -124,10 +124,7 @@
       "restart_when_changed": [
         "mcp/dist/index.js"
       ],
-      "auto_restart": true,
-      "env": {
-        "STUDIO_TRUST_STUB": "1"
-      }
+      "auto_restart": true
     }
   ],
   "iyke": {
