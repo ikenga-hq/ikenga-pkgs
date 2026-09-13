@@ -21,6 +21,9 @@ video: script → breakdown → references/characters/locations → storyboard �
 - **iframe UI** (`src/studio/`) — the M-A "production desk": Launcher, Canvas, Cell,
   Composition, Archetype builder, Cast & World, Breakdown, Ledger, Handoff. Built with
   React 19 + Vite, themed via `@ikenga/tokens`.
+  The **node canvas** — a pan/zoom surface of expandable nodes projecting the on-disk
+  project — is the Canvas view. The 1D Rail it used to sit behind a "Canvas"/"Rail"
+  switcher with was retired in WP-31, after the G-61 live re-clear.
 
 ## The fal.ai adapter
 
