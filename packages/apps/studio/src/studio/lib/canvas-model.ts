@@ -532,15 +532,12 @@ export function beatNameOf(cell: {
  * Accessible name (and hover tooltip) for a per-shot delete control —
  * `Delete cell <beat> (<uid>)`.
  *
- * Used by ALL THREE per-shot delete controls in the pkg: the node canvas's
- * expanded card and collapsed strip — a driver must not have to know which
- * state a card is in — and the RAIL's hover-revealed ✕. The Rail matters most,
- * not least: `canvasMode` defaults to `'rail'`, so it is the surface a human
- * lands on, it is the one the WP-32 gate calls "currently the only working
- * surface", and its ✕ was the only delete the live round drove end-to-end with
- * a real OS mouse (`g61/5-verdict.md`). Leaving it on `Delete cell ${beat}`
- * would have left five identical destructive controls on the DEFAULT view
- * while claiming G-102 was closed.
+ * Used by BOTH per-shot delete controls in the pkg — the node canvas's
+ * expanded card and its collapsed strip, because a driver must not have to
+ * know which state a card is in. (It was three until WP-31 retired the 1D
+ * Rail and its hover-revealed ✕; the Rail was the surface the live round drove
+ * end-to-end with a real OS mouse, `g61/5-verdict.md`, and the reason G-102
+ * could not be closed on the canvas alone at the time.)
  *
  * It is also the `title`, not just the `aria-label`: on the live fixture every
  * cell's `beat` is `beat-hello` and every canvas-created shot's label is

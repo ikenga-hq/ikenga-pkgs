@@ -1,5 +1,10 @@
 /**
- * Node Canvas view (WP-28 · WP-29 · WP-30, Plan 25) — behind the view switch.
+ * Node Canvas view (WP-28 · WP-29 · WP-30, Plan 25) — THE Canvas-view surface.
+ *
+ * WP-31 retired the 1D Rail and the "Canvas"/"Rail" view switch that used to
+ * gate this file, after the G-61 live re-clear (behaviours 1–6 all PASS; see
+ * plans/studio/verify/2026-09-12-wp32-live/g61/7-gate.md §0, 2026-09-13).
+ * `views/Canvas.tsx` is now just the chrome around `<NodeCanvas />`.
  *
  * A pan/zoom canvas of heterogeneous, expandable nodes projecting the on-disk
  * project: pipeline stages, the script, its beats, the boarded shots, and the
@@ -95,19 +100,20 @@
  *   ---------------------------|---------------------------------------------
  *   canvas root (application)  | `Studio node canvas`
  *   toolbar create button      | `New cell` — its TEXT reads `+ New cell`, and
- *                              | the Rail header's own button is named
- *                              | `+ New cell`: two different controls that
- *                              | only the accessible name tells apart (G-103).
+ *                              | the Canvas VIEW header's own button (the
+ *                              | labelled create path, `views/Canvas.tsx`) is
+ *                              | named `+ New cell`: two different controls
+ *                              | that only the accessible name tells apart
+ *                              | (G-103). This toolbar's writes an UNLABELLED
+ *                              | lane cell; the header's opens a modal that
+ *                              | asks for a beat label and a rung.
  *   per-shot delete, expanded  | `Delete cell <beat> (<uid>)`
  *   per-shot delete, collapsed | the same string, deliberately — a driver must
  *                              | not have to know which state the card is in.
- *   per-shot delete, RAIL      | the same string again (`views/Canvas.tsx`'s
- *                              | hover-revealed ✕). The two surfaces are never
- *                              | mounted at once — `canvasMode` is one or the
- *                              | other — so one name per shot per view, and a
- *                              | runbook line resolves on either. All three
- *                              | also use it as their `title`, so the hover
- *                              | tooltip says which shot too.
+ *                              | Both also use it as their `title`, so the
+ *                              | hover tooltip says which shot too. Since
+ *                              | WP-31 retired the 1D Rail these are the only
+ *                              | per-shot deletes in the pkg.
  *   confirm dialog (dialog)    | `Confirm deleting cell <beat> (<uid>)` —
  *                              | different from the button that opened it,
  *                              | which is still in the tree behind the modal.
@@ -116,7 +122,7 @@
  *                              | singleton.
  *   error banner dismiss       | `Dismiss cell error`
  *
- * `<beat>` is the Rail's `DisplayCell.beat` (`beat_id || label || uid`) and is
+ * `<beat>` is the `DisplayCell.beat` shape (`beat_id || label || uid`) and is
  * NOT unique on a real board; `<uid>` is what makes each name unique. Both come
  * from `../lib/canvas-model`'s name helpers, never an inline template here.
  *
