@@ -5,7 +5,12 @@
  * sidecar-side errors into our `{ ok: false, error, message }` envelope.
  */
 
-import { SidecarClient, SidecarRpcError, SidecarUnavailableError } from '../sidecar-client.js';
+import {
+  EXTERNAL_CALL_TIMEOUT_MS,
+  SidecarClient,
+  SidecarRpcError,
+  SidecarUnavailableError,
+} from '../sidecar-client.js';
 import type { OpenProjectRegistry, ToolDef, ToolResult } from './types.js';
 
 export async function callSidecar(
@@ -35,7 +40,13 @@ export function projectTools(
   return [
     {
       name: 'project.open',
-      description: 'Open a project on disk. Returns projectId + parsed Project.',
+      description:
+        'Open a project on disk. Returns projectId + parsed Project. Runs the '
+        + 'WP-04 per-folder trust gate first: a folder the user has already '
+        + 'granted opens immediately, an ungranted one pops a native prompt on '
+        + "the user's screen and blocks until they answer. Returns "
+        + "error:'trust-denied' if they decline, error:'trust-unreachable' if "
+        + 'there is no shell to ask.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -45,7 +56,19 @@ export function projectTools(
         additionalProperties: false,
       },
       async handler(args) {
-        const r = await callSidecar(sidecar, 'project.open', { path: args.path });
+        // Long timeout, not the 30s default: the trust gate this call runs may
+        // put a native dialog in front of the user, and a human click is not
+        // bounded by our RPC budget. The MCP relay must not be the layer that
+        // gives up while the prompt is still on screen — the grant would land
+        // anyway and the caller would have seen a false failure. (The shell's
+        // own 10s long-lived-MCP CALL_TIMEOUT can still drop OUR caller first;
+        // a retry then hits the recorded grant with no prompt.)
+        const r = await callSidecar(
+          sidecar,
+          'project.open',
+          { path: args.path },
+          EXTERNAL_CALL_TIMEOUT_MS,
+        );
         if (r.ok) {
           const rec = r as unknown as { projectId?: string; project?: unknown };
           if (typeof rec.projectId === 'string') {
@@ -101,7 +124,10 @@ export function projectTools(
     },
     {
       name: 'project.create',
-      description: 'Scaffold a new project on disk from an archetype id, then open it.',
+      description:
+        'Scaffold a new project on disk from an archetype id, then open it. '
+        + 'Runs the same WP-04 per-folder trust gate as project.open before '
+        + 'touching the filesystem, so an ungranted path pops a native prompt.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -113,11 +139,17 @@ export function projectTools(
         additionalProperties: false,
       },
       async handler(args) {
-        const r = await callSidecar(sidecar, 'project.create', {
-          archetype_id: args.archetype_id,
-          path: args.path,
-          name: args.name,
-        });
+        // Same trust-gate timeout rationale as project.open above.
+        const r = await callSidecar(
+          sidecar,
+          'project.create',
+          {
+            archetype_id: args.archetype_id,
+            path: args.path,
+            name: args.name,
+          },
+          EXTERNAL_CALL_TIMEOUT_MS,
+        );
         if (r.ok) {
           const rec = r as unknown as { projectId?: string; project?: unknown };
           if (typeof rec.projectId === 'string') {

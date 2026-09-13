@@ -13,16 +13,58 @@
 //            against synthetic data.
 //
 // Selection rule:
-//   - Standalone-dev (no parent window)               → mock
+//   - Standalone-dev (no parent window)               → mock ('demo')
 //   - In-shell, real MCP server answers the probe      → real
-//   - In-shell, server absent / crash-looping / slow   → mock (demo data)
+//   - In-shell, host reports NO mcp server for the pkg → mock ('demo'), but
+//                                                        only once the verdict
+//                                                        repeats (one answer is
+//                                                        a per-call manifest
+//                                                        read, not a fact)
+//   - In-shell, server slow / booting / mid-restart    → keep probing
+//                                                        ('connecting'), then
+//                                                        demo data with a
+//                                                        background re-probe
+//                                                        ('degraded')
 //
 // The real-vs-mock choice in-shell is decided by a cheap `render.list_engines`
-// probe wrapped in a timeout (getMcpClient below): a pass selects the real
-// client, a throw/timeout falls back to the mock so a missing or crash-looping
-// studio MCP server degrades to demo data instead of throwing on every call.
+// probe (getMcpClient below), RETRIED on a backoff for a bounded ~15 s window
+// (lib/mcp-probe.ts owns that policy, and is unit-tested). See the G-105 note
+// on `resolveClient` for why a single-shot probe was not enough.
+//
+// WHAT CALLERS HOLD (and why it is not the transport)
+//
+//   `getMcpClient()` resolves to ONE stable facade object for the iframe's
+//   lifetime. Every call on it is routed to whichever transport is live at the
+//   moment of the call, and `mode` is a live getter. That is deliberate: views
+//   cache the resolved client in a ref (`clientRef.current ?? (clientRef
+//   .current = await getMcpClient())` — Launcher, ArchetypeBuilder), and a
+//   degraded→real upgrade used to leave those refs pointing at the MOCK for the
+//   rest of the mount. The Launcher's create path is the sharp edge: it would
+//   `project.create` against the mock, get an id, flip the store open and paint
+//   a header for a project that exists nowhere on disk, while `/iyke/state`
+//   reported `mcp.phase: 'real'`. A facade makes a stale ref impossible, so no
+//   view has to subscribe to the upgrade edge to stay correct (subscribing is
+//   still how a view RENDERS the phase — see subscribeMcpConnection).
+//
+//   Event subscriptions taken through the facade are re-bound onto the new
+//   transport on every swap, so a subscription taken while degraded stops
+//   hearing the mock's synthetic emitter once the real server is live.
 
-import { connectBridge, isStandalone } from './bridge';
+import { connectBridge, isBridgeConnected, isStandalone, publishState } from './bridge';
+import {
+  DEFAULT_PROBE_POLICY,
+  classifyProbeError,
+  connectionMessage,
+  foldAbsentStreak,
+  isDemoPhase,
+  phaseForFallback,
+  recordProbeFailure,
+  shouldLatchAbsent,
+  startProbeWindow,
+  type McpConnectionPhase,
+  type ProbeFallbackReason,
+  type ProbePolicy,
+} from './lib/mcp-probe';
 import type {
   StudioEventName,
   StudioEventPayloadMap,
@@ -57,13 +99,21 @@ let _client: McpClient | null = null;
 
 /** In-flight construction, shared across concurrent callers so three
  *  simultaneous Launcher loaders (archetypes/recents/engines, each firing its
- *  own `getMcpClient()` on mount) await ONE probe + ONE client instead of each
- *  building a real client and racing to win `_client` — a losing instance
- *  could be left holding a stale/null active-project reference and throw
- *  "no open project" on its first real call. Cleared in the `finally` below
- *  so a later retry (post PROBE_RETRY_MS) starts a fresh probe rather than
- *  replaying a long-settled promise. */
+ *  own `getMcpClient()` on mount) await ONE probe window + ONE client instead
+ *  of each building a real client and racing to win `_client` — a losing
+ *  instance could be left holding a stale/null active-project reference and
+ *  throw "no open project" on its first real call. Cleared in the `finally`
+ *  below so a later background re-probe starts fresh rather than replaying a
+ *  long-settled promise. */
 let _clientPromise: Promise<McpClient> | null = null;
+
+/** The one real client instance for this iframe's lifetime, built lazily on
+ *  the first in-shell resolve and REUSED by every re-probe. Holds the active
+ *  project + cell cache (real-mcp.ts), so re-probing must never mint a second
+ *  one — a fresh instance would come back with no active project and throw
+ *  "no open project" on its first call after an upgrade. */
+let _real: McpClient | null = null;
+let _mock: McpClient | null = null;
 
 /** Cache of the probe's own `render.list_engines` result (real mode only) so
  *  callers that need the engine list right after `getMcpClient()` resolves
@@ -78,97 +128,686 @@ export function getProbedEngines(): EngineCapability[] | null {
   return _probedEngines;
 }
 
-/** Lazily resolves and caches the MCP client. Idempotent — calling twice
- *  returns the same promise.
+// ─── The facade every caller actually holds ─────────────────────────────
+
+/** Forces call routing to a specific transport for the duration of an upgrade,
+ *  BEFORE that transport becomes `_client`. The upgrade has to re-open the
+ *  project on the real client while the session is still nominally degraded
+ *  (adoptReal), and those two calls must not go to the mock. */
+let _pinned: McpClient | null = null;
+
+/** Open while an upgrade is mid-flight. Every facade call that is not the
+ *  upgrade's own `project.open` / `project.info` waits on it, so nothing can
+ *  reach the real transport in the window where it has no active project yet
+ *  (`real-mcp.ts` would throw "no open project"). Resolves — never rejects —
+ *  when the upgrade has settled one way or the other. */
+let _upgradeGate: Promise<void> | null = null;
+
+function isUpgradeOwnCall(name: string): boolean {
+  return name === 'project.open' || name === 'project.info';
+}
+
+/** The transport a call made right now should go to. */
+function activeTransport(): McpClient | null {
+  return _pinned ?? _client;
+}
+
+interface FacadeSubscription {
+  event: StudioEventName;
+  handler: (payload: unknown) => void;
+  /** Unsubscribe fn of the CURRENT binding, re-made on every transport swap. */
+  off: (() => void) | null;
+}
+
+const _facadeSubs = new Set<FacadeSubscription>();
+
+type LooseSubscribe = (event: string, handler: (payload: unknown) => void) => () => void;
+
+function bindSubscription(sub: FacadeSubscription): void {
+  sub.off = null;
+  const transport = activeTransport();
+  if (!transport) return;
+  try {
+    sub.off = (transport.subscribe as unknown as LooseSubscribe)(sub.event, sub.handler);
+  } catch {
+    // A transport that can't take subscriptions must not break the caller; the
+    // next swap re-tries the binding.
+    sub.off = null;
+  }
+}
+
+/** Re-point every live subscription at the transport that just became active.
+ *  Without this, a subscription taken while degraded keeps hearing the mock's
+ *  setTimeout emitter after the real server is live. */
+function rebindSubscriptions(): void {
+  for (const sub of _facadeSubs) {
+    try {
+      sub.off?.();
+    } catch {
+      // Best effort — a failed unsubscribe must not strand the rebind.
+    }
+    bindSubscription(sub);
+  }
+}
+
+function dropSubscriptions(): void {
+  for (const sub of _facadeSubs) {
+    try {
+      sub.off?.();
+    } catch {
+      // ignore
+    }
+    sub.off = null;
+  }
+  _facadeSubs.clear();
+}
+
+/** Await a usable transport. Only reached before the first resolve settles (a
+ *  facade handed out by `getMcpClient()` always already has one), so the
+ *  recursion into getMcpClient() is one level deep and shares the in-flight
+ *  probe window rather than starting a second one. */
+async function requireTransport(): Promise<McpClient> {
+  const now = activeTransport();
+  if (now) return now;
+  await getMcpClient();
+  const settled = activeTransport();
+  if (settled) return settled;
+  throw new Error('[studio] mcp transport unavailable (no client resolved)');
+}
+
+/** The one object callers hold. Stable for the iframe's lifetime; routes to
+ *  whatever transport is live at call time (see the header note). */
+const MCP_FACADE: McpClient = {
+  async callTool<TResult = unknown>(
+    name: string,
+    args?: Record<string, unknown>,
+  ): Promise<TResult> {
+    // `_pinned !== null` is what marks the upgrade's OWN open/info round-trip:
+    // outside that pin even a project.* call waits, so a user click can't slip a
+    // second open in between the re-open and the swap.
+    if (_upgradeGate && !(_pinned !== null && isUpgradeOwnCall(name))) {
+      await _upgradeGate;
+    }
+    const transport = await requireTransport();
+    return transport.callTool<TResult>(name, args);
+  },
+  subscribe<E extends StudioEventName>(
+    event: E,
+    handler: (payload: StudioEventPayloadMap[E]) => void,
+  ): () => void {
+    const sub: FacadeSubscription = {
+      event,
+      handler: handler as (payload: unknown) => void,
+      off: null,
+    };
+    _facadeSubs.add(sub);
+    bindSubscription(sub);
+    return () => {
+      _facadeSubs.delete(sub);
+      try {
+        sub.off?.();
+      } catch {
+        // ignore
+      }
+      sub.off = null;
+    };
+  },
+  get mode(): 'mock' | 'real' {
+    return activeTransport()?.mode ?? 'mock';
+  },
+};
+
+// ─── Connection state (the visible half of the G-105 fix) ───────────────
+
+/** What the client is doing about its transport, for the UI to render.
+ *  `message` is plain language and safe to show verbatim. */
+export interface McpConnectionState {
+  phase: McpConnectionPhase;
+  message: string;
+  /** Failed probes in the current window (0 before any failure). */
+  failures: number;
+  /** Why demo data is being served, `null` in `idle` / `connecting` / `real`. */
+  reason: ProbeFallbackReason | null;
+}
+
+const IDLE_STATE: McpConnectionState = {
+  phase: 'idle',
+  message: connectionMessage('idle', null),
+  failures: 0,
+  reason: null,
+};
+
+let _conn: McpConnectionState = IDLE_STATE;
+const _connListeners = new Set<(s: McpConnectionState) => void>();
+
+/** Synchronous read of the current transport state. */
+export function getMcpConnectionState(): McpConnectionState {
+  return _conn;
+}
+
+/** Subscribe to transport-state changes. Returns an unsubscribe fn. Fires only
+ *  on a phase/reason TRANSITION, never on a re-probe that changed nothing.
+ *
+ *  This is for RENDERING the phase, not for correctness: render
+ *  `state.message` while `phase === 'connecting'`, and badge the surface while
+ *  `isDemoMcpPhase(state.phase)`, so a booting MCP server reads as
+ *  "connecting" and demo data is never mistaken for the open project.
+ *
+ *  Rehydrating on the `degraded`/`demo` → `real` edge is NOT a consumer's job:
+ *  `adoptReal` re-opens the project on the real client and re-reads the
+ *  storyboard itself, and the client callers hold is a facade that re-routes on
+ *  the swap, so a cached client ref cannot go stale (header note). */
+export function subscribeMcpConnection(fn: (s: McpConnectionState) => void): () => void {
+  _connListeners.add(fn);
+  return () => {
+    _connListeners.delete(fn);
+  };
+}
+
+/** True while the data on screen is a fixture rather than the open project. */
+export function isDemoMcpPhase(phase: McpConnectionPhase): boolean {
+  return isDemoPhase(phase);
+}
+
+function setConnection(
+  phase: McpConnectionPhase,
+  reason: ProbeFallbackReason | null,
+  failures: number,
+): void {
+  const next: McpConnectionState = {
+    phase,
+    reason,
+    failures,
+    message: connectionMessage(phase, reason),
+  };
+  // `failures` is bookkeeping, NOT part of the dedupe key: a permanently dead
+  // server re-probes every `reprobeMs` forever, and including the counter made
+  // every one of those ticks publish a fresh iyke state for a pane that had not
+  // changed — the shell then bumps its state generation, dispatches
+  // IFRAME_STATE_EVENT and re-pushes the whole panes payload, and any component
+  // subscribed here re-renders, indefinitely. Only a phase/reason TRANSITION is
+  // user-visible, so only a transition is published. The counter is still kept
+  // on `_conn` (the next real transition carries the current number).
+  const quiet = next.phase === _conn.phase && next.reason === _conn.reason;
+  _conn = next;
+  if (quiet) return;
+  // Publish on the iyke state channel under its own key so the running shell
+  // (and any observing agent) can read the mode straight out of
+  // `/iyke/state` — G-105's instruction to "check for `mock` in the tree
+  // after every reload" had no reliable signal to check, since the iframe
+  // console is not captured (G-93) and every DOM name is fixture-shaped.
+  // No-op standalone (bridge.postIyke bails without a parent window).
+  publishState('mcp', {
+    phase: next.phase,
+    reason: next.reason,
+    failures: next.failures,
+    // The same plain-language copy a view renders, so `/iyke/state` carries the
+    // human-readable mode too and an agent reading the tree doesn't have to map
+    // phase+reason back to meaning.
+    message: next.message,
+  });
+  for (const fn of _connListeners) {
+    try {
+      fn(next);
+    } catch {
+      // A listener must never break the transport.
+    }
+  }
+}
+
+// ─── The probe ──────────────────────────────────────────────────────────
+
+let _policy: ProbePolicy = DEFAULT_PROBE_POLICY;
+
+/** TEST/DEV ONLY. Override the retry policy (shorter windows in tests, a
+ *  longer one on a slow box). Pass no argument to restore the default. */
+export function __setProbePolicy(policy?: Partial<ProbePolicy>): void {
+  _policy = policy ? { ...DEFAULT_PROBE_POLICY, ...policy } : DEFAULT_PROBE_POLICY;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('mcp-probe-timeout')), ms);
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** TEST/DEV ONLY overrides. The upgrade edge (degraded → real) is where the
+ *  ordering bugs live — the real client must have the project OPEN before it
+ *  becomes the transport — and driving it for real needs a shell, an AppBridge
+ *  handshake and a supervised sidecar. These four consult points let
+ *  `mcp-client.test.ts` drive it with fake transports instead. Nothing in
+ *  production sets them. */
+interface TransportOverrides {
+  real?: McpClient;
+  mock?: McpClient;
+  /** Force `resolveClient` down the in-shell branch (skip standalone + bridge). */
+  inShell?: boolean;
+  /** What the probe policy is told about server presence (default: the bridge). */
+  serverPresent?: boolean;
+}
+let _overrides: TransportOverrides | null = null;
+
+/** TEST/DEV ONLY. Pass `null` to restore real behaviour. */
+export function __setMcpTransports(overrides: TransportOverrides | null): void {
+  _overrides = overrides;
+}
+
+async function getRealClient(): Promise<McpClient> {
+  if (_real) return _real;
+  if (_overrides?.real) {
+    _real = _overrides.real;
+    return _real;
+  }
+  const { createRealMcpClient } = await import('./real-mcp.js');
+  _real = createRealMcpClient();
+  return _real;
+}
+
+async function getMockClient(): Promise<McpClient> {
+  if (_mock) return _mock;
+  if (_overrides?.mock) {
+    _mock = _overrides.mock;
+    return _mock;
+  }
+  const { createMockMcpClient } = await import('./__mocks__/mcp.js');
+  _mock = createMockMcpClient();
+  return _mock;
+}
+
+/** One probe attempt. `render.list_engines` needs no open project and is the
+ *  cheapest tool the server exposes, so a pass proves the whole path
+ *  (iframe → AppBridge → shell `pkg_mcp_call` → supervised studio server).
+ *
+ *  Resolves to `null` — NOT `[]` — when the answer carries no engines array.
+ *  The probe still PASSED (the transport answered); there is just nothing to
+ *  cache. `[]` is truthy, so caching it made the Launcher's
+ *  `getProbedEngines() ?? (await renderApi.list_engines(client)).engines`
+ *  skip the fetch and drop the engine rail for the life of the mount. */
+async function probeOnce(real: McpClient): Promise<EngineCapability[] | null> {
+  const result = await withTimeout(
+    real.callTool<{ engines?: EngineCapability[] }>('render.list_engines'),
+    _policy.timeoutMs,
+  );
+  return Array.isArray(result?.engines) ? result.engines : null;
+}
+
+/** How many upgrade attempts may fail to re-open the project before the real
+ *  client is adopted anyway (and the unopenable project forgotten). Bounded on
+ *  purpose: staying degraded forever would be its own mock-lock, e.g. when the
+ *  persisted path came from a MOCK recents row and names nothing on disk. */
+const UPGRADE_REOPEN_ATTEMPTS = 2;
+let _upgradeReopenFailures = 0;
+
+/** Promote `real` to the session transport.
+ *
+ *  On an UPGRADE (degraded/demo → real) the project the demo session was
+ *  showing is re-opened on the real client FIRST, behind `_upgradeGate`, and
+ *  the phase only flips once that succeeded. The previous version swapped
+ *  `_client` and published `phase: 'real'` synchronously and then re-opened in
+ *  a detached, fully-swallowed async function: anything routed to the real
+ *  client in that window threw `no open project` (a CellPoster fetch, a user
+ *  click), and if the re-open FAILED the session was stranded — phase `real`,
+ *  no active project, `armReprobe()` refusing to arm on `real`, every
+ *  project-scoped call throwing for the rest of the pane's life while the
+ *  header still showed an open project. */
+async function adoptReal(real: McpClient, engines: EngineCapability[] | null): Promise<McpClient> {
+  if (!isDemoPhase(_conn.phase)) {
+    // First-mount resolve: nothing loaded against a fixture, nothing to redo.
+    settleReal(real, engines);
+    return MCP_FACADE;
+  }
+
+  let release = (): void => {};
+  _upgradeGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const outcome = await reopenOpenProjectOn(real);
+    if (outcome === 'failed') {
+      _upgradeReopenFailures += 1;
+      if (_upgradeReopenFailures < UPGRADE_REOPEN_ATTEMPTS) {
+        // Keep serving the fixture — honestly labelled — and try the whole
+        // upgrade again on the next re-probe. Promoting a real client with no
+        // active project would break every project-scoped call instead.
+        setConnection('degraded', 'project-reopen-failed', _conn.failures);
+        armReprobe();
+        return MCP_FACADE;
+      }
+      // The transport answers but this project cannot be opened on it. Stop
+      // pretending: forget it and let the user land on the Launcher with a
+      // real client, rather than keep a phantom project in the header.
+      await forgetUnopenableProject();
+    }
+    settleReal(real, engines);
+    if (outcome === 'opened') void rehydrateStoryboardAfterUpgrade();
+    return MCP_FACADE;
+  } finally {
+    _upgradeGate = null;
+    release();
+  }
+}
+
+/** The actual swap. Split out so the upgrade path can do its work before it. */
+function settleReal(real: McpClient, engines: EngineCapability[] | null): void {
+  cancelReprobe();
+  _pinned = null;
+  _client = real;
+  _probedEngines = engines;
+  _absentStreak = 0;
+  _upgradeReopenFailures = 0;
+  rebindSubscriptions();
+  setConnection('real', null, 0);
+}
+
+/** Re-open the currently-open project ON the real client, while that client is
+ *  pinned as the call target but is not yet the session transport.
+ *
+ *  Dynamic imports on purpose: `project-store` / `open-project` /
+ *  `storyboard-store` all import THIS module, so a static import here would be
+ *  a cycle. Routed through `openProjectByPath` rather than a second open path
+ *  of its own — that helper owns the project.info enrichment and the
+ *  last-project persistence, and forking it would drift (see its header). */
+async function reopenOpenProjectOn(real: McpClient): Promise<'none' | 'opened' | 'failed'> {
+  let target: { path: string; name: string } | null = null;
+  try {
+    const { useProjectStore } = await import('./project-store.js');
+    const open = useProjectStore.getState().project;
+    target = open?.path ? { path: open.path, name: open.name } : null;
+  } catch {
+    return 'none';
+  }
+  if (!target) return 'none';
+  _pinned = real;
+  try {
+    await (await import('./lib/open-project.js')).openProjectByPath(target.path, target.name);
+    return 'opened';
+  } catch {
+    // Moved / access denied / sidecar error / a path that only ever existed in
+    // the mock's recents.
+    return 'failed';
+  } finally {
+    _pinned = null;
+  }
+}
+
+/** Drop a project that the real client cannot open, so nothing on screen
+ *  claims an open project the transport doesn't have. */
+async function forgetUnopenableProject(): Promise<void> {
+  try {
+    const { useProjectStore } = await import('./project-store.js');
+    useProjectStore.getState().closeProject();
+  } catch {
+    // ignore — best effort
+  }
+  try {
+    const { useStoryboardStore } = await import('./storyboard-store.js');
+    useStoryboardStore.getState().clear();
+  } catch {
+    // ignore — best effort
+  }
+}
+
+/** Re-read the storyboard against the freshly-opened REAL project id.
+ *
+ *  Re-opening already restarts most of the chain on its own: the project id
+ *  changes (mock id → real sidecar id) and App.tsx's effects are keyed on
+ *  `project.project_id`. This is belt and braces for the case where the two ids
+ *  happen to match. It passes the id EXPLICITLY rather than calling
+ *  `refetch()`: refetch reads the storyboard store's own `projectId`, which is
+ *  still the MOCK id until React re-keys it, so it issued a `storyboard.read`
+ *  for a project the sidecar has never heard of and parked the resulting error
+ *  string in the store (rendered by Ledger) after an otherwise clean upgrade. */
+async function rehydrateStoryboardAfterUpgrade(): Promise<void> {
+  try {
+    const { useProjectStore } = await import('./project-store.js');
+    const projectId = useProjectStore.getState().project?.project_id;
+    if (!projectId) return;
+    const { useStoryboardStore } = await import('./storyboard-store.js');
+    // Nothing was ever hydrated (no fixture cells on screen) — App.tsx's own
+    // effect owns the first hydrate; don't race it with a duplicate read.
+    if (useStoryboardStore.getState().projectId === null) return;
+    await useStoryboardStore.getState().hydrate(projectId);
+  } catch {
+    // Best effort — a failed rehydrate must not take the transport down. The
+    // phase already says `real`, so the next user action reads live data.
+  }
+}
+
+async function adoptMock(reason: ProbeFallbackReason, latch: boolean, failures: number): Promise<McpClient> {
+  const mock = await getMockClient();
+  _pinned = null;
+  _client = mock;
+  _probedEngines = null;
+  rebindSubscriptions();
+  setConnection(phaseForFallback(latch), reason, failures);
+  if (!latch) armReprobe();
+  return MCP_FACADE;
+}
+
+// ─── Background re-probe (never latch while the server is present) ──────
+
+let _reprobeTimer: ReturnType<typeof setTimeout> | null = null;
+/** True from the moment a background re-probe starts until it has settled.
+ *  The timer handle cannot serve as this flag — `armReprobe`'s callback nulls
+ *  it BEFORE awaiting `runReprobe`, so every call arriving during an in-flight
+ *  probe used to satisfy `nudgeReprobe`'s only guard and start another one
+ *  (mounting Composition while degraded meant one concurrent probe per
+ *  CellPoster, each holding its own 3 s timer and SDK request, fired at a
+ *  server that had already missed its window). */
+let _probeInFlight = false;
+
+/** Consecutive `absent` verdicts, carried ACROSS the foreground window and the
+ *  background re-probes so the two confirm each other (lib/mcp-probe.ts owns
+ *  the rule; a single absent answer must never latch). */
+let _absentStreak = 0;
+
+function cancelReprobe(): void {
+  if (_reprobeTimer !== null) {
+    clearTimeout(_reprobeTimer);
+    _reprobeTimer = null;
+  }
+}
+
+/** Arm a single background re-probe. Serving demo data is never terminal while
+ *  the host reports the pkg's MCP server present: the moment a probe succeeds
+ *  we flip to the real client and notify subscribers so the views rehydrate. */
+function armReprobe(): void {
+  if (_reprobeTimer !== null || _conn.phase === 'real' || _conn.phase === 'demo') return;
+  _reprobeTimer = setTimeout(() => {
+    _reprobeTimer = null;
+    void runReprobe();
+  }, _policy.reprobeMs);
+}
+
+async function runReprobe(): Promise<void> {
+  // A foreground resolve or another re-probe already owns the decision.
+  if (_probeInFlight || _clientPromise || _conn.phase === 'real' || _conn.phase === 'demo') return;
+  _probeInFlight = true;
+  try {
+    const real = await getRealClient();
+    const engines = await probeOnce(real);
+    await adoptReal(real, engines);
+  } catch (err) {
+    const kind = classifyProbeError(err);
+    _absentStreak = foldAbsentStreak(_absentStreak, kind);
+    if (kind === 'absent' && shouldLatchAbsent(_absentStreak, _policy)) {
+      // The host has now said twice in a row that there is no server at all —
+      // this is the sanctioned demo mode, and the only case where we stop
+      // trying. One absent answer is not enough: the shell re-reads
+      // manifest.json on every call, so a live manifest edit or an
+      // uninstall/reinstall produces exactly this wording transiently.
+      void adoptMock('absent', true, _conn.failures + 1);
+      return;
+    }
+    setConnection(
+      'degraded',
+      kind === 'trust-required' ? 'trust-required' : kind === 'absent' ? 'absent' : 'window-exhausted',
+      _conn.failures + 1,
+    );
+    armReprobe();
+  } finally {
+    _probeInFlight = false;
+  }
+}
+
+/** Kick the background re-probe early. Timers are throttled hard in a hidden
+ *  webview, so a view that asks for a client while degraded also nudges the
+ *  upgrade rather than waiting on a possibly-parked timeout. */
+function nudgeReprobe(): void {
+  if (_conn.phase !== 'degraded' || _clientPromise || _probeInFlight) return;
+  // Only when nothing is pending, so a burst of view calls can't turn the
+  // re-probe into a hot loop against a server that is already struggling.
+  if (_reprobeTimer === null) void runReprobe();
+}
+
+// ─── Resolve ────────────────────────────────────────────────────────────
+
+/** The full first-mount decision, retried across the probe window.
+ *
+ *  G-105 (WP-32 live round, 2026-09-12) is why this loops. The kernel remounts
+ *  the iframe the instant a pkg reloads, but the supervised `studio` MCP
+ *  server needs ~3.4 s to answer its first `tools/call`. The previous version
+ *  of this function fired ONE probe behind a 3 s timeout and, on the throw,
+ *  cached the mock for the session: the pane came back reading
+ *  `~/Untitled (mock)/` with the 6-cell mock timeline, and every subsequent
+ *  check silently graded demo data. Now:
+ *
+ *    • the probe is retried on a backoff for ~15 s (lib/mcp-probe.ts), so the
+ *      reload race resolves REAL in a few hundred ms;
+ *    • while the window is open the phase is `connecting`, so callers await
+ *      and the UI can say "Connecting to studio engine…" instead of painting
+ *      a fixture;
+ *    • a window-exhausted fallback does NOT latch while the host reports the
+ *      MCP server present — demo data is served with a background re-probe
+ *      armed, and a later success flips to real + notifies subscribers;
+ *    • only a host that reports NO mcp server (or standalone dev) latches.
+ *      That is the explicit, sanctioned demo mode. */
+async function resolveClient(): Promise<McpClient> {
+  if (!_overrides?.inShell && isStandalone()) {
+    cancelReprobe();
+    const mock = await getMockClient();
+    _pinned = null;
+    _client = mock;
+    _probedEngines = null;
+    rebindSubscriptions();
+    setConnection('demo', 'standalone', 0);
+    return MCP_FACADE;
+  }
+
+  if (!_overrides?.inShell) await connectBridge();
+  const real = await getRealClient();
+
+  let win = startProbeWindow(Date.now());
+  setConnection('connecting', null, 0);
+
+  for (;;) {
+    // The probe and the ADOPTION are separate steps on purpose: a throw out of
+    // adoptReal (which now awaits a project re-open) must not be folded into
+    // the window as another probe failure.
+    let engines: EngineCapability[] | null = null;
+    let failure: unknown = null;
+    let probed = false;
+    try {
+      engines = await probeOnce(real);
+      probed = true;
+    } catch (err) {
+      failure = err;
+    }
+    if (probed) return adoptReal(real, engines);
+
+    // NB: destructured as `nextWindow` — binding it as `window` would shadow
+    // the global.
+    const { window: nextWindow, step } = recordProbeFailure(win, failure, Date.now(), {
+      // The AppBridge handshake completed, so the kernel mounted this iframe
+      // as a pkg pane from a manifest that declares the `studio` server:
+      // the server is reported present and a fallback must stay un-latched.
+      serverPresent: _overrides?.serverPresent ?? isBridgeConnected(),
+      policy: _policy,
+    });
+    win = nextWindow;
+    // Carried into the background re-probe so a foreground absent verdict and a
+    // background one confirm each other (and any other verdict resets both).
+    _absentStreak = win.absentStreak;
+    if (step.action === 'retry') {
+      setConnection('connecting', null, step.failures);
+      await sleep(step.delayMs);
+      continue;
+    }
+    return adoptMock(step.reason, step.latch, step.failures);
+  }
+}
+
+/** Lazily resolves and caches the MCP client. Idempotent — concurrent callers
+ *  share one probe window and one client.
  *
  *  Selection is RUNTIME, not a build flag:
  *    • Standalone dev (plain browser tab, no shell parent) → mock. Lets
  *      `pnpm dev` boot the iframe without a backend.
- *    • In-shell (mounted in an Ikenga pane) → REAL, but only once a cheap
+ *    • In-shell (mounted in an Ikenga pane) → REAL, once the retried
  *      `render.list_engines` probe confirms the pkg's `studio` MCP server
- *      actually answers. If the server is absent / crash-looping / slow past
- *      the timeout, we fall back to the mock client so the UI degrades to
- *      demo data (mode==='mock') instead of throwing a raw '[studio] … failed'
- *      on every view call.
+ *      answers. While that window is open this promise stays PENDING — a
+ *      caller that awaits it is what makes the "connecting" state honest.
+ *    • Demo data is only handed out once the window is exhausted (or the host
+ *      reports no server at all), and then only alongside a live
+ *      `connection.phase` saying so.
  *
  *  `isStandalone()` is the synchronous discriminator. main.tsx only renders
  *  <App/> after connectBridge() resolves, so in shell mode the bridge is
  *  already connected before any view calls this; we await it again here
  *  (idempotent) so the real client's transport is guaranteed live. */
-const PROBE_TIMEOUT_MS = 3000;
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('mcp-probe-timeout')), ms)),
-  ]);
-}
-
-/** A failed probe must not strand the session in demo data forever (a slowly
- *  booting MCP server would otherwise stay mocked until a pane reload) — the
- *  mock result is cached soft: subsequent calls re-probe, at most once per
- *  backoff window, and swap to the real client when it comes up. */
-const PROBE_RETRY_MS = 10_000;
-let _probeFailedAt = 0;
-
 export function getMcpClient(): Promise<McpClient> {
-  const stale = _probeFailedAt !== 0 && Date.now() - _probeFailedAt >= PROBE_RETRY_MS;
-  if (_client && !stale) {
-    return Promise.resolve(_client);
+  // Settled for good: real, or an explicitly latched demo mode. (The facade is
+  // the same object either way — see the header note on why callers never hold
+  // a transport directly.)
+  if (_client && (_conn.phase === 'real' || _conn.phase === 'demo')) {
+    return Promise.resolve(MCP_FACADE);
   }
 
   // Concurrent callers (Launcher's three loaders all fire on mount) share the
-  // one construction + probe already underway rather than each starting its
-  // own real client and probe.
-  if (_clientPromise) {
-    return _clientPromise;
+  // one construction + probe window already underway rather than each starting
+  // its own real client and probe.
+  if (_clientPromise) return _clientPromise;
+
+  // Degraded: a client exists (the mock) and a background re-probe owns the
+  // upgrade. Hand it over immediately — blocking every view on a server that
+  // already missed its window would be worse than clearly-labelled demo data.
+  if (_client) {
+    nudgeReprobe();
+    return Promise.resolve(MCP_FACADE);
   }
 
-  _clientPromise = (async () => {
-    try {
-      if (isStandalone()) {
-        _probeFailedAt = 0;
-        const { createMockMcpClient } = await import('./__mocks__/mcp.js');
-        _client = createMockMcpClient();
-        return _client;
-      }
-
-      await connectBridge();
-      const { createRealMcpClient } = await import('./real-mcp.js');
-      const real = createRealMcpClient();
-      // Guarded probe: render.list_engines needs no open project and is cheap.
-      // A pass proves the real studio MCP server is live; a throw/timeout means it
-      // is absent or crash-looping — fall back to the mock so the UI stays usable.
-      try {
-        const { engines } = await withTimeout(
-          real.callTool<{ engines: EngineCapability[] }>('render.list_engines'),
-          PROBE_TIMEOUT_MS,
-        );
-        _client = real;
-        _probeFailedAt = 0;
-        _probedEngines = engines ?? null;
-      } catch {
-        if (!_client) {
-          const { createMockMcpClient } = await import('./__mocks__/mcp.js');
-          _client = createMockMcpClient();
-        }
-        _probeFailedAt = Date.now();
-        _probedEngines = null;
-      }
-      return _client;
-    } finally {
-      _clientPromise = null;
-    }
-  })();
+  _clientPromise = resolveClient().finally(() => {
+    _clientPromise = null;
+  });
   return _clientPromise;
 }
 
 /** TEST/DEV ONLY. Drops the cached client so the next getMcpClient() call
  *  re-resolves. Used by view tests that need to inject a custom mock. */
 export function __resetMcpClient(): void {
+  cancelReprobe();
+  dropSubscriptions();
   _client = null;
+  _pinned = null;
+  _upgradeGate = null;
   _clientPromise = null;
   _probedEngines = null;
+  _real = null;
+  _mock = null;
+  _absentStreak = 0;
+  _probeInFlight = false;
+  _upgradeReopenFailures = 0;
+  _conn = IDLE_STATE;
 }
 
 // ─── Typed helpers ──────────────────────────────────────────────────────

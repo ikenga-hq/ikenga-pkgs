@@ -34,6 +34,23 @@ export class OpenRouterEngine implements Engine {
   readonly id = ID;
   readonly version = VERSION;
 
+  /**
+   * Mirrors the `engine` block of this pkg's `manifest.json` — the contract
+   * (`EngineMetadata`) says the shell + wizard may read either one, so the two
+   * must agree. `src/manifest.test.mjs` asserts they do, field for field.
+   *
+   * Every flag below is what `openrouter_http::server` actually implements, not
+   * what the OpenRouter API could theoretically do:
+   *   - `artifacts` / `agenticTools` — the adapter streams text, thinking and
+   *     `tool_calls` only; it renders no structured artifacts and executes no
+   *     tools itself (a tool-call turn ends and the client runs them).
+   *   - `fileAttachments` / `imageInput` — `extract_prompt_text` refuses image
+   *     and audio prompt blocks; `PromptCapabilities` declares text +
+   *     embedded-text context only.
+   *   - `slashCommands` / `promptCaching` — not implemented.
+   *   - `mcp` — the adapter connects to no MCP servers; tool defs arrive via
+   *     `handle_set_tools`, which is not an MCP transport.
+   */
   readonly metadata = {
     agentId: 'openrouter',
     display: 'OpenRouter Unified LLM',
@@ -41,14 +58,14 @@ export class OpenRouterEngine implements Engine {
       streaming: true,
       toolUse: true,
       thinking: true,
-      artifacts: true,
-      fileAttachments: true,
-      imageInput: true,
-      slashCommands: true,
+      artifacts: false,
+      fileAttachments: false,
+      imageInput: false,
+      slashCommands: false,
       modelSwitching: true,
-      promptCaching: true,
-      agenticTools: true,
-      mcp: true,
+      promptCaching: false,
+      agenticTools: false,
+      mcp: false,
       sessionResume: true,
     },
     onboarding: {

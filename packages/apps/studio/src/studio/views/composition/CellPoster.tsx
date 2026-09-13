@@ -24,7 +24,7 @@ import { useEffect, useReducer } from 'react';
 
 import { getMcpClient } from '../../mcp-client';
 import type { PosterEntry } from '../../mcp-types';
-import { base64ToBlob } from './format';
+import { base64ToBlob, posterFetchIds, type PosterMiss } from './format';
 
 export interface CellPosterProps {
   /** The finished render's record id, or null when the cell has no done render. */
@@ -45,6 +45,24 @@ const MAX_ENTRIES = 50;
 const cache = new Map<string, string | null>();
 const inFlight = new Set<string>();
 const listeners = new Map<string, Set<() => void>>();
+/** recordId → miss bookkeeping. A cached `null` is only PROVISIONAL until the
+ *  bounded retry budget in `posterFetchIds` is spent — the sidecar writes the
+ *  poster PNG after it marks the row done (G-109), so the first batch for a
+ *  freshly-done record legitimately misses. Cleared on a hit. */
+const misses = new Map<string, PosterMiss>();
+
+const fetchState = {
+  cached: (id: string) => cache.has(id),
+  inFlight: (id: string) => inFlight.has(id),
+  miss: (id: string) => misses.get(id),
+};
+
+/** True when this id would go into a batch right now — a genuine gap, not a
+ *  settled hit or miss. Keeps the component's solo-fetch gate and the batch
+ *  planner on exactly one rule. */
+function needsFetch(recordId: string): boolean {
+  return posterFetchIds([recordId], fetchState, Date.now()).length > 0;
+}
 
 function bump(recordId: string, url: string | null) {
   cache.delete(recordId);
@@ -61,6 +79,12 @@ function bump(recordId: string, url: string | null) {
 function setCached(recordId: string, url: string | null) {
   const prev = cache.get(recordId);
   if (prev && prev !== url) URL.revokeObjectURL(prev);
+  if (url) {
+    misses.delete(recordId);
+  } else {
+    const seen = misses.get(recordId);
+    misses.set(recordId, { at: Date.now(), tries: (seen?.tries ?? 0) + 1 });
+  }
   bump(recordId, url);
   listeners.get(recordId)?.forEach((fn) => fn());
 }
@@ -82,7 +106,7 @@ function subscribe(recordId: string, onChange: () => void): () => void {
  *  already in flight, so calling this redundantly (e.g. every adaptive-poll
  *  tick) costs nothing once the set has resolved. */
 async function fetchBatch(recordIds: string[]): Promise<void> {
-  const toFetch = [...new Set(recordIds)].filter((id) => !cache.has(id) && !inFlight.has(id));
+  const toFetch = posterFetchIds(recordIds, fetchState, Date.now());
   if (toFetch.length === 0) return;
   toFetch.forEach((id) => inFlight.add(id));
   try {
@@ -125,7 +149,7 @@ export function CellPoster({ recordId, alt = '', className, style }: CellPosterP
   }, [recordId]);
 
   useEffect(() => {
-    if (!recordId || cache.has(recordId)) return;
+    if (!recordId || !needsFetch(recordId)) return;
     // DON'T race the grid's batch prefetch. React flushes passive effects
     // child→parent within one commit, so this per-card effect runs BEFORE
     // Canvas's prefetchPosters effect — a synchronous solo fetch here would fire
@@ -141,7 +165,7 @@ export function CellPoster({ recordId, alt = '', className, style }: CellPosterP
     // after the batch has had its reservation pass.
     let cancelled = false;
     queueMicrotask(() => {
-      if (cancelled || cache.has(recordId)) return;
+      if (cancelled || !needsFetch(recordId)) return;
       void fetchBatch([recordId]);
     });
     return () => {

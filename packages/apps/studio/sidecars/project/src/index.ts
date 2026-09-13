@@ -244,12 +244,38 @@ function bootstrapProjectOnDisk(args: {
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────
 
-// Shared between the extended handlers + the render runner: refresh the
-// in-memory project copy after a mutation so subsequent reads (and the render
-// runner's cell lookup) see the new state without a disk round-trip.
-function syncOpenProject(projectId: string, project: Project): void {
+// The ONE place the in-memory open-project copy is refreshed. Three callers:
+//
+//   • every mutating RPC, which hands over the document it just persisted;
+//   • every storyboard READ RPC, which hands over the document it just parsed
+//     off disk (free — no extra I/O, the read already did it);
+//   • the FS watcher's `onProjectDocChanged` hook, with no document, which
+//     makes this helper read + Zod-validate storyboard.json itself.
+//
+// WP-32 live-found (g58): before the last two, the cache was refreshed ONLY
+// by mutating RPCs. An out-of-band edit to storyboard.json (WP-26's premise:
+// an agent, the CLI, or a human with an editor) updated every disk-going
+// reader — i.e. the whole FE, via `storyboard.list_cells` — and no cache-going
+// reader. The exporter (`ExportLookup.project`) and the render runner
+// (`ProjectLookup.cell`) are cache-going, so a `Cell.index` rotation on disk
+// re-ordered the live lane within 3 s while an export 2.5 min later cut the
+// OLD order, with no error anywhere. A failed re-read leaves the previous
+// (still-valid) document in place and logs: a half-written or invalid
+// storyboard.json must not blank the cache out from under an in-flight export.
+function syncOpenProject(projectId: string, project?: Project): void {
   const o = open.get(projectId);
-  if (o) o.project = project;
+  if (!o) return;
+  if (project) {
+    o.project = project;
+    return;
+  }
+  try {
+    o.project = readProjectFromDisk(o.path);
+  } catch (e) {
+    logErr(
+      `open-project cache refresh skipped for ${projectId} (${o.path}): ${(e as Error).message}`,
+    );
+  }
 }
 
 function defaultResolution(p: Project): { w: number; h: number } {
@@ -390,26 +416,45 @@ function buildHandlers(db: Db): BuiltHandlers {
 
     switch (method) {
       // ── storyboard.* ──
-      case 'storyboard.read':
-        return storyboard.read(root).result;
-      case 'storyboard.read_cell':
-        return storyboard.readCell(root, params.cellId as string).result;
+      //
+      // The reads sync the open-project cache too (WP-32 / g58). They already
+      // re-read + Zod-validate storyboard.json, so handing that same document
+      // to syncOpenProject costs no extra I/O and keeps the cache-going
+      // readers (the exporter, the render runner) in step with the disk the
+      // FE is reading — including after an out-of-band edit that never passed
+      // through an RPC at all.
+      case 'storyboard.read': {
+        const r = storyboard.read(root);
+        syncOpenProject(params.projectId as string, r.project);
+        return r.result;
+      }
+      case 'storyboard.read_cell': {
+        const r = storyboard.readCell(root, params.cellId as string);
+        syncOpenProject(params.projectId as string, r.project);
+        return r.result;
+      }
       case 'storyboard.read_fountain':
         return storyboard.readFountain(root).result;
       case 'storyboard.write_fountain':
         return storyboard.writeFountain(root, params.text).result;
-      case 'storyboard.read_cell_content':
-        return storyboard.readCellContent(root, params.cellId as string).result;
+      case 'storyboard.read_cell_content': {
+        const r = storyboard.readCellContent(root, params.cellId as string);
+        syncOpenProject(params.projectId as string, r.project);
+        return r.result;
+      }
       case 'storyboard.write_cell_content':
         // Content-only write — no storyboard.json mutation, so no `project`
         // to sync back (see storyboard.ts's writeCellContent doc comment for
         // why: one fs write in, one watcher emit out).
         return storyboard.writeCellContent(root, params.cellId as string, params.html).result;
-      case 'storyboard.list_cells':
-        return storyboard.listCells(root, {
+      case 'storyboard.list_cells': {
+        const r = storyboard.listCells(root, {
           beat_id: params.beat_id as string | undefined,
           rung: params.rung as never,
-        }).result;
+        });
+        syncOpenProject(params.projectId as string, r.project);
+        return r.result;
+      }
       case 'storyboard.create_cell': {
         const r = storyboard.createCell(root, params.cell);
         if (r.project) syncOpenProject(params.projectId as string, r.project);
@@ -652,7 +697,14 @@ function buildHandlers(db: Db): BuiltHandlers {
         // degrades (canvas.write will report the failure) but the open proceeds.
         logErr(`could not create .studio/ in ${abs}: ${(e as Error).message}`);
       }
-      const watcher = await startWatcher(projectId, abs);
+      // The watcher is the seam for out-of-band edits (WP-26 / g58): when
+      // storyboard.json changes on disk without passing through a mutating
+      // RPC, re-hydrate the open-project cache BEFORE the cells/changed
+      // notification goes out, so the exporter and the render runner never
+      // disagree with the lane the user is looking at. See syncOpenProject.
+      const watcher = await startWatcher(projectId, abs, {
+        onProjectDocChanged: () => syncOpenProject(projectId),
+      });
       const open_: OpenProject = { projectId, path: abs, project, watcher };
       open.set(projectId, open_);
       // Hydrate the LRU; the result is observable for smoke tests via

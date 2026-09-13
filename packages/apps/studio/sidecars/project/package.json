@@ -8,6 +8,6 @@
     "build": "bash build.sh",
     "dev": "bash build.sh --watch",
     "typecheck": "tsc -p ../../tsconfig.json --noEmit",
-    "test": "bun run src/registry.test.ts && bun run src/session.test.ts && bun run src/storyboard.test.ts && bun run src/canvas.test.ts && bun run src/recents.test.ts && bun run src/renderers/blender.test.ts && bun run src/export/davinci.test.ts && bun run src/rpc.dispatch.test.ts"
+    "test": "bun run src/registry.test.ts && bun run src/trust.test.ts && bun run src/session.test.ts && bun run src/storyboard.test.ts && bun run src/watcher.test.ts && bun run src/canvas.test.ts && bun run src/recents.test.ts && bun run src/renderers/blender.test.ts && bun run src/renderers/chrome.test.ts && bun run src/renderers/hyperframes.test.ts && bun run src/export/davinci.test.ts && bun run src/rpc.dispatch.test.ts"
   }
 }

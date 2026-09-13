@@ -181,20 +181,50 @@ export function clipAt(clips: TimelineClip[], ms: number): TimelineClip | null {
 
 /**
  * Fold a render.list result into the latest status per cell uid. Records may be
- * multiple per cell (one row per render attempt) and the list order is not a
- * guaranteed recency sort, so an ACTIVE status (running/queued) always wins over
- * a terminal one for the same cell, and among same-tier records the later one in
- * list order wins. This keeps a freshly-enqueued re-render showing "running"
- * even while an older "done" row for the cell is still present.
+ * multiple per cell (one row per render attempt), so:
+ *
+ *   • an ACTIVE status (running/queued) always wins over a terminal one for the
+ *     same cell — a freshly-enqueued re-render reads "running" even while an
+ *     older "done"/"failed" row for the cell is still present; and
+ *   • among same-tier records the MOST RECENT one wins, by `finished_at` (or,
+ *     lacking that, `started_at`); only an exact tie — or two rows with no
+ *     parseable timestamp at all — falls back to later-list-position wins.
+ *
+ * G-109 (live 2026-09-13, `plans/studio/verify/2026-09-12-wp32-live/hf-win-b5/`):
+ * this used to be list-position-only among terminal rows, but `render.list`
+ * returns `ORDER BY created_at DESC` (`sidecars/project/src/queue.ts`), so the
+ * later-iterated row is the OLDER one. A cell whose history was failed(t1) →
+ * done(t2) therefore folded to `failed`, and its canvas tile kept reading
+ * `○ Standby` after a successful re-render while the Composition banner — built
+ * on the recency-only `latestRecordByUid` — correctly moved to `5/7 rendered`.
+ * The recency rule here now mirrors that one (and `doneRecordIdByUid`), so all
+ * three surfaces agree on which attempt is "the latest".
  */
 export function foldRenderStatus(records: RenderRecord[]): Record<string, RenderStatus> {
   const ACTIVE = new Set<RenderStatus>(['running', 'queued']);
+  const timeMs = (r: RenderRecord): number => {
+    const v = r.finished_at ?? r.started_at;
+    const t = v ? Date.parse(v) : NaN;
+    return Number.isFinite(t) ? t : 0;
+  };
   const out: Record<string, RenderStatus> = {};
+  const bestAt: Record<string, number> = {};
   for (const r of records) {
     if (!r || typeof r.cell_uid !== 'string' || !r.cell_uid) continue;
     const prev = out[r.cell_uid];
-    if (prev && ACTIVE.has(prev) && !ACTIVE.has(r.status)) continue;
+    const t = timeMs(r);
+    if (prev !== undefined) {
+      const prevActive = ACTIVE.has(prev);
+      const nextActive = ACTIVE.has(r.status);
+      // Tier first: in-flight beats terminal regardless of timestamps (a queued
+      // row has neither started_at nor finished_at, so recency alone would let
+      // an old `done` mask a re-render that is running right now).
+      if (prevActive && !nextActive) continue;
+      if (!prevActive && !nextActive && t < bestAt[r.cell_uid]) continue;
+      if (prevActive && nextActive && t < bestAt[r.cell_uid]) continue;
+    }
     out[r.cell_uid] = r.status;
+    bestAt[r.cell_uid] = t;
   }
   return out;
 }
