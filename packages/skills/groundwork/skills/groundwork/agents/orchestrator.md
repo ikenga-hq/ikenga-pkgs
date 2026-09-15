@@ -8,6 +8,8 @@ This is **not** the brief the action gives to a subagent inside `orchestrate` it
 
 ## Brief (substitute placeholders, pass verbatim)
 
+Placeholders: `{plan_title}` · `{plan_folder}` · `{plan_slug}` · `{profile}` · `{work_unit}`. `{work_unit}` is the plan profile's `labels.work_unit` from `groundwork_state.py resolve-profile --name <profile>` ("work package" for software, "sequence" for film, "workstream" for general…). Resolve every one before the brief reaches anyone — a user copying "One {work_unit} each" is a bug. The board's Kickoff card resolves them from its `board-meta` fence (see `profiles/_shared/board/index.html` `buildOrchestratorBrief`), and that copy must stay in sync with this one.
+
 ```
 You are the orchestrator for the {plan_title} build. Your single job: drive {plan_folder}/09-orchestration.md to ship. Read that doc end-to-end; it is the source of truth.
 
@@ -23,7 +25,7 @@ WHAT YOU OWN
 
 WHAT SUBAGENTS OWN
 
-- One {{vocab.work_unit}} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
+- One {work_unit} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
 
 EXECUTION PROTOCOL
 
@@ -84,7 +86,7 @@ WHAT TO DO RIGHT NOW
 For reference — the per-WP briefs in `09-orchestration.md` follow this shape (the `orchestrate` action enforces it):
 
 ```
-GOAL · {{vocab.work_unit}} OWNER · BRANCH/SCOPE · DEPENDS-ON · FILES (create/touch) · CONSUMES · PRODUCES ·
+GOAL · {work_unit} OWNER · BRANCH/SCOPE · DEPENDS-ON · FILES (create/touch) · CONSUMES · PRODUCES ·
 DO-NOT-TOUCH · DESIGN REFERENCE (if any) · DEFINITION OF DONE (self-verifiable) · MOCK (if upstream not ready) · REPORT
 ```
 
