@@ -645,7 +645,10 @@ def cmd_register_id(args):
         try:
             v = json.loads(v)
         except json.JSONDecodeError:
-            pass
+            # `[WP-01,WP-02]` (unquoted IDs) isn't JSON but is plainly a list — store it as one.
+            s = v.strip()
+            if len(s) >= 2 and s[0] == "[" and s[-1] == "]":
+                v = [x.strip().strip("\"'") for x in s[1:-1].split(",") if x.strip().strip("\"'")]
         entry[k] = v
     ids[args.id] = entry
     save_anchor(args.plan, anchor)
@@ -719,7 +722,7 @@ def cmd_issue_sync_data(args):
     children_map = {}
     for k, v in ids.items():
         if k.startswith("WP-"):
-            for dep in v.get("depends_on", []):
+            for dep in _as_id_list(v.get("depends_on")):  # tolerates the legacy "[WP-01]" string
                 if dep.startswith("WP-"):
                     children_map.setdefault(dep, []).append(k)
 
@@ -754,7 +757,7 @@ def cmd_issue_sync_data(args):
                 "wave": v.get("wave"),
                 "phase": v.get("phase", f"P{v.get('wave', 0) + 1}"),
                 "tier": v.get("tier"),
-                "depends_on": v.get("depends_on", []),
+                "depends_on": _as_id_list(v.get("depends_on")),
                 "gate": v.get("gate"),
                 "brief": briefs.get(k, ""),
                 "issue": v.get("issue"),

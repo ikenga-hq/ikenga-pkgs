@@ -364,7 +364,7 @@ try:
     check("spec-only lock -> LOCKED + derived warning",
           res.get("result")=="LOCKED" and "locked without a design file" in dd(dp,"D-03")["warnings"])
 
-    # legacy string-form implements (register-id stores `[A,B]` as a string) is tolerated
+    # implements given as `[A,B]` on the command line (see "register-id list fields" below)
     run("register-id","--plan",dp,"--id","WP-02","--doc","05-tracking.md","--field","implements=[D-03]",
         "--field","status=in_progress")
     check("string-form implements tolerated", "WP-02" in [w["id"] for w in dd(dp,"D-03")["wps"]])
@@ -442,6 +442,39 @@ try:
           res.get("result")=="LOCKED" and dd(kp,"D-02")["locked_files"]==both)
     _,r = J("design-lock","--plan",kp,"--id","D-02","--round","5","--file",both[0],expect=1)
     check("re-locking a different file set while locked refuses", r.returncode==1)
+
+    # ---- list-valued --field (depends_on) ----
+    print("register-id list fields:")
+    lp2 = os.path.join(tmp, "plan-lists")
+    run("scaffold","--plan",lp2,"--profiles-root",PROFILES,"--profile","software","--goal","List fields")
+    for wid in ("WP-01", "WP-02"):
+        run("register-id","--plan",lp2,"--id",wid,"--doc","05-tracking.md","--field",f"title={wid}")
+    run("register-id","--plan",lp2,"--id","WP-03","--doc","05-tracking.md","--field","depends_on=[WP-01, WP-02]")
+    run("register-id","--plan",lp2,"--id","WP-04","--doc","05-tracking.md","--field","depends_on=[WP-01]")
+    run("register-id","--plan",lp2,"--id","WP-05","--doc","05-tracking.md","--field",'depends_on=["WP-02"]')
+    run("register-id","--plan",lp2,"--id","WP-06","--doc","05-tracking.md","--field","depends_on=[]",
+        "--field","note=[draft] later")
+    ids2 = anc(lp2)["ids"]
+    check("register-id stores unquoted [A, B] as a trimmed list", ids2["WP-03"]["depends_on"]==["WP-01","WP-02"])
+    check("register-id stores unquoted [A] as a list", ids2["WP-04"]["depends_on"]==["WP-01"])
+    check("register-id still parses JSON lists", ids2["WP-05"]["depends_on"]==["WP-02"])
+    check("register-id: [] is an empty list; non-bracketed text stays a string",
+          ids2["WP-06"]["depends_on"]==[] and ids2["WP-06"]["note"]=="[draft] later")
+
+    # legacy anchors already carry depends_on as a string — every reader must cope
+    la2 = anc(lp2)
+    la2["ids"]["WP-03"]["depends_on"] = "[WP-01,WP-02]"
+    la2["ids"]["WP-04"]["depends_on"] = "[WP-01]"
+    open(os.path.join(lp2,".groundwork.json"),"w",encoding="utf-8",newline="\n").write(json.dumps(la2, indent=2)+"\n")
+    isd = json.loads(run("issue-sync-data","--plan",lp2,"--with-tasklists").stdout)
+    iwp = {w["id"]: w for w in isd["wps"]}
+    check("issue-sync-data: string depends_on still maps children",
+          [c["id"] for c in iwp["WP-01"]["children"]]==["WP-03","WP-04"]
+          and [c["id"] for c in iwp["WP-02"]["children"]]==["WP-03","WP-05"], iwp["WP-01"]["children"])
+    check("issue-sync-data: depends_on emitted as a list", iwp["WP-04"]["depends_on"]==["WP-01"])
+    check("issue-sync-data: tasklist built for a legacy parent", "WP-04" in iwp["WP-01"].get("tasklist_md",""))
+    bwp = {w["id"]: w for w in json.loads(run("board-data","--plan",lp2).stdout)["wps"]}
+    check("board-data: string depends_on emitted as a list deps", bwp["WP-03"]["deps"]==["WP-01","WP-02"])
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
