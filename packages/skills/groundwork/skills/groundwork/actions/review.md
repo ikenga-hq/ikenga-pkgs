@@ -16,7 +16,7 @@
 
 1. **Verify** `.groundwork.json`. Refuse without one.
 2. **Scope the review**: ask the user (`AskUserQuestion`):
-   - **Target**: the whole plan (default), a single doc (`01`/`05`), or a specific design (`designs/<file>`).
+   - **Target**: the whole plan (default), a single doc (`01`/`05`), a specific design (`D-NN` or `designs/<file>`), or a PR that implements designs (`"PR #N"` — the design-conformance lens). See §"Design reviews".
    - **Lens**: structural gaps · risks not surfaced · contradictions · readiness for next phase. Default: structural gaps + risks.
 3. **Spawn the reviewer** with the brief from `agents/reviewer.md`, populated with `{target, lens, profile, current_state}`. Pass the relevant docs as context.
 4. **Receive findings** — the agent returns a list of `{ kind, severity, finding, suggestion, touches: [docs] }`. Each finding becomes a `G-NN` ID.
@@ -124,12 +124,55 @@ This is the deterministic version of the studio loop. The studio second-pass cau
 
 ## Design reviews
 
-When `--target designs/<file>` is passed:
+Two design lenses. Both are keyed to the design's **`D-NN`** — never to a bare file path — and both record findings as `D-NN · state · file:line`. Read the design model first: `groundwork_state.py design-data --plan <plan>` (which file is locked, in which Round, which WPs implement it, open findings).
 
-- The reviewer focuses critique on the design itself — layout, hierarchy, information density, alignment with `01-plan.md`'s stated needs.
-- Findings carry `kind: "design-review"` in the registry.
-- The Round entry titled "Round N — design review for `designs/<file>`."
-- Re-syncs may include the design file itself (the design action then re-mocks based on the findings) — this is the iterate-on-mockups loop.
+### Design review — `--target D-NN` (or `--target designs/<file>`)
+
+Critique of the mockup itself, before or after lock.
+
+- Target the locked file if the design is locked, else every variant (`design-data` → `files`). A `designs/<file>` target resolves to its `D-NN` through the link; an unlinked file is reviewed but its findings can't attach — say so and suggest `register-design` / `design-migrate`.
+- The reviewer checks layout, hierarchy, information density, alignment with `01-plan.md`'s stated needs, and **coverage of every state the spec names** (default, empty, loading, error, declined / no-consent — whichever apply).
+- Findings carry `kind: "design-review"`, `design: "D-NN"`, `state` (null when whole-design), `location: "designs/<file>:<line>"`.
+- The Round is titled "Round N — design review for D-NN (<title>)".
+- Re-syncs may include the design file itself — the iterate-on-mockups loop. If a finding changes a **locked** design, unlock it first (`design-unlock --reason "G-NN"`), revise, re-lock (`actions/design.md` §"Unlocking a design").
+
+### Design conformance — `--target "PR #N"`
+
+For a PR whose body's **"Designs implemented"** line names one or more `D-NN` (template: `actions/orchestrate.md` §"PR body"). Compares the implementation to the *locked* mockup.
+
+1. For each named `D-NN`, look up `locked_file` in `design-data`. A named design that is not locked is itself a **critical** finding ("implements an unlocked design").
+2. Render the screen from the PR (web build or export; light and dark; phone width) and compare it to the locked mockup **state by state**, on tokens (no raw colours), copy (voice, consent wording), accessibility (contrast, 44 px targets).
+3. Findings carry `kind: "design-conformance"`, `design`, `state`, `location: "<implementation file>:<line>"`. A PR that changes a locked design's appearance without an unlock round in `04` is **critical** and the PR goes back.
+4. Record the implementation: `register-design-impl --plan <plan> --wp WP-NN --designs D-03 --pr N --url <url> --pr-state open` (again with `--pr-state merged` on merge). Build status is derived from this — never hand-kept.
+5. When the PR has merged and no `design-conformance` finding on that `D-NN` is still open: `design-verify --plan <plan> --id D-NN --round N`. A later unlock clears it.
+
+### Registering design findings
+
+Same `next-id --kind gap` allocation as every finding, plus the design fields:
+
+```bash
+groundwork_state.py register-id --plan <plan> --id G-14 --doc 04-discussion.md \
+  --field kind=design-conformance --field design=D-03 --field state=error \
+  --field location=app/onboarding/DealBreakers.tsx:88 --field severity=important \
+  --field status=open --field 'title=Error copy drifts from the locked mockup'
+```
+
+Leave `status=open` until the fix lands, then set `status=resolved`. `design-data`, `board-data` and `status-data` attach these to the design (`findings[]`, `open_findings`).
+
+### Round body shape for design findings
+
+One sub-section per design, after the severity-grouped gap sections:
+
+```markdown
+### Design findings — D-03 · Deal-breakers (locked Round 4 · designs/d-03-deal-breakers.html)
+
+| G-NN | State | Location | Severity | Finding → fold |
+|---|---|---|---|---|
+| **G-14** | error | `app/onboarding/DealBreakers.tsx:88` | important | Error copy reads "Invalid" where the mockup reads "Pick at least one" → fix in PR #42 |
+| **G-15** | empty | `designs/d-03-deal-breakers.html:120` | nice | Empty state has no guidance line → add to mockup (unlock/re-lock Round 5) |
+
+**Conformance:** fails · 1 open (PR #42) · **Verified:** pending
+```
 
 ---
 

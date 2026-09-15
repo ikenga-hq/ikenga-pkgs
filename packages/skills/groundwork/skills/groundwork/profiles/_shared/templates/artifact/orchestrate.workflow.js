@@ -31,7 +31,7 @@ export const meta = {
 const WP_REPORT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'status', 'report', 'files_touched', 'dod_met'],
+  required: ['id', 'status', 'report', 'files_touched', 'dod_met', 'designs_implemented'],
   properties: {
     id: { type: 'string' },
     status: { type: 'string', enum: ['done', 'blocked', 'needs-decision'] },
@@ -39,6 +39,7 @@ const WP_REPORT_SCHEMA = {
     files_touched: { type: 'array', items: { type: 'string' } },
     dod_met: { type: 'boolean' },
     drift: { type: ['string', 'null'] },
+    designs_implemented: { type: 'array', items: { type: 'string' } },
   },
 }
 const VERDICT_SCHEMA = {
