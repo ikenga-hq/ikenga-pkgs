@@ -36,6 +36,7 @@ Returns JSON with:
 - **`rounds`**: `[{ round, date, topic, status, heading_line, body_anchor }]` — one entry per row in the `04-discussion.md` rounds-index fence (newest first).
 - **`risks_raw`**: `[{ raw_line, severity_hint, source }]` — one entry per bullet under `01-plan.md §Risks` (and any `### New risks folded` rounds), with the leading `**R<n> —**` / `**G-<NN> —**` prefix stripped and a severity hint (`critical` / `important` / `nice`) inferred from any tag in the bullet.
 - **`ids_summary`**: gates/gaps/WP counts by status — for cross-checking against what the round summaries say.
+- **`designs`**: one entry per `D-NN` — `{ id, title, phase, design_state, build_state, locked_in, verified_in, wps }` (the same derivation as `design-data`). Each `phases[]` entry also carries `design_ids` (the `D-NN` whose `phase` matches). Use them in the per-phase `note` ("D-01..D-03 locked, D-01 verified") and in round summaries. The template doesn't yet render a dedicated designs panel.
 
 The script does NOT synthesize prose. It hands back the **raw materials**; the action's job is to craft the human-readable summary for each round and each risk.
 

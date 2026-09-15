@@ -47,13 +47,14 @@
    Net guarantee: **for Ikenga work, Ikenga tokens are used unconditionally** — whether design-language detects them, requests them via workspace hint, or is bypassed entirely. For non-Ikenga work, the project's own tokens win, with the artifact's built-in defaults as the floor. **Conflicts are never silently resolved** — design-language's block is the contract; groundwork honors it.
 
 5. Capture the resolved contract; pass it to whichever artifact skill we end up calling.
-6. **Scope the mockup**: ask the user (`AskUserQuestion`):
+6. **Scope the mockup**: read `groundwork_state.py design-data --plan <plan>`. `planned` designs are registered `D-NN` with no mockup yet, and they're the natural next targets. Then ask the user (`AskUserQuestion`):
+   - **Which design** is this? An existing `D-NN` (preferred), or a new surface (allocate the `D-NN` now: `next-id --kind design` + `register-id`).
    - **Which phase / WP** is being designed? (P1 / P2 / P3 / cross-cutting)
    - **What's the surface**? (a screen, a flow, a board, a single component)
    - **What does the surface need** — interactive / data-bearing? scroll-driven narrative? pure visual craft? (this informs which skills get layered *with* huashu-design, not a single pick)
 7. **Compose the skill blend.** `huashu-design` is always engaged (step 2). On top of it, Claude layers whichever skills the surface warrants — `ikenga-artifact-builder`, `scrollytelling`, `frontend-design`, `web-artifacts-builder`, or any combination — using the *Composed-skill selection* guide below as a starting map, not a single-pick table. Pass every engaged skill the design contract resolved in step 4. Claude decides the final blend while building; no limits.
 8. **Produce ≥2 comparable variants** as `designs/<surface>-<variant>.html`. Each variant should be a real working file, not a sketch — the studio's Pattern C lock came from comparing complete mockups, not lo-fi wireframes.
-9. **Register** the variants in `.groundwork.json.designs` with `phase`, `wp` (if known), `locked: false`, plus `pane_ids: null` (filled at mount time if mounted in-shell).
+9. **Register** each variant against its design, through the script: `groundwork_state.py register-design --plan <plan> --file designs/<surface>-<variant>.html --id D-NN --phase <P> [--wp WP-NN]`. The `D-NN` is the surface being designed. Reuse the one already in `ids` if the plan registered it (plans often register `D-NN` before any mockup exists); otherwise allocate it now with `next-id --kind design` + `register-id --id D-NN --doc 01-plan.md --field kind=design --field title=<surface> --field phase=<P>`. The command writes `designs[<file>]` (`phase`, `wp`, `locked: false`, `pane_ids: null`, `design: "D-NN"`) and adds the file to `ids[D-NN].files`. Re-running it is a no-op.
 10. **Open them — host-aware** *(G3)*. The action checks for an in-shell signal (presence of `iyke` CLI on PATH + `IYKE_BRIDGE_URL` env var) before falling back to system open:
     - **In Ikenga** (`iyke` available) → `iyke open <path>` for each variant; capture returned pane IDs into `.groundwork.json.designs.<file>.pane_ids` so the action can later read iframe-state.
     - **Standalone terminal / browser** → `xdg-open` / `open` (Linux/macOS) — the previous behavior.
@@ -65,12 +66,22 @@
     - Re-asks the lock question with the comments visible — user may pick a winner *with caveats* the action then folds into the Round, or ask the action to revise mockups based on the comments (re-invokes the artifact skill with the comments as additional brief input)
 13. **Capture the lock** — `AskUserQuestion` for the chosen variant + a one-line rationale. The action does **not** auto-lock without confirmation.
 14. **Fold the lock**:
-    - Append a "Round N — design lock for <surface>" entry to `04-discussion.md` (newest first, above existing rounds).
-    - Update `01-plan.md`'s relevant section to cite the chosen design.
-    - Set `.groundwork.json.designs.<file>.locked = true` and `.locked_in = "Round N"`.
+    - Append a "Round N — design lock for D-NN (<surface>)" entry to `04-discussion.md` (newest first, above existing rounds).
+    - Update `01-plan.md`'s relevant section to cite the chosen design by `D-NN` and path.
+    - Lock it through the script — never by editing the anchor: `groundwork_state.py design-lock --plan <plan> --id D-NN --round N --file designs/<file>`. This sets `ids[D-NN].locked / locked_files / locked_file / locked_in`, appends to `history[]`, and mirrors `locked` onto every variant in `designs` (chosen `true`, the rest `false`). When the lock covers complementary variants rather than rival options (a main screen plus a returning-member path), repeat `--file` for each. Re-running it is a no-op; locking a *different* file while locked refuses (unlock first, see §"Unlocking a design").
     - If `--check-notes` surfaced comments, include them under a "**Considered (from inline notes)**" sub-section in the Round body so the design rationale captures them.
-15. **Allocate a `D-NN` ID** for the locked design; register in `.groundwork.json.ids`.
-16. **Print next steps** — typically "run `groundwork orchestrate` once you've locked all P1 designs," or "design the next phase when you reach it."
+15. **The `D-NN` already exists** — it was allocated at scope time (step 6), so a design has one ID from planning through verification. For a legacy plan that locked files without IDs, run `design-migrate` (see [`../lib/state.md` §"Design lifecycle"](../lib/state.md#design-lifecycle)).
+16. **Print next steps** — typically "run `groundwork orchestrate` once you've locked all P1 designs," or "design the next phase when you reach it." Once a WP implementing the design merges and a design-conformance review passes, `design-verify` closes the loop (`actions/review.md` §"Design reviews").
+
+### Unlocking a design
+
+A locked design's appearance never changes silently. When a review finding, a notes pass or a product decision needs the locked mockup to change:
+
+1. Append a Round to `04` that says *why* (cite the `G-NN` or decision).
+2. `design-unlock --plan <plan> --id D-NN --round N --reason "<one line>"` — records `unlocked_in`, clears `verified_in`, keeps the prior lock in `history[]`, and warns if WPs already build against it.
+3. Revise the variant (or produce a new one), then `design-lock` again in the same or a later Round.
+
+An implementation PR that changes a locked design's look *without* this unlock round is a critical design-conformance finding.
 
 ---
 
@@ -214,7 +225,9 @@ This format mirrors `plans/groundwork/04-discussion.md` §"Round 4 — plan-boar
 
 ## Review-pass integration
 
-A `review` pass can target a design (not just the plan) — when the user runs `groundwork review --target designs/<file>`, the reviewer agent critiques the design specifically; findings go into a Round with `G-NN` IDs marked `kind: design-review`. The design action can then iterate: revise → re-present → re-lock.
+A `review` pass can target a design, not just the plan. `groundwork review --target D-NN` (or `designs/<file>`) critiques the mockup. Findings go into a Round as `G-NN` with `kind: design-review`, `design: D-NN`, a `state` and a `file:line` location, and they attach to the design in `design-data` and on the board. The design action can then iterate: revise → re-present → re-lock (unlocking first if the design was locked).
+
+After the build, `groundwork review --target "PR #N"` runs the **design-conformance** lens: it compares the PR against the locked mockup state by state, records the implementation with `register-design-impl`, and, once the PR has merged clean, closes the loop with `design-verify`. See `actions/review.md` §"Design reviews".
 
 The notes-back loop (G1) and the review-pass are *complementary*: notes are the user's voice on specific elements; review is the agent's critique of the whole. Both can run on a single design; both can feed the iterate loop.
 

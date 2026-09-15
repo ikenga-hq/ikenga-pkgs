@@ -35,6 +35,7 @@ EXECUTION PROTOCOL
 2. LIVE RUN
    - When you spawn a subagent for a WP, set its Task `in_progress`.
    - When the subagent's DoD report passes review, set the Task `completed` and tick the matching 05-tracking.md checkbox.
+   - Record which designs it built. When its PR opens, run `groundwork_state.py register-design-impl --plan {plan_folder} --wp WP-NN --designs <designs_implemented, or none> --pr <N> --url <url> --pr-state open`, and repeat with `--pr-state merged` on merge. The PR body carries the "Designs implemented" line (09 §"PR body"). A PR that implements a locked design gets a design-conformance review (`groundwork review --target "PR #N"`) before it merges; after a clean pass on a merged PR, run `design-verify --id D-NN --round N`.
    - Subagents never touch Tasks or 05 markdown.
 
 3. DURABLE SYNC
@@ -99,7 +100,7 @@ If `orchestrate` was run with `--emit-workflow`, you do **not** improvise the fa
 
 1. **KICKOFF** — same as below: `groundwork status` + `clarify`, then `TaskCreate` per `WP-NN`.
 2. **RUN** — invoke `Workflow({ scriptPath: "{plan_folder}/artifact/orchestrate.workflow.js" })`. It fans out each wave (WPs in `parallel`, each in its own worktree), adversarially verifies every freeze gate, and **returns** `{ results }` (or `{ halted, failed, results, verdicts }` if a gate failed sign-off). It writes no files — that's yours.
-3. **RECONCILE** (from the returned `results[]`, each a `WP_REPORT_SCHEMA` object) — for every WP reported `done` and gate-verified: set its Task `completed`, tick its `05-tracking.md` checkbox, and commit `chore({plan_slug}): WP-NN done`. For `blocked` / `needs-decision`: leave the checkbox, surface to the user. Record any non-null `drift` per the DRIFT LOG step.
+3. **RECONCILE** (from the returned `results[]`, each a `WP_REPORT_SCHEMA` object) — for every WP reported `done` and gate-verified: set its Task `completed`, tick its `05-tracking.md` checkbox, record `designs_implemented` with `register-design-impl --wp WP-NN --designs <list or none>` (plus `--pr` once its PR exists), and commit `chore({plan_slug}): WP-NN done`. For `blocked` / `needs-decision`: leave the checkbox, surface to the user. Record any non-null `drift` per the DRIFT LOG step.
 4. **MERGE** — in wave order, per the matrix (contract/lib first, `pnpm install`, then consumers).
 5. **HALTED GATE** — if the run returned `{ halted }`, the freeze gate failed sign-off: do **not** proceed. Review the `verdicts`, fix or re-scope the failing WP(s), and re-run the workflow (cached unchanged WPs return instantly via Workflow resume) or finish those WPs by hand.
 

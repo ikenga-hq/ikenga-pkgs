@@ -49,7 +49,7 @@ Surface model:
 |---|---|---|
 | Scaffolder (`init`) | First-run interview + folder skeleton drop | User has a goal but no plan folder |
 | Action: `research` | Researcher agent fills `02`/`03` | After scaffolder, or to refresh |
-| Action: `design` | Produces ≥2 comparable `designs/*.html` for the current phase, locks one | Visual/UX work, profile-gated |
+| Action: `design` | Produces ≥2 comparable `designs/*.html` for the current phase, locks one (`design-lock`); each `D-NN` is then tracked through implement → verify | Visual/UX work, profile-gated |
 | Action: `subplan` | Scaffolds a focused `NN-*.md` from one of three archetypes (diff-plan / decision-doc / bug-doc) | A hard piece needs its own focused doc (critical-path PR plan, between-round deliberation, postmortem) |
 | Action: `review` | Reviewer agent → new Round in `04` → re-sync via IDs | Recurring, highest-value |
 | Action: `clarify` | Readiness gate before `orchestrate` | Before kickoff |
@@ -128,6 +128,7 @@ The contract that makes stateless actions safe over an existing folder:
 2. **Generated-region fences** (`<!-- groundwork:auto:start ID -->` … `<!-- groundwork:auto:end ID -->`) demarcate the only blocks an action may write. Everything outside a fence is hand-authored and never touched.
 3. **Re-runs diff, not overwrite** — an action recomputes a region, hashes it, and writes only when the hash differs.
 4. **Stable IDs** (`G-NN` gaps, `WP-NN` work packages, `G-<NAME>` gates, `D-NN` designs) thread `01` → `05` → `09` → board; the review action computes the affected-doc set from IDs + hashes, not from guessing.
+5. **Designs are a tracked loop** — produce → review → lock → implement → verify. `ids[D-NN]` is the canonical design (linked to its `designs/*.html` variants). Every transition is a script command (`design-lock` / `design-unlock` / `register-design-impl` / `design-verify`), and build status is derived from WP status + PR records, never hand-kept. See `lib/state.md` §"Design lifecycle".
 
 The full schema, fence grammar, hash-diff algorithm, and a worked example: **[`lib/state.md`](lib/state.md)**. Read it before any action that writes.
 

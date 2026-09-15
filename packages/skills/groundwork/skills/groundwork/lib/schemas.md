@@ -72,9 +72,12 @@ The full reviewer envelope from `agents/reviewer.md`, now machine-enforceable. U
         "properties": {
           "title":    { "type": "string" },
           "severity": { "type": "string", "enum": ["critical", "important", "nice"] },
-          "kind":     { "type": "string", "enum": ["structural-gap", "risk", "contradiction", "design-review", "readiness"] },
+          "kind":     { "type": "string", "enum": ["structural-gap", "risk", "contradiction", "design-review", "design-conformance", "readiness"] },
           "fold":     { "type": "string", "description": "one paragraph: what changes in which doc" },
-          "touches":  { "type": "array", "items": { "type": "string" }, "description": "every doc whose content changes to apply the fold" }
+          "touches":  { "type": "array", "items": { "type": "string" }, "description": "every doc whose content changes to apply the fold" },
+          "design":   { "type": ["string", "null"], "description": "D-NN the finding is about — set for design-review / design-conformance, null otherwise" },
+          "state":    { "type": ["string", "null"], "description": "the design state it concerns (default / empty / loading / error / declined …); null when it applies to the whole design" },
+          "location": { "type": ["string", "null"], "description": "file:line — the mockup line for design-review, the implementation line for design-conformance" }
         }
       }
     },
@@ -149,14 +152,15 @@ What each WP agent returns from its run. The workflow aggregates these and retur
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "status", "report", "files_touched", "dod_met"],
+  "required": ["id", "status", "report", "files_touched", "dod_met", "designs_implemented"],
   "properties": {
     "id":            { "type": "string", "description": "WP-NN" },
     "status":        { "type": "string", "enum": ["done", "blocked", "needs-decision"] },
     "report":        { "type": "string", "description": "what was done; if blocked/needs-decision, what's needed" },
     "files_touched": { "type": "array", "items": { "type": "string" } },
     "dod_met":       { "type": "boolean", "description": "subagent's own DoD self-check (the gate verify re-checks adversarially)" },
-    "drift":         { "type": ["string", "null"], "description": "one line if shipped scope diverged from the brief (feeds the Round-8 drift log); null if it matched" }
+    "drift":         { "type": ["string", "null"], "description": "one line if shipped scope diverged from the brief (feeds the Round-8 drift log); null if it matched" },
+    "designs_implemented": { "type": "array", "items": { "type": "string" }, "description": "D-NN this change implements, [] when none. The orchestrator records it with `register-design-impl` and copies it to the PR body's \"Designs implemented\" line" }
   }
 }
 ```

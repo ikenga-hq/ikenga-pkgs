@@ -819,6 +819,509 @@ def cmd_apply_issue_sync(args):
 
 
 # --------------------------------------------------------------------------- #
+# design lifecycle — ids[D-NN] is canonical; designs[<path>] are its variant files
+# --------------------------------------------------------------------------- #
+#
+# One model: `ids[D-NN]` is the design (a surface or decision — it can exist before
+# any mockup file). `designs[<path>]` registers each variant file and links back with
+# `design: "D-NN"`; its `locked`/`locked_in` are a mirror kept for older readers.
+# Lifecycle state (design_state, build_state) is DERIVED on every read, never stored.
+# Legacy anchors (unlinked `designs[path]` locks, D-NN with no files) are tolerated.
+
+_D_ID_RE = re.compile(r"^D-\d+[a-z]?$")
+# A design token at the start of a filename: `d-01-identity.html`, `D-3.html`, `d07_x.html`.
+_D_FILE_TOKEN_RE = re.compile(r"^d-?(\d{1,3})(?=[-_.])", re.I)
+_CLOSED_FINDING = {"folded", "resolved", "retired", "closed", "wontfix"}
+
+
+def _round_label(r) -> str:
+    m = re.fullmatch(r"(?:round\s*)?(\d+)", str(r).strip(), re.I)
+    if not m:
+        die(f"--round expects a round number (e.g. 5 or 'Round 5'), got {r!r}", 1)
+    return f"Round {int(m.group(1))}"
+
+
+def _as_id_list(v) -> list:
+    """Tolerate a JSON list or the legacy string forms `[D-01,D-02]` / `D-01, D-02`
+    (register-id stores `--field k=[A,B]` as a string because it isn't valid JSON)."""
+    if isinstance(v, list):
+        return [str(x) for x in v]
+    if isinstance(v, str):
+        parts = [x.strip().strip("\"'") for x in v.strip().strip("[]").split(",")]
+        return [x for x in parts if x and x.lower() != "none"]
+    return []
+
+
+def _id_sort_key(k: str):
+    m = re.match(r"^[A-Z]+-(\d+)([a-z]?)", k)
+    return (0, int(m.group(1)), m.group(2)) if m else (1, 0, k)
+
+
+def _norm_rel(p: str) -> str:
+    p = p.replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _design_ids(anchor: dict) -> list:
+    return sorted((k for k, v in anchor.get("ids", {}).items()
+                   if k.startswith("D-") and isinstance(v, dict)), key=_id_sort_key)
+
+
+def _design_link(entry):
+    """The D-NN a variant entry links to. `design` is canonical; `id` is read too, because
+    plans adopted that spelling before the lifecycle commands existed."""
+    if not isinstance(entry, dict):
+        return None
+    for key in ("design", "id"):
+        v = entry.get(key)
+        if isinstance(v, str) and _D_ID_RE.match(v):
+            return v
+    return None
+
+
+def _design_files(anchor: dict, did: str) -> list:
+    """Variant files linked to a design, from either side of the link."""
+    e = anchor.get("ids", {}).get(did, {})
+    files = [_norm_rel(p) for p in _as_id_list(e.get("files"))]
+    for p, d in (anchor.get("designs") or {}).items():
+        if _design_link(d) == did and p not in files:
+            files.append(p)
+    return files
+
+
+def _design_token_id(anchor: dict, path: str):
+    """`designs/d-01-identity.html` → `D-01` if a design with that number is registered."""
+    m = _D_FILE_TOKEN_RE.match(os.path.basename(path))
+    if not m:
+        return None
+    n = int(m.group(1))
+    for did in _design_ids(anchor):
+        dm = re.match(r"^D-(\d+)$", did)
+        if dm and int(dm.group(1)) == n:
+            return did
+    return None
+
+
+def _effective_lock(anchor: dict, did: str):
+    """(locked, locked_files, locked_in). The ID's own fields win. Two legacy shapes are
+    read through: a lock recorded only on linked variants (`designs[p].locked`), and a lock
+    recorded on the ID by hand with no file named — its locked files are then the linked
+    variants that carry `locked: true`."""
+    e = anchor.get("ids", {}).get(did, {})
+    designs = anchor.get("designs") or {}
+    mirrored = [p for p in _design_files(anchor, did)
+                if isinstance(designs.get(p), dict) and designs[p].get("locked")]
+    mirror_in = designs[mirrored[0]].get("locked_in") if mirrored else None
+    if "locked" not in e:
+        return bool(mirrored), mirrored, mirror_in
+    if not e.get("locked"):
+        return False, [], None
+    files = _as_id_list(e.get("locked_files")) or ([e["locked_file"]] if e.get("locked_file") else mirrored)
+    return True, files, e.get("locked_in") or mirror_in
+
+
+def _link_design_file(anchor: dict, did: str, rel: str) -> None:
+    designs = anchor.setdefault("designs", {})
+    entry = designs.get(rel)
+    if not isinstance(entry, dict):
+        entry = {"phase": None, "wp": None, "locked": False, "pane_ids": None}
+        designs[rel] = entry
+    entry["design"] = did
+    e = anchor["ids"][did]
+    files = _as_id_list(e.get("files"))
+    if rel not in files:
+        files.append(rel)
+    e["files"] = files
+    if not entry.get("phase") and e.get("phase"):
+        entry["phase"] = e["phase"]
+
+
+def _design_lifecycle(anchor: dict, plan: str | None = None) -> dict:
+    """The derived design model: one entry per D-NN plus unlinked variant files and
+    per-phase coverage. build_state comes from implementing WPs (`ids[WP].implements`)
+    and their PR records (`ids[WP].prs[]`); verified needs an explicit `verified_in`."""
+    ids = anchor.get("ids", {})
+    designs = anchor.get("designs") or {}
+    wp_ids = sorted((k for k, v in ids.items() if k.startswith("WP-") and isinstance(v, dict)),
+                    key=_id_sort_key)
+    gap_ids = sorted((k for k, v in ids.items() if k.startswith("G-") and isinstance(v, dict)
+                      and v.get("kind") != "freeze_gate"), key=_id_sort_key)
+    out, linked = [], set()
+    for did in _design_ids(anchor):
+        e = ids[did]
+        files = _design_files(anchor, did)
+        linked.update(files)
+        locked, locked_files, locked_in = _effective_lock(anchor, did)
+        locked_file = locked_files[0] if locked_files else None
+        phase = e.get("phase") or next((designs[p].get("phase") for p in files
+                                        if isinstance(designs.get(p), dict) and designs[p].get("phase")), None)
+        wps = [{"id": w, "title": ids[w].get("title", ""), "status": ids[w].get("status", "queued")}
+               for w in wp_ids if did in _as_id_list(ids[w].get("implements"))]
+        prs = [{"wp": w, "number": pr.get("number"), "url": pr.get("url"), "state": pr.get("state", "open")}
+               for w in wp_ids for pr in (ids[w].get("prs") or [])
+               if isinstance(pr, dict) and did in _as_id_list(pr.get("designs"))]
+        pr_states = {p["state"] for p in prs}
+        wp_states = [w["status"] for w in wps]
+        if "merged" in pr_states or (wp_states and all(s == "done" for s in wp_states)):
+            build = "implemented"
+        elif "open" in pr_states or any(s in ("in_progress", "done") for s in wp_states):
+            build = "in_progress"
+        else:
+            build = "unbuilt"
+        verified_in = e.get("verified_in")
+        if build == "implemented" and locked and verified_in:
+            build = "verified"
+        warnings = []
+        if build != "unbuilt" and not locked:
+            warnings.append("built against an unlocked design")
+        if locked and not locked_file:
+            warnings.append("locked without a design file")
+        for lf in (locked_files if plan else []):
+            if not os.path.exists(os.path.join(plan, lf)):
+                warnings.append(f"locked file missing on disk: {lf}")
+        if verified_in and build != "verified":
+            warnings.append(f"verified in {verified_in} but no longer locked and implemented")
+        findings = [{"id": g, "kind": ids[g].get("kind"), "status": ids[g].get("status", "open"),
+                     "severity": ids[g].get("severity"), "state": ids[g].get("state"),
+                     "location": ids[g].get("location"), "title": ids[g].get("title", "")}
+                    for g in gap_ids if did in _as_id_list(ids[g].get("design"))]
+        out.append({
+            "id": did, "title": e.get("title", ""), "phase": phase, "files": files,
+            "design_state": "locked" if locked else ("drafted" if files else "planned"),
+            "locked": locked, "locked_file": locked_file, "locked_files": locked_files,
+            "locked_in": locked_in, "unlocked_in": e.get("unlocked_in"), "verified_in": verified_in,
+            "build_state": build, "wps": wps, "prs": prs, "findings": findings,
+            "open_findings": sum(1 for f in findings if f["status"] not in _CLOSED_FINDING),
+            "warnings": warnings,
+        })
+    unlinked = []
+    for p, d in sorted(designs.items()):
+        if not isinstance(d, dict) or p in linked:
+            continue
+        u = {"path": p, "phase": d.get("phase"), "wp": d.get("wp"),
+             "locked": bool(d.get("locked")), "locked_in": d.get("locked_in"),
+             "suggested_id": _design_token_id(anchor, p)}
+        if _design_link(d):
+            u["dangling_design"] = _design_link(d)  # links to a D-NN that isn't registered
+        unlinked.append(u)
+
+    cov = {}
+    def _cov(ph):
+        key = ph or "unphased"
+        return cov.setdefault(key, {"phase": key, "designs": 0, "of": 0, "implemented": 0,
+                                    "verified": 0, "unlinked": 0, "unlinked_locked": 0})
+    for d in out:
+        c = _cov(d["phase"])
+        c["of"] += 1
+        c["designs"] += 1 if d["locked"] else 0
+        c["implemented"] += 1 if d["build_state"] in ("implemented", "verified") else 0
+        c["verified"] += 1 if d["build_state"] == "verified" else 0
+    for u in unlinked:
+        c = _cov(u["phase"])
+        c["unlinked"] += 1
+        c["unlinked_locked"] += 1 if u["locked"] else 0
+    for c in cov.values():
+        # Legacy plans (files only, no D-NN) keep the old meaning: ≥1 locked file = covered.
+        c["ok"] = (c["designs"] == c["of"]) if c["of"] else c["unlinked_locked"] > 0
+    coverage = sorted(cov.values(), key=lambda c: (c["phase"] == "unphased", _id_sort_key(c["phase"].replace("P", "P-", 1))))
+
+    summary = {"total": len(out), "unlinked": len(unlinked),
+               "warnings": sum(len(d["warnings"]) for d in out)}
+    for k in ("planned", "drafted", "locked"):
+        summary[k] = sum(1 for d in out if d["design_state"] == k)
+    for k in ("unbuilt", "in_progress", "implemented", "verified"):
+        summary[k] = sum(1 for d in out if d["build_state"] == k)
+    return {"designs": out, "unlinked": unlinked, "coverage": coverage, "summary": summary}
+
+
+def _anchor_snapshot(anchor: dict) -> str:
+    return json.dumps({k: v for k, v in anchor.items() if k != "updated"}, sort_keys=True)
+
+
+def _save_if_changed(plan: str, anchor: dict, before: str) -> bool:
+    """Idempotency for the design commands: a no-op leaves the anchor (and `updated`) untouched."""
+    if _anchor_snapshot(anchor) == before:
+        return False
+    save_anchor(plan, anchor)
+    return True
+
+
+def _require_design(anchor: dict, did: str) -> dict:
+    if not _D_ID_RE.match(did):
+        die(f"{did} is not a design ID (expected D-NN)", 1)
+    e = anchor.get("ids", {}).get(did)
+    if not isinstance(e, dict):
+        die(f"design {did} is not registered; allocate it with `next-id --kind design` then "
+            f"`register-id --id {did} --doc <doc> --field kind=design --field title=<t> --field phase=<P>`", 1)
+    return e
+
+
+def _lifecycle_entry(anchor: dict, plan: str, did: str) -> dict:
+    return next(d for d in _design_lifecycle(anchor, plan)["designs"] if d["id"] == did)
+
+
+def cmd_register_design(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    rel = _norm_rel(args.file)
+    designs = anchor.setdefault("designs", {})
+    entry = designs.get(rel)
+    if not isinstance(entry, dict):
+        entry = {"phase": None, "wp": None, "locked": False, "pane_ids": None}
+        designs[rel] = entry
+    if args.phase:
+        entry["phase"] = args.phase
+    if args.wp:
+        entry["wp"] = args.wp
+    if args.id:
+        e = _require_design(anchor, args.id)
+        prev = _design_link(entry)
+        if prev and prev != args.id and isinstance(anchor["ids"].get(prev), dict):
+            locked, locked_files, _ = _effective_lock(anchor, prev)
+            if locked and rel in locked_files:
+                die(f"{rel} is a locked file of {prev}; run design-unlock on {prev} before relinking it", 1)
+            pe = anchor["ids"][prev]
+            pe["files"] = [p for p in _as_id_list(pe.get("files")) if p != rel]
+            if entry.get("id") == prev:
+                entry.pop("id")  # a stale alias would keep resolving to the old design
+        if args.phase and not e.get("phase"):
+            e["phase"] = args.phase
+        _link_design_file(anchor, args.id, rel)
+    warnings = [] if os.path.exists(os.path.join(plan, rel)) else [f"{rel} does not exist on disk yet"]
+    changed = _save_if_changed(plan, anchor, before)
+    emit({"result": "REGISTERED" if changed else "UNCHANGED", "file": rel,
+          "design": _design_link(designs[rel]), "entry": designs[rel], "warnings": warnings})
+
+
+def cmd_design_lock(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    did = args.id
+    e = _require_design(anchor, did)
+    rnd = _round_label(args.round)
+    files = _design_files(anchor, did)
+    locked, cur_files, cur_in = _effective_lock(anchor, did)
+    requested = list(dict.fromkeys(_norm_rel(f) for f in args.file)) if args.file else None
+    if requested is None:
+        if locked:
+            requested = cur_files
+        elif len(files) <= 1:
+            requested = files
+        else:
+            die(f"{did} has {len(files)} variant files ({', '.join(files)}); pass --file "
+                f"(repeatable) to name the locked one(s)", 1)
+
+    if locked:
+        if sorted(cur_files) != sorted(requested):
+            die(f"{did} is locked on {', '.join(cur_files) or '(no file)'} in {cur_in}; run "
+                f"`design-unlock --id {did} --round N --reason ...` before locking a different set of files", 1)
+        # A file-only or hand-rolled lock: lift it onto the ID in canonical form.
+        if (not e.get("locked") or _as_id_list(e.get("locked_files")) != cur_files
+                or e.get("locked_in") != cur_in):
+            e.update({"locked": True, "locked_files": cur_files,
+                      "locked_file": cur_files[0] if cur_files else None, "locked_in": cur_in})
+        changed = _save_if_changed(plan, anchor, before)
+        emit({"result": "NORMALIZED" if changed else "UNCHANGED", "id": did,
+              "locked_files": cur_files, "locked_in": cur_in, "note": f"already locked in {cur_in}"})
+        return
+
+    designs = anchor.get("designs") or {}
+    for rel in requested:
+        owner = _design_link(designs.get(rel))
+        if owner not in (None, did):
+            die(f"{rel} belongs to {owner}, not {did}", 1)
+        if rel not in files:
+            _link_design_file(anchor, did, rel)
+    e.update({"locked": True, "locked_files": requested,
+              "locked_file": requested[0] if requested else None, "locked_in": rnd})
+    e.pop("unlocked_in", None)
+    e.setdefault("history", []).append({"action": "lock", "round": rnd, "files": requested, "at": _now()})
+    for p in _design_files(anchor, did):  # mirror onto the variant registry
+        d = anchor["designs"].get(p)
+        if isinstance(d, dict):
+            d["locked"] = p in requested
+            if p in requested:
+                d["locked_in"] = rnd
+            else:
+                d.pop("locked_in", None)
+    warnings = [] if requested else [f"{did} locked without a design file (spec-only lock)"]
+    warnings += [f"{p} does not exist on disk" for p in requested if not os.path.exists(os.path.join(plan, p))]
+    _save_if_changed(plan, anchor, before)
+    emit({"result": "LOCKED", "id": did, "locked_files": requested,
+          "locked_file": requested[0] if requested else None, "locked_in": rnd, "warnings": warnings})
+
+
+def cmd_design_unlock(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    did = args.id
+    e = _require_design(anchor, did)
+    rnd = _round_label(args.round)
+    locked, cur_files, cur_in = _effective_lock(anchor, did)
+    if not locked:
+        emit({"result": "UNCHANGED", "id": did, "note": f"{did} is not locked"})
+        return
+    cleared = e.pop("verified_in", None)
+    e.pop("locked_in", None)
+    e.pop("locked_files", None)
+    e.update({"locked": False, "locked_file": None, "unlocked_in": rnd})
+    rec = {"action": "unlock", "round": rnd, "files": cur_files, "was_locked_in": cur_in,
+           "reason": args.reason, "at": _now()}
+    if cleared:
+        rec["cleared_verified_in"] = cleared
+    e.setdefault("history", []).append(rec)
+    for p in cur_files:
+        d = (anchor.get("designs") or {}).get(p)
+        if isinstance(d, dict):
+            d["locked"] = False
+            d.pop("locked_in", None)
+    _save_if_changed(plan, anchor, before)
+    building = [w["id"] for w in _lifecycle_entry(anchor, plan, did)["wps"]]
+    warnings = [f"{', '.join(building)} now build against an unlocked design"] if building else []
+    emit({"result": "UNLOCKED", "id": did, "unlocked_in": rnd, "cleared_verified_in": cleared,
+          "warnings": warnings})
+
+
+def cmd_design_verify(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    did = args.id
+    e = _require_design(anchor, did)
+    rnd = _round_label(args.round)
+    d = _lifecycle_entry(anchor, plan, did)
+    if e.get("verified_in") == rnd and d["build_state"] == "verified":
+        emit({"result": "UNCHANGED", "id": did, "verified_in": rnd})
+        return
+    if not args.force:
+        if not d["locked"]:
+            die(f"{did} is not locked; lock it before verifying an implementation against it", 1)
+        if d["build_state"] not in ("implemented", "verified"):
+            die(f"{did} build_state is {d['build_state']}; verify once an implementing WP is done or its PR "
+                f"is merged (register-design-impl), or pass --force", 1)
+    e["verified_in"] = rnd
+    rec = {"action": "verify", "round": rnd, "at": _now()}
+    if args.force:
+        rec["forced"] = True
+    e.setdefault("history", []).append(rec)
+    _save_if_changed(plan, anchor, before)
+    emit({"result": "VERIFIED", "id": did, "verified_in": rnd,
+          "build_state": _lifecycle_entry(anchor, plan, did)["build_state"]})
+
+
+def cmd_register_design_impl(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    ids = anchor.setdefault("ids", {})
+    if not args.wp.startswith("WP-") or not isinstance(ids.get(args.wp), dict):
+        die(f"work package {args.wp} not found in anchor", 1)
+    w = ids[args.wp]
+    declared = _as_id_list(args.designs)
+    for did in declared:
+        _require_design(anchor, did)
+    current = _as_id_list(w.get("implements"))
+    implements = declared if args.replace else current + [d for d in declared if d not in current]
+    if implements or "implements" in w:
+        w["implements"] = implements
+    if args.pr is not None:
+        prs = w.setdefault("prs", [])
+        rec = next((p for p in prs if isinstance(p, dict) and p.get("number") == args.pr), None)
+        if rec is None:
+            rec = {"number": args.pr}
+            prs.append(rec)
+        if args.url:
+            rec["url"] = args.url
+        rec["state"] = args.pr_state or rec.get("state", "open")
+        rec["designs"] = declared
+    warnings = []
+    for did in declared:
+        locked, _, _ = _effective_lock(anchor, did)
+        if not locked:
+            warnings.append(f"{did} is not locked; {args.wp} builds against an unlocked design")
+    changed = _save_if_changed(plan, anchor, before)
+    emit({"result": "REGISTERED" if changed else "UNCHANGED", "wp": args.wp,
+          "implements": w.get("implements", []), "prs": w.get("prs", []), "warnings": warnings})
+
+
+def cmd_design_migrate(args):
+    """Bring a pre-lifecycle anchor forward: link registered design files to D-NN (by an
+    existing `design` field or a `d-NN` filename token), lift legacy file-level locks onto
+    the ID, and report what could not be linked. Never allocates IDs."""
+    plan = args.plan
+    anchor = load_anchor(plan)
+    before = _anchor_snapshot(anchor)
+    ids = anchor.setdefault("ids", {})
+    designs = anchor.setdefault("designs", {})
+    linked, lifted, unmatched, registered = [], [], [], []
+
+    if args.include_unregistered:
+        ddir = os.path.join(plan, "designs")
+        for root, _dirs, fnames in os.walk(ddir) if os.path.isdir(ddir) else []:
+            for fn in sorted(fnames):
+                if not fn.lower().endswith((".html", ".htm")):
+                    continue
+                rel = _norm_rel(os.path.relpath(os.path.join(root, fn), plan))
+                if rel not in designs and _design_token_id(anchor, rel):
+                    designs[rel] = {"phase": None, "wp": None, "locked": False, "pane_ids": None}
+                    registered.append(rel)
+
+    for p in sorted(designs):
+        d = designs[p]
+        if not isinstance(d, dict):
+            continue
+        link = _design_link(d)
+        did = link if isinstance(ids.get(link), dict) else None
+        via = "design field" if did and d.get("design") == did else "id field"
+        if did is None:
+            did, via = _design_token_id(anchor, p), "filename"
+        if did is None:
+            unmatched.append(p)
+            continue
+        if p not in _as_id_list(ids[did].get("files")) or d.get("design") != did:
+            _link_design_file(anchor, did, p)
+            linked.append({"path": p, "id": did, "via": via})
+
+    for did in _design_ids(anchor):
+        e = ids[did]
+        if not e.get("phase"):
+            ph = next((designs[p].get("phase") for p in _design_files(anchor, did)
+                       if isinstance(designs.get(p), dict) and designs[p].get("phase")), None)
+            if ph:
+                e["phase"] = ph
+        locked, lfiles, rin = _effective_lock(anchor, did)
+        if locked and ("locked" not in e or _as_id_list(e.get("locked_files")) != lfiles
+                       or e.get("locked_in") != rin):
+            e.update({"locked": True, "locked_files": lfiles,
+                      "locked_file": lfiles[0] if lfiles else None, "locked_in": rin})
+            if not any(h.get("action") == "lock" for h in e.get("history", []) if isinstance(h, dict)):
+                e.setdefault("history", []).append({"action": "lock", "round": rin, "files": lfiles,
+                                                    "migrated": True})
+            lifted.append(did)
+
+    report = {"linked": linked, "lifted_locks": lifted, "registered_from_disk": registered,
+              "unmatched": unmatched}
+    if args.dry_run:
+        emit({"result": "DRY_RUN", **report})
+        return
+    changed = _save_if_changed(plan, anchor, before)
+    emit({"result": "MIGRATED" if changed else "UNCHANGED", **report})
+
+
+def cmd_design_data(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    emit({"plan": {"title": _plan_title(plan, anchor), "profile": anchor.get("profile"),
+                   "slug": os.path.basename(os.path.normpath(plan))},
+          **_design_lifecycle(anchor, plan)})
+
+
+# --------------------------------------------------------------------------- #
 # command: board-data / status-data
 # --------------------------------------------------------------------------- #
 
@@ -869,23 +1372,31 @@ def cmd_board_data(args):
     for k, v in ids.items():
         if k.startswith("WP-"):
             wp = {"id": k, "title": v.get("title", ""), "wave": v.get("wave"),
-                  "deps": v.get("depends_on", []), "status": v.get("status", "queued"),
+                  "deps": _as_id_list(v.get("depends_on")), "status": v.get("status", "queued"),
                   "gate": v.get("gate"), "tier": v.get("tier")}
             if v.get("issue"):
                 wp["issue"] = v.get("issue")
+            if v.get("implements"):
+                wp["implements"] = _as_id_list(v.get("implements"))
+            if v.get("prs"):
+                wp["prs"] = v.get("prs")
             if getattr(args, "with_briefs", False):
                 wp["brief"] = briefs.get(k)
             wps.append(wp)
         elif k.startswith("G-") and v.get("kind") == "freeze_gate":
             gates.append({"id": k, "wp": v.get("wp"), "status": v.get("status", "pending")})
-    designs = [{"path": p, "phase": d.get("phase"), "wp": d.get("wp"), "locked": d.get("locked", False)}
+    designs = [{"path": p, "phase": d.get("phase"), "wp": d.get("wp"), "locked": d.get("locked", False),
+                "design": d.get("design")}
                for p, d in anchor.get("designs", {}).items()]
+    lifecycle = _design_lifecycle(anchor, plan)
     subplans = [{"path": p, "archetype": d.get("archetype"), "ref": d.get("ref"),
                  "status": d.get("status", "active")} for p, d in anchor.get("subplans", {}).items()]
     emit({
         "plan": {"title": _plan_title(plan, anchor), "profile": anchor.get("profile"),
                  "goal": anchor.get("goal"), "slug": os.path.basename(os.path.normpath(plan))},
         "gates": gates, "wps": wps, "designs": designs, "subplans": subplans,
+        "design_lifecycle": lifecycle["designs"], "design_unlinked": lifecycle["unlinked"],
+        "coverage": lifecycle["coverage"],
         "research": {k: v.get("stamped") for k, v in anchor.get("research", {}).items()},
     })
 
@@ -921,11 +1432,14 @@ def cmd_status_data(args):
                            for n in sorted(os.listdir(args.profiles_root))
                            if os.path.isdir(os.path.join(args.profiles_root, n))]
     wps_with_issues = sum(1 for k, v in ids.items() if k.startswith("WP-") and v.get("issue"))
+    lifecycle = _design_lifecycle(anchor, plan)
     emit({
         "profile": anchor.get("profile"), "spine_version": anchor.get("spine_version"),
         "goal": anchor.get("goal"), "created": anchor.get("created"), "updated": anchor.get("updated"),
         "docs": doc_report,
-        "ids": {"gaps": gaps, "gates": gates, "wps": wps, "designs": designs_n, "total": len(ids)},
+        "ids": {"gaps": gaps, "gates": gates, "wps": wps, "designs": designs_n,
+                "designs_locked": lifecycle["summary"]["locked"], "total": len(ids)},
+        "design_lifecycle": lifecycle,
         "issues": {"linked": wps_with_issues, "total_wps": wps},
         "subplans": [{"path": p, "archetype": d.get("archetype"), "status": d.get("status", "active"),
                       "ref": d.get("ref")} for p, d in anchor.get("subplans", {}).items()],
@@ -1013,7 +1527,8 @@ def _explorer_badges(relposix: str, ntype: str, kind: str, anchor: dict) -> dict
     d = anchor.get("designs", {}).get(relposix)
     if d:
         b["design"] = {"phase": d.get("phase"), "wp": d.get("wp"),
-                       "locked": d.get("locked", False), "locked_in": d.get("locked_in")}
+                       "locked": d.get("locked", False), "locked_in": d.get("locked_in"),
+                       "id": d.get("design")}
     sp = anchor.get("subplans", {}).get(relposix)
     if sp:
         b["subplan"] = {"archetype": sp.get("archetype"), "ref": sp.get("ref"),
@@ -1176,6 +1691,13 @@ def _plan_rollup(plan_dir: str, name: str) -> dict | None:
     for v in gates:
         s = v.get("status", "pending"); gate[s] = gate.get(s, 0) + 1
     designs = anchor.get("designs", {})
+    lifecycle = _design_lifecycle(anchor, plan_dir)["summary"]
+    if lifecycle["total"]:  # D-NN are the designs; files are variants of them
+        design_roll = {k: lifecycle[k] for k in ("total", "locked", "planned", "drafted",
+                                                 "in_progress", "implemented", "verified", "unlinked")}
+    else:  # legacy plan: only file registrations
+        design_roll = {"total": len(designs),
+                       "locked": sum(1 for x in designs.values() if isinstance(x, dict) and x.get("locked"))}
     subs = anchor.get("subplans", {})
     # drift: any tracked doc whose on-disk hash diverged (or vanished)
     drift = False
@@ -1189,7 +1711,7 @@ def _plan_rollup(plan_dir: str, name: str) -> dict | None:
         "updated": (anchor.get("updated") or "")[:10],
         "wps": {"total": sum(wp.values()), **wp},
         "gates": {"total": len(gates), **gate},
-        "designs": {"total": len(designs), "locked": sum(1 for x in designs.values() if x.get("locked"))},
+        "designs": design_roll,
         "subplans": {"total": len(subs), "active": sum(1 for x in subs.values() if x.get("status", "active") == "active")},
         "research": {k: v.get("stamped") for k, v in anchor.get("research", {}).items()},
         "drift": drift,
@@ -1498,6 +2020,14 @@ def cmd_living_spec_data(args):
         elif kind == "gap" or (k.startswith("G-") and kind != "freeze_gate"):
             gap_status_counter[v.get("status", "open")] += 1
 
+    # ---- designs (derived lifecycle, one entry per D-NN) ---- #
+    lifecycle = _design_lifecycle(anchor, plan)
+    designs = [{k: d[k] for k in ("id", "title", "phase", "design_state", "build_state",
+                                  "locked_in", "verified_in")} | {"wps": [w["id"] for w in d["wps"]]}
+               for d in lifecycle["designs"]]
+    for ph in phases:
+        ph["design_ids"] = [d["id"] for d in designs if d["phase"] == ph["id"]]
+
     plan_slug = os.path.basename(os.path.normpath(plan))
     emit({
         "plan": {
@@ -1507,6 +2037,7 @@ def cmd_living_spec_data(args):
             "goal": anchor.get("goal"),
         },
         "generated_at": _now(),
+        "designs": designs,
         "phases": phases,
         "rounds": rounds,
         "risks_raw": risks_raw,
@@ -1666,6 +2197,59 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--plan", required=True)
     g.add_argument("--updates-file", required=True)
     g.set_defaults(func=cmd_apply_issue_sync)
+
+    # ---- design lifecycle ----
+    g = sub.add_parser("register-design", help="register a design variant file and link it to a D-NN")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--file", required=True, help="path relative to --plan, e.g. designs/d-01-a.html")
+    g.add_argument("--id", help="D-NN to link the file to (must be registered)")
+    g.add_argument("--phase")
+    g.add_argument("--wp")
+    g.set_defaults(func=cmd_register_design)
+
+    g = sub.add_parser("design-lock", help="lock a D-NN on one variant file, recording the round")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--id", required=True)
+    g.add_argument("--round", required=True, help="round number, e.g. 5 or 'Round 5'")
+    g.add_argument("--file", action="append",
+                   help="a locked variant; repeat for complementary variants. Required when the "
+                        "design has several files and isn't locked yet")
+    g.set_defaults(func=cmd_design_lock)
+
+    g = sub.add_parser("design-unlock", help="unlock a D-NN (records the round, clears verification)")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--id", required=True)
+    g.add_argument("--round", required=True)
+    g.add_argument("--reason", required=True)
+    g.set_defaults(func=cmd_design_unlock)
+
+    g = sub.add_parser("design-verify", help="record that an implementation of a locked D-NN passed conformance")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--id", required=True)
+    g.add_argument("--round", required=True)
+    g.add_argument("--force", action="store_true", help="verify even if not locked + implemented")
+    g.set_defaults(func=cmd_design_verify)
+
+    g = sub.add_parser("register-design-impl", help="record the D-NN a WP (and optionally a PR) implements")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--wp", required=True)
+    g.add_argument("--designs", required=True, help="comma-separated D-NN list, or 'none'")
+    g.add_argument("--replace", action="store_true", help="set implements exactly instead of adding")
+    g.add_argument("--pr", type=int)
+    g.add_argument("--url")
+    g.add_argument("--pr-state", choices=["open", "merged", "closed"])
+    g.set_defaults(func=cmd_register_design_impl)
+
+    g = sub.add_parser("design-migrate", help="link legacy designs[path] entries to D-NN and lift old locks")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--include-unregistered", action="store_true",
+                   help="also register designs/**/*.html on disk whose d-NN filename token matches a D-NN")
+    g.set_defaults(func=cmd_design_migrate)
+
+    g = sub.add_parser("design-data", help="emit the derived design lifecycle + coverage model")
+    g.add_argument("--plan", required=True)
+    g.set_defaults(func=cmd_design_data)
 
     return p
 

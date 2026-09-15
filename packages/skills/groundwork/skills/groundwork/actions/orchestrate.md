@@ -25,7 +25,7 @@
    - **Per-WP briefs**: one self-contained brief per `WP-NN`, following the brief template.
    - **Model tier per WP**: stamp each `WP-NN` with a `tier` (`opus` / `sonnet` / `haiku`) by task weight (see [`../lib/schemas.md` §"Model tiers"](../lib/schemas.md)). Heuristic default — architecture/novel → `opus`, routine build → `sonnet`, mechanical → `haiku`; user-overridable via `--field tier=<t>`.
    - **Worktree-vs-branch recommendation**: based on parallel WP count and isolation axis.
-4. **Cite locked designs**: each `WP-NN` whose phase has a locked `D-NN` cites the design path in its brief.
+4. **Link designs to work packages**: read `groundwork_state.py design-data --plan <plan>`. For each `WP-NN` that builds a designed surface, declare the link explicitly: `register-design-impl --plan <plan> --wp WP-NN --designs D-01,D-03`. That link is what later derives each design's build status. The brief's `DESIGNS` field lists each implemented `D-NN` with its locked file, lock round, and the states the spec names. Only a WP with no `implements` falls back to the old phase match (every locked `D-NN` in its phase), marked `(inferred — declare with register-design-impl)`. A WP that implements an unlocked design fails clarify check 3 unless the user opts in, and its brief says so.
 5. **Write `09-orchestration.md`** — this is the one file `orchestrate` rewrites whole; the convention is "delete and re-author." Hand-written sections live above an explicit `<!-- groundwork:auto:start orchestration -->` fence and are preserved.
 6. **Update `.groundwork.json`**:
    - Bump `docs["09-orchestration.md"]`.
@@ -74,8 +74,8 @@ How to drive the build with **one orchestrator agent + per-{{vocab.work_unit}} s
 
 ```
 GOAL · REPO/OWNER · BRANCH/SCOPE · DEPENDS-ON · FILES (create/touch) · CONSUMES · PRODUCES ·
-DO-NOT-TOUCH · DESIGN REFERENCE (if a locked D-NN applies) · DEFINITION OF DONE ·
-MOCK (if upstream not ready) · REPORT
+DO-NOT-TOUCH · DESIGN REFERENCE (if a locked D-NN applies) · DESIGNS (D-NN implemented) ·
+DEFINITION OF DONE · MOCK (if upstream not ready) · REPORT
 ```
 
 The agent brief in `agents/orchestrator.md` and the per-WP example below use the same shape — `REPO` resolves to `OWNER` under the `general` profile, `BRANCH` resolves to `SCOPE`, and `DESIGN REFERENCE` is omitted when no locked design applies.
@@ -91,8 +91,9 @@ The agent brief in `agents/orchestrator.md` and the per-WP example below use the
 - **CONSUMES** / **PRODUCES**: …
 - **DO-NOT-TOUCH**: …
 - **DESIGN REFERENCE**: <designs/path> (if locked design exists)
-- **DEFINITION OF DONE**: …
-- **REPORT**: …
+- **DESIGNS**: D-01 — <title> · `designs/d-01-….html` · locked Round 3 · states: default, error, declined · (omit when `implements` is empty; mark phase-matched ones `(inferred)`)
+- **DEFINITION OF DONE**: … (for a designed surface: "matches the locked mockup of every D-NN above, state by state; PR body names them on its Designs implemented line")
+- **REPORT**: … (include `designs_implemented: [D-NN…]`, `[]` when none)
 - **MOCK** (if applicable): …
 
 ---
@@ -100,6 +101,9 @@ The agent brief in `agents/orchestrator.md` and the per-WP example below use the
 [ … one section per WP-NN … ]
 
 ---
+
+## PR body
+[ the template every WP PR uses — see §"PR body template" below ]
 
 ## Tracking protocol
 [ kickoff · live run · durable sync · blocked / needs-decision · merge order ]
@@ -175,6 +179,32 @@ Users may want a custom intro section in `09` (project-specific context, owner n
 ```
 
 The action writes only inside the fence. Hand intro is preserved on re-runs.
+
+---
+
+## PR body template
+
+Every WP pull request (software profile) uses this body; `09` carries it under `## PR body` so subagents copy it verbatim. The **Designs implemented** line is required: list each `D-NN` the change implements, or `none`. `issue-sync` and the orchestrator parse this line into `register-design-impl`; a design-conformance review (`actions/review.md` §"Design reviews") is triggered by any `D-NN` on it.
+
+```markdown
+## WP-NN — <title>
+
+Closes #<issue>  ·  Plan: `<plan_slug>`  ·  Wave <n>
+
+Designs implemented: D-01, D-03        <!-- required; `none` when the change builds no designed surface -->
+
+### What changed
+- …
+
+### Definition of Done
+- [ ] … (copied from 09 §WP-NN)
+- [ ] Matches the locked mockup of every design above, state by state (default · empty · loading · error · … as the spec names)
+
+### Drift from the brief
+none  <!-- or one line per divergence; feeds the drift log -->
+```
+
+A PR that alters a locked design's appearance must cite the unlock Round (`design-unlock`) in "Drift from the brief"; without it the conformance review returns the PR.
 
 ---
 

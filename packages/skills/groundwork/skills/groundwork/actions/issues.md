@@ -68,6 +68,7 @@ For each WP where `issue` is `null`:
    ```markdown
    ## <WP-ID>: <title>
    **Plan**: <plan_slug> | **Phase**: <phase> | **Wave**: <wave> | **Tier**: <tier>
+   **Implements**: <`ids[WP].implements` as D-NN list, or "none">
 
    ### Brief & Definition of Done
    <brief>
@@ -122,7 +123,14 @@ For each linked WP:
      gh issue reopen <NUM>
      ```
 
-2. **Apply Updates**:
+2. **Pull design implementation from PRs**: for each linked WP, list its PRs (`gh pr list --search "<WP-ID> in:title,body" --state all --json number,url,state,body`). Parse the body's `Designs implemented:` line (template in `actions/orchestrate.md` §"PR body template") and record it:
+   ```bash
+   python3 <skill>/scripts/groundwork_state.py register-design-impl --plan <plan> --wp <WP-ID> \
+     --designs <D-01,D-03 | none> --pr <NUM> --url <URL> --pr-state <open|merged|closed>
+   ```
+   GitHub's `MERGED` maps to `merged`, and `CLOSED` without a merge to `closed`. The command is idempotent, so re-syncing an unchanged PR writes nothing. A PR with no such line is skipped with a warning: it can't be tied to a design.
+
+3. **Apply Updates**:
    Write update payload to a temp file `/tmp/gw-issue-updates.json`:
    ```json
    {
