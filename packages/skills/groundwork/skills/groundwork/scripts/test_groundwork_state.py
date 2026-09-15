@@ -64,6 +64,34 @@ try:
     # no stray {{}}
     stray=[f for f in os.listdir(plan) if f.endswith(".md") and "{{" in open(os.path.join(plan,f)).read()]
     check("no stray {{ }} placeholders", not stray, stray)
+
+    # vocab tokens must never reach a user. Scan EVERY scaffolded file (html/json too, not just .md)
+    # for every profile, plus the board template and kickoff brief that are handed to users verbatim.
+    print("no unrendered {{vocab.*}} tokens:")
+    vocab_re = re.compile(r"\{\{\s*vocab\.")
+    for prof in ("software", "general", "content", "design-system", "film"):
+        vp = os.path.join(tmp, f"vocab-{prof}")
+        run("scaffold","--plan",vp,"--profiles-root",PROFILES,"--profile",prof,"--goal",f"{prof} vocab check")
+        leaks = []
+        for root_, _, files_ in os.walk(vp):
+            for fn in files_:
+                p = os.path.join(root_, fn)
+                if vocab_re.search(open(p, encoding="utf-8", errors="replace").read()):
+                    leaks.append(os.path.relpath(p, vp))
+        check(f"{prof}: scaffolded files (all types) carry no vocab token", not leaks, leaks)
+    board_tpl = open(os.path.join(PROFILES,"_shared","board","index.html"), encoding="utf-8").read()
+    check("board template carries no vocab token (its copy-prompts reach users verbatim)",
+          not vocab_re.search(board_tpl), [l for l in board_tpl.splitlines() if vocab_re.search(l)][:3])
+    check("board kickoff brief resolves {work_unit} at runtime",
+          "{work_unit}" in board_tpl and ".replace(/\\{work_unit\\}/g" in board_tpl)
+    wu = re.search(r"const WORK_UNIT_BY_PROFILE = (\{.*?\});", board_tpl)
+    labels = {n: json.load(open(os.path.join(PROFILES,n,"profile.json"), encoding="utf-8"))["labels"]["work_unit"]
+              for n in os.listdir(PROFILES) if os.path.exists(os.path.join(PROFILES,n,"profile.json"))}
+    check("board WORK_UNIT_BY_PROFILE matches every profile.json labels.work_unit",
+          bool(wu) and json.loads(wu.group(1))==labels, (wu and wu.group(1), labels))
+    orch = open(os.path.join(SKILL,"agents","orchestrator.md"), encoding="utf-8").read()
+    brief = orch.split("## Brief",1)[1].split("\n---",1)[0]
+    check("orchestrator kickoff brief carries no vocab token", not vocab_re.search(brief))
     # anchor sane
     anc = json.load(open(os.path.join(plan,".groundwork.json")))
     check("anchor profile/version", anc["profile"]=="software" and anc["spine_version"]=="1")

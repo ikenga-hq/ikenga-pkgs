@@ -35,7 +35,7 @@
 
   <script type="application/json" id="board-meta">
   <!-- groundwork:auto:start board-meta -->
-  { "title": "{{plan_title}}", "profile": "{{profile}}", "plan_folder": "{{plan_folder}}", "plan_slug": "{{plan_slug}}", "goal": "{{goal}}", "refreshed": null }
+  { "title": "{{plan_title}}", "profile": "{{profile}}", "plan_folder": "{{plan_folder}}", "plan_slug": "{{plan_slug}}", "work_unit": null, "goal": "{{goal}}", "refreshed": null }
   <!-- groundwork:auto:end board-meta -->
   </script>
 
@@ -1111,8 +1111,9 @@
        — if the orchestrator brief changes, mirror it here. A future drift-check
        action can diff this constant against the source.
 
-       Placeholders: {plan_title} {plan_folder} {plan_slug} {profile}
-       Substituted by buildOrchestratorBrief() below. */
+       Placeholders: {plan_title} {plan_folder} {plan_slug} {profile} {work_unit}
+       Substituted by buildOrchestratorBrief() below. Single-brace runtime tokens only —
+       a double-brace vocab token here is never substituted and reaches the user verbatim. */
     const ORCHESTRATOR_BRIEF_TEMPLATE = `You are the orchestrator for the {plan_title} build. Your single job: drive {plan_folder}/09-orchestration.md to ship. Read that doc end-to-end; it is the source of truth.
 
 WHAT YOU OWN
@@ -1127,7 +1128,7 @@ WHAT YOU OWN
 
 WHAT SUBAGENTS OWN
 
-- One {{vocab.work_unit}} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
+- One {work_unit} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
 
 EXECUTION PROTOCOL
 
@@ -1171,12 +1172,21 @@ WHAT TO DO RIGHT NOW
 4. Create Tasks for all WPs.
 5. Start Wave 0.`;
 
+    /* labels.work_unit for each built-in profile — mirrors profiles/<name>/profile.json.
+       Only a fallback: refresh-board writes the plan's own label into board-meta.work_unit.
+       test_groundwork_state.py fails if this drifts from the profile.json files. */
+    const WORK_UNIT_BY_PROFILE = {"_shared": "work item", "content": "piece", "design-system": "part", "film": "sequence", "general": "workstream", "software": "work package"};
+    function resolveWorkUnit(meta, profile) {
+      return (meta && meta.work_unit) || WORK_UNIT_BY_PROFILE[profile] || WORK_UNIT_BY_PROFILE._shared;
+    }
+
     /* Resolve placeholders for the orchestrator brief.
        Sources, in order:
          {plan_title}  ← meta.title  → data.plan.title  → 'this plan'
          {plan_folder} ← meta.plan_folder (added in WP-20)  → derived from plan_slug  → 'this plan folder'
          {plan_slug}   ← meta.plan_slug  → slugify(plan_title)  → 'plan'
-         {profile}     ← meta.profile  → data.plan.profile  → 'software' */
+         {profile}     ← meta.profile  → data.plan.profile  → 'software'
+         {work_unit}   ← meta.work_unit  → WORK_UNIT_BY_PROFILE[profile]  → 'work item' */
     function buildOrchestratorBrief(meta, data) {
       const planTitle  = (meta && meta.title)        || (data && data.plan && data.plan.title)   || 'this plan';
       const profile    = (meta && meta.profile)      || (data && data.plan && data.plan.profile) || 'software';
@@ -1186,7 +1196,8 @@ WHAT TO DO RIGHT NOW
         .replace(/\{plan_title\}/g,  planTitle)
         .replace(/\{plan_folder\}/g, planFolder)
         .replace(/\{plan_slug\}/g,   planSlug)
-        .replace(/\{profile\}/g,     profile);
+        .replace(/\{profile\}/g,     profile)
+        .replace(/\{work_unit\}/g,   resolveWorkUnit(meta, profile));
     }
 
     /* ─────── ACTIONS — the 9 groundwork actions surfaced by the ⌘K palette ───────
@@ -1251,6 +1262,7 @@ WHAT TO DO RIGHT NOW
         plan_title:    meta.title         || plan.title || 'groundwork plan',
         plan_slug:     meta.plan_slug     || (meta.plan_folder ? String(meta.plan_folder).split('/').filter(Boolean).pop() : 'groundwork'),
         profile:       meta.profile       || plan.profile || 'software',
+        work_unit:     resolveWorkUnit(meta, meta.profile || plan.profile || 'software'),
         goal:          meta.goal          || plan.goal    || '(no goal set)',
         phase:         meta.phase         || '(active phase)',
         archetype:     meta.archetype     || '<archetype>',
