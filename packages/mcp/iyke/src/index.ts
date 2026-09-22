@@ -19,12 +19,24 @@ import {
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { ACTIVITY_MODES, MINI_APP_NAMES } from '@ikenga/contract/iyke';
+import { MINI_APP_NAMES } from '@ikenga/contract/iyke';
 
 import { createRequire } from 'node:module';
 
 import { IykeClient } from './api.js';
 import { load, STALE_THRESHOLD_SECS } from './control.js';
+import {
+  EXPLORER_SECTIONS_PATH,
+  NGWA_SNAPSHOT_PATH,
+  NGWA_SNAPSHOT_TIMEOUT_MS,
+  V16_MODES,
+  findNgwaItem,
+  isRouteMissing,
+  resolveProjectId,
+  routeMissingError,
+  type NgwaSnapshot,
+  type ProjectListEntry,
+} from './nouns.js';
 
 // Read the version from package.json rather than repeating it here. The literal
 // that used to live in the Server() identity below drifted to 0.1.0 while the
@@ -58,11 +70,11 @@ const TOOLS = [
   {
     name: 'iyke_mode',
     description:
-      'Switch the activity-bar sidebar mode. Valid modes: app, files, agents, sessions, settings, storyboard, video-engine, canvas-design, image-generator. The first five are core; the rest are mini-apps.',
+      'Switch the rail activity mode. Valid modes: project, chi, ngwa, settings — the four modes the v16 shell owns. (The bridge still accepts the legacy pre-v16 names for one compatibility release and normalizes them shell-side, but they are no longer advertised here.)',
     inputSchema: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: [...ACTIVITY_MODES] },
+        mode: { type: 'string', enum: [...V16_MODES] },
       },
       required: ['mode'],
       additionalProperties: false,
@@ -416,6 +428,79 @@ const TOOLS = [
     description:
       'Return the currently active project (id, display_name, root_path, icon, color, description, position, is_default, created_at). Call this before iyke_project_set_active or any project-scoped mutation so an agent knows which project the user is in.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  // WP-21b — the rest of the `iyke project …` noun, mirroring
+  // iyke-cli/src/cmd/project.rs one-for-one.
+  {
+    name: 'iyke_project_show',
+    description:
+      'Alias of iyke_project_get_active — returns the currently active project. Exists so the MCP surface mirrors `iyke project show` one-for-one.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'iyke_project_switch',
+    description:
+      'Switch the shell\'s active project, mirroring `iyke project switch <path>`. Accepts a root path (separators, trailing slashes, and casing are normalized) or a bare project id (e.g. "default"). Resolves against the project list and fails with the candidate list when nothing matches. Same side effects as iyke_project_set_active.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Project root path (or a bare project id).' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'iyke_project_sections',
+    description:
+      "List the Explorer sidebar's registered sections for the active project (G-STATE ExplorerSectionState[] — id, source, order, collapsed), mirroring `iyke project sections`. Requires GET /iyke/explorer/sections, which is pending a WP-28 bridge route — on shells that don't expose it this tool fails with a clear 'route missing' error.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  // ── WP-21b — the Ngwa noun, mirroring `iyke ngwa …` ────────────────────
+  // The unified equipment catalogue the `/ngwa/*` surfaces render: installed
+  // pkgs + Ọba-placed primitives + engine config. All five tools read one
+  // payload — GET /iyke/ngwa/snapshot, the bridge twin of WP-14's
+  // `ngwa_snapshot` Tauri command — so installed/store/scopes/health return
+  // the verbatim `NgwaSnapshot` (`{ items, as_of_ms, sources }`) and
+  // iyke_ngwa_item extracts one entry. The route is pending WP-28; shells
+  // that don't expose it produce a 'route missing' error, not a different
+  // shape.
+  {
+    name: 'iyke_ngwa_installed',
+    description:
+      'The /ngwa/installed facet — every installed NgwaItem (pkgs + primitives), as the shell surface renders them. Returns the verbatim snapshot: { items, as_of_ms, sources }.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'iyke_ngwa_store',
+    description:
+      'The /ngwa/store catalogue facet — the snapshot the store renders. Remote-registry rows (state: available/update) are enriched frontend-side and are not part of the bridged snapshot.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'iyke_ngwa_scopes',
+    description:
+      'The /ngwa/scopes facet — the snapshot the scope matrix renders. Items carry scope { kind: personal } or { kind: project, project_id }; group by it client-side for the matrix view.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'iyke_ngwa_health',
+    description:
+      'The /ngwa/health facet — the snapshot the health surface renders. The `sources` rollup (kernel, oba, engine_config, engine_assets, trust, usage — each { ok, error, count }) plus items in state broken/orphaned are the parts the surface leads with.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'iyke_ngwa_item',
+    description:
+      'One NgwaItem\'s full detail — the /ngwa/item/<id> surface. `id` is the namespaced snapshot id, e.g. "com.ikenga.iyke" or "skill:personal:groundwork"; iyke_ngwa_installed lists them. 404-style error when absent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'NgwaItem id from the snapshot.' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
   },
   // Phase 3 (projects-first-class): chat sessions are projects' first-class
   // children. Agents listing or re-attributing sessions must always go
@@ -1180,6 +1265,29 @@ function getClient(): IykeClient {
   }
 }
 
+// The ngwa snapshot's first call does a cold transcript scan (~100 s on a
+// post-0065 database) — the default 5 s GET timeout would abort mid-scan,
+// so this uses the same 130 s budget as `iyke ngwa`. A bare 404 means the
+// shell predates the pending WP-28 route; say so instead of parroting it.
+async function ngwaSnapshot(client: IykeClient): Promise<NgwaSnapshot> {
+  try {
+    return (await client.get(
+      NGWA_SNAPSHOT_PATH,
+      undefined,
+      NGWA_SNAPSHOT_TIMEOUT_MS,
+    )) as NgwaSnapshot;
+  } catch (e) {
+    if (isRouteMissing(e)) {
+      throw routeMissingError(
+        NGWA_SNAPSHOT_PATH,
+        "the HTTP twin of WP-14's `ngwa_snapshot` Tauri command",
+        e,
+      );
+    }
+    throw e;
+  }
+}
+
 async function dispatch(name: ToolName, args: Record<string, unknown>): Promise<unknown> {
   const client = getClient();
   switch (name) {
@@ -1307,7 +1415,36 @@ async function dispatch(name: ToolName, args: Record<string, unknown>): Promise<
     case 'iyke_project_set_active':
       return client.post('/iyke/project/set-active', { id: args.id });
     case 'iyke_project_get_active':
+    case 'iyke_project_show':
       return client.get('/iyke/project/active');
+    case 'iyke_project_switch': {
+      const target = typeof args.path === 'string' ? args.path : '';
+      const res = (await client.get('/iyke/project/list')) as {
+        projects?: ProjectListEntry[];
+      };
+      const id = resolveProjectId(res.projects ?? [], target);
+      return client.post('/iyke/project/set-active', { id });
+    }
+    case 'iyke_project_sections':
+      try {
+        return await client.get(EXPLORER_SECTIONS_PATH);
+      } catch (e) {
+        if (isRouteMissing(e)) {
+          throw routeMissingError(
+            EXPLORER_SECTIONS_PATH,
+            'the Explorer section registry',
+            e,
+          );
+        }
+        throw e;
+      }
+    case 'iyke_ngwa_installed':
+    case 'iyke_ngwa_store':
+    case 'iyke_ngwa_scopes':
+    case 'iyke_ngwa_health':
+      return ngwaSnapshot(client);
+    case 'iyke_ngwa_item':
+      return findNgwaItem(await ngwaSnapshot(client), String(args.id));
     case 'iyke_session_list':
       return client.get('/iyke/session/list', {
         project_id: args.project_id ?? undefined,

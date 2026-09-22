@@ -52,7 +52,7 @@
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build",
-    "test": "echo 'no tests yet — see CONTRIBUTING.md' && exit 0"
+    "test": "npm run build && node --test dist/nouns.test.js"
   },
   "dependencies": {
     "@ikenga/contract": "^0.3.0",
