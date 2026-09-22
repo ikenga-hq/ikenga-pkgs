@@ -12,9 +12,13 @@ export class IykeClient {
     this.token = cf.token;
   }
 
-  async get(path: string, params?: Record<string, unknown>): Promise<unknown> {
+  async get(
+    path: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     const qs = params ? buildQuery(params) : '';
-    return this.fetch(`${path}${qs}`, { method: 'GET' });
+    return this.fetch(`${path}${qs}`, { method: 'GET' }, timeoutMs);
   }
 
   async post(path: string, body: unknown, timeoutMs?: number): Promise<unknown> {
@@ -45,7 +49,9 @@ export class IykeClient {
     } catch (err) {
       const e = err as Error;
       if (e.name === 'AbortError') {
-        throw new Error(`iyke ${path} timed out (5s). Is the Ikenga desktop app running?`);
+        throw new Error(
+          `iyke ${path} timed out (${timeoutMs}ms). Is the Ikenga desktop app running?`,
+        );
       }
       throw new Error(
         `could not reach iyke server at ${path}: ${e.message}. Is the Ikenga desktop app running?`,
