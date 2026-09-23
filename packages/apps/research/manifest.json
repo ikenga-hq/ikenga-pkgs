@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "research.index",
-        "label": "Research",
+        "title": "Research",
         "icon": "search",
-        "section": "agents",
-        "route": "/pkg/com.ikenga.research/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

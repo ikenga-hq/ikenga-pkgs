@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "strategy.index",
-        "label": "Strategy",
+        "title": "Strategy",
         "icon": "target",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.strategy/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

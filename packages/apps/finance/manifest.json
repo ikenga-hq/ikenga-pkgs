@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "finance.index",
-        "label": "Finance",
+        "title": "Finance",
         "icon": "bar-chart-2",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.finance/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

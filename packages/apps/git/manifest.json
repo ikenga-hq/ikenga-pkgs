@@ -10,41 +10,41 @@
   },
 
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "git.changes",
-        "label": "Changes",
+        "title": "Changes",
         "icon": "git-branch",
-        "section": "source",
-        "route": "/pkg/com.ikenga.git/"
+        "route": "/",
+        "pin_on_install": true
       },
       {
         "id": "git.history",
-        "label": "History",
+        "title": "History",
         "icon": "history",
-        "section": "source",
-        "route": "/pkg/com.ikenga.git/history"
+        "route": "/history",
+        "pin_on_install": false
       },
       {
         "id": "git.branches",
-        "label": "Branches",
+        "title": "Branches",
         "icon": "git-fork",
-        "section": "source",
-        "route": "/pkg/com.ikenga.git/branches"
+        "route": "/branches",
+        "pin_on_install": false
       },
       {
         "id": "git.worktrees",
-        "label": "Worktrees",
+        "title": "Worktrees",
         "icon": "layout-grid",
-        "section": "source",
-        "route": "/pkg/com.ikenga.git/worktrees"
+        "route": "/worktrees",
+        "pin_on_install": false
       },
       {
         "id": "git.prs",
-        "label": "PRs",
+        "title": "PRs",
         "icon": "git-pull-request",
-        "section": "source",
-        "route": "/pkg/com.ikenga.git/prs"
+        "route": "/prs",
+        "pin_on_install": false
       }
     ],
     "routes": [

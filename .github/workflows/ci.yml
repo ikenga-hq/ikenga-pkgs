@@ -45,6 +45,10 @@ jobs:
       # ever changing the displayed version.
       - run: pnpm sync:versions:check
 
+      # Manifest schema validation: assert every manifest under packages/ adheres
+      # to @ikenga/contract schemas (ManifestSchema / ArtifactManifestSchema).
+      - run: pnpm validate:manifests
+
       - run: pnpm -r test --if-present
 
       # Cross-language signing gate (ADR-017 / WP-06): canonicalize the frozen

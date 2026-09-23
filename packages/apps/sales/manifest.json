@@ -7,13 +7,13 @@
   "author": { "name": "Royalti", "key": "royalti" },
 
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "sales.index",
-        "label": "Sales",
+        "title": "Sales",
         "icon": "trending-up",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.sales/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [
