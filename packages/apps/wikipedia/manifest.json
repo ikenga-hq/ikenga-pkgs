@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.wikipedia",
   "name": "Wikipedia",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "ikenga_api": "4",
   "kind": "embedded",
   "author": { "name": "Royalti", "key": "royalti" },

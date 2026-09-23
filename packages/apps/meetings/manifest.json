@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.meetings",
   "name": "Meetings",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "ikenga_api": "3",
   "kind": "app",
   "author": {

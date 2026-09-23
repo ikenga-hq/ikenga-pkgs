@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-mail",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Mail — Inbox, Triage, All, Drafts over the production mail schema. No-build iframe pkg; deterministic CSS vendoring build.",
   "license": "Apache-2.0",
   "repository": {

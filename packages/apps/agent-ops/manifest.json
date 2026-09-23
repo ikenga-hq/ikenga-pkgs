@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.agent-ops",
   "name": "Agent Ops",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {

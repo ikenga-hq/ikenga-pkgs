@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.finance",
   "name": "Finance",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {
