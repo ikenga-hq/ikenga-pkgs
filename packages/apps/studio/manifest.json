@@ -41,13 +41,13 @@
     }
   ],
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "studio.index",
-        "label": "Studio",
+        "title": "Studio",
         "icon": "clapperboard",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.studio/studio"
+        "route": "/studio",
+        "pin_on_install": true
       }
     ],
     "routes": [

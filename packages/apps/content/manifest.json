@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "content.index",
-        "label": "Content",
+        "title": "Content",
         "icon": "file-text",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.content/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

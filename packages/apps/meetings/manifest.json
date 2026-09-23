@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "meetings.index",
-        "label": "Meetings",
+        "title": "Meetings",
         "icon": "video",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.meetings/meetings"
+        "route": "/meetings",
+        "pin_on_install": true
       }
     ],
     "routes": [

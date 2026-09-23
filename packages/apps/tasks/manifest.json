@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "tasks.index",
-        "label": "Tasks",
+        "title": "Tasks",
         "icon": "check-square",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.tasks/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

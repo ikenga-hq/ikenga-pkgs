@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "agentops.index",
-        "label": "Agent Ops",
+        "title": "Agent Ops",
         "icon": "activity",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.agent-ops/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

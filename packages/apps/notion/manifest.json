@@ -7,13 +7,13 @@
   "author": { "name": "Royalti", "key": "royalti" },
   "ui": {
     "session": { "persistence": "keep" },
-    "nav": [
+    "views": [
       {
         "id": "notion.index",
-        "label": "Notion",
+        "title": "Notion",
         "icon": "book",
-        "section": "apps",
-        "route": "/pkg/com.ikenga.notion/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [
