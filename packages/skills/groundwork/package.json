@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/skill-groundwork",
-  "version": "0.7.6",
+  "version": "0.8.0",
   "description": "Reusable research → design → plan → orchestrate → act skill for Claude Code.",
   "keywords": [
     "claude",

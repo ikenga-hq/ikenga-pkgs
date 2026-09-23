@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.tasks",
   "name": "Tasks",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {

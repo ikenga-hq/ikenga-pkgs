@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.sales",
   "name": "Sales",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": { "name": "Royalti", "key": "royalti" },
