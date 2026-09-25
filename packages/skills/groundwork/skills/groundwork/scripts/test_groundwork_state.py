@@ -64,6 +64,34 @@ try:
     # no stray {{}}
     stray=[f for f in os.listdir(plan) if f.endswith(".md") and "{{" in open(os.path.join(plan,f)).read()]
     check("no stray {{ }} placeholders", not stray, stray)
+
+    # vocab tokens must never reach a user. Scan EVERY scaffolded file (html/json too, not just .md)
+    # for every profile, plus the board template and kickoff brief that are handed to users verbatim.
+    print("no unrendered {{vocab.*}} tokens:")
+    vocab_re = re.compile(r"\{\{\s*vocab\.")
+    for prof in ("software", "general", "content", "design-system", "film"):
+        vp = os.path.join(tmp, f"vocab-{prof}")
+        run("scaffold","--plan",vp,"--profiles-root",PROFILES,"--profile",prof,"--goal",f"{prof} vocab check")
+        leaks = []
+        for root_, _, files_ in os.walk(vp):
+            for fn in files_:
+                p = os.path.join(root_, fn)
+                if vocab_re.search(open(p, encoding="utf-8", errors="replace").read()):
+                    leaks.append(os.path.relpath(p, vp))
+        check(f"{prof}: scaffolded files (all types) carry no vocab token", not leaks, leaks)
+    board_tpl = open(os.path.join(PROFILES,"_shared","board","index.html"), encoding="utf-8").read()
+    check("board template carries no vocab token (its copy-prompts reach users verbatim)",
+          not vocab_re.search(board_tpl), [l for l in board_tpl.splitlines() if vocab_re.search(l)][:3])
+    check("board kickoff brief resolves {work_unit} at runtime",
+          "{work_unit}" in board_tpl and ".replace(/\\{work_unit\\}/g" in board_tpl)
+    wu = re.search(r"const WORK_UNIT_BY_PROFILE = (\{.*?\});", board_tpl)
+    labels = {n: json.load(open(os.path.join(PROFILES,n,"profile.json"), encoding="utf-8"))["labels"]["work_unit"]
+              for n in os.listdir(PROFILES) if os.path.exists(os.path.join(PROFILES,n,"profile.json"))}
+    check("board WORK_UNIT_BY_PROFILE matches every profile.json labels.work_unit",
+          bool(wu) and json.loads(wu.group(1))==labels, (wu and wu.group(1), labels))
+    orch = open(os.path.join(SKILL,"agents","orchestrator.md"), encoding="utf-8").read()
+    brief = orch.split("## Brief",1)[1].split("\n---",1)[0]
+    check("orchestrator kickoff brief carries no vocab token", not vocab_re.search(brief))
     # anchor sane
     anc = json.load(open(os.path.join(plan,".groundwork.json")))
     check("anchor profile/version", anc["profile"]=="software" and anc["spine_version"]=="1")
@@ -231,6 +259,250 @@ try:
     import json as _json
     check("html-script-safe still valid JSON (round-trips)",
           _json.loads(inner[inner.index("{"):inner.rindex("}")+1])["c"] == "x</script><img>&y")
+
+    # ---- design lifecycle (ids[D-NN] canonical, designs[path] linked variants) ----
+    print("design lifecycle:")
+    dp = os.path.join(tmp, "plan-design")
+    run("scaffold","--plan",dp,"--profiles-root",PROFILES,"--profile","software","--goal","Design lifecycle fixture")
+    def J(*a, expect=0):
+        r = run(*a, expect=expect)
+        try: return json.loads(r.stdout), r
+        except json.JSONDecodeError: return {}, r
+    def anc(p): return json.load(open(os.path.join(p,".groundwork.json"), encoding="utf-8"))
+    def abytes(p): return open(os.path.join(p,".groundwork.json"),"rb").read()
+    def dd(p, did):
+        return next(d for d in json.loads(run("design-data","--plan",p).stdout)["designs"] if d["id"]==did)
+
+    # D-NN registered with no files — the shape real plans have before any mockup exists
+    for n in (1, 2, 3):
+        run("register-id","--plan",dp,"--id",f"D-0{n}","--doc","01-plan.md","--field","kind=design",
+            "--field",f"title=Screen {n}","--field","phase=P1","--field","status=queued")
+    run("register-id","--plan",dp,"--id","WP-01","--doc","05-tracking.md","--field","title=Build screens",
+        "--field","status=queued","--field","wave=1")
+    data = json.loads(run("design-data","--plan",dp).stdout)
+    check("design-data: file-less D-NN are planned + unbuilt", len(data["designs"])==3 and
+          all(d["design_state"]=="planned" and d["build_state"]=="unbuilt" for d in data["designs"]))
+    p1 = next(c for c in data["coverage"] if c["phase"]=="P1")
+    check("coverage counts planned D-NN (0/3, not ok)", p1["designs"]==0 and p1["of"]==3 and p1["ok"] is False, p1)
+
+    for v in ("a", "b"):
+        open(os.path.join(dp,"designs",f"d-01-{v}.html"),"w").write(f"<h1>{v}</h1>")
+    res,_ = J("register-design","--plan",dp,"--file","designs/d-01-a.html","--id","D-01","--phase","P1")
+    check("register-design links file -> REGISTERED", res.get("result")=="REGISTERED" and res.get("design")=="D-01")
+    b0 = abytes(dp)
+    res,_ = J("register-design","--plan",dp,"--file","designs/d-01-a.html","--id","D-01","--phase","P1")
+    check("register-design re-run -> UNCHANGED, anchor byte-identical", res.get("result")=="UNCHANGED" and abytes(dp)==b0)
+    J("register-design","--plan",dp,"--file","designs/d-01-b.html","--id","D-01")
+    a = anc(dp)
+    check("link is two-way (ids.files + designs.design)",
+          a["ids"]["D-01"]["files"]==["designs/d-01-a.html","designs/d-01-b.html"]
+          and a["designs"]["designs/d-01-b.html"]["design"]=="D-01")
+    check("design-data: files -> drafted", dd(dp,"D-01")["design_state"]=="drafted")
+    _,r = J("register-design","--plan",dp,"--file","designs/x.html","--id","D-99",expect=1)
+    check("register-design refuses unregistered D-NN", r.returncode==1)
+
+    _,r = J("design-lock","--plan",dp,"--id","D-01","--round","2",expect=1)
+    check("design-lock with 2 variants and no --file refuses", r.returncode==1)
+    res,_ = J("design-lock","--plan",dp,"--id","D-01","--round","2","--file","designs/d-01-a.html")
+    a = anc(dp)
+    check("design-lock -> LOCKED, records round", res.get("result")=="LOCKED" and a["ids"]["D-01"]["locked_in"]=="Round 2")
+    check("design-lock mirrors onto variant registry",
+          a["designs"]["designs/d-01-a.html"]["locked"] is True and a["designs"]["designs/d-01-b.html"]["locked"] is False)
+    b0 = abytes(dp)
+    res,_ = J("design-lock","--plan",dp,"--id","D-01","--round","Round 2","--file","designs/d-01-a.html")
+    check("design-lock re-run -> UNCHANGED, anchor byte-identical", res.get("result")=="UNCHANGED" and abytes(dp)==b0)
+    _,r = J("design-lock","--plan",dp,"--id","D-01","--round","3","--file","designs/d-01-b.html",expect=1)
+    check("design-lock onto a different file while locked refuses", r.returncode==1)
+    _,r = J("design-lock","--plan",dp,"--id","D-01","--round","soon",expect=1)
+    check("design-lock rejects a non-numeric round", r.returncode==1)
+
+    # implementation linkage + derived build_state
+    res,_ = J("register-design-impl","--plan",dp,"--wp","WP-01","--designs","D-01,D-02")
+    check("register-design-impl records implements", anc(dp)["ids"]["WP-01"]["implements"]==["D-01","D-02"])
+    check("register-design-impl warns on unlocked design", any("D-02" in w for w in res.get("warnings",[])))
+    b0 = abytes(dp)
+    res,_ = J("register-design-impl","--plan",dp,"--wp","WP-01","--designs","D-01")
+    check("register-design-impl is additive + idempotent", res.get("result")=="UNCHANGED" and abytes(dp)==b0)
+    _,r = J("register-design-impl","--plan",dp,"--wp","WP-77","--designs","D-01",expect=1)
+    check("register-design-impl refuses unknown WP", r.returncode==1)
+    check("queued WP -> unbuilt", dd(dp,"D-01")["build_state"]=="unbuilt")
+    run("register-id","--plan",dp,"--id","WP-01","--doc","05-tracking.md","--field","status=in_progress")
+    check("in_progress WP -> in_progress", dd(dp,"D-01")["build_state"]=="in_progress")
+    _,r = J("design-verify","--plan",dp,"--id","D-01","--round","3",expect=1)
+    check("design-verify refuses before implemented", r.returncode==1)
+    J("register-design-impl","--plan",dp,"--wp","WP-01","--designs","D-01","--pr","42",
+      "--url","https://example.test/pr/42","--pr-state","merged")
+    check("merged PR listing D-01 -> implemented", dd(dp,"D-01")["build_state"]=="implemented")
+    d2 = dd(dp,"D-02")
+    check("D-02 (WP in_progress, not in the PR) stays in_progress + warns unlocked",
+          d2["build_state"]=="in_progress" and "built against an unlocked design" in d2["warnings"])
+    J("register-design-impl","--plan",dp,"--wp","WP-01","--designs","D-01","--pr","42","--pr-state","merged")
+    check("PR record updates in place (no duplicate)", len(anc(dp)["ids"]["WP-01"]["prs"])==1)
+    res,_ = J("design-verify","--plan",dp,"--id","D-01","--round","3")
+    check("design-verify -> VERIFIED", res.get("result")=="VERIFIED" and dd(dp,"D-01")["build_state"]=="verified")
+    b0 = abytes(dp)
+    res,_ = J("design-verify","--plan",dp,"--id","D-01","--round","3")
+    check("design-verify re-run -> UNCHANGED", res.get("result")=="UNCHANGED" and abytes(dp)==b0)
+    run("register-id","--plan",dp,"--id","WP-01","--doc","05-tracking.md","--field","status=done")
+    check("all implementing WPs done -> implemented", dd(dp,"D-02")["build_state"]=="implemented")
+
+    # review findings attach to a design + state + location
+    run("register-id","--plan",dp,"--id","G-01","--doc","04-discussion.md","--field","kind=design-conformance",
+        "--field","design=D-01","--field","state=error","--field","location=app/screens/Identity.tsx:88",
+        "--field","status=open","--field","severity=important","--field","title=Error copy drifts from mockup")
+    f = dd(dp,"D-01")
+    check("findings attach by design field (state + location carried)",
+          f["open_findings"]==1 and f["findings"][0]["state"]=="error" and f["findings"][0]["location"].endswith(":88"))
+
+    # surfaces
+    bd = json.loads(run("board-data","--plan",dp).stdout)
+    check("board-data emits design_lifecycle + coverage",
+          len(bd.get("design_lifecycle",[]))==3 and any(c["phase"]=="P1" for c in bd.get("coverage",[])))
+    check("board-data WP carries implements", next(w for w in bd["wps"] if w["id"]=="WP-01").get("implements")==["D-01","D-02"])
+    check("board-data designs carry their D-NN link", all(x.get("design")=="D-01" for x in bd["designs"]))
+    sd = json.loads(run("status-data","--plan",dp).stdout)
+    check("status-data summarises lifecycle", sd.get("design_lifecycle",{}).get("summary",{}).get("verified")==1)
+    ls = json.loads(run("living-spec-data","--plan",dp).stdout)
+    check("living-spec-data carries designs", {d["id"] for d in ls.get("designs",[])}=={"D-01","D-02","D-03"})
+    proot2 = os.path.join(tmp,"plansroot-design"); os.makedirs(proot2)
+    shutil.copytree(dp, os.path.join(proot2,"p"))
+    roll = json.loads(run("plans-index-data","--plans-dir",proot2).stdout)["plans"][0]["designs"]
+    check("plans-index rollup counts D-NN, not just files",
+          roll.get("total")==3 and roll.get("locked")==1 and roll.get("verified")==1, roll)
+
+    # unlock clears verification; history is the audit trail
+    res,_ = J("design-unlock","--plan",dp,"--id","D-01","--round","4","--reason","copy change")
+    a = anc(dp)
+    check("design-unlock -> UNLOCKED, clears verified_in", res.get("result")=="UNLOCKED"
+          and "verified_in" not in a["ids"]["D-01"] and a["ids"]["D-01"]["unlocked_in"]=="Round 4")
+    check("design-unlock warns about implementing WPs", any("WP-01" in w for w in res.get("warnings",[])))
+    check("unlocked + built -> warning, mirror cleared",
+          "built against an unlocked design" in dd(dp,"D-01")["warnings"]
+          and a["designs"]["designs/d-01-a.html"]["locked"] is False)
+    b0 = abytes(dp)
+    res,_ = J("design-unlock","--plan",dp,"--id","D-01","--round","4","--reason","again")
+    check("design-unlock when not locked -> UNCHANGED", res.get("result")=="UNCHANGED" and abytes(dp)==b0)
+    check("history records lock/verify/unlock", [h["action"] for h in a["ids"]["D-01"]["history"]]==["lock","verify","unlock"])
+    res,_ = J("design-lock","--plan",dp,"--id","D-01","--round","5","--file","designs/d-01-b.html")
+    check("re-lock onto another variant after unlock",
+          res.get("result")=="LOCKED" and dd(dp,"D-01")["locked_file"]=="designs/d-01-b.html")
+
+    # spec-only lock (no file) is allowed but flagged
+    res,_ = J("design-lock","--plan",dp,"--id","D-03","--round","5")
+    check("spec-only lock -> LOCKED + derived warning",
+          res.get("result")=="LOCKED" and "locked without a design file" in dd(dp,"D-03")["warnings"])
+
+    # implements given as `[A,B]` on the command line (see "register-id list fields" below)
+    run("register-id","--plan",dp,"--id","WP-02","--doc","05-tracking.md","--field","implements=[D-03]",
+        "--field","status=in_progress")
+    check("string-form implements tolerated", "WP-02" in [w["id"] for w in dd(dp,"D-03")["wps"]])
+
+    # ---- design-migrate: pre-lifecycle anchors ----
+    print("design-migrate:")
+    lp = os.path.join(tmp, "plan-legacy")
+    run("scaffold","--plan",lp,"--profiles-root",PROFILES,"--profile","software","--goal","Legacy designs")
+    la = anc(lp)
+    la["ids"]["D-01"] = {"doc": "04-discussion.md", "kind": "design", "title": "Board"}
+    la["ids"]["D-02"] = {"doc": "01-plan.md", "kind": "design", "title": "Detail"}
+    la["designs"] = {"designs/d-01-board.html": {"phase": "P1", "wp": "WP-07", "locked": True, "locked_in": "Round 5"},
+                     "designs/pattern-x.html": {"phase": "P2", "wp": None, "locked": False}}
+    open(os.path.join(lp,".groundwork.json"),"w",encoding="utf-8",newline="\n").write(json.dumps(la, indent=2)+"\n")
+    open(os.path.join(lp,"designs","d-01-board.html"),"w").write("<h1>board</h1>")
+    open(os.path.join(lp,"designs","d-02-detail.html"),"w").write("<h1>detail</h1>")
+    pre = json.loads(run("design-data","--plan",lp).stdout)
+    check("legacy anchor readable before migrate (files reported unlinked, not an error)",
+          pre["summary"]["unlinked"]==2 and pre["unlinked"][0]["suggested_id"]=="D-01")
+    b0 = abytes(lp)
+    res,_ = J("design-migrate","--plan",lp,"--dry-run")
+    check("design-migrate --dry-run reports, writes nothing",
+          res.get("result")=="DRY_RUN" and len(res["linked"])==1 and abytes(lp)==b0)
+    res,_ = J("design-migrate","--plan",lp)
+    m1 = dd(lp,"D-01")
+    check("design-migrate links by filename token", res.get("result")=="MIGRATED" and m1["files"]==["designs/d-01-board.html"])
+    check("design-migrate lifts the legacy lock onto the ID",
+          res["lifted_locks"]==["D-01"] and m1["locked_in"]=="Round 5" and m1["phase"]=="P1")
+    check("design-migrate reports unmatched files", res["unmatched"]==["designs/pattern-x.html"])
+    b0 = abytes(lp)
+    res,_ = J("design-migrate","--plan",lp)
+    check("design-migrate re-run -> UNCHANGED", res.get("result")=="UNCHANGED" and abytes(lp)==b0)
+    res,_ = J("design-migrate","--plan",lp,"--include-unregistered")
+    check("--include-unregistered registers + links d-NN files on disk",
+          res["registered_from_disk"]==["designs/d-02-detail.html"] and dd(lp,"D-02")["design_state"]=="drafted")
+
+    # hand-rolled shape seen in a real plan: variants link with `id`, the lock sits on the ID
+    # with no file named, and one design locks two complementary variants
+    print("design lifecycle — hand-rolled anchors:")
+    kp = os.path.join(tmp, "plan-idlink")
+    run("scaffold","--plan",kp,"--profiles-root",PROFILES,"--profile","software","--goal","Hand-rolled design lock")
+    ka = anc(kp)
+    ka["ids"]["D-02"] = {"doc": "01-plan.md", "kind": "design", "title": "Profile", "phase": "P1",
+                         "status": "locked", "locked": True, "locked_in": "Round 2"}
+    ka["designs"] = {
+        "designs/d-02-profile.html": {"phase": "P1", "wp": "WP-01", "id": "D-02", "locked": True,
+                                      "locked_in": "Round 2", "pane_ids": None, "variant": "single"},
+        "designs/returning-confirm.html": {"phase": "P1", "wp": "WP-02", "id": "D-02", "locked": True,
+                                           "locked_in": "Round 2", "pane_ids": None, "variant": "returning fast path"},
+        "designs/index.html": {"phase": "P1", "wp": "WP-01", "locked": True, "locked_in": "Round 2",
+                               "pane_ids": None, "variant": "gallery"}}
+    open(os.path.join(kp,".groundwork.json"),"w",encoding="utf-8",newline="\n").write(json.dumps(ka, indent=2)+"\n")
+    for fn in ("d-02-profile.html", "returning-confirm.html", "index.html"):
+        open(os.path.join(kp,"designs",fn),"w").write("<h1>x</h1>")
+    both = ["designs/d-02-profile.html", "designs/returning-confirm.html"]
+    k2 = dd(kp,"D-02")
+    check("`id` accepted as the variant link", k2["files"]==both, k2["files"])
+    check("ID-level lock with no file resolves its locked variants",
+          k2["locked"] and k2["locked_files"]==both and k2["locked_file"]==both[0] and not k2["warnings"], k2)
+    check("gallery page with no D-NN is reported unlinked",
+          [u["path"] for u in json.loads(run("design-data","--plan",kp).stdout)["unlinked"]]==["designs/index.html"])
+    res,_ = J("design-lock","--plan",kp,"--id","D-02","--round","2")
+    check("design-lock normalizes a hand-rolled lock (no --file needed)",
+          res.get("result")=="NORMALIZED" and anc(kp)["ids"]["D-02"].get("locked_files")==both, res)
+    b0 = abytes(kp)
+    res,_ = J("design-lock","--plan",kp,"--id","D-02","--round","2")
+    check("normalized lock re-run -> UNCHANGED", res.get("result")=="UNCHANGED" and abytes(kp)==b0)
+    J("design-migrate","--plan",kp)
+    rc_entry = anc(kp)["designs"]["designs/returning-confirm.html"]
+    check("design-migrate adds the canonical `design` link, keeps `id`",
+          rc_entry.get("design")=="D-02" and rc_entry.get("id")=="D-02")
+    J("design-unlock","--plan",kp,"--id","D-02","--round","3","--reason","split the fast path")
+    res,_ = J("design-lock","--plan",kp,"--id","D-02","--round","4","--file",both[0],"--file",both[1])
+    check("design-lock accepts several --file (complementary variants)",
+          res.get("result")=="LOCKED" and dd(kp,"D-02")["locked_files"]==both)
+    _,r = J("design-lock","--plan",kp,"--id","D-02","--round","5","--file",both[0],expect=1)
+    check("re-locking a different file set while locked refuses", r.returncode==1)
+
+    # ---- list-valued --field (depends_on) ----
+    print("register-id list fields:")
+    lp2 = os.path.join(tmp, "plan-lists")
+    run("scaffold","--plan",lp2,"--profiles-root",PROFILES,"--profile","software","--goal","List fields")
+    for wid in ("WP-01", "WP-02"):
+        run("register-id","--plan",lp2,"--id",wid,"--doc","05-tracking.md","--field",f"title={wid}")
+    run("register-id","--plan",lp2,"--id","WP-03","--doc","05-tracking.md","--field","depends_on=[WP-01, WP-02]")
+    run("register-id","--plan",lp2,"--id","WP-04","--doc","05-tracking.md","--field","depends_on=[WP-01]")
+    run("register-id","--plan",lp2,"--id","WP-05","--doc","05-tracking.md","--field",'depends_on=["WP-02"]')
+    run("register-id","--plan",lp2,"--id","WP-06","--doc","05-tracking.md","--field","depends_on=[]",
+        "--field","note=[draft] later")
+    ids2 = anc(lp2)["ids"]
+    check("register-id stores unquoted [A, B] as a trimmed list", ids2["WP-03"]["depends_on"]==["WP-01","WP-02"])
+    check("register-id stores unquoted [A] as a list", ids2["WP-04"]["depends_on"]==["WP-01"])
+    check("register-id still parses JSON lists", ids2["WP-05"]["depends_on"]==["WP-02"])
+    check("register-id: [] is an empty list; non-bracketed text stays a string",
+          ids2["WP-06"]["depends_on"]==[] and ids2["WP-06"]["note"]=="[draft] later")
+
+    # legacy anchors already carry depends_on as a string — every reader must cope
+    la2 = anc(lp2)
+    la2["ids"]["WP-03"]["depends_on"] = "[WP-01,WP-02]"
+    la2["ids"]["WP-04"]["depends_on"] = "[WP-01]"
+    open(os.path.join(lp2,".groundwork.json"),"w",encoding="utf-8",newline="\n").write(json.dumps(la2, indent=2)+"\n")
+    isd = json.loads(run("issue-sync-data","--plan",lp2,"--with-tasklists").stdout)
+    iwp = {w["id"]: w for w in isd["wps"]}
+    check("issue-sync-data: string depends_on still maps children",
+          [c["id"] for c in iwp["WP-01"]["children"]]==["WP-03","WP-04"]
+          and [c["id"] for c in iwp["WP-02"]["children"]]==["WP-03","WP-05"], iwp["WP-01"]["children"])
+    check("issue-sync-data: depends_on emitted as a list", iwp["WP-04"]["depends_on"]==["WP-01"])
+    check("issue-sync-data: tasklist built for a legacy parent", "WP-04" in iwp["WP-01"].get("tasklist_md",""))
+    bwp = {w["id"]: w for w in json.loads(run("board-data","--plan",lp2).stdout)["wps"]}
+    check("board-data: string depends_on emitted as a list deps", bwp["WP-03"]["deps"]==["WP-01","WP-02"])
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

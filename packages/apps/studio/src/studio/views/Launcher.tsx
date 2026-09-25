@@ -21,14 +21,19 @@
 // (toast + inline error). Open-folder consumes the shell's real picker/grant
 // result honestly — cancel does nothing, denial shows "access denied", success
 // opens the actually-picked path. No pkg-side trust pre-modal (the shell's
-// native picker + grant dialog is the single consent surface).
+// native picker + grant dialog is the single consent surface). When that call
+// times out there is nothing to open: the picked path lives only in the
+// response that never arrived, so the timeout branch says so rather than
+// guessing at a recents row (see openFolderFlow's catch), and the wait itself
+// gets a visible banner with a cancel rather than ten silent minutes.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { archetypeApi, projectApi, renderApi, getMcpClient, getProbedEngines, type McpClient } from '../mcp-client';
-import { openFolder } from '../bridge';
+import { openFolder, isHostCallTimeout } from '../bridge';
 import { useProjectStore } from '../project-store';
 import { openProjectByPath, errText } from '../lib/open-project';
+import { basename } from '../lib/path';
 import type { AspectRatio, Archetype, EngineCapability } from '../mcp-types';
 import { Icon } from './launcher/icons';
 import { Gallery } from './launcher/Gallery';
@@ -44,6 +49,14 @@ interface Toast {
   title: string;
   detail?: string;
   action?: { label: string; run: () => void };
+  /** Skip the 6.5s auto-dismiss. For failures whose whole point is that the
+   *  user was NOT at the keyboard when they happened (the open-folder timeout
+   *  branch below fires only after ≥10 minutes in native dialogs) — a toast
+   *  that expires 6.5s later is the same invisible failure the live round
+   *  recorded (wp04/verdict.md: "the error toast had auto-dismissed by the
+   *  time I read the DOM"). Sticky toasts stay until the X or the action is
+   *  clicked. */
+  sticky?: boolean;
 }
 
 // ─── view ──────────────────────────────────────────────────────────────────
@@ -82,6 +95,21 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
   const [opening, setOpening] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
+  // Open-folder is the one action that waits on a human clicking through two
+  // NATIVE dialogs (OS picker, then the shell's "Grant Studio folder access?"
+  // prompt), which can easily land behind a maximized shell window. `opening`
+  // greys out Resume / every recents row / both "Open folder…" buttons for the
+  // whole wait, and the host call's ceiling is 10 minutes (bridge.ts) — so the
+  // wait needs a visible state and a way out, or the desk is simply inert with
+  // no explanation. `folderWait` drives the banner + button labels;
+  // `folderAbortRef` is what the banner's Cancel aborts. `folderCancelledRef`
+  // is required because the SDK reports an abort with the SAME
+  // `ErrorCode.RequestTimeout` as a real timeout (see HostCallOptions.signal)
+  // — the flag is the only way to tell our own cancel apart from the deadline.
+  const [folderWait, setFolderWait] = useState(false);
+  const folderAbortRef = useRef<AbortController | null>(null);
+  const folderCancelledRef = useRef(false);
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
   const galleryRef = useRef<HTMLDivElement>(null);
@@ -89,7 +117,9 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
   const pushToast = useCallback((t: Omit<Toast, 'id'>) => {
     const id = ++toastId.current;
     setToasts((cur) => [...cur, { ...t, id }]);
-    window.setTimeout(() => setToasts((cur) => cur.filter((x) => x.id !== id)), 6500);
+    if (!t.sticky) {
+      window.setTimeout(() => setToasts((cur) => cur.filter((x) => x.id !== id)), 6500);
+    }
     return id;
   }, []);
   const dismissToast = useCallback((id: number) => {
@@ -126,10 +156,7 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
       // before (the runtime-detection seam this already relies on).
       const { projects } =
         client.mode === 'real' ? await projectApi.recents(client) : await projectApi.list(client);
-      const rows = (projects ?? [])
-        .map(normalizeRecent)
-        .filter((r): r is RecentRow => r !== null);
-      setRecents(rows);
+      setRecents((projects ?? []).map(normalizeRecent).filter((r): r is RecentRow => r !== null));
     } catch (e) {
       setRecentsError(errText(e));
       setRecents([]);
@@ -224,13 +251,35 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
     if (target) void openRecentRow(target);
   }, [recents, openRecentRow]);
 
+  // Abandon the wait on the native dialogs. Client-side only, and honestly so:
+  // the abort deletes the response handler and sends notifications/cancelled,
+  // but the shell's `openDialog` / `pkg_studio_request_project_access` are not
+  // abortable, so a dialog already on screen stays there and a grant the user
+  // then confirms is still written. That's why the banner says as much rather
+  // than claiming the request was called off.
+  const cancelFolderWait = useCallback(() => {
+    folderCancelledRef.current = true;
+    folderAbortRef.current?.abort(new Error('open-folder wait cancelled from the Launcher'));
+    pushToast({
+      kind: 'info',
+      title: 'Stopped waiting for the folder dialog',
+      detail:
+        'If the picker or the grant prompt is still on screen, answering it now won’t open anything here — close it, then use “Open folder…” when you’re ready.',
+    });
+  }, [pushToast]);
+
   // Open-folder: the shell pops its OWN native picker + grant dialog. We consume
   // the real result honestly — no pkg-side pre-modal, no hardcoded mock project.
   const openFolderFlow = useCallback(async () => {
     if (opening) return;
+    const ac = new AbortController();
+    folderAbortRef.current = ac;
+    folderCancelledRef.current = false;
     setOpening(true);
+    setFolderWait(true);
     try {
-      const res = await openFolder();
+      const res = await openFolder({ signal: ac.signal });
+      setFolderWait(false); // both native dialogs are done; the rest is ours
       const sc = (res.structuredContent ?? {}) as {
         ok?: boolean;
         cancelled?: boolean;
@@ -242,9 +291,44 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
         pushToast({ kind: 'info', title: 'Access denied — nothing opened' });
         return;
       }
-      await openByPath(sc.path, sc.path.split('/').filter(Boolean).pop() ?? 'project');
+      await openByPath(sc.path, basename(sc.path) || 'project');
       void loadRecents(); // the just-opened project now belongs in recents
     } catch (e) {
+      // The banner's Cancel aborts the call; the SDK rejects that with the same
+      // RequestTimeout code as a real deadline, so the flag — not the error —
+      // is what tells them apart. A cancel the user just performed needs no
+      // message.
+      if (folderCancelledRef.current) return;
+      // host.openFolder gets a generous ceiling (10 min, bridge.ts) because the
+      // OS picker + native grant dialog are user-paced, but a user who never
+      // answers them still trips it — and the host may have finished the grant
+      // write anyway (WP-04 live round: verdict.md "Live-found gap").
+      //
+      // There is NO recovery seam here, and we deliberately don't fake one:
+      // the timed-out response is the only carrier of the picked path, and
+      // nothing on the host side of `host.openFolder` touches the project
+      // registry (it does `openDialog` + `pkg_studio_request_project_access`
+      // and returns `{ok, granted, path}`; `last_opened` moves only in the
+      // sidecar's `project.open` handler, which only the iframe or the agent-
+      // facing MCP tool reaches). So after a timeout Studio genuinely does not
+      // know which folder was picked — any "newest recents row" guess would
+      // open a DIFFERENT project than the user chose. Say the true thing
+      // instead, and say it in a toast that doesn't expire: this branch fires
+      // only after ≥10 minutes, i.e. when the user is almost certainly not
+      // looking. No auto-retry action either — the picker/grant dialog it timed
+      // out on is still live, so re-firing openFolder() here would pop a second
+      // picker and leave the first call's grant prompt to surface later, for a
+      // folder the user has meanwhile abandoned.
+      if (isHostCallTimeout(e)) {
+        pushToast({
+          kind: 'info',
+          sticky: true,
+          title: 'Studio didn’t hear back about that folder',
+          detail:
+            'The folder picker or the “Grant Studio folder access?” prompt may still be open behind this window — finish or close it before retrying. Any access you already granted was saved, so “Open folder…” will skip the prompt for that folder next time, but Studio never learned which folder you picked: choose it again.',
+        });
+        return;
+      }
       pushToast({
         kind: 'error',
         title: 'Couldn’t open that folder',
@@ -252,6 +336,8 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
         action: { label: 'Try again', run: () => void openFolderFlow() },
       });
     } finally {
+      if (folderAbortRef.current === ac) folderAbortRef.current = null;
+      setFolderWait(false);
       setOpening(false);
     }
   }, [opening, openByPath, pushToast, loadRecents]);
@@ -392,7 +478,7 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
             disabled={opening}
             className="flex items-center gap-2 rounded-md border border-soft px-3 py-1.5 text-xs text-fg-muted hover:border-[var(--chip-carve)] hover:text-fg disabled:opacity-60"
           >
-            <Icon name="folder" size={14} /> Open folder…
+            <Icon name="folder" size={14} /> {folderWait ? 'Waiting for folder…' : 'Open folder…'}
           </button>
         </div>
       </header>
@@ -424,6 +510,37 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
               className="flex-none text-fg-faint hover:text-fg"
             >
               <Icon name="x" size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Waiting-on-native-dialogs banner. `opening` disables Resume, every
+            recents row and both "Open folder…" buttons for as long as the host
+            call is in flight — up to 10 minutes (bridge.ts OPEN_FOLDER_TIMEOUT_
+            MS). This is the explanation for that, and the way out of it. */}
+        {folderWait && (
+          <div
+            role="status"
+            className="mb-5 flex items-start gap-3 rounded-lg border px-4 py-3"
+            style={{ borderColor: 'color-mix(in srgb, var(--info) 42%, var(--border))', background: 'var(--info-soft)' }}
+          >
+            <span className="mt-0.5 flex-none" style={{ color: 'var(--info)' }}>
+              <Icon name="folder" size={16} />
+            </span>
+            <div className="min-w-0 flex-1 text-[13px] leading-snug">
+              <div className="font-semibold text-fg">Waiting for the folder dialog…</div>
+              <p className="mt-0.5 text-fg-muted">
+                The OS folder picker &mdash; and then Studio&rsquo;s &ldquo;Grant Studio folder
+                access?&rdquo; prompt &mdash; are open. They can appear <em>behind</em> this window,
+                so check your taskbar. The desk stays locked until you answer them.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={cancelFolderWait}
+              className="flex-none rounded-md border border-soft px-2.5 py-1 text-xs text-fg-muted hover:border-[var(--chip-carve)] hover:text-fg"
+            >
+              Stop waiting
             </button>
           </div>
         )}
@@ -466,7 +583,7 @@ export function LauncherView({ resumeError = null, onDismissResumeError }: Launc
                 disabled={opening}
                 className="flex items-center gap-2 rounded-lg border border-soft bg-raised px-4 py-2.5 text-sm font-semibold text-fg hover:border-[var(--chip-carve)] disabled:opacity-60"
               >
-                <Icon name="folder" size={15} /> Open folder…
+                <Icon name="folder" size={15} /> {folderWait ? 'Waiting for folder…' : 'Open folder…'}
               </button>
               <button
                 type="button"

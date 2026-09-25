@@ -492,7 +492,7 @@ function shortDate(epochMs) {
  *   { subject?, draft_slug?, edition?, sent_at?, body? }
  * @returns {{ freshness: Object, previouslyFeatured: Object }}
  */
-export function newsletterHistorySignals(item, historyRows) {
+export function newsletterHistorySignals(item, historyRows, now = Date.now()) {
   const it = item || {};
   const rows = Array.isArray(historyRows) ? historyRows : [];
 
@@ -500,7 +500,6 @@ export function newsletterHistorySignals(item, historyRows) {
   // A repeat is a history row whose normalised subject equals this draft's subject
   // AND whose sent_at is within 60 days of now.
   const draftSubj = normalizeSubject(it.subject);
-  const now = Date.now();
 
   let freshness;
   if (rows.length === 0) {

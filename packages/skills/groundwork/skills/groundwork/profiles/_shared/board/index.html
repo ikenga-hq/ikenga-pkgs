@@ -35,7 +35,7 @@
 
   <script type="application/json" id="board-meta">
   <!-- groundwork:auto:start board-meta -->
-  { "title": "{{plan_title}}", "profile": "{{profile}}", "plan_folder": "{{plan_folder}}", "plan_slug": "{{plan_slug}}", "goal": "{{goal}}", "refreshed": null }
+  { "title": "{{plan_title}}", "profile": "{{profile}}", "plan_folder": "{{plan_folder}}", "plan_slug": "{{plan_slug}}", "work_unit": null, "goal": "{{goal}}", "refreshed": null }
   <!-- groundwork:auto:end board-meta -->
   </script>
 
@@ -82,6 +82,12 @@
       { "phase": "P1", "designs": 1, "of": 1, "ok": true  },
       { "phase": "P2", "designs": 1, "of": 3, "ok": false },
       { "phase": "P3", "designs": 0, "of": 2, "ok": false }
+    ],
+    "design_lifecycle": [
+      { "id": "D-01", "title": "Layout pattern", "phase": "P1", "design_state": "locked", "locked_in": "Round 5", "locked_file": "designs/d-01-layout-split.html", "build_state": "verified", "verified_in": "Round 7", "wps": [{ "id": "WP-07", "status": "done" }], "open_findings": 0, "warnings": [] },
+      { "id": "D-02", "title": "Config panel", "phase": "P2", "design_state": "locked", "locked_in": "Round 6", "locked_file": "designs/d-02-config-dense.html", "build_state": "in_progress", "wps": [{ "id": "WP-09", "status": "queued" }], "open_findings": 1, "warnings": [] },
+      { "id": "D-03", "title": "Export dialog", "phase": "P2", "design_state": "drafted", "build_state": "unbuilt", "wps": [], "open_findings": 0, "warnings": [] },
+      { "id": "D-04", "title": "Empty states", "phase": "P3", "design_state": "planned", "build_state": "unbuilt", "wps": [], "open_findings": 0, "warnings": [] }
     ],
     "research": { "external_stamped": "2026-05-20", "internal_stamped": "2026-05-20" }
   }
@@ -580,6 +586,19 @@
     .coverage-row .phase-count { font-family: var(--font-mono); font-size: 10.5px; }
     .coverage-row .phase-count.ok { color: var(--achievement); }
     .coverage-row .phase-count.warn { color: var(--danger); }
+    .design-row { padding: var(--space-2) 0; border-top: 1px dashed var(--border-soft); }
+    .design-row:first-of-type { border-top: 0; padding-top: 0; }
+    .design-row-head { display: flex; gap: 6px; align-items: baseline; }
+    .design-row .design-id { font-size: 10.5px; color: var(--primary); letter-spacing: .04em; }
+    .design-row .design-title { font-size: 11.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .design-row-meta { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
+    .design-chip { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--fg-muted); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 1px 5px; white-space: nowrap; }
+    .design-chip.ds-locked { color: var(--primary); border-color: currentColor; }
+    .design-chip.ds-planned { color: var(--fg-faint); border-style: dashed; }
+    .design-chip.bs-in_progress { color: var(--primary); }
+    .design-chip.bs-implemented { color: var(--achievement); }
+    .design-chip.bs-verified { color: var(--achievement); border-color: currentColor; }
+    .design-chip.design-findings, .design-chip.design-warn { color: var(--danger); border-color: currentColor; }
     .subplan-row { padding: var(--space-2) 0; border-top: 1px dashed var(--border-soft); }
     .subplan-row:first-child { border-top: 0; padding-top: 0; }
     .subplan-row-link { color: var(--primary); text-decoration: none; border-bottom: 1px dashed currentColor; font-size: 11.5px; word-break: break-word; }
@@ -1111,8 +1130,9 @@
        — if the orchestrator brief changes, mirror it here. A future drift-check
        action can diff this constant against the source.
 
-       Placeholders: {plan_title} {plan_folder} {plan_slug} {profile}
-       Substituted by buildOrchestratorBrief() below. */
+       Placeholders: {plan_title} {plan_folder} {plan_slug} {profile} {work_unit}
+       Substituted by buildOrchestratorBrief() below. Single-brace runtime tokens only —
+       a double-brace vocab token here is never substituted and reaches the user verbatim. */
     const ORCHESTRATOR_BRIEF_TEMPLATE = `You are the orchestrator for the {plan_title} build. Your single job: drive {plan_folder}/09-orchestration.md to ship. Read that doc end-to-end; it is the source of truth.
 
 WHAT YOU OWN
@@ -1127,7 +1147,7 @@ WHAT YOU OWN
 
 WHAT SUBAGENTS OWN
 
-- One {{vocab.work_unit}} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
+- One {work_unit} each. They receive the brief verbatim from 09 §WP-NN. They work on the branch / scope you name. They self-check against the Definition of Done. They report back: done / blocked / needs-decision. They do NOT merge, do NOT touch other packages' files, and do NOT edit 05-tracking.md.
 
 EXECUTION PROTOCOL
 
@@ -1171,12 +1191,21 @@ WHAT TO DO RIGHT NOW
 4. Create Tasks for all WPs.
 5. Start Wave 0.`;
 
+    /* labels.work_unit for each built-in profile — mirrors profiles/<name>/profile.json.
+       Only a fallback: refresh-board writes the plan's own label into board-meta.work_unit.
+       test_groundwork_state.py fails if this drifts from the profile.json files. */
+    const WORK_UNIT_BY_PROFILE = {"_shared": "work item", "content": "piece", "design-system": "part", "film": "sequence", "general": "workstream", "software": "work package"};
+    function resolveWorkUnit(meta, profile) {
+      return (meta && meta.work_unit) || WORK_UNIT_BY_PROFILE[profile] || WORK_UNIT_BY_PROFILE._shared;
+    }
+
     /* Resolve placeholders for the orchestrator brief.
        Sources, in order:
          {plan_title}  ← meta.title  → data.plan.title  → 'this plan'
          {plan_folder} ← meta.plan_folder (added in WP-20)  → derived from plan_slug  → 'this plan folder'
          {plan_slug}   ← meta.plan_slug  → slugify(plan_title)  → 'plan'
-         {profile}     ← meta.profile  → data.plan.profile  → 'software' */
+         {profile}     ← meta.profile  → data.plan.profile  → 'software'
+         {work_unit}   ← meta.work_unit  → WORK_UNIT_BY_PROFILE[profile]  → 'work item' */
     function buildOrchestratorBrief(meta, data) {
       const planTitle  = (meta && meta.title)        || (data && data.plan && data.plan.title)   || 'this plan';
       const profile    = (meta && meta.profile)      || (data && data.plan && data.plan.profile) || 'software';
@@ -1186,7 +1215,8 @@ WHAT TO DO RIGHT NOW
         .replace(/\{plan_title\}/g,  planTitle)
         .replace(/\{plan_folder\}/g, planFolder)
         .replace(/\{plan_slug\}/g,   planSlug)
-        .replace(/\{profile\}/g,     profile);
+        .replace(/\{profile\}/g,     profile)
+        .replace(/\{work_unit\}/g,   resolveWorkUnit(meta, profile));
     }
 
     /* ─────── ACTIONS — the 9 groundwork actions surfaced by the ⌘K palette ───────
@@ -1251,6 +1281,7 @@ WHAT TO DO RIGHT NOW
         plan_title:    meta.title         || plan.title || 'groundwork plan',
         plan_slug:     meta.plan_slug     || (meta.plan_folder ? String(meta.plan_folder).split('/').filter(Boolean).pop() : 'groundwork'),
         profile:       meta.profile       || plan.profile || 'software',
+        work_unit:     resolveWorkUnit(meta, meta.profile || plan.profile || 'software'),
         goal:          meta.goal          || plan.goal    || '(no goal set)',
         phase:         meta.phase         || '(active phase)',
         archetype:     meta.archetype     || '<archetype>',
@@ -1835,6 +1866,12 @@ WHAT TO DO RIGHT NOW
               </span>
             </div>
           )}
+          {wp.implements && wp.implements.length > 0 && (
+            <div className="detail-subplan">
+              <span className="detail-label">implements</span>
+              <span className="detail-value mono">{wp.implements.join(' · ')}</span>
+            </div>
+          )}
           <div className="detail-brief-label">Brief</div>
           <pre className="detail-brief">{briefText}</pre>
           {wp.status !== 'done' && (
@@ -1908,6 +1945,36 @@ WHAT TO DO RIGHT NOW
               <div style={{ fontSize: 10, color: 'var(--fg-faint)', marginTop: 8, lineHeight: 1.4 }}>
                 Designs are produced per phase as approached.
               </div>
+            </section>
+          )}
+          {data.design_lifecycle && data.design_lifecycle.length > 0 && (
+            <section className="detail-card">
+              <span className="detail-card-label">Designs</span>
+              {data.design_lifecycle.map(d => (
+                <div key={d.id} className="design-row" title={(d.warnings || []).join('\n')}>
+                  <div className="design-row-head">
+                    <span className="mono design-id">{d.id}</span>
+                    <span className="design-title">{d.title || d.locked_file || ''}</span>
+                  </div>
+                  <div className="design-row-meta">
+                    <span className={`design-chip ds-${d.design_state}`}>
+                      {d.design_state === 'locked' ? `locked · ${d.locked_in || '?'}` : d.design_state}
+                    </span>
+                    <span className={`design-chip bs-${d.build_state}`}>
+                      {d.build_state.replace('_', ' ')}{d.build_state === 'verified' && d.verified_in ? ` · ${d.verified_in}` : ''}
+                    </span>
+                    {d.wps && d.wps.length > 0 && <span className="subplan-ref mono">{d.wps.map(w => w.id).join(' · ')}</span>}
+                    {d.open_findings > 0 && <span className="design-chip design-findings">{d.open_findings} open</span>}
+                    {d.warnings && d.warnings.length > 0 && <span className="design-chip design-warn">⚠ {d.warnings.length}</span>}
+                  </div>
+                  {d.locked_file && <a href={`../${d.locked_file}`} target="_top" className="subplan-row-link">{d.locked_file}</a>}
+                </div>
+              ))}
+              {data.design_unlinked && data.design_unlinked.length > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--fg-faint)', marginTop: 8, lineHeight: 1.4 }}>
+                  {data.design_unlinked.length} design file{data.design_unlinked.length === 1 ? '' : 's'} not linked to a D-NN — run design-migrate.
+                </div>
+              )}
             </section>
           )}
           {data.research && (

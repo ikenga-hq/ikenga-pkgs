@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.content",
   "name": "Content",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {
@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "content.index",
-        "label": "Content",
+        "title": "Content",
         "icon": "file-text",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.content/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

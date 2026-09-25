@@ -54,7 +54,8 @@ PROFILE NOTES
 
 TARGET-SPECIFIC LENSES
 
-- TARGET = "designs/<file>" → critique the design: layout, hierarchy, information density, alignment with 01-plan stated needs. Set kind: "design-review" on each finding.
+- TARGET = "designs/<file>" or "D-NN" → critique the design: layout, hierarchy, information density, alignment with 01-plan stated needs, and coverage of every state the spec names (default, empty, loading, error, declined / no-consent). Set kind: "design-review", design: "D-NN", state: "<state>" (null if it applies to the whole design), location: "designs/<file>:<line>" on each finding.
+- TARGET = "PR #N implements D-NN" (design-conformance lens) → render the screen from the PR (web build or export; light and dark; phone width) and compare it to the LOCKED file of each D-NN named on the PR's "Designs implemented" line, state by state: tokens (no raw colours), copy (voice, consent wording), accessibility (contrast, 44 px targets), and every state the spec names. Set kind: "design-conformance", design, state, and location: "<implementation file>:<line>". A PR that changes a locked design's appearance without an unlock round in 04 is itself a critical finding. Read `groundwork_state.py design-data` first for which file is locked.
 - TARGET = "05-tracking.md" → critique completeness of work decomposition; missing WPs; dependencies that aren't right; critical path that isn't.
 - TARGET = "01-plan.md" → critique the plan itself; what's underspecified, what's a hand-wave, what's a risk masquerading as a decision.
 

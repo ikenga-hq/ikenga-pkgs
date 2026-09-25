@@ -5,10 +5,45 @@
  * `hyperframes` CLI (`npx hyperframes render`) against the project root,
  * pointing at the cell's HTML composition via `--composition=…`.
  *
- * G24 — Chrome version pin. We thread `PUPPETEER_EXECUTABLE_PATH` (from
- * `./chrome.ts`) onto the spawned child so HF picks up our pinned binary
- * instead of downloading its own. The Excalidraw adapter (WP-05b) shares
- * the same resolver.
+ * G24 — Chrome version pin. We thread the resolved binary (from `./chrome.ts`)
+ * onto the spawned child so HF picks up our pinned browser instead of using
+ * its own cache. The Excalidraw adapter (WP-05b) shares the same resolver.
+ *
+ * ─── WP-32 live-found fixes (g61, 2026-09-12) ─────────────────────────────
+ *
+ * Three separate defects made 8/8 live HF renders fail with an error row that
+ * said nothing at all (`[hyperframes] render failed (exit 1):` + empty tail):
+ *
+ * 1. **Wrong env var.** We passed the path as `PUPPETEER_EXECUTABLE_PATH`,
+ *    which the HF CLI never reads (`grep -o 'PUPPETEER_[A-Z_]*' dist/cli.js`
+ *    on hyperframes 0.8.35 yields only PUPPETEER_CACHE_DIR / the protocol
+ *    timeouts). Its browser resolution is `ensureBrowser()` →
+ *    `findFromEnv()`, which reads **`HYPERFRAMES_BROWSER_PATH`** (or
+ *    `PRODUCER_HEADLESS_SHELL_PATH`) first and otherwise falls back to its own
+ *    `~/.cache/hyperframes/chrome/…` install — which on the live box was a
+ *    broken extraction (`STATUS_DLL_NOT_FOUND`, 0xC0000135). Hence exit 1.
+ *    There is no `--browser-path` flag on `render` (that flag exists only on
+ *    `preview`/`open`/`studio`), so the env var is the only seam.
+ * 2. **Wrong binary for the env var.** HF preflights whatever path it is given
+ *    with `<exe> --version` under a 5s timeout. Full Chrome on Windows never
+ *    answers that on stdout, so pointing HF at `chrome.exe` swaps one failure
+ *    ("Browser: cache" → DLL error) for another ("Browser: env" → signal
+ *    SIGKILL, ETIMEDOUT). We therefore prefer puppeteer's
+ *    `chrome-headless-shell` build (which answers `--version` instantly), and
+ *    on win32 we REFUSE the full-Chrome fallback: handing Chrome to HF there
+ *    *is* the g61 failure, so a missing shell build throws fast with an
+ *    install hint for the right browser. POSIX, where the preflight passes,
+ *    keeps the fallback. Hand-verified: the same argv + `HYPERFRAMES_BROWSER_PATH=<headless
+ *    shell>` renders the live fixture cell to a 375 KB / 90-frame MP4, exit 0.
+ * 3. **A blind error row.** `detached: true` + piped stdio loses BOTH pipes
+ *    under Bun on Windows (measured: `spawn('npx', …, {detached:true})`
+ *    captures zero bytes and reports exit 0; the identical spawn with
+ *    `detached:false` captures `0.8.35`), so no HF output ever reached the
+ *    queue row. `detached` was only ever there for `process.kill(-pid)`, which
+ *    is POSIX-only and always threw on win32 anyway — so we detach on POSIX
+ *    only and reap the Windows tree with `taskkill /T /F`. The failure message
+ *    now also carries stdout AND stderr tails separately, and says so
+ *    explicitly when a child produced no output at all.
  *
  * G1 — aspect-ratio threading. HF's `--resolution` flag is preset-based
  * (landscape/portrait/square), not arbitrary W×H. We map the project's
@@ -84,7 +119,13 @@ import {
   type RenderRecord,
 } from '@ikenga/studio-schema';
 
-import { resolveChromeExecutable } from './chrome.js';
+import {
+  buildIdFromInstallPath,
+  HEADLESS_SHELL_INSTALL_HINT,
+  headlessShellCacheDir,
+  resolveChromeExecutable,
+  resolveHeadlessShellExecutable,
+} from './chrome.js';
 import { clearRenderPid, recordRenderPid } from '../queue.js';
 import type {
   Diagnostic,
@@ -118,13 +159,43 @@ let cachedEngineVersion: string | null = null;
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Terminate a detached child and its entire process group. SIGTERM first,
- * then SIGKILL after a short grace window so a wedged HF/chrome can't linger.
- * Killing the negative PID targets the whole group (npx + hyperframes +
- * chrome + ffmpeg), which a plain `child.kill()` would not reach.
+ * Terminate a child and its entire process tree.
+ *
+ * POSIX: the child is spawned `detached`, so it leads its own process group
+ * and killing the *negative* PID reaps the whole group (npx + hyperframes +
+ * chrome + ffmpeg) — SIGTERM first, then SIGKILL after a short grace window
+ * so a wedged HF/chrome can't linger. A plain `child.kill()` would not reach
+ * the grandchildren.
+ *
+ * win32: there are no process groups to signal — `process.kill(-pid, …)` has
+ * always thrown here and silently degraded to killing only the `npx` wrapper,
+ * orphaning chrome/ffmpeg. `taskkill /T /F` is the platform's actual
+ * whole-tree kill, so we use it (and the child is NOT spawned detached on
+ * win32 — see the file header, defect 3).
  */
 function killTree(child: ChildProcess): void {
   const pid = child.pid;
+  if (process.platform === 'win32') {
+    if (pid !== undefined) {
+      try {
+        // Fire-and-forget: `/T` includes descendants, `/F` is force.
+        spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        }).on('error', () => {
+          /* taskkill missing (unlikely) — fall through to the handle kill */
+        });
+      } catch {
+        // fall through
+      }
+    }
+    try {
+      if (!child.killed) child.kill();
+    } catch {
+      // already exited
+    }
+    return;
+  }
   const signalGroup = (sig: NodeJS.Signals) => {
     if (pid === undefined) return;
     try {
@@ -255,6 +326,198 @@ function parseProgressLine(
     if (v >= 0 && v <= 100) return { pct: v / 100 };
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Spawn shape — extracted so the argv / env / failure-message construction
+// is testable without a HyperFrames install (same pattern as blender.ts's
+// buildRenderArgs). See the WP-32 notes in the file header for why each of
+// these looks the way it does.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Which binary we handed HF, and how we chose it (for diagnostics). */
+export interface HyperframesBrowser {
+  path: string;
+  source: 'env' | 'headless-shell' | 'chrome';
+}
+
+/**
+ * Pick the browser to hand HyperFrames.
+ *
+ * Order: an operator-set `HYPERFRAMES_BROWSER_PATH` that exists on disk wins
+ * (never override a deliberate override), then puppeteer's pinned
+ * `chrome-headless-shell`, then — on POSIX only — puppeteer's pinned full
+ * Chrome.
+ *
+ * On **win32 there is no Chrome fallback**: full Chrome cannot answer HF's
+ * `<exe> --version` preflight there, so returning it would hand back a binary
+ * that is *known* to reproduce the g61 failure (exit 1, "Chrome cannot start …
+ * signal SIGKILL, ETIMEDOUT") after a ~15 s wait, with an install hint
+ * pointing at the wrong browser. A fail-fast throw naming
+ * `chrome-headless-shell` is strictly more useful than a render that cannot
+ * work. On POSIX the preflight passes and the fallback is real, so it stays.
+ *
+ * `env`/`exists`/`platform` are injectable so tests can drive every branch
+ * from one box without touching the real cache.
+ */
+export function resolveHyperframesBrowser(deps: {
+  env?: NodeJS.ProcessEnv;
+  exists?: (p: string) => boolean;
+  headlessShell?: () => string | null;
+  chrome?: () => string;
+  platform?: NodeJS.Platform;
+} = {}): HyperframesBrowser {
+  const env = deps.env ?? process.env;
+  const exists = deps.exists ?? existsSync;
+  const headlessShell = deps.headlessShell ?? resolveHeadlessShellExecutable;
+  const chrome = deps.chrome ?? resolveChromeExecutable;
+  const platform = deps.platform ?? process.platform;
+
+  const override = env.HYPERFRAMES_BROWSER_PATH;
+  if (override && exists(override)) return { path: override, source: 'env' };
+
+  const shell = headlessShell();
+  if (shell) return { path: shell, source: 'headless-shell' };
+
+  if (platform === 'win32') {
+    throw new Error(
+      'chrome-headless-shell not found in ' +
+        `${headlessShellCacheDir()}. ${HEADLESS_SHELL_INSTALL_HINT} ` +
+        '(Installing full Chrome does NOT fix this: HyperFrames preflights the ' +
+        'binary with `<exe> --version` under a 5s timeout and Chrome on Windows ' +
+        'never answers, so the render dies with ETIMEDOUT — live-found g61.)',
+    );
+  }
+
+  return { path: chrome(), source: 'chrome' };
+}
+
+/** The `npx …` argv for one render. */
+export function buildHyperframesArgv(args: {
+  projectDir: string;
+  compositionFile?: string;
+  outPath: string;
+  preset: 'landscape' | 'portrait' | 'square';
+  fps?: number;
+}): string[] {
+  return [
+    '--yes',
+    'hyperframes',
+    'render',
+    args.projectDir,
+    ...(args.compositionFile ? ['-c', args.compositionFile] : []),
+    '-o',
+    args.outPath,
+    '--resolution',
+    args.preset,
+    '--fps',
+    String(args.fps ?? HF_DEFAULT_FPS),
+    // NOTE: HF has no `--duration`/`--width`/`--height` flags — duration is
+    // declared inside the composition HTML (data-duration) and framing is
+    // set via the `--resolution` preset (see deviations #2/#3). We do NOT
+    // pass `--quiet`: it suppresses the `Capturing frame N/M` progress
+    // lines our progress parser depends on. There is no `--browser-path` on
+    // `render` either — the browser goes through the env (below).
+  ];
+}
+
+/**
+ * The child env. `HYPERFRAMES_BROWSER_PATH` is the variable the HF CLI
+ * actually reads; `PUPPETEER_EXECUTABLE_PATH` is kept pointed at the same
+ * binary for any puppeteer-based dep further down the tree (HF itself ignores
+ * it — that was live-found defect 1).
+ *
+ * `PRODUCER_HEADLESS_SHELL_PATH` is deliberately **deleted**, not left to
+ * inherit: hyperframes 0.8.35 has two browser resolvers and they disagree on
+ * precedence — `findFromEnv` reads `HYPERFRAMES_BROWSER_PATH ??
+ * PRODUCER_HEADLESS_SHELL_PATH` (ours wins) while `BrowserManager` checks
+ * `PRODUCER_HEADLESS_SHELL_PATH` FIRST and hard-throws "[BrowserManager]
+ * Chrome binary not found at PRODUCER_HEADLESS_SHELL_PATH=…" when it points
+ * at a moved binary. An inherited leftover (another tool, a CI profile, an
+ * operator experiment) would therefore decide the browser for some HF code
+ * paths. Clearing it makes the adapter's choice the only voice, which is what
+ * the resolver above is for.
+ */
+export function buildHyperframesEnv(
+  base: NodeJS.ProcessEnv,
+  browser: HyperframesBrowser,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    HYPERFRAMES_BROWSER_PATH: browser.path,
+    PUPPETEER_EXECUTABLE_PATH: browser.path,
+    // Prevent puppeteer-deep deps from trying to download Chrome on the fly.
+    PUPPETEER_SKIP_DOWNLOAD: 'true',
+  };
+  delete env.PRODUCER_HEADLESS_SHELL_PATH;
+  return env;
+}
+
+/**
+ * Spawn options. `detached` is POSIX-only on purpose: it exists so killTree
+ * can signal the process group, which win32 has no equivalent for, and under
+ * Bun on Windows it additionally costs us every byte of the child's piped
+ * stdout/stderr (live-found defect 3).
+ */
+export function buildHyperframesSpawnOptions(
+  platform: NodeJS.Platform = process.platform,
+): { detached: boolean; windowsHide: boolean } {
+  return { detached: platform !== 'win32', windowsHide: true };
+}
+
+const FAILURE_TAIL_LINES = 20;
+const FAILURE_MESSAGE_MAX_CHARS = 4000;
+
+/**
+ * Assemble the message that becomes the `render_queue.error` row.
+ *
+ * HF writes its failures to **stdout** (the "✗ Chrome cannot start" box), so a
+ * message built from stderr alone is empty for the most common failure class —
+ * which is exactly what the live round saw. Both tails are included and
+ * labelled, and a child that produced nothing at all says so, with the command
+ * and the browser we chose, so the row is never a dead end.
+ *
+ * Layout matters for the same reason: the diagnostic context (command +
+ * browser) goes BEFORE the output tails, because the whole message is capped
+ * and truncated from the tail end. With the context last, a chatty failure —
+ * 40 tail lines is already over the 4000-char cap — cut exactly the two fields
+ * g61 added, and the queue row ended "…(truncated)" with no record of which
+ * binary HF was handed.
+ */
+export function buildRenderFailureMessage(args: {
+  exitCode: number | null;
+  stdoutTail: string[];
+  stderrTail: string[];
+  argv: string[];
+  browser?: HyperframesBrowser;
+  /** Overrides the leading clause (used by the exit-0-no-output case). */
+  headline?: string;
+}): string {
+  const { exitCode, stdoutTail, stderrTail, argv, browser } = args;
+  const headline =
+    args.headline ?? `[hyperframes] render failed (exit ${exitCode ?? 'spawn-error'}):`;
+  const context =
+    `command: npx ${argv.join(' ')}` +
+    (browser ? `\nbrowser: ${browser.source} ${browser.path}` : '');
+
+  const sections: string[] = [];
+  const push = (label: string, lines: string[]): void => {
+    const tail = lines.slice(-FAILURE_TAIL_LINES);
+    if (tail.length === 0) return;
+    sections.push(`--- ${label} (last ${tail.length} line${tail.length === 1 ? '' : 's'}) ---\n${tail.join('\n')}`);
+  };
+  push('stdout', stdoutTail);
+  push('stderr', stderrTail);
+
+  // headline + context first (never truncated away), tails after.
+  const head = `${headline}\n${context}`;
+  const body =
+    sections.length > 0 ? sections.join('\n') : 'no output captured on stdout or stderr';
+
+  const message = `${head}\n${body}`;
+  return message.length > FAILURE_MESSAGE_MAX_CHARS
+    ? `${message.slice(0, FAILURE_MESSAGE_MAX_CHARS)}\n…(truncated)`
+    : message;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -396,58 +659,47 @@ export const hyperframesAdapter: RendererAdapter = {
     const outDir = dirname(outPath);
     if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
-    // Resolve the pinned Chrome — fail fast if it isn't installed yet so
-    // the caller gets a clear error rather than HF downloading its own.
-    let chromePath: string;
+    // Resolve the browser to hand HF — fail fast if no usable one is installed
+    // so the caller gets a clear error rather than HF reaching for its own
+    // (possibly broken) cache, or a Windows Chrome that cannot pass HF's
+    // preflight. Prefers chrome-headless-shell; see the header.
+    let browser: HyperframesBrowser;
     try {
-      chromePath = resolveChromeExecutable();
+      browser = resolveHyperframesBrowser();
     } catch (e) {
       throw new Error(
-        `[hyperframes] Chrome not available: ${(e as Error).message}`,
+        `[hyperframes] no usable browser: ${(e as Error).message}`,
       );
     }
+    const chromePath = browser.path;
 
     const engineVersion = await detectEngineVersion();
 
-    const argv = [
-      '--yes',
-      'hyperframes',
-      'render',
+    const argv = buildHyperframesArgv({
       projectDir,
-      ...(needsComposition ? ['-c', cellHtmlBase] : []),
-      '-o',
+      compositionFile: needsComposition ? cellHtmlBase : undefined,
       outPath,
-      '--resolution',
       preset,
-      '--fps',
-      String(HF_DEFAULT_FPS),
-      // NOTE: HF has no `--duration`/`--width`/`--height` flags — duration is
-      // declared inside the composition HTML (data-duration) and framing is
-      // set via the `--resolution` preset (see deviations #2/#3). We do NOT
-      // pass `--quiet`: it suppresses the `Capturing frame N/M` progress
-      // lines our progress parser depends on.
-    ];
+    });
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      PUPPETEER_EXECUTABLE_PATH: chromePath,
-      // Prevent puppeteer-deep deps from trying to download Chrome on the fly.
-      PUPPETEER_SKIP_DOWNLOAD: 'true',
-    };
+    const env = buildHyperframesEnv(process.env, browser);
 
-    // `detached: true` puts the child (npx) in its own process group, so
-    // killing the *group* (negative PID) reaps the whole npx → hyperframes →
-    // chrome → ffmpeg tree — a plain `child.kill()` only hits npx and leaves
-    // chrome/ffmpeg grandchildren orphaned. See `killTree` below.
+    // On POSIX `detached: true` puts the child (npx) in its own process group,
+    // so killing the *group* (negative PID) reaps the whole npx → hyperframes
+    // → chrome → ffmpeg tree. On win32 detaching buys nothing (no groups to
+    // signal) and loses the child's piped output under Bun, so we don't —
+    // killTree uses `taskkill /T` there instead.
     const child = spawn('npx', argv, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
-      detached: true,
+      ...buildHyperframesSpawnOptions(),
     });
     activeChildren.set(recordId, child);
-    // Persist the group-leader PID so a fresh sidecar (after a crash) can reap
-    // this detached group before re-queuing the render — otherwise two writers
-    // would race the same output file. Cleared on close below.
+    // Persist the child's PID so a fresh sidecar (after a crash) can reap the
+    // leftover tree before re-queuing the render — otherwise two writers would
+    // race the same output file. On POSIX that PID is the group leader; on
+    // win32 it is the `npx` process and `taskkill /T` walks its descendants.
+    // Cleared on close below.
     if (child.pid !== undefined) recordRenderPid(recordId, child.pid);
 
     // Wire cancellation via the host signal.
@@ -466,8 +718,12 @@ export const hyperframesAdapter: RendererAdapter = {
         ? Math.max(1, Math.floor((cell.duration_ms / 1000) * HF_DEFAULT_FPS))
         : null;
 
-    // Line-buffered stderr → progress events. Tail stdout too in case HF
-    // ever decides to emit progress there.
+    // Line-buffered stdout AND stderr → progress events. The two tails are
+    // kept separate so the failure message can say which stream said what:
+    // HF prints progress on stdout and prints its *failures* there too (the
+    // "✗ Chrome cannot start" box), which is why a stderr-only error row read
+    // blank for all 8 live failures.
+    const stdoutTail: string[] = [];
     const stderrTail: string[] = [];
     let lastProgress = -1;
     let lastFrame = 0;
@@ -490,13 +746,13 @@ export const hyperframesAdapter: RendererAdapter = {
       });
     };
 
-    const handleLine = (raw: string): void => {
+    const handleLine = (tail: string[], raw: string): void => {
       // Strip ANSI escape sequences (HF uses `\x1b[2K` etc. on the progress bar).
       // eslint-disable-next-line no-control-regex
       const line = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').trim();
       if (line.length === 0) return;
-      stderrTail.push(line);
-      if (stderrTail.length > 200) stderrTail.shift();
+      tail.push(line);
+      if (tail.length > 200) tail.shift();
       const p = parseProgressLine(line);
       if (!p) return;
       if ('frame' in p) {
@@ -514,7 +770,7 @@ export const hyperframesAdapter: RendererAdapter = {
       }
     };
 
-    const bufferLines = (stream: NodeJS.ReadableStream): void => {
+    const bufferLines = (stream: NodeJS.ReadableStream, tail: string[]): void => {
       let pending = '';
       stream.on('data', (chunk: Buffer) => {
         pending += chunk.toString('utf8');
@@ -524,16 +780,16 @@ export const hyperframesAdapter: RendererAdapter = {
         while ((idx = pending.search(/[\r\n]/)) >= 0) {
           const line = pending.slice(0, idx);
           pending = pending.slice(idx + 1);
-          if (line.length > 0) handleLine(line);
+          if (line.length > 0) handleLine(tail, line);
         }
       });
       stream.on('end', () => {
-        if (pending.length > 0) handleLine(pending);
+        if (pending.length > 0) handleLine(tail, pending);
       });
     };
 
-    if (child.stderr) bufferLines(child.stderr);
-    if (child.stdout) bufferLines(child.stdout);
+    if (child.stderr) bufferLines(child.stderr, stderrTail);
+    if (child.stdout) bufferLines(child.stdout, stdoutTail);
 
     // Wait for completion / failure / abort.
     const exitCode: number | null = await new Promise<number | null>((resolveExit) => {
@@ -555,16 +811,21 @@ export const hyperframesAdapter: RendererAdapter = {
     }
 
     if (exitCode !== 0) {
-      const tail = stderrTail.slice(-20).join('\n');
       throw new Error(
-        `[hyperframes] render failed (exit ${exitCode ?? 'spawn-error'}):\n${tail}`,
+        buildRenderFailureMessage({ exitCode, stdoutTail, stderrTail, argv, browser }),
       );
     }
 
     if (!existsSync(outPath)) {
       throw new Error(
-        `[hyperframes] render exited 0 but output not found at ${outPath}\n` +
-          stderrTail.slice(-20).join('\n'),
+        buildRenderFailureMessage({
+          exitCode,
+          stdoutTail,
+          stderrTail,
+          argv,
+          browser,
+          headline: `[hyperframes] render exited 0 but output not found at ${outPath}`,
+        }),
       );
     }
 
@@ -593,6 +854,14 @@ export const hyperframesAdapter: RendererAdapter = {
         frames_observed: lastFrame,
         elapsed_ms: finishedAtMs - startedAtMs,
         chrome_executable: chromePath,
+        // How that path was chosen (env override / headless shell / full
+        // Chrome) — the live round could not tell which binary HF used.
+        browser_source: browser.source,
+        // …and WHICH puppeteer build it was. `browser_source` alone cannot
+        // distinguish a shell build pinned to the Chrome the Excalidraw
+        // adapter uses (G24) from a mismatched one, and an HF fast-capture
+        // path is itself build-gated — so the record carries the buildId.
+        browser_build_id: buildIdFromInstallPath(browser.path) ?? null,
       },
     };
     return record;

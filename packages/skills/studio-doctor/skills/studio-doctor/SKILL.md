@@ -14,6 +14,7 @@ Toolchain preflight for `com.ikenga.studio`. Run it before `studio-init` / `stud
 | `ffmpeg` | **required** | exporter (stitch/encode) |
 | Chromium / Chrome | **required** | HyperFrames renderer (Puppeteer) |
 | `bun` | **required** | sidecar / CLI runtime |
+| `chrome-headless-shell` | **required on Windows**, reported elsewhere | HyperFrames CLI (drives the headless shell, not full Chrome, on win32) |
 | `python3` | optional | `studio-beat-detect` |
 | `librosa` (python import) | optional | `studio-beat-detect` (beat/onset detection) |
 
@@ -32,4 +33,5 @@ It prints a table of `ok` / `MISSING` per dependency and a one-line summary. Exi
 ## Interpreting output
 
 - All `ok` → you're clear to build anything, including music videos.
-- `python3`/`librosa` `MISSING (optional)` → everything works except `studio-beat-detect`; install with `pip install librosa` when you need music-video beat-snapping.
+- `python3`/`librosa` `MISSING (optional)` → everything works except `studio-beat-detect`; install with `pip install librosa` when you need music-video beat-snapping. The check probes `python3`, `python` and `py` in turn and imports `librosa` with the interpreter it actually found (on Windows `python3` is often the Store alias stub).
+- `chrome-headless-shell` `MISSING (required)` on Windows → `npx puppeteer browsers install chrome-headless-shell`. Chromium itself is found via `PUPPETEER_EXECUTABLE_PATH`, a system browser, or the Puppeteer cache (`~/.cache/puppeteer`, or `PUPPETEER_CACHE_DIR`).

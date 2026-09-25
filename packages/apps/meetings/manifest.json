@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.meetings",
   "name": "Meetings",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "ikenga_api": "3",
   "kind": "app",
   "author": {
@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "meetings.index",
-        "label": "Meetings",
+        "title": "Meetings",
         "icon": "video",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.meetings/meetings"
+        "route": "/meetings",
+        "pin_on_install": true
       }
     ],
     "routes": [

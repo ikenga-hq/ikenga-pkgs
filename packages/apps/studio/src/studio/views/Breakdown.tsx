@@ -655,19 +655,25 @@ export function BreakdownView() {
     return [...hydratedCells]
       .sort((a, b) => a.index - b.index)
       .map((c) => {
-        // Two record sources: the polled render.list rows, and the records the
-        // cell itself carries (storyboard.read hydrates `Cell.renders`) so a
-        // shot that rendered before this session still shows its real engine.
+        // ONE record source: the polled `render.list` rows. This used to read a
+        // second source — `recordByUid(c.renders)` — under a comment claiming
+        // "storyboard.read hydrates `Cell.renders`". That claim is FALSE: no
+        // sidecar writer populates `Cell.renders`, so a real project's
+        // storyboard.json keeps `renders: []` even after a successful render
+        // (live-verified, plans/studio/verify/2026-09-12-wp32-live/g61/
+        // 2-poster-verdict.md). The fallback contributed nothing and the
+        // comment misled the node canvas into sourcing its posters from the
+        // same dead field. `render.list` is not session-scoped — it reads the
+        // `render_queue` table — so a shot that rendered in an earlier session
+        // still resolves its real engine here.
         //
         // `recordByUid` RANKS by status (done>running>queued>failed) but
         // filters nothing — it returns the best record of ANY status. So its
         // result must still be checked: a shot whose only render is queued or
         // failed has rendered NOTHING, and chipping "fal ▸ ltx-video · engine
-        // that rendered this shot" onto it is a lie (Round-2 defect #1). Take
-        // the first `done` record from either source, or none at all.
-        const done = [recByUid[c.uid], recordByUid(c.renders ?? [])[c.uid]].find(
-          (r): r is RenderRecord => r?.status === 'done',
-        );
+        // that rendered this shot" onto it is a lie (Round-2 defect #1).
+        const best = recByUid[c.uid];
+        const done: RenderRecord | undefined = best?.status === 'done' ? best : undefined;
         return cellToShot(c, trackForCell(c, engines), done);
       });
   }, [hasRealCells, hydratedCells, engines, recByUid]);

@@ -118,7 +118,7 @@ export async function runServer(dbPath?: string): Promise<void> {
   await server.connect(transport);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('index.js')) {
   runServer().catch((err) => {
     console.error('Fatal MCP Server error:', err);
     process.exit(1);

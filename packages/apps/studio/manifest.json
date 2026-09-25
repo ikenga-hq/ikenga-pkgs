@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.studio",
   "name": "Studio",
-  "version": "0.6.0",
+  "version": "0.7.1",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {
@@ -41,13 +41,13 @@
     }
   ],
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "studio.index",
-        "label": "Studio",
+        "title": "Studio",
         "icon": "clapperboard",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.studio/studio"
+        "route": "/studio",
+        "pin_on_install": true
       }
     ],
     "routes": [
@@ -124,10 +124,7 @@
       "restart_when_changed": [
         "mcp/dist/index.js"
       ],
-      "auto_restart": true,
-      "env": {
-        "STUDIO_TRUST_STUB": "1"
-      }
+      "auto_restart": true
     }
   ],
   "iyke": {

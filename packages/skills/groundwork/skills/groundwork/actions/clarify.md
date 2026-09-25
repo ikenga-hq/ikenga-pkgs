@@ -18,7 +18,7 @@ A seven-point readiness scan:
 |---|---|---|
 | 1 | **Open questions in `04`** | Scan for "Open questions / not blocking" headings without an answer below; flag each. |
 | 2 | **Unspecified IDs in `01`** | Find `G-NN` / `WP-NN` mentions in `01` that have no entry in `.groundwork.json.ids`, or have `status: open`. |
-| 3 | **Missing locked designs for visual profiles** | If `profile.produces_designs && phase about to be orchestrated has 0 locked designs`, flag. |
+| 3 | **Design readiness for visual profiles** | Run `groundwork_state.py design-data --plan <plan>` and read the phase about to be orchestrated. **`fail`** if any `D-NN` in that phase is not `locked`, or (legacy plans with no `D-NN`) the phase has WPs but no locked design file. **`warn`** for each design warning (locked without a file, locked file missing on disk, built against an unlocked design), each unlinked design file (`design-migrate` links them), and each locked `D-NN` with no implementing WP (orchestrate would fall back to phase matching). A `D-NN` with no file yet is `planned` — reported as not locked, never as "missing". |
 | 4 | **`05-tracking.md` drift from `01`** | For every ID in `01`, confirm `05` references it (or the regions covering it are coherent). |
 | 5 | **Critical-path freshness** | If `01`/`05` whole-file hashes have changed since the last `orchestrate`, the critical path may be stale. |
 | 6 | **Active sub-plans** | Find sub-plans with `status: active` and surface their `ref` WPs. **Not a blocker** — active sub-plans are a normal state during a build. But if `orchestrate` is about to run and a sub-plan's ref WP is `queued`, surface it as a `warn` so the orchestrator's kickoff brief can mention "WP-NN has its own diff-plan at NN-*.md — read it before starting." |

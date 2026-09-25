@@ -60,6 +60,23 @@ export interface WatcherOptions {
   debounceMs?: number;
   /** Override the event writer (default: stdout). */
   writer?: EventWriter;
+  /**
+   * Called once per flush in which `storyboard.json` itself changed, BEFORE
+   * the `cells/changed` notifications for that flush go out.
+   *
+   * WP-32 live-found (g58): the project document is a first-class input —
+   * an agent, the CLI, or a human with an editor can rewrite it out of band
+   * (WP-26). Every FS-going reader (the whole FE, via `storyboard.list_cells`)
+   * then sees the new bytes, but the sidecar's in-memory open-project record
+   * was only ever refreshed by the *mutating* RPCs, so the exporter and the
+   * render runner — which read that cache — kept cutting the old document.
+   * Live: a `Cell.index` rotation on disk re-ordered the lane within 3 s while
+   * an export 2.5 min later used the pre-edit order, silently. This hook is
+   * how index.ts re-hydrates the cache on an out-of-band edit; it fires before
+   * the emit so a FE refetch triggered by the event can't observe a cache the
+   * exporter hasn't caught up with.
+   */
+  onProjectDocChanged?: (absPath: string) => void;
 }
 
 export interface WatcherHandle {
@@ -92,6 +109,12 @@ const WATCH_GLOBS = [
   // this stays one emit per save — see canvas.ts.
   '.studio/**',
 ];
+
+/**
+ * `deriveCellId`'s synthetic id for the project document itself. The flush
+ * loop matches on this to decide whether `onProjectDocChanged` fires.
+ */
+export const PROJECT_DOC_CELL_ID = 'project:storyboard.json';
 
 const IGNORED = [
   '**/renders/**',
@@ -203,6 +226,19 @@ export async function startWatcher(
       flushTimer = null;
       const batch = Array.from(pending.values());
       pending.clear();
+      // Cache coherence before notification (see onProjectDocChanged): if
+      // storyboard.json moved, let the owner re-hydrate from disk first. A
+      // throwing hook must not cost us the emits.
+      const docChange = batch.find((c) => c.cellId === PROJECT_DOC_CELL_ID);
+      if (docChange && opts.onProjectDocChanged) {
+        try {
+          opts.onProjectDocChanged(docChange.path);
+        } catch (e) {
+          process.stderr.write(
+            `[studio-sidecar][watcher] onProjectDocChanged failed: ${(e as Error).message}\n`,
+          );
+        }
+      }
       for (const change of batch) {
         emitCellsChanged(writer, projectId, change);
       }

@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.tasks",
   "name": "Tasks",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": {
@@ -9,13 +9,13 @@
     "key": "royalti"
   },
   "ui": {
-    "nav": [
+    "views": [
       {
         "id": "tasks.index",
-        "label": "Tasks",
+        "title": "Tasks",
         "icon": "check-square",
-        "section": "ops",
-        "route": "/pkg/com.ikenga.tasks/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

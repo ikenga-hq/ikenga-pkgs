@@ -41,12 +41,18 @@ IDs (13 total)
   G-NN gaps:       2 open · 6 folded · 0 retired
   WP-NN packages:  13 defined · 1 in_progress · 12 queued · 0 blocked · 0 done
   G-<NAME> gates:  3 declared · 1 passed · 2 pending
-  D-NN designs:    1 locked · 0 pending
+  D-NN designs:    7 total · 2 locked · 1 drafted · 4 planned
 
-Design coverage
-  P1: 1/1 locked  ✓
-  P2: 0/5 locked  ⚠ (5 surfaces undesigned — design before P2 orchestration)
-  P3: 0/4 locked  — not yet approached
+Design coverage                              (from status-data .design_lifecycle.coverage)
+  P1: 2/7 locked · 1 implemented · 1 verified  ⚠ (5 not locked — design before P1 orchestration)
+  P2: 0/0 locked  — not yet approached
+
+Design lifecycle                             (one line per D-NN; design_state · build_state)
+  D-01  Identity & consent   locked Round 3 · verified Round 6   WP-01 · PR #42 merged
+  D-02  Profile              locked Round 3 · in progress        WP-01
+  D-03  Deal-breakers        drafted        · unbuilt            ⚠ 1 open finding (G-14 · error · app/…/DealBreakers.tsx:88)
+  D-04  Assessment           planned        · unbuilt
+  ⚠ 1 design file not linked to a D-NN — run `groundwork_state.py design-migrate`
 
 Sub-plans
   active:  1 · 06-startSeededChat-extraction.md (diff-plan · ref WP-09 · G-VERB)
@@ -81,7 +87,8 @@ The exact icon set: `✓` pass · `⚠` warn · `✗` fail · `—` n/a.
 | "Stale: N input docs changed since refresh" | Whole-file hash drift count of `01`/`04`/`05`/`09` vs `refresh-board.last_run` |
 | G-NN counts | `.groundwork.json.ids` filter by kind + status |
 | WP-NN status counts | Same; cross-check against `05-tracking.md` checkboxes if present |
-| Design coverage | `.groundwork.json.designs` grouped by `phase` |
+| Design coverage | `status-data` → `design_lifecycle.coverage` (locked / planned `D-NN` per phase, plus implemented, verified, unlinked files). Plans with no `D-NN` fall back to `designs` files grouped by `phase` |
+| Design lifecycle | `status-data` → `design_lifecycle.designs[]`: `design_state` (planned / drafted / locked), `build_state` (unbuilt / in_progress / implemented / verified), implementing WPs + PRs, open findings, warnings. Suggest `design-migrate` when `summary.unlinked > 0` |
 | Sub-plans | `.groundwork.json.subplans` grouped by `status` (active / landed / abandoned / deferred); flags actives whose `ref` WP is still `queued` (signal: implementation hasn't started but the plan-for-it has been drafted — fine, but worth confirming) |
 | Profile conformance | Walk profile-required keys against rendered template state |
 

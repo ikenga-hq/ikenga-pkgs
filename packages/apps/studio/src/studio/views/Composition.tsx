@@ -69,6 +69,8 @@ import {
   fidelityLabel,
   engineLabel,
   recordByUid,
+  latestRecordByUid,
+  renderCounts,
 } from './composition/format';
 
 const FPS = DEFAULT_FPS;
@@ -126,6 +128,13 @@ export function CompositionView() {
   // records table, byte-playback, and the per-clip fidelity label (fixes the
   // stale global-rung finding).
   const recByUid = useMemo(() => (hasRealCells ? recordByUid(renderRecords) : {}), [hasRealCells, renderRecords]);
+  // Latest (not best-ever) render record per cell, for the "N / M rendered"
+  // banner only (G-106) — everything else above keeps using recByUid's
+  // best-status pick (filmstrip poster, byte-playback, records table).
+  const latestByUid = useMemo(
+    () => (hasRealCells ? latestRecordByUid(renderRecords) : {}),
+    [hasRealCells, renderRecords],
+  );
   const cellByUid = useMemo(() => {
     const m: Record<string, Cell> = {};
     for (const c of hydratedCells) m[c.uid] = c;
@@ -381,7 +390,9 @@ export function CompositionView() {
   const activeRung = activeCell?.rung ?? (hasRealCells ? undefined : meta.rung);
 
   const activeWord = narration?.words.find((w) => playheadMs >= w.start_ms && playheadMs < w.end_ms);
-  const renderedCount = clips.filter((c) => (recByUid[c.uid]?.status ?? c.status) === 'done').length;
+  const bannerCounts = useMemo(() => renderCounts(clips, latestByUid), [clips, latestByUid]);
+  const renderedCount = bannerCounts.rendered;
+  const failedRenderCount = bannerCounts.failed;
   const fullyRendered = clips.length > 0 && renderedCount === clips.length;
   const playheadPct = Math.min(100, Math.max(0, (playheadMs / totalMs) * 100));
   const clipIndex = activeClip ? clips.findIndex((c) => c.uid === activeClip.uid) : -1;
@@ -513,8 +524,12 @@ export function CompositionView() {
             <span className="comp-pill" title="Rendering engine">
               ⚡ HyperFrames · <b>{fidelityLabel(activeRung ?? meta.rung)}</b>
             </span>
-            <span className={`comp-pill${fullyRendered ? ' is-ok' : ''}`} title="Cells with a finished render on disk">
+            <span
+              className={`comp-pill${fullyRendered ? ' is-ok' : ''}`}
+              title="Cells whose latest render attempt is done or failed"
+            >
               {fullyRendered ? '✓ ' : ''}{renderedCount} / {clips.length} rendered
+              {failedRenderCount > 0 ? ` · ${failedRenderCount} failed` : ''}
             </span>
           </div>
         </header>

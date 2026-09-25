@@ -28,7 +28,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readCellContent, writeCellContent } from './storyboard.js';
+import { listCells, read, readCell, readCellContent, writeCellContent } from './storyboard.js';
 import { startWatcher } from './watcher.js';
 import { TOPIC_CELLS_CHANGED, type EventEnvelope } from './events.js';
 
@@ -145,6 +145,49 @@ async function main(): Promise<number> {
       assert.equal(payload.cellId, CELL_UID);
       assert.equal(payload.kind, 'created');
       assert.ok(payload.path.replace(/\\/g, '/').endsWith('cells/hifi/c1/content.html'));
+    });
+
+    // ── WP-32 / g58 — the READS carry the document they parsed ────────────
+    //
+    // index.ts's `syncOpenProject` needs something to sync FROM on a read, or
+    // the exporter and render runner stay on a stale cache after an
+    // out-of-band edit (the live export-order bug: the lane re-ordered, the
+    // export did not). Every read that already re-reads storyboard.json must
+    // hand that parse back — it is free, and it is the whole contract.
+    const rotated = JSON.parse(readFileSync(join(projectRoot, 'storyboard.json'), 'utf8')) as {
+      cells: Array<{ uid: string; index: number }>;
+    };
+    rotated.cells[0]!.index = 42;
+    writeFileSync(
+      join(projectRoot, 'storyboard.json'),
+      JSON.stringify(rotated, null, 2) + '\n',
+      'utf8',
+    );
+
+    test('storyboard.read returns the parsed project for the cache sync, reflecting the disk edit', () => {
+      const r = read(projectRoot);
+      assert.ok(r.project, 'read() must carry the project it parsed');
+      assert.equal(r.project!.cells[0]!.index, 42);
+    });
+
+    test('storyboard.list_cells (the FE refetch path that used to skip the sync) carries it too', () => {
+      const r = listCells(projectRoot);
+      assert.ok(r.project, 'listCells() must carry the project it parsed');
+      assert.equal(r.project!.cells[0]!.index, 42);
+    });
+
+    test('read_cell and read_cell_content carry it as well — on the hit AND the cell-not-found path', () => {
+      const hit = readCell(projectRoot, CELL_UID);
+      assert.ok(hit.project);
+      assert.equal(hit.project!.cells[0]!.index, 42);
+
+      const miss = readCell(projectRoot, 'no-such-cell');
+      assert.equal((miss.result as { ok: boolean }).ok, false);
+      assert.ok(miss.project, 'a cell-not-found read still parsed the document — sync from it');
+
+      const content = readCellContent(projectRoot, CELL_UID);
+      assert.ok(content.project);
+      assert.equal(content.project!.cells[0]!.index, 42);
     });
 
     console.log(`\n${passed} passed`);

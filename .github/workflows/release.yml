@@ -89,6 +89,12 @@ jobs:
           PUBLISHER_SIGNING_PUBLIC_KEY: ${{ secrets.PUBLISHER_SIGNING_PUBLIC_KEY }}
         run: node scripts/update-registry-index.mjs
 
+      - name: Registry recovery hint
+        if: failure() && steps.changesets.outputs.published == 'true'
+        run: |
+          echo "::notice title=Registry Recovery Path::If registry update failed for packages already on npm, backfill the registry without re-releasing via:"
+          echo "  gh workflow run registry-update.yml --repo ikenga-hq/ikenga-pkgs -f published='${{ steps.changesets.outputs.publishedPackages }}'"
+
       - name: Verify registry index health
         if: steps.changesets.outputs.published == 'true'
         run: node scripts/check-registry-stale.mjs

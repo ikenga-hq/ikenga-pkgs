@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-studio",
-  "version": "0.6.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "com.ikenga.studio app pkg — project sidecar (storyboard/render queue with fal.ai + Excalidraw renderer adapters), FFmpeg-backed exporter, prompt-package Track-B handoff, a 40-tool MCP server, and the full M-A production-desk iframe UI.",
   "scripts": {
