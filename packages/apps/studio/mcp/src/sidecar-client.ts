@@ -225,7 +225,13 @@ export class SidecarClient {
       return;
     }
 
-    process.stderr.write(`[studio-mcp] spawning sidecar: node ${this.sidecarPath}\n`);
+    // Report the REAL runtime, not a hardcoded "node". The sidecar is built
+    // `--target=bun` with a `#!/usr/bin/env bun` shebang, and it inherits
+    // whatever runtime this MCP is running under via `process.execPath` — so
+    // launching the MCP with node kills the child on `Cannot find package
+    // 'ws'`. This line used to say "node" unconditionally, which actively
+    // pointed debugging away from the real cause.
+    process.stderr.write(`[studio-mcp] spawning sidecar: ${process.execPath} ${this.sidecarPath}\n`);
     const child = spawn(process.execPath, [this.sidecarPath], {
       env: this.env,
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -83,8 +83,15 @@ test('.excalidraw content_path + auto still resolves normally (requires_network:
   assert.equal(resolveEngineWithRequest('board.excalidraw', undefined), 'excalidraw');
 });
 
+test('.tsx content_path resolves to remotion (requires_network:false, unguarded)', () => {
+  assert.equal(resolveEngine('scene.tsx'), 'remotion');
+  assert.equal(resolveEngineWithRequest('scene.tsx', undefined), 'remotion');
+  assert.equal(resolveEngineWithRequest('scene.tsx', 'remotion'), 'remotion');
+});
+
 test('an unrecognized extension is still rejected as unresolvable, not routed to fal', () => {
   assertRejects(() => resolveEngineWithRequest('cell.json', undefined), 'unresolvable-engine');
 });
 
 console.log(`\n${passed} passed`);
+

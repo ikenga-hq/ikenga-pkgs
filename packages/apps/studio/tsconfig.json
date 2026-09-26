@@ -8,7 +8,8 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx"
   },
   "include": ["sidecars/project/src/**/*", "mcp/src/**/*"]
 }

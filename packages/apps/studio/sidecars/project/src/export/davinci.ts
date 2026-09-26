@@ -507,11 +507,12 @@ try:
     media_items = []
     path_to_item = {}
     for item in clips_data:
-        if item["mediaPath"] and os.path.exists(item["mediaPath"]):
-            imported = mp.ImportMedia([item["mediaPath"]])
+        m_path = item["mediaPath"]
+        if m_path and os.path.exists(m_path) and m_path not in path_to_item:
+            imported = mp.ImportMedia([m_path])
             if imported:
                 media_items.extend(imported)
-                path_to_item[item["mediaPath"]] = imported[0]
+                path_to_item[m_path] = imported[0]
 
     # G-79 (found live on Resolve 19.1/Windows): AppendToTimeline returns a
     # non-empty list while silently placing nothing. CreateTimelineFromClips
@@ -564,6 +565,7 @@ try:
     if not timeline:
         print(json.dumps({"ok": False, "error": "TIMELINE_CREATE_FAILED"}))
         sys.exit(0)
+    proj.SetCurrentTimeline(timeline)
 
     # Honest population report (G-75 #5 spirit): some builds silently no-op
     # the append fallback; surface what actually landed instead of claiming

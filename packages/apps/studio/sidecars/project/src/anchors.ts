@@ -20,6 +20,12 @@ import { AnchorSchema, type Project } from '@ikenga/studio-schema';
 import { readProject, writeProjectAtomic } from './storyboard-fs.js';
 import { importAsset } from './assets.js';
 import { generateStill } from './renderers/fal.js';
+import {
+  reserve as reserveSpend,
+  settle as settleSpend,
+  voidEntry as voidSpend,
+  type SpendDb,
+} from './spend.js';
 
 export interface AnchorResult {
   result: Record<string, unknown>;
@@ -59,6 +65,16 @@ export interface AnchorGenerateInput {
   prompt: string;
   seed?: number;
   model?: string;
+  /**
+   * WP-12 — the spend ledger + the project id it bills against.
+   *
+   * Optional so `generate()` stays callable in tests and tooling without a DB,
+   * but the RPC handler ALWAYS supplies it: this is the second paid door in
+   * the system, and the one the Round-3 experiments actually spent $6.30
+   * through. A `generate()` call with no `spend` is ungated — do not add a
+   * caller that omits it.
+   */
+  spend?: { db: SpendDb; projectId: string; projectMetadata?: Record<string, unknown> };
 }
 
 /**
@@ -84,6 +100,45 @@ export async function generate(
 
   const id = randomUUID();
 
+  // 0) WP-12 — the spend gate, BEFORE the network call.
+  //
+  // `anchor.generate` bills fal for a still and never inserts a render_queue
+  // row, so a gate that lived only on the queue would miss it entirely. It is
+  // also the cheapest call in the system per invocation and therefore the
+  // easiest to run a hundred times without noticing — which is exactly what
+  // happened during Round 3. Reserve first, settle or void after.
+  let spendEntryId: string | undefined;
+  if (input.spend) {
+    const reservation = reserveSpend(input.spend.db, {
+      projectId: input.spend.projectId,
+      refId: id,
+      kind: 'still',
+      engine: 'fal',
+      model_id: input.model,
+      projectMetadata: input.spend.projectMetadata,
+    });
+    if (!reservation.ok) {
+      // Terminal, and not overridable from a tool call — same rule as the
+      // render gate. The message names the human remedies.
+      return {
+        result: {
+          ok: false,
+          error: reservation.error,
+          message: reservation.message,
+          spend: {
+            estimate_usd: reservation.estimate_usd,
+            basis: reservation.basis,
+            ceiling_usd: reservation.ceiling_usd,
+            ceiling_source: reservation.ceiling_source,
+            committed_usd: reservation.committed_usd,
+            remaining_usd: reservation.remaining_usd,
+          },
+        },
+      };
+    }
+    spendEntryId = reservation.entryId;
+  }
+
   // 1) Generate the still to a temp file (fal downloads the produced image).
   const tmpDir = join(tmpdir(), 'ikenga-studio-anchor');
   if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
@@ -102,8 +157,16 @@ export async function generate(
       tmpPath,
     );
   } catch (e) {
+    // The call never produced an image, so it gives its reservation back.
+    if (input.spend && spendEntryId) voidSpend(input.spend.db, spendEntryId);
     return { result: { ok: false, error: 'internal-error', message: (e as Error).message } };
   }
+
+  // fal billed the moment it returned an image — settle now, before the local
+  // import, so a downstream filesystem failure can't void a reservation for
+  // money that has already left the account. `still.cost` is usually undefined
+  // (fal rarely reports one), in which case the entry settles at its estimate.
+  if (input.spend && spendEntryId) settleSpend(input.spend.db, spendEntryId, still.cost);
 
   // 2) Import the still into assets/images/ (reuses the shared importer).
   const imported = await importAsset(projectRoot, still.uri, 'image');

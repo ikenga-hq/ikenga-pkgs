@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings or bash cannot run them on a Windows
+# checkout (core.autocrlf=true rewrites them to CRLF and every line fails with
+#   build.sh: line N: $'': command not found
+# ). Verified 2026-09-07: studio sidecar/mcp build.sh were both unrunnable.
+*.sh text eol=lf
