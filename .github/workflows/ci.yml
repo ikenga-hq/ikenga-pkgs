@@ -1,16 +1,38 @@
 name: CI
 
+# Tiered CI:
+#   - non-draft PRs into main: full build + drift/version/manifest guards
+#     (cheap, whole-fleet by nature), but tests only for the packages the PR
+#     changed plus their dependents.
+#   - nightly on main + manual dispatch: everything, every package's tests.
+# Skipped: drafts (marking ready runs it), docs-only changes, and pushes to
+# main (the PR already ran; release.yml builds main; the nightly tests it).
+
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  schedule:
+    - cron: '41 2 * * *' # nightly, all tests on main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          # the affected-packages filter below diffs against the PR base
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -49,7 +71,17 @@ jobs:
       # to @ikenga/contract schemas (ManifestSchema / ArtifactManifestSchema).
       - run: pnpm validate:manifests
 
-      - run: pnpm -r test --if-present
+      # PRs: only packages changed since the base, plus their dependents.
+      # Nightly / dispatch: every package.
+      - name: Tests (affected on PRs, all otherwise)
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            pnpm -r --filter "...[origin/$BASE]" test --if-present
+          else
+            pnpm -r test --if-present
+          fi
 
       # Cross-language signing gate (ADR-017 / WP-06): canonicalize the frozen
       # golden manifest and assert it equals the golden canonical.json
