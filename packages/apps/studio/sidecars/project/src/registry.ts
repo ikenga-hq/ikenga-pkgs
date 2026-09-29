@@ -31,9 +31,16 @@ import { hyperframesAdapter } from './renderers/hyperframes.js';
 import { excalidrawAdapter } from './renderers/excalidraw.js';
 import { falAdapter } from './renderers/fal.js';
 import { blenderAdapter } from './renderers/blender.js';
+import { remotionAdapter } from './renderers/remotion.js';
 import type { RendererAdapter } from './renderers/types.js';
 
-const ADAPTERS: RendererAdapter[] = [hyperframesAdapter, excalidrawAdapter, falAdapter, blenderAdapter];
+const ADAPTERS: RendererAdapter[] = [
+  hyperframesAdapter,
+  excalidrawAdapter,
+  falAdapter,
+  blenderAdapter,
+  remotionAdapter,
+];
 
 const BY_ID = new Map<string, RendererAdapter>(ADAPTERS.map((a) => [a.id, a]));
 
@@ -95,7 +102,7 @@ export function resolveEngine(contentPath: string): string {
     case 'blend':
       return 'blender';
     case 'tsx':
-      throw new EngineResolutionError('engine-not-available-in-p1', 'remotion is P2');
+      return 'remotion';
     case '':
       // No file-backed content → fal, the network AI generation engine. fal
       // drives from the cell's `prompt` (+ optional anchor image ref), not from
@@ -128,9 +135,6 @@ export function resolveEngineWithRequest(
   requested: string | undefined,
 ): string {
   if (requested && requested !== 'auto') {
-    if (requested === 'remotion') {
-      throw new EngineResolutionError('engine-not-available-in-p1', 'remotion is P2');
-    }
     if (!BY_ID.has(requested)) {
       throw new EngineResolutionError('unresolvable-engine', `unknown engine ${requested}`);
     }

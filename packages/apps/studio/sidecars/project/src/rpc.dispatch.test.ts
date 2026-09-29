@@ -52,7 +52,8 @@ function stubHandlers(): RpcHandlers {
         method === 'export.davinci_timeline' ||
         method === 'canvas.read' ||
         method === 'canvas.write' ||
-        method === 'storyboard.reorder_cells'
+        method === 'storyboard.reorder_cells' ||
+        method === 'spend.status'
       ) {
         return { ok: true, stub: true, method };
       }
@@ -119,7 +120,11 @@ async function main(): Promise<number> {
     // ── G-76: the additive Plan-25 verbs are registered too ─────────────
     // Same failure mode as G-75 #1 — a handler implemented in index.ts but
     // missing from rpc.ts's gate is unreachable over the real stdio transport.
-    const additive = ['canvas.read', 'canvas.write', 'storyboard.reorder_cells'];
+    // WP-12's `spend.status` rides along here for the same reason: it is a
+    // brand-new verb implemented in index.ts's extended() switch, which is
+    // precisely the shape that produced G-75 #1. A spend gate whose status
+    // verb 404s over stdio is a gate nobody can inspect.
+    const additive = ['canvas.read', 'canvas.write', 'storyboard.reorder_cells', 'spend.status'];
     for (let i = 0; i < additive.length; i++) {
       const name = additive[i]!;
       const resp = await send(10 + i, name, { projectId: 'p1' });

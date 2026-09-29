@@ -8,7 +8,9 @@
  *
  * LIFT PROVENANCE (prose only — no live imports back to these paths):
  *   pkgs/_review/studio/src/ui/video/lib/storyboard-schema.ts
- *   (byte-identical with royalti-video-engine/src/lib/storyboard-schema.ts)
+ *   (byte-identical with royalti-video-engine/src/lib/storyboard-schema.ts —
+ *    that engine was retired and deleted on 2026-09-08, WP-16; the path is kept
+ *    here as provenance, not as somewhere to go looking)
  *
  * Lifted base: BeatStatus, Rung, the three per-rung schemas, Comment, the rung structure on Beat,
  * and the Narration block. Renamed Beat -> Cell at the boundary. Composition-engine-specific

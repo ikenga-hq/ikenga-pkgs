@@ -21,6 +21,7 @@ import { anchorTools } from './anchor.js';
 import { assetTools } from './asset.js';
 import { compositionTools } from './composition.js';
 import { renderTools } from './render.js';
+import { spendTools } from './spend.js';
 import { exportTools } from './export.js';
 import { blockTools } from './block.js';
 import { archetypeTools } from './archetype.js';
@@ -41,6 +42,7 @@ export function buildTools(opts: {
     ...assetTools(sidecar),
     ...compositionTools(sidecar, registry),
     ...renderTools(sidecar),
+    ...spendTools(sidecar),
     ...exportTools(sidecar),
     ...blockTools(catalog, registry),
     ...archetypeTools(catalog, registry, sidecar),

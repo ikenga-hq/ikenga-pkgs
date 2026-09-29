@@ -21,12 +21,18 @@ if [[ "${1:-}" == "--watch" ]]; then
   WATCH_FLAG="--watch"
 fi
 
+# `--external better-sqlite3`: db.ts's Node-only FALLBACK branch imports it, but
+# it is deliberately NOT a declared dep since the Bun migration (7e068a6) —
+# bun:sqlite is the real driver. Without the flag the bundler tries to resolve
+# it anyway and the whole build fails, so the sidecar could not be rebuilt at
+# all. External for exactly the reason db.ts carries a @ts-ignore there.
 echo "==> bundling $OUTPUT (target: bun, format: esm)"
 bun build $WATCH_FLAG \
   --target=bun \
   --format=esm \
   --external chokidar \
   --external esbuild \
+  --external better-sqlite3 \
   src/index.ts \
   --outfile "$TMP"
 
