@@ -12,6 +12,9 @@
     "dev:sidecar": "bash sidecars/project/build.sh --watch",
     "build:mcp": "bash mcp/build.sh",
     "dev:mcp": "bash mcp/build.sh --watch",
+    "test": "pnpm run test:ui && pnpm run test:sidecar",
+    "test:ui": "bun run src/studio/bridge.test.ts && bun run src/studio/lib/canvas-controls.test.ts && bun run src/studio/lib/canvas-links.test.ts && bun run src/studio/lib/mcp-probe.test.ts && bun run src/studio/lib/path.test.ts && bun run src/studio/mcp-client.test.ts && bun run src/studio/views/composition/format.test.ts",
+    "test:sidecar": "cd sidecars/project && bun run test",
     "prepublishOnly": "npm run build:mcp && npm run build:sidecar"
   },
   "dependencies": {
