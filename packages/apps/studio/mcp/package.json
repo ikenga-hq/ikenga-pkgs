@@ -7,6 +7,7 @@
   "scripts": {
     "build": "bash build.sh",
     "dev": "bash build.sh --watch",
-    "typecheck": "tsc -p ../tsconfig.json --noEmit"
+    "typecheck": "tsc -p ../tsconfig.json --noEmit",
+    "test": "bun run src/index.smoke.test.ts"
   }
 }
