@@ -1,5 +1,17 @@
 # @ikenga/pkg-engine-openrouter
 
+## 0.2.0
+
+### Minor Changes
+
+- [#112](https://github.com/ikenga-hq/ikenga-pkgs/pull/112) [`990319a`](https://github.com/ikenga-hq/ikenga-pkgs/commit/990319a2a2eeb8dc9366142bde89874f86230cd0) Thanks [@nedjamez](https://github.com/nedjamez)! - Real streaming HTTP transport for the OpenRouter engine (WP-20): SSE client for
+  the OpenAI-compatible `/chat/completions` endpoint, a stateful normalizer that
+  handles both G-54 reasoning forms (`delta.reasoning`/`delta.thinking` and inline
+  `<think>…</think>` tags split across chunks), OpenAI-shape tool_calls delta
+  accumulation, post-finish usage accounting, and API-key binding via the F-9
+  settings-secret env mechanism (`OPENROUTER_API_KEY`). Model stays free text —
+  no pinned roster.
+
 ## 0.1.1
 
 ### Patch Changes
