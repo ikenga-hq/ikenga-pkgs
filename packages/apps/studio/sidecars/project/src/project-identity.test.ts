@@ -27,10 +27,17 @@ function test(name: string, fn: () => void): void {
 
 const BS = String.fromCharCode(92);
 
-test('separator spelling does not change identity', () => {
-  const fwd = 'C:/Users/x/Documents/proj';
-  assert.equal(samePath(fwd, fwd.split('/').join(BS)), true);
-});
+if (process.platform === 'win32') {
+  test('separator spelling does not change identity on Windows', () => {
+    const fwd = 'C:/Users/x/Documents/proj';
+    assert.equal(samePath(fwd, fwd.split('/').join(BS)), true);
+  });
+} else {
+  test('a backslash is a filename character off Windows, not a separator', () => {
+    // POSIX allows `\` in a name, so `/home/x/a\b` is one entry, not `a/b`.
+    assert.equal(samePath('/home/x/a/b', `/home/x/a${BS}b`), false);
+  });
+}
 
 test('a trailing separator does not change identity', () => {
   assert.equal(samePath('/home/x/proj', '/home/x/proj/'), true);
