@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-sentry",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Sentry webview package",
   "license": "Apache-2.0",
   "repository": {

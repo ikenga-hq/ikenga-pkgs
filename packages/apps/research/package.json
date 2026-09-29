@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-research",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Research — Reports (list+detail), Sources (monitored register), Personas (ICP grid) over the research_notes + research_sources schema. Multi-file iframe pkg; deterministic CSS vendoring build.",
   "license": "Apache-2.0",
   "repository": {

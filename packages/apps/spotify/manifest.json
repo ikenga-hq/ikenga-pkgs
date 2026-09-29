@@ -1,19 +1,19 @@
 {
   "id": "com.ikenga.spotify",
   "name": "Spotify for Artists",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "ikenga_api": "1",
   "kind": "embedded",
   "author": { "name": "Royalti", "key": "royalti" },
   "ui": {
     "session": { "persistence": "keep" },
-    "nav": [
+    "views": [
       {
         "id": "spotify.index",
-        "label": "Spotify",
+        "title": "Spotify",
         "icon": "music",
-        "section": "apps",
-        "route": "/pkg/com.ikenga.spotify/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

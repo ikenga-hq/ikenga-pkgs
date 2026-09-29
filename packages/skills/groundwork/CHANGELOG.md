@@ -1,5 +1,73 @@
 # @ikenga/skill-groundwork
 
+## 0.8.0
+
+### Minor Changes
+
+- [#108](https://github.com/ikenga-hq/ikenga-pkgs/pull/108) [`e204ef1`](https://github.com/ikenga-hq/ikenga-pkgs/commit/e204ef1e54de8ab5ef69c5ef26f1a3c551347547) Thanks [@nedjamez](https://github.com/nedjamez)! - Track the design lifecycle — produce, review, lock, implement, verify — with the same
+  ID discipline as gaps, gates and work packages.
+
+  Designs used to live in two unlinked places: `designs[<path>]` held the lock on a file,
+  while `D-NN` in `ids` was allocated after the lock and never used again. Locking meant
+  hand-editing the anchor, which the skill forbids everywhere else. There was no unlock,
+  and nothing let a PR say which design it built. A plan that registered `D-NN` before
+  drawing any mockup showed zero designs on the board and the plans index.
+
+  `ids[D-NN]` is now the canonical design record. `designs[<path>]` stays as the variant
+  registry and links back with `design: "D-NN"`. New commands, all idempotent (a re-run
+  writes nothing):
+
+  - `register-design` links a variant file to a design.
+  - `design-lock` and `design-unlock` record the round; unlock also clears any verification.
+  - `register-design-impl` records which designs a WP implements, plus PR records.
+  - `design-verify` records a clean conformance pass.
+  - `design-migrate` links legacy anchors by `d-NN` filename token and lifts old
+    file-level locks onto the ID.
+  - `design-data` emits the derived model.
+
+  Build status (`unbuilt` / `in_progress` / `implemented` / `verified`) is derived from
+  WP status, PR records and `verified_in`, never hand-kept. `board-data`, `status-data`,
+  `living-spec-data` and `plans-index-data` carry the model; existing keys keep their shape.
+  The board rail gets a per-design lifecycle card. The review action gains a design-review
+  finding shape (`D-NN · state · file:line`) and a design-conformance lens. `orchestrate`
+  now emits a `DESIGNS` brief field and a PR-body template with a required
+  "Designs implemented" line, and `WP_REPORT_SCHEMA` gains `designs_implemented`.
+
+### Patch Changes
+
+- [#110](https://github.com/ikenga-hq/ikenga-pkgs/pull/110) [`1f85c3c`](https://github.com/ikenga-hq/ikenga-pkgs/commit/1f85c3cf31149b2ddd6183658bf7fc2ea3057b68) Thanks [@nedjamez](https://github.com/nedjamez)! - Stop the board's Kickoff brief from showing a raw `{{vocab.work_unit}}`.
+
+  The plan board embeds the orchestrator kickoff brief as a copy-prompt. It was copied
+  from `agents/orchestrator.md` with its double-brace `{{vocab.work_unit}}` intact, but
+  the board resolves placeholders at runtime with single-brace tokens from `board-meta`
+  (`{plan_folder}`, `{plan_slug}` …). Nothing ever filled that one, so every copied brief
+  read "One {{vocab.work_unit}} each". An eval run on the `film` profile caught it.
+
+  - The brief now uses `{work_unit}`, resolved like the other tokens.
+  - The value comes from `board-meta.work_unit`, which `refresh-board` writes from the
+    profile's `labels.work_unit`.
+  - If that field is missing, the board uses a built-in per-profile label, and a test
+    keeps those labels in step with each `profile.json`.
+  - `agents/orchestrator.md` lists all of its placeholders.
+
+  New tests scan every scaffolded file for leftover `{{vocab.*}}` tokens, not just
+  `.md`. They also check the board template and the kickoff brief.
+
+- [#109](https://github.com/ikenga-hq/ikenga-pkgs/pull/109) [`53daf0e`](https://github.com/ikenga-hq/ikenga-pkgs/commit/53daf0e3b1bbf3688588e31527e985ffc285c2aa) Thanks [@nedjamez](https://github.com/nedjamez)! - Store `register-id --field k=[A,B]` as a list, and read the old string form everywhere.
+
+  `register-id` parses each `--field` value as JSON and falls back to the raw text. So
+  `--field depends_on=[WP-01]` (unquoted IDs, not valid JSON) was saved as the string
+  `"[WP-01]"`, and real anchors carry that shape. Three things broke on it:
+
+  - `issue-sync-data` iterated the string character by character, so dependent work
+    packages never appeared as children and parent tasklists came out empty.
+  - `board-data` emitted `deps` as a string.
+  - The board crashed on `deps.join`.
+
+  A bracketed value that isn't JSON is now stored as a list of trimmed IDs. Every
+  reader of `depends_on` also accepts the legacy string, so existing anchors work
+  without a rewrite.
+
 ## 0.6.1
 
 ### Patch Changes

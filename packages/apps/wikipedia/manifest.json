@@ -1,19 +1,19 @@
 {
   "id": "com.ikenga.wikipedia",
   "name": "Wikipedia",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "ikenga_api": "4",
   "kind": "embedded",
   "author": { "name": "Royalti", "key": "royalti" },
   "ui": {
     "session": { "persistence": "clear-on-exit" },
-    "nav": [
+    "views": [
       {
         "id": "wikipedia.index",
-        "label": "Wikipedia",
+        "title": "Wikipedia",
         "icon": "book-open",
-        "section": "apps",
-        "route": "/pkg/com.ikenga.wikipedia/"
+        "route": "/",
+        "pin_on_install": true
       }
     ],
     "routes": [

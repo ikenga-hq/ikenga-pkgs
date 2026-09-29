@@ -75,6 +75,28 @@ Then point your MCP client at `node /path/to/ikenga-pkg-mcp-iyke/dist/index.js`.
 | `iyke_iframe_state` | Read the latest published state object for an iframe pane.              |
 | `iyke_iframe_send`  | Send a fire-and-forget postMessage to an iframe pane.                   |
 
+### Project noun (`iyke project …`)
+
+| Tool                     | Purpose                                                            |
+|--------------------------|--------------------------------------------------------------------|
+| `iyke_project_list`      | List projects in switcher order.                                   |
+| `iyke_project_get_active` / `iyke_project_show` | The shell's active project.          |
+| `iyke_project_switch`    | Switch the active project by root path (or bare id).               |
+| `iyke_project_sections`  | Explorer sidebar section registry — pending a WP-28 bridge route.  |
+| `iyke_project_create` / `update` / `archive` / `set_active` | Project lifecycle writes. |
+
+### Ngwa noun (`iyke ngwa …`)
+
+All five tools read the same payload — `GET /iyke/ngwa/snapshot`, the bridge twin of the shell's `ngwa_snapshot` command — so the facet tools return the verbatim `NgwaSnapshot` (`{ items, as_of_ms, sources }`) the `/ngwa/*` surfaces render. The route is **pending WP-28**: shells that don't expose it return a clear "route missing" error naming the gap.
+
+| Tool                  | Purpose                                                        |
+|-----------------------|----------------------------------------------------------------|
+| `iyke_ngwa_installed` | Every installed NgwaItem (pkgs + primitives).                  |
+| `iyke_ngwa_store`     | The store catalogue facet of the snapshot.                     |
+| `iyke_ngwa_scopes`    | Scope matrix facet — items carry `scope` for grouping.         |
+| `iyke_ngwa_health`    | Health facet — `sources` rollup + broken/orphaned items.       |
+| `iyke_ngwa_item`      | One item's full detail by namespaced id.                       |
+
 ## Trust boundary
 
 The MCP server reads `control.json` from the platform-specific app-local-data directory (`~/Library/Application Support/app.ikenga/control.json` on macOS, `$XDG_DATA_HOME/app.ikenga/control.json` on Linux, `%APPDATA%/app.ikenga/control.json` on Windows). The control file contains:

@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-git",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "com.ikenga.git — Git mini-app pkg (Bun sidecar + MCP + UI) that tracks every Ikenga project's repo(s), reuses the user's existing git/gh auth by shelling out rather than storing credentials, and makes agent worktrees, attribution and stale-base hazards first-class.",
   "license": "Apache-2.0",
   "repository": {

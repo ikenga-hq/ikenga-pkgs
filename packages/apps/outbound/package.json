@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-outbound",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Outbound — Email, Newsletter, Sequences, Social channels over the production outbound schema. No-build iframe pkg; deterministic CSS vendoring build.",
   "license": "Apache-2.0",
   "repository": {
