@@ -3,6 +3,14 @@ name: Release packages
 on:
   push:
     branches: [main]
+    # Docs-only pushes can't change what gets versioned or published. The
+    # later `.changeset/**` entry re-includes changeset files the `*.md` rule
+    # excludes (later patterns win).
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '.changeset/**'
   workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +47,10 @@ jobs:
 
       - run: pnpm -r build
 
-      - run: pnpm -r test --if-present
+      # No test step: every commit reaching main was tested by its PR's CI,
+      # and the nightly re-tests main. Re-running the suite here only added a
+      # second, flakier gate in front of publishing (most release failures
+      # were this step, not the release).
 
       # minisign is needed BEFORE publish to sign manifests (ADR-017 / WP-06)
       # and again after publish to re-sign the registry index — install once.

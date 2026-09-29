@@ -28,13 +28,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test \"src/**/*.test.mjs\""
+    "test": "node --test --import=tsx \"src/**/*.test.mjs\" \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@ikenga/contract": "^0.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.8.2"
   }
 }

@@ -22,11 +22,18 @@
   "settings": {
     "schema": [
       {
+        "key": "openrouter_api_key",
+        "type": "secret",
+        "label": "OpenRouter API key",
+        "env": "OPENROUTER_API_KEY",
+        "description": "Stored in the vault; injected into the adapter process as OPENROUTER_API_KEY (settings-secret env mechanism). Get one at https://openrouter.ai/keys."
+      },
+      {
         "key": "model",
         "type": "string",
         "label": "Default model",
         "default": "openrouter/auto",
-        "description": "OpenRouter model identifier (e.g. openrouter/auto, anthropic/claude-3.7-sonnet, deepseek/deepseek-r1, meta-llama/llama-3.3-70b-instruct)."
+        "description": "OpenRouter model identifier, free text — any model on openrouter.ai works (e.g. openrouter/auto, anthropic/claude-3.7-sonnet, deepseek/deepseek-r1, meta-llama/llama-3.3-70b-instruct)."
       },
       {
         "key": "base_url",
