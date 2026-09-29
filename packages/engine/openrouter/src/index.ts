@@ -1,8 +1,26 @@
 /**
  * OpenRouter Unified LLM Engine Adapter (WP-20).
  *
- * Implements the Engine and AcpEngine interfaces for OpenRouter.
- * Bridges reasoning tokens (`thinking_delta`), function tool calls, and model tier selection.
+ * Two engines ship from this pkg, and which one you want depends on whether a
+ * HostBridge exists in your process:
+ *
+ *   - `OpenRouterEngine` / `createEngine(host)` — the HostBridge-delegating
+ *     adapter this pkg's `manifest.json` declares. The transport is the
+ *     shell-side Rust `openrouter_http::server`; this class is the TS
+ *     declaration of it, and `src/manifest.test.mjs` asserts its `metadata`
+ *     block stays identical to the manifest, field for field.
+ *
+ *   - `OpenRouterHttpEngine` / `createHttpEngine(config)` — a self-contained
+ *     in-process HTTP transport for OpenRouter's OpenAI-compatible
+ *     `/chat/completions` endpoint: streaming SSE, reasoning-token
+ *     normalization (G-54 — both the `delta.reasoning`/`delta.thinking` field
+ *     form and the inline `<think>…</think>` form), and OpenAI-shape tool-call
+ *     delta accumulation. Use it where there is no HostBridge: Node-side
+ *     tooling, tests, or any context that talks to OpenRouter directly.
+ *
+ * Model selection is free text end-to-end — no pinned roster (Plan 24 §5.1).
+ * See `http-engine.ts` for the API-key binding story (F-9 settings-secret env
+ * today; shell-side Stronghold read once the Rust HTTP-engine adapter lands).
  */
 
 import type {
@@ -15,6 +33,8 @@ import type {
 
 export * from './stream.js';
 export * from './acp-engine.js';
+export * from './transport.js';
+export * from './http-engine.js';
 
 const ID = 'com.ikenga.engine-openrouter';
 const VERSION = '0.1.0';
@@ -117,6 +137,11 @@ export class OpenRouterEngine implements Engine {
   }
 }
 
+/**
+ * Primary factory — the manifest-declared engine, backed by the shell's
+ * HostBridge. For the in-process HTTP transport (no HostBridge), call
+ * `createHttpEngine(config)` from `./http-engine.js` instead.
+ */
 export function createEngine(host: HostBridge): Engine {
   return new OpenRouterEngine(host);
 }
