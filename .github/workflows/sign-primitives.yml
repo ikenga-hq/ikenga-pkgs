@@ -1,0 +1,41 @@
+name: Sign + publish primitive catalog (manual)
+
+# Sign registry/primitives.json (the Ọba catalog: git/npx skills, agents,
+# commands, hooks, MCP entries) with the registry minisign key and push it to
+# ikenga-registry, alongside index.json. Regenerate pins first with the shell's
+# scripts/primitives-catalog-pin.ts, commit the result here, then run:
+#
+#   gh workflow run sign-primitives.yml --repo ikenga-hq/ikenga-pkgs
+#   gh workflow run sign-primitives.yml --repo ikenga-hq/ikenga-pkgs -f dry_run=true
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Sign and verify only; don't push to ikenga-registry.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read   # checkout only; registry push goes via REGISTRY_REPO_PAT
+
+jobs:
+  sign-primitives:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+
+      - name: Sign + publish primitives.json
+        env:
+          REGISTRY_REPO_PAT: ${{ secrets.REGISTRY_REPO_PAT }}
+          REGISTRY_SIGNING_PRIVATE_KEY: ${{ secrets.REGISTRY_SIGNING_PRIVATE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: node scripts/publish-primitives.mjs
