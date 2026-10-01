@@ -6,6 +6,8 @@ import {
   shortName,
   ikengaDeps,
   catalogPackage,
+  loadRetiredPkgNames,
+  dropRetiredFromIndex,
 } from './update-registry-index.mjs';
 
 describe('npmDistInfo retry and error handling', () => {
@@ -329,5 +331,96 @@ describe('helpers', () => {
       },
     };
     assert.deepEqual(ikengaDeps(pj), [{ name: '@ikenga/pkg-core', range: '^1.0.0' }]);
+  });
+});
+
+describe('loadRetiredPkgNames (DEC-72)', () => {
+  it('reads names out of a retired.json-shaped file', () => {
+    const fakeRead = () =>
+      JSON.stringify({
+        retired: [
+          { name: '@ikenga/mcp-meetings', reason: 'r', replaced_by: 'com.ikenga.meetings' },
+          { name: '@ikenga/pkg-meetings-bot', reason: 'r', replaced_by: 'com.ikenga.meetings' },
+        ],
+      });
+    const names = loadRetiredPkgNames('/fake/path/retired.json', fakeRead);
+    assert.deepEqual([...names].sort(), ['@ikenga/mcp-meetings', '@ikenga/pkg-meetings-bot']);
+  });
+
+  it('returns an empty set when the file is missing or unparsable', () => {
+    const throwingRead = () => {
+      throw new Error('ENOENT');
+    };
+    const names = loadRetiredPkgNames('/fake/path/retired.json', throwingRead);
+    assert.equal(names.size, 0);
+  });
+
+  it('returns an empty set when the file has no `retired` array', () => {
+    const fakeRead = () => JSON.stringify({});
+    const names = loadRetiredPkgNames('/fake/path/retired.json', fakeRead);
+    assert.equal(names.size, 0);
+  });
+});
+
+describe('dropRetiredFromIndex (DEC-72)', () => {
+  it('splits index.pkgs into kept and dropped by retired name, preserving order', () => {
+    const pkgs = [
+      { name: '@ikenga/pkg-studio', latest: '1.0.0' },
+      { name: '@ikenga/mcp-meetings', latest: '0.1.0' },
+      { name: '@ikenga/pkg-tasks', latest: '0.3.0' },
+      { name: '@ikenga/pkg-meetings-bot', latest: '0.1.0' },
+    ];
+    const retired = new Set(['@ikenga/mcp-meetings', '@ikenga/pkg-meetings-bot']);
+
+    const { kept, dropped } = dropRetiredFromIndex(pkgs, retired);
+
+    assert.deepEqual(
+      kept.map((p) => p.name),
+      ['@ikenga/pkg-studio', '@ikenga/pkg-tasks'],
+    );
+    assert.deepEqual(
+      dropped.map((p) => p.name),
+      ['@ikenga/mcp-meetings', '@ikenga/pkg-meetings-bot'],
+    );
+  });
+
+  it('is a no-op when nothing in the index is retired', () => {
+    const pkgs = [{ name: '@ikenga/pkg-studio', latest: '1.0.0' }];
+    const { kept, dropped } = dropRetiredFromIndex(pkgs, new Set(['@ikenga/mcp-meetings']));
+    assert.deepEqual(kept, pkgs);
+    assert.deepEqual(dropped, []);
+  });
+});
+
+describe('catalogPackage never re-catalogues a retired pkg (DEC-72)', () => {
+  it('skips a retired pkg even when it is freshly published, without touching the index or fs', async () => {
+    const mockIndex = { $schemaVersion: 1, updatedAt: 'old', pkgs: [] };
+    let findPackageDirCalled = false;
+
+    const result = await catalogPackage(
+      { name: '@ikenga/mcp-meetings', version: '0.1.1' },
+      {
+        registryDir: '/mock/registry',
+        index: mockIndex,
+        nowIso: '2026-10-01T00:00:00.000Z',
+        retiredPkgs: new Set(['@ikenga/mcp-meetings', '@ikenga/pkg-meetings-bot']),
+        findPackageDirFn: () => {
+          findPackageDirCalled = true;
+          return '/mock/packages/mcp-meetings';
+        },
+        logFn: () => {},
+        warnFn: () => {},
+        errorFn: () => {},
+      },
+    );
+
+    assert.deepEqual(result, {
+      status: 'skipped',
+      name: '@ikenga/mcp-meetings',
+      version: '0.1.1',
+      reason: 'retired',
+    });
+    assert.equal(findPackageDirCalled, false, 'retired check must short-circuit before any pkg-dir lookup');
+    assert.deepEqual(mockIndex.pkgs, []);
   });
 });

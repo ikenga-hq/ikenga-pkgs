@@ -25,7 +25,15 @@
  */
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync as wf } from 'node:fs';
+import {
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  unlinkSync,
+  writeFileSync as wf,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +78,51 @@ export const NON_PKG_LIBRARIES = new Set([
   '@ikenga/ui-lib', // shared React components, consumed by app pkgs
   '@ikenga/meetings-contract', // shared types/Zod schemas for the meetings pkgs
 ]);
+
+/**
+ * Pkgs retired from the registry (DEC-72, Round 58). Kept on disk — still
+ * buildable, testable and publishable to npm for a final compatibility patch
+ * — but dropped from the signed `index.json` and never re-added, no matter
+ * how many more versions get published. Source of truth is the checked-in
+ * `registry/retired.json`, which also carries the reason and replacement for
+ * each entry; this script only reads it.
+ */
+const RETIRED_JSON_PATH = join(REPO_ROOT, 'registry', 'retired.json');
+
+/**
+ * Load retired pkg names from `registry/retired.json` as a Set. Pure aside
+ * from the single read, and overridable for tests. A missing or unparsable
+ * file yields an empty set rather than throwing, so a corrupt retired list
+ * degrades to "nothing retired" instead of failing every registry update.
+ */
+export function loadRetiredPkgNames(path = RETIRED_JSON_PATH, readFileFn = readFileSync) {
+  try {
+    const data = JSON.parse(readFileFn(path, 'utf8'));
+    return new Set((data.retired ?? []).map((e) => e.name));
+  } catch {
+    return new Set();
+  }
+}
+
+export const RETIRED_PKGS = loadRetiredPkgNames();
+
+/**
+ * Remove retired pkgs from a registry index's `pkgs` array. Pure — no fs —
+ * so it's independently testable; the caller is responsible for deleting
+ * each dropped entry's `pkgs/<short>.json` detail file and for logging.
+ */
+export function dropRetiredFromIndex(pkgs, retiredNames) {
+  const kept = [];
+  const dropped = [];
+  for (const entry of pkgs) {
+    if (retiredNames.has(entry.name)) {
+      dropped.push(entry);
+    } else {
+      kept.push(entry);
+    }
+  }
+  return { kept, dropped };
+}
 
 /** `@ikenga/pkg-engine-claude-code` → `engine-claude-code` */
 export function shortName(npmName) {
@@ -234,6 +287,7 @@ export async function catalogPackage(
     nowIso = new Date().toISOString(),
     publisherKey = null,
     options = {},
+    retiredPkgs = RETIRED_PKGS,
     findPackageDirFn = findPackageDir,
     npmDistInfoFn = npmDistInfo,
     readFileFn = readFileSync,
@@ -245,6 +299,15 @@ export async function catalogPackage(
     errorFn = console.error,
   },
 ) {
+  // Retired pkgs (registry/retired.json, DEC-72) may still publish — e.g. a
+  // final compatibility patch for existing installs — but never go back into
+  // the catalog. Checked first, ahead of the library/manifest checks below,
+  // so a retired pkg is always a clean 'skipped', never a 'failed' lookup.
+  if (retiredPkgs.has(name)) {
+    logFn(`Skipping ${name}@${version}: retired from the registry (see registry/retired.json).`);
+    return { status: 'skipped', name, version, reason: 'retired' };
+  }
+
   const short = shortName(name);
   let pkgDir;
   try {
@@ -433,10 +496,20 @@ export async function updateRegistry(env = process.env, options = {}) {
     }
   }
 
-  // Nothing reached the catalog. Re-stamping `updatedAt` and re-signing anyway is
-  // how the 2026-08-04 run produced a commit that named a pkg it had not written:
+  // Retired pkgs (registry/retired.json, DEC-72) are dropped from the index
+  // on every run, independent of what was published this run — so a name
+  // that was already catalogued from before it was retired still comes out.
+  // Computed before the bail-out below, because dropping a retired entry is
+  // real work this run needs to do even when nothing new was catalogued
+  // (e.g. a run that only published a retired pkg's final compatibility patch,
+  // which `catalogPackage` always 'skipped' rather than catalogued).
+  const { kept: keptPkgs, dropped: retiredDropped } = dropRetiredFromIndex(index.pkgs, RETIRED_PKGS);
+
+  // Nothing reached the catalog, and there's no retired-pkg cleanup to do
+  // either. Re-stamping `updatedAt` and re-signing anyway is how the
+  // 2026-08-04 run produced a commit that named a pkg it had not written:
   // the index moved, the catalog didn't. Bail before touching the registry.
-  if (catalogued.length === 0) {
+  if (catalogued.length === 0 && retiredDropped.length === 0) {
     console.error('✗ no packages were catalogued — leaving the registry untouched.');
     for (const p of uncatalogued) console.error(`  uncatalogued: ${p}`);
     const uncatPayload = formatPublishedInput(uncatalogued);
@@ -446,6 +519,20 @@ export async function updateRegistry(env = process.env, options = {}) {
         `  gh workflow run registry-update.yml --repo ikenga-hq/ikenga-pkgs -f published='${uncatPayload}'`,
     );
     process.exit(1);
+  }
+
+  if (retiredDropped.length > 0) {
+    index.pkgs = keptPkgs;
+    for (const entry of retiredDropped) {
+      const detailPath = join(registryDir, 'pkgs', `${shortName(entry.name)}.json`);
+      if (existsSync(detailPath)) {
+        unlinkSync(detailPath);
+      }
+    }
+    console.log(
+      `✓ dropped ${retiredDropped.length} retired pkg(s) from index: ` +
+        retiredDropped.map((e) => e.name).join(', '),
+    );
   }
 
   // Reconcile catalog visibility across ALL entries (not just the ones published
@@ -473,9 +560,12 @@ export async function updateRegistry(env = process.env, options = {}) {
   // Commit + push. The message lists what was actually written to the catalog,
   // not what npm published — those differ whenever a library is skipped, and
   // conflating them is what made the earlier miss invisible in the git log.
-  const pkgList = catalogued.map((p) => `${p.name}@${p.version}`).join(', ');
+  const pkgList = catalogued.map((p) => `${p.name}@${p.version}`).join(', ') || '(none)';
   execSync(`git -C ${registryDir} add -A`);
-  const commitMsg = `chore: publish ${catalogued.length} pkg version(s)\n\n${catalogued.map((p) => `- ${p.name}@${p.version}`).join('\n')}\n`;
+  const retiredLines = retiredDropped.length
+    ? `\nRetired (dropped from the index):\n${retiredDropped.map((e) => `- ${e.name}`).join('\n')}\n`
+    : '';
+  const commitMsg = `chore: publish ${catalogued.length} pkg version(s)\n\n${catalogued.map((p) => `- ${p.name}@${p.version}`).join('\n')}\n${retiredLines}`;
   // -F - rather than -m "...": passing the message through the shell leaves the
   // \n sequences uninterpreted inside double quotes, which is why every registry
   // commit subject up to now carried a literal "\n\n" instead of a blank line.
