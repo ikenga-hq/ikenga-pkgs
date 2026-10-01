@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.mcp-meetings",
   "name": "Meetings MCP",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "ikenga_api": "3",
   "kind": "skill",
 
