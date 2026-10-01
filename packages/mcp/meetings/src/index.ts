@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -118,7 +119,16 @@ export async function runServer(dbPath?: string): Promise<void> {
   await server.connect(transport);
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('index.js')) {
+// Compare via pathToFileURL rather than string-concatenating `file://` onto
+// argv[1]: on Windows argv[1] is a drive-letter path ("C:\...") whose correct
+// file URL needs percent-encoding and a third slash (file:///C:/...), so the
+// naive `file://${argv[1]}` never equals import.meta.url there and the
+// server used to exit silently ("stdout closed before id=1"). The
+// `.endsWith('index.js')` fallback stays for bundled/renamed entry points.
+if (
+  (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) ||
+  process.argv[1]?.endsWith('index.js')
+) {
   runServer().catch((err) => {
     console.error('Fatal MCP Server error:', err);
     process.exit(1);

@@ -1,0 +1,15 @@
+{
+  "$schemaVersion": 1,
+  "retired": [
+    {
+      "name": "@ikenga/mcp-meetings",
+      "reason": "Superseded by com.ikenga.meetings 0.2.1, which bundles its own `meetings` MCP server. The standalone server's 0.1.0 publish never starts on Windows (DEC-72, Round 58).",
+      "replaced_by": "com.ikenga.meetings"
+    },
+    {
+      "name": "@ikenga/pkg-meetings-bot",
+      "reason": "Superseded by com.ikenga.meetings 0.2.1, which bundles the meetings bot sidecar (DEC-72, Round 58).",
+      "replaced_by": "com.ikenga.meetings"
+    }
+  ]
+}

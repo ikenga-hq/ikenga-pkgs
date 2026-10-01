@@ -12,6 +12,10 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// Single source of truth for retired pkg names (registry/retired.json,
+// DEC-72): reuse the loader rather than re-reading the file here, so this
+// check and the index updater can never disagree about what's retired.
+import { loadRetiredPkgNames } from './update-registry-index.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTRY_URL = 'https://registry.ikenga.dev/index.json';
@@ -21,6 +25,8 @@ const NON_PKG_LIBRARIES = new Set([
   '@ikenga/registry-client',
   '@ikenga/ui-lib',
 ]);
+
+const RETIRED_PKGS = loadRetiredPkgNames();
 
 async function fetchRegistryIndex() {
   try {
@@ -65,6 +71,26 @@ function findMonorepoPackages() {
   return pkgs;
 }
 
+/**
+ * Pure drift computation, extracted so it's testable without the network or
+ * the filesystem walk: for each monorepo pkg absent from the registry's
+ * {name -> latest} map, record it as missing — unless it's retired
+ * (registry/retired.json, DEC-72). Retired pkgs are DROPPED from the index on
+ * purpose by update-registry-index.mjs, so a retired name that's "missing"
+ * from the index is the system working as intended, not drift.
+ */
+export function computeDrift(monorepoPkgs, registryPkgs, retiredNames = new Set()) {
+  const drift = [];
+  for (const pkg of monorepoPkgs) {
+    if (retiredNames.has(pkg.name)) continue;
+    const regVersion = registryPkgs.get(pkg.name);
+    if (!regVersion) {
+      drift.push({ name: pkg.name, localVersion: pkg.version, regVersion: 'missing' });
+    }
+  }
+  return drift;
+}
+
 export async function checkRegistryHealth() {
   const index = await fetchRegistryIndex();
   if (!index) {
@@ -75,13 +101,7 @@ export async function checkRegistryHealth() {
   const monorepoPkgs = findMonorepoPackages();
   const registryPkgs = new Map((index.pkgs || []).map((p) => [p.name, p.latest]));
 
-  const drift = [];
-  for (const pkg of monorepoPkgs) {
-    const regVersion = registryPkgs.get(pkg.name);
-    if (!regVersion) {
-      drift.push({ name: pkg.name, localVersion: pkg.version, regVersion: 'missing' });
-    }
-  }
+  const drift = computeDrift(monorepoPkgs, registryPkgs, RETIRED_PKGS);
 
   let ageDays = null;
   if (index.updatedAt) {
