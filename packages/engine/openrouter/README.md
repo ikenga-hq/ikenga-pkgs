@@ -1,76 +1,82 @@
 # @ikenga/pkg-engine-openrouter
 
-OpenRouter unified LLM engine adapter for Ikenga — provides a unified interface for running agents with any model available on OpenRouter, from Anthropic, OpenAI, Google, DeepSeek, Meta, and more.
+OpenRouter engine pkg for Ikenga. It lets the Ikenga shell run chat sessions on any model available through [OpenRouter](https://openrouter.ai/), using a single API key.
 
 | | |
 |---|---|
 | Pkg id | `com.ikenga.engine-openrouter` |
 | Kind | `engine` |
-| Status | Beta (ADR-013) |
-| Requires | Network access to `https://openrouter.ai/api/` |
-| Sessions | `/sessions`, `/sessions/by-agent/$agent`, `/sessions/$id` |
+| Maturity | Beta |
+| Requires | An OpenRouter API key, and network access to `https://openrouter.ai/api/` |
 
 ## What it is
 
-This engine lets you run Ikenga agents using OpenRouter, a unified API that provides access to hundreds of LLM models across multiple providers. Instead of managing separate API keys and endpoints for each provider, you use a single OpenRouter API key to access models from Anthropic, OpenAI, Google, DeepSeek, Meta, Mistral, and others.
+OpenRouter is a hosted API that fronts many model providers behind one OpenAI-compatible endpoint. This pkg registers it as an engine in the Ikenga shell. Unlike the Codex and Antigravity engines there is no CLI to install: the engine talks to OpenRouter over HTTPS.
+
+Two surfaces ship from this pkg:
+
+- `createAcpEngine(host)` (and the legacy `createEngine(host)`): the engine the manifest declares. Its methods forward to a host the shell injects (the shell's Tauri ACP commands), and the shell makes the HTTPS requests. See `src/acp-engine.ts`.
+- `OpenRouterHttpEngine` / `createHttpEngine(config)`: a self-contained, in-process HTTP engine for places with no shell host, such as Node tooling and tests. It streams the OpenAI-compatible `/chat/completions` endpoint, normalizes reasoning tokens (both the `reasoning` / `thinking` delta fields and inline `<think>` tags), and accumulates streamed tool calls. It reads the key from `OPENROUTER_API_KEY` unless you pass `apiKey`.
+
+Model selection is free text, forwarded as written. There is no pinned model list.
 
 ## Install
 
 ```bash
-# Via Ikenga CLI
 ikenga add @ikenga/pkg-engine-openrouter
-
-# Or directly with npm
-npm install @ikenga/pkg-engine-openrouter
 ```
 
-Then configure the engine in Ikenga by:
-1. Creating an OpenRouter account at https://openrouter.ai/
-2. Generating an API key and storing it in your vault as `OPENROUTER_API_KEY`
-3. Optionally customizing the default model in settings (defaults to `openrouter/auto`)
+The pkg is also published to npm as `@ikenga/pkg-engine-openrouter`. It is listed in the Ikenga registry.
+
+Then:
+
+1. Create an API key at <https://openrouter.ai/keys>.
+2. Set it in the pkg's `openrouter_api_key` setting. It is stored in the vault, not in plain settings.
+3. Optionally set the default model (default `openrouter/auto`).
 
 ## Capabilities
 
 | Capability | Supported | Note |
 |---|---|---|
-| Streaming | Yes | Real-time token streaming |
-| Tool use | Yes | Model-dependent; most modern models support it |
-| Thinking | Yes | When available in the model (o1, o4) |
-| Artifacts | No | OpenRouter does not support artifact attachments |
-| File attachments | No | OpenRouter does not support file attachments |
-| Image input | No | Currently not supported |
-| Slash commands | No | Restricted capability set |
-| Model switching | Yes | Swap models per-session from hundreds of options |
-| Prompt caching | No | Not supported by OpenRouter API |
-| MCP | No | Restricted capability set |
-| Session resume | Yes | Sessions are persisted |
+| Streaming | Yes | Server-sent events from `/chat/completions`. |
+| Tool use | Yes | Model-dependent. The engine reports the tool calls the model asks for and ends the turn. It does not run tools itself. |
+| Thinking | Yes | When the model returns reasoning tokens. |
+| Artifacts | No | |
+| File attachments | No | |
+| Image input | No | Prompts are text only. Image and audio blocks are refused. |
+| Slash commands | No | |
+| Model switching | Yes | Any OpenRouter model id. |
+| Prompt caching | No | |
+| MCP | No | |
+| Session resume | In-process only | History is held in memory by the running shell. A session can be replayed while that process is alive. It does **not** survive a restart. |
 
 ## Known limits
 
-- **Cannot resume after restart**: sessions are stored locally and can be resumed within the current session, but restarting Ikenga will not be able to resume previous OpenRouter sessions (they are abandoned on restart)
-- **No artifacts or file attachments**: OpenRouter does not support artifact or file attachment features
-- **No image input**: image attachments are not yet supported
-- **No MCP**: OpenRouter's current tooling integration is for basic function calls only
-- **Limited to text and basic tools**: this engine is best suited for text-based workflows and simple function calling
+- **Cannot resume after a restart.** OpenRouter's endpoint is stateless and the conversation history lives only in the shell process that created it. After the shell restarts, an earlier OpenRouter session cannot be resumed. The shell returns an error rather than opening an empty transcript.
+- **No agentic loop.** The engine reports tool calls but never executes them, so it suits chat and simple function-calling flows rather than autonomous multi-step work.
+- **Text only.** No image input, file attachments, artifacts, slash commands or MCP.
+- **Model behaviour varies.** Tool use and reasoning output depend on the model you choose.
 
 ## Maturity
 
-**Beta** — shipped in v0.2.0. The adapter provides basic streaming chat and model switching. Tool use works for models that support it natively. See [ADR-013](https://github.com/ikenga-hq/ikenga/blob/main/docs/adr/013-multi-engine-runtime-wire-protocols.md) for the runtime protocol specification.
+**Beta.** Behaviour and capabilities may change between releases.
 
 ## Configuration
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `openrouter_api_key` | secret | — | Your OpenRouter API key. Required. Stored in the vault; injected into the adapter process as `OPENROUTER_API_KEY`. Get one at https://openrouter.ai/keys. |
-| `model` | string | `openrouter/auto` | Default model identifier. Use any model slug from https://openrouter.ai/models (e.g., `anthropic/claude-3.7-sonnet`, `openai/gpt-4o`, `deepseek/deepseek-r1`, `meta-llama/llama-3.3-70b-instruct`). `openrouter/auto` selects the best model by cost/performance. |
-| `base_url` | string | `https://openrouter.ai/api/v1` | API endpoint. Usually not changed. |
+| `openrouter_api_key` | secret | none | Your OpenRouter API key. Stored in the vault and passed to the adapter as `OPENROUTER_API_KEY`. |
+| `model` | string | `openrouter/auto` | Default model id, for example `openrouter/auto`, `anthropic/claude-3.7-sonnet` or `deepseek/deepseek-r1`. `openrouter/auto` lets OpenRouter choose. |
+| `base_url` | string | `https://openrouter.ai/api/v1` | API endpoint. Usually left unchanged. |
 
 ## Permissions
 
-- `net`: HTTPS access to OpenRouter API (`https://openrouter.ai/api/**`)
-- `fs.read`/`fs.write`: manage session state in `$pkg_data/sessions/`
-- `vault.keys`: read `OPENROUTER_API_KEY` from the vault
+Declared in `manifest.json`:
+
+- `net`: `https://openrouter.ai/api/**`. This is the only place the API key may be sent.
+- `vault.keys`: `OPENROUTER_API_KEY`.
+- `fs.read` and `fs.write`: `$pkg_data/sessions/**`.
 
 ## License
 
-Apache-2.0 — see [LICENSE](../../LICENSE) (monorepo root).
+Apache-2.0. See [LICENSE](../../../LICENSE) at the monorepo root.

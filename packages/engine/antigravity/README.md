@@ -1,74 +1,83 @@
 # @ikenga/pkg-engine-antigravity
 
-Antigravity CLI engine adapter for Ikenga — wraps the `agy` CLI binary and provides a unified interface for running agents with Google Gemini models.
+Antigravity engine pkg for Ikenga. It lets the Ikenga shell run agent sessions on Google's Antigravity CLI (`agy`) with Gemini models.
 
 | | |
 |---|---|
 | Pkg id | `com.ikenga.engine-antigravity` |
 | Kind | `engine` |
-| Status | Beta (ADR-013) |
-| Requires | `agy` CLI on `$PATH` |
-| Sessions | `/sessions`, `/sessions/by-agent/$agent`, `/sessions/$id` |
+| Maturity | Beta |
+| Requires | The `agy` CLI on `$PATH` |
+
+This pkg supersedes the retired `@ikenga/pkg-engine-gemini` (Gemini CLI) adapter. If you used that engine, switch to this one.
 
 ## What it is
 
-This engine lets you run Ikenga agents using the Antigravity CLI, which provides access to Google Gemini models. It wraps the `agy` command-line interface and parses its stream-json output, just like the Claude Code engine wraps the `claude` CLI.
+This pkg registers Antigravity as an engine in the Ikenga shell. It is a thin delegator, not a CLI wrapper:
+
+- `createAcpEngine(host)` returns an engine whose methods (`initialize`, `newSession`, `prompt`, `cancel`, `setMode`, `loadSession`, `forkSession`, plus the session-update and permission-request listeners) forward straight to an `AcpHost` that the shell injects. The host is the shell's Tauri ACP commands. See `src/acp-engine.ts`.
+- The shell, not this pkg, starts and talks to the `agy` CLI. The pkg has no `@tauri-apps/*` dependency and spawns no process of its own.
+- A second export, `AntigravityEngineAdapter`, runs at pkg install time. When you install a pkg that ships skills, subagents, commands or MCP servers, it writes them into Antigravity's own configuration: skills, agents and commands under `~/.gemini/antigravity-cli/`, and MCP entries into `~/.gemini/config/mcp_config.json`. An MCP entry with a plaintext secret-shaped environment value is refused; secrets must use a `${IKENGA_SECRET:<vault-key>}` placeholder.
+
+The legacy `createEngine` factory is still exported for symmetry with the other engine pkgs. New code should use `createAcpEngine`.
 
 ## Install
 
 ```bash
-# Via Ikenga CLI
 ikenga add @ikenga/pkg-engine-antigravity
-
-# Or directly with npm
-npm install @ikenga/pkg-engine-antigravity
 ```
 
-Then configure the engine in Ikenga by:
-1. Installing or configuring the `agy` CLI (https://antigravity.google/)
-2. Setting `GEMINI_API_KEY` in your vault
-3. Optionally customizing the default model in settings (defaults to `gemini-3.5-flash-medium`)
+The pkg is also published to npm as `@ikenga/pkg-engine-antigravity`. It is listed in the Ikenga registry.
+
+Then:
+
+1. Install the Antigravity CLI from <https://antigravity.google/>.
+2. Check it is authenticated. The manifest's auth check is `agy models`.
+3. Make `GEMINI_API_KEY` available. The manifest's onboarding block lists it as a required vault key.
+4. Optionally set the default model in the pkg settings (default `gemini-3.5-flash-medium`).
 
 ## Capabilities
 
-| Capability | Supported | Note |
+The flags below are what `manifest.json` declares to the shell. Where the shell's Antigravity adapter is known to behave differently, the note says so.
+
+| Capability | Declared | Note |
 |---|---|---|
-| Streaming | No | Responses are buffered |
-| Tool use | Yes | Native support via Gemini |
-| Thinking | Yes | When available in the model |
+| Streaming | No | The shell adapter forwards text to the chat as the CLI emits it. |
+| Tool use | Yes | |
+| Thinking | Yes | Model-dependent. |
 | Artifacts | Yes | |
 | File attachments | Yes | |
 | Image input | No | |
 | Slash commands | Yes | |
-| Model switching | No | Fixed default model |
-| Prompt caching | Yes | Gemini native |
-| MCP | Yes | Tool use integration |
-| Session resume | Yes | Sessions are persisted |
+| Model switching | No | The shell can pass a per-session model to the CLI when one is set. |
+| Prompt caching | Yes | |
+| MCP | Yes | Via the install-time adapter above. |
+| Session resume | Yes | |
 
 ## Known limits
 
-- **No streaming**: responses are fully buffered before being sent to the UI
-- **No image input**: the Antigravity CLI does not support image attachments
-- **No model switching**: the default model is set at engine startup and cannot change per-session
-- **GeminiEngineAdapter only**: this engine does not yet integrate with the full Ikenga runtime; it materializes pkg-shipped skills, commands, agents, and MCP entries into Antigravity's config tree at install time but does not handle agent lifecycle or inter-pkg communication
+- **No image input.** The shell adapter does not send image attachments to `agy`.
+- **Manifest flags are conservative.** The declared `streaming: false` and `modelSwitching: false` understate what the shell adapter does today (see the notes above).
+- **One process per turn.** Each prompt runs the `agy` CLI as a separate process, so there is no long-lived Antigravity session to attach to.
 
 ## Maturity
 
-**Beta** — shipped in v0.2.2. The adapter is feature-complete for skill and command materialization (ADR-012 Track G). Runtime session handling and multi-engine dispatch are stable. See [ADR-013](https://github.com/ikenga-hq/ikenga/blob/main/docs/adr/013-multi-engine-runtime-wire-protocols.md) for the long-term architecture.
+**Beta.** Behaviour and the declared capabilities may change between releases.
 
 ## Configuration
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `antigravity_binary` | string | `agy` | Path to the `agy` CLI executable. Resolved against `$PATH` if not absolute. |
-| `model` | string | `gemini-3.5-flash-medium` | Default Gemini model to use for new sessions. |
+| `antigravity_binary` | string | `agy` | Path to the `agy` CLI. Resolved against `$PATH` if not absolute. |
+| `model` | string | `gemini-3.5-flash-medium` | Default Gemini model for new sessions. |
 
 ## Permissions
 
-- `shell.execute`: run the `agy` CLI
-- `fs.read`/`fs.write`: manage session state in `$pkg_data/sessions/`
-- `vault.keys`: read `GEMINI_API_KEY` from the vault
+Declared in `manifest.json`:
+
+- `shell.execute`: run the `agy` CLI.
+- `fs.read` and `fs.write`: `$pkg_data/sessions/**`.
 
 ## License
 
-Apache-2.0 — see [LICENSE](../../LICENSE) (monorepo root).
+Apache-2.0. See [LICENSE](../../../LICENSE) at the monorepo root.

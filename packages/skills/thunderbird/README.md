@@ -9,7 +9,14 @@ store at run time. No hardcoded paths or account-specific credential names.
 
 ## Install
 
-> **Not separately installable yet.** The thunderbird skill is published deferred (supervised) — held changeset with `"private": true`. The public mirror at `ikenga-hq/skill-thunderbird` will be available once the 3-copy publish sync is wired.
+```bash
+ikenga add @ikenga/skill-thunderbird
+```
+
+The skill is published to npm as
+[`@ikenga/skill-thunderbird`](https://www.npmjs.com/package/@ikenga/skill-thunderbird)
+and listed in the Ikenga registry, so a running Ikenga shell can install it
+from there too.
 
 ## What it does
 
@@ -46,7 +53,3 @@ contract.
 ## License
 
 Apache-2.0 — see [LICENSE](../../LICENSE) (monorepo root).
-
-## Phase
-
-Initial skeleton. Publish sync deferred (supervised) — held changeset + `"private": true`.
