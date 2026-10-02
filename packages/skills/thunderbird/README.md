@@ -9,11 +9,7 @@ store at run time. No hardcoded paths or account-specific credential names.
 
 ## Install
 
-```bash
-npx skills add ikenga-hq/skill-thunderbird   # publish deferred (supervised)
-```
-
-Or via the Ikenga CLI once the 3-copy publish sync is wired (WP-14 pattern).
+> **Not separately installable yet.** The thunderbird skill is published deferred (supervised) — held changeset with `"private": true`. The public mirror at `ikenga-hq/skill-thunderbird` will be available once the 3-copy publish sync is wired.
 
 ## What it does
 

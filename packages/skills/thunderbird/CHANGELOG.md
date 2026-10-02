@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- [`fcebba5`](https://github.com/Royalti-io/ikenga-pkgs/commit/fcebba53599f71b63065b3e66792a19b3132a4ed) Thanks [@nedjamez](https://github.com/nedjamez)! - Drop the `fs.read` and `shell.execute` declarations (ADR-020).
+- [`fcebba5`](https://github.com/ikenga-hq/ikenga-pkgs/commit/fcebba53599f71b63065b3e66792a19b3132a4ed) Thanks [@nedjamez](https://github.com/nedjamez)! - Drop the `fs.read` and `shell.execute` declarations (ADR-020).
 
   Thunderbird is skill-only — no `mcp` block, no `sidecars` — so neither scope has
   a consumer: `shell.execute` gates the sidecar spawn that never happens, and
@@ -22,7 +22,7 @@
 
 ### Minor Changes
 
-- [`2fb5f74`](https://github.com/Royalti-io/ikenga-pkgs/commit/2fb5f74259d1a0746288d30aeddc71e2b5d10a81) Thanks [@nedjamez](https://github.com/nedjamez)! - Initial release of `@ikenga/skill-thunderbird` — the Thunderbird mail skill.
+- [`2fb5f74`](https://github.com/ikenga-hq/ikenga-pkgs/commit/2fb5f74259d1a0746288d30aeddc71e2b5d10a81) Thanks [@nedjamez](https://github.com/nedjamez)! - Initial release of `@ikenga/skill-thunderbird` — the Thunderbird mail skill.
 
   Operates on the user's local Thunderbird mail store (not `ikenga.db`), so it
   ships as a standalone skill pkg rather than folding into the dispatch-only

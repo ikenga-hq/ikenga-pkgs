@@ -8,8 +8,8 @@
 			"version": "0.1.0",
 			"description": "Scaffold a research → design → plan → orchestrate → act folder for non-trivial work; drops a domain-agnostic spine plus stateless action-skills.",
 			"source": "npx",
-			"url": "royalti-io/groundwork",
-			"publisher": "royalti-io",
+			"url": "ikenga-hq/groundwork",
+			"publisher": "ikenga-hq",
 			"ref": "0e884bbaf8f98c3776e8437d63191035f27259de",
 			"hash": "sha256-add004e2ff656d649db6b7cab27ac2f411358df49f9d7517088e7272b38cd5c7"
 		},
@@ -19,8 +19,8 @@
 			"version": "0.1.0",
 			"description": "Author a self-contained interactive HTML artifact that renders standalone and lights up with live data inside the Ikenga shell.",
 			"source": "npx",
-			"url": "royalti-io/ikenga-artifact-builder",
-			"publisher": "royalti-io",
+			"url": "ikenga-hq/ikenga-artifact-builder",
+			"publisher": "ikenga-hq",
 			"ref": "e71c79e27b2f171b010197acd53963f6e0ad823a",
 			"hash": "sha256-c41c8029b454eea082ce727dd6c86b8bf704c6191f14a29fe6988bc694437ff3"
 		},

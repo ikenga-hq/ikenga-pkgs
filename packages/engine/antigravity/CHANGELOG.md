@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- [#54](https://github.com/Royalti-io/ikenga-pkgs/pull/54) [`46a65f8`](https://github.com/Royalti-io/ikenga-pkgs/commit/46a65f8d3991ab4c68dd4984ec1d5b00c06dfb14) Thanks [@nedjamez](https://github.com/nedjamez)! - Publish the Antigravity CLI engine adapter under its new package name. This supersedes the retired Gemini CLI engine adapter (`@ikenga/pkg-engine-gemini`), which has been delisted from the registry. Users on the old Gemini engine should switch to `@ikenga/pkg-engine-antigravity`.
+- [#54](https://github.com/ikenga-hq/ikenga-pkgs/pull/54) [`46a65f8`](https://github.com/ikenga-hq/ikenga-pkgs/commit/46a65f8d3991ab4c68dd4984ec1d5b00c06dfb14) Thanks [@nedjamez](https://github.com/nedjamez)! - Publish the Antigravity CLI engine adapter under its new package name. This supersedes the retired Gemini CLI engine adapter (`@ikenga/pkg-engine-gemini`), which has been delisted from the registry. Users on the old Gemini engine should switch to `@ikenga/pkg-engine-antigravity`.
 
 ## 0.2.1
 
@@ -20,4 +20,4 @@
 
 ### Minor Changes
 
-- [`19a48a7`](https://github.com/Royalti-io/ikenga-pkgs/commit/19a48a7d21679135780296009cfcf487dd0513cf) Thanks [@nedjamez](https://github.com/nedjamez)! - First release. Ships the install-time `GeminiEngineAdapter` (ADR-012 Track G) — materializes pkg-shipped skills, commands, agents, and MCP entries into Gemini CLI's on-disk config tree (`~/.gemini/settings.json`, `~/.gemini/extensions/<slug>/`, `~/.gemini/commands/<slug>/<name>.toml`, `~/.gemini/agents/<slug>/`). Runtime `Engine` is a stub that throws — chat-runtime wiring is a separate slice.
+- [`19a48a7`](https://github.com/ikenga-hq/ikenga-pkgs/commit/19a48a7d21679135780296009cfcf487dd0513cf) Thanks [@nedjamez](https://github.com/nedjamez)! - First release. Ships the install-time `GeminiEngineAdapter` (ADR-012 Track G) — materializes pkg-shipped skills, commands, agents, and MCP entries into Gemini CLI's on-disk config tree (`~/.gemini/settings.json`, `~/.gemini/extensions/<slug>/`, `~/.gemini/commands/<slug>/<name>.toml`, `~/.gemini/agents/<slug>/`). Runtime `Engine` is a stub that throws — chat-runtime wiring is a separate slice.
