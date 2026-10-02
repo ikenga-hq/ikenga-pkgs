@@ -35,5 +35,6 @@ Apache-2.0 — see [LICENSE](../../LICENSE) (monorepo root).
 
 WP-15 (atelier Phase 4 prerequisite). Shipping this resolves the
 `depends_on: ['skill-core']` edge that `@ikenga/skill-pa` — and every future
-domain skill — already declares. Publish sync (npm + `ikenga-hq/skill-core`
-mirror) is the supervised follow-up in [PUBLISHING.md](./PUBLISHING.md).
+domain skill — already declares. It ships with the shell (see Install above);
+there is no separate per-skill repository. How skills are distributed is in
+[PUBLISHING.md](./PUBLISHING.md).
