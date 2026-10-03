@@ -100,7 +100,7 @@
     }
   },
   "consumers": {
-    "tasks": { "pkgId": "com.ikenga.tasks", "logTag": "tasks", "files": ["bridge", "ui"] },
+    "tasks": { "pkgId": "com.ikenga.tasks", "logTag": "tasks", "files": ["bridge", "ui", "operator"] },
     "mail": { "pkgId": "com.ikenga.mail", "logTag": "mail", "files": ["bridge", "ui", "facet-filter"] },
     "sales": { "pkgId": "com.ikenga.sales", "logTag": "sales", "files": ["bridge", "ui", "dispatch", "create-dispatch", "facet-filter", "operator"] },
     "outbound": { "pkgId": "com.ikenga.outbound", "logTag": "outbound", "files": ["bridge", "ui"], "bridgeExt": "outbound" },

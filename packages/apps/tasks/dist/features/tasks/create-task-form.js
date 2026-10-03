@@ -47,9 +47,11 @@ const labelStyle = {
 };
 
 /**
- * @param {{ onClose: () => void }} props
+ * @param {{ onClose: () => void, operatorId?: string | null }} props
+ *   operatorId: who "Me" is (hostContext.operator); null when the shell did not
+ *   report one — then the task is stored with no creator and "Me" is not offered.
  */
-export function CreateTaskForm({ onClose }) {
+export function CreateTaskForm({ onClose, operatorId = null }) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [owner, setOwner] = useState(''); // '' = unassigned
@@ -57,7 +59,7 @@ export function CreateTaskForm({ onClose }) {
   const [due, setDue] = useState(''); // 'YYYY-MM-DD' from <input type=date>
   const [description, setDescription] = useState('');
 
-  const options = assigneeOptions(getContext());
+  const options = assigneeOptions(getContext(), operatorId);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -70,6 +72,7 @@ export function CreateTaskForm({ onClose }) {
         // Store an ISO timestamp so it sorts/groups alongside existing rows.
         dueDate: due ? new Date(due).toISOString() : null,
         description: description.trim() || null,
+        createdBy: operatorId,
       });
     },
     onSuccess: () => {

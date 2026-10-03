@@ -39,11 +39,13 @@ writeFileSync('dist/lib/tasks-css.js', header + 'export default ' + JSON.stringi
 // 3. Vendor the shared no-build runtime (bridge + ui) from @ikenga/pkg-runtime —
 //    single source of truth (WP-19). The generated pkg-id.js carries this pkg's
 //    source-id + log tag, so the copied bridge.js stays byte-identical across pkgs.
+//    `operator` brings the shared fail-safe operator-identity predicates (the
+//    same copy the other no-build app pkgs vendor) for the "Me" / "You" logic.
 const runtime = vendorRuntime({
   destLibDir: fileURLToPath(new URL('../dist/lib', import.meta.url)),
   pkgId: 'com.ikenga.tasks',
   logTag: 'tasks',
-  files: ['bridge', 'ui'],
+  files: ['bridge', 'ui', 'operator'],
 });
 
 console.log(

@@ -15,7 +15,8 @@
 //      reopened if wrong.
 //
 // Schema columns used: id, title, status, priority, outcome_notes,
-// completed_at, updated_at, category. All present in royalti-pa/migrations.
+// completed_at, updated_at, category. All present in the shell's `tasks` table
+// (migration 0025_tasks_domain).
 
 import { html, Icon, Button, useQuery } from '../../lib/ui.js';
 import { hostDbQuery } from '../../lib/bridge.js';
@@ -135,9 +136,9 @@ export function SweeperView() {
 
       ${!awaiting.isLoading && !recent.isLoading && pendingCount === 0 && closedCount === 0 && html`
         <div style=${{ color: 'var(--fg-muted)', fontSize: 'var(--text-body-sm)', padding: 'var(--space-3) 0' }}>
-          No sweep proposals. When the sweeper observes a task's side-effect it'll list the close
-          here — high-confidence ones auto-close and stay visible for 7d, mid-confidence ones wait
-          for your call.
+          No sweep proposals yet. This app does not run a sweeper itself: proposals appear here
+          when an assistant that reviews your tasks writes them. High-confidence ones auto-close
+          and stay visible for 7d, mid-confidence ones wait for your call.
         </div>
       `}
 

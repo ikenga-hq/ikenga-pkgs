@@ -1,57 +1,54 @@
-// Assignee roster — single source of truth for who a task can be owned by, used
-// by both the create form (owner field) and the detail pane's Reassign picker.
+// Assignee roster — who a task can be owned by, used by both the create form
+// (owner field) and the detail pane's Reassign picker, plus the small helpers
+// that turn the operator's identity into labels.
 //
-// Two assignee kinds map onto the `tasks` columns: `assigned_to` (the id —
-// an email for a human, an agent id like `cfo-agent` for an agent) and
+// Two assignee kinds map onto the `tasks` columns: `assigned_to` (the id) and
 // `assignee_type` ('human' | 'agent'). `assigneeIsAgent` in shared.js also
-// treats a trailing `-agent` as the agent convention, so keep agent ids
-// suffixed `-agent`.
+// treats a trailing `-agent` as the agent convention when the type column is
+// empty, so keep agent ids suffixed `-agent`.
 //
-// ## Roster resolution
+// ## Who "Me" is
 //
-// The roster is INJECTABLE via `hostContext.royaltiSuite.tasksRoster` at
-// iframe-mount time. The shell delivers hostContext through the AppBridge
-// `connectBridge` return value and the `onContextChange` callback (see
-// bridge.js / app.js). The expected shape is:
+// "Me" is the operator the shell reports through `hostContext.operator`
+// (`{ id, displayName? }`, see @ikenga/contract's host-context). It is
+// OPTIONAL: when absent the operator is UNKNOWN, not a default person. Every
+// helper here fails safe on a missing operator:
+//
+//   - there is no "Me" option to pick (nothing real to store),
+//   - rows and audit events this app writes carry a null creator / actor,
+//   - the activity timeline reads those entries as "You".
+//
+// The id is threaded down from app.js (connectBridge ctx.operator.id) as a plain
+// string or null, the same way every other no-build app pkg does it. The pure
+// predicates (isMine, ...) come from the shared runtime copy in ./operator.js.
+//
+// ## Who the agents are
+//
+// There is no built-in agent list. Agents are offered only when the shell
+// delivers a roster at `hostContext.royaltiSuite.tasksRoster` at iframe-mount
+// time (via the AppBridge `connectBridge` return value and `onContextChange`,
+// see bridge.js / app.js). The expected shape is:
 //
 //   hostContext.royaltiSuite.tasksRoster = {
-//     humans: [{ value: string, label: string }],  // email → display name
+//     humans: [{ value: string, label: string }],  // id → display name
 //     agents: [{ id: string, label: string }],      // agent-id → display name
 //   }
 //
-// When `tasksRoster` is present and well-formed (both arrays non-empty) the
-// configured list takes full precedence over the static defaults below.
-// When absent or malformed the static CURRENT_USER + AGENT_ROSTER fallback
-// remains active — so the pkg works unchanged today and on every future
-// install that hasn't run `skill-tasks setup` yet.
-//
-// ## Shell hook needed (WP-10 contract side)
-//
-// The shell must read `.atelier/skill-tasks/roster.json` from the current
-// project dir (the directory passed as --project / CLAUDE_PROJECT_DIR) and
-// inject it as `hostContext.royaltiSuite.tasksRoster` when building the
-// hostContext object for this pkg's iframe (pkg-iframe-host.tsx). The JSON
-// file shape mirrors the `tasksRoster` field above:
-//   { "humans": [{"value":"...", "label":"..."}],
-//     "agents": [{"id":"...",   "label":"..."}] }
-// Written by `skill-tasks` `setup` (WP-06 setup lifecycle); the shell need
-// only pass it through — it must not transform or cache it.
+// When it is present and well-formed (both arrays non-empty) it is the whole
+// list of assignees. When it is absent or malformed the picker offers just
+// "Me" (when the operator is known) and "Unassigned". The shell reads the
+// roster from an optional `.atelier/skill-tasks/roster.json` in the project
+// folder and passes it through untouched; with no such file nothing is offered.
 
-// The logged-in human. TODO(hello@royalti.io): thread from
-// hostContext.royaltiAuth once it carries the user email (mirrors the same TODO
-// in tasks-view.js — this module is now the one place that literal lives).
-export const CURRENT_USER = 'hello@royalti.io';
+import { isMine } from './operator.js';
+
+/** Label for the operator in pickers and filters. */
+export const ME_LABEL = 'Me';
+
+/** Label used for the operator's own timeline entries. */
+export const SELF_LABEL = 'You';
 
 /** @typedef {{ id: string, label: string }} AgentEntry */
-
-/** @type {AgentEntry[]} */
-export const AGENT_ROSTER = [
-  { id: 'cfo-agent', label: 'CFO · Finance' },
-  { id: 'cmo-agent', label: 'CMO · Marketing' },
-  { id: 'coo-agent', label: 'COO · Operations' },
-  { id: 'content-agent', label: 'Content' },
-  { id: 'outbound-agent', label: 'Outbound' },
-];
 
 /** @typedef {{ value: string, label: string, type: 'human' | 'agent' }} AssigneeOption */
 
@@ -59,6 +56,18 @@ export const AGENT_ROSTER = [
  * @typedef {{ value: string, label: string }} HumanEntry
  * @typedef {{ humans: HumanEntry[], agents: AgentEntry[] }} TasksRoster
  */
+
+/**
+ * The operator's id from a hostContext, or `null` when the shell did not
+ * supply one (unknown operator). Never invents a default.
+ *
+ * @param {unknown} [hostContext]
+ * @returns {string | null}
+ */
+export function operatorIdFrom(hostContext) {
+  const id = /** @type {any} */ (hostContext)?.operator?.id;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
+}
 
 /**
  * Validate and return a configured roster from `hostContext.royaltiSuite.tasksRoster`,
@@ -90,20 +99,18 @@ export function resolveRoster(hostContext) {
 }
 
 /**
- * Flat option list for an assignee <select>. "Me" first (human), then each
- * configured agent. The empty-value "Unassigned" sentinel is added by the
- * caller's <select> so this list stays purely the real assignees.
+ * Flat option list for an assignee <select>. The empty-value "Unassigned"
+ * sentinel is added by the caller's <select> so this list stays purely the real
+ * assignees.
  *
- * Accepts an optional `hostContext` object. When it carries a valid
- * `royaltiSuite.tasksRoster`, the configured roster wins. Without it (or when
- * the roster is absent/malformed) the static CURRENT_USER + AGENT_ROSTER
- * defaults are used, so existing call sites calling the no-arg form remain
- * correct without modification.
+ * A configured roster (see above) wins outright. Without one the list is just
+ * "Me" — and only when the operator is known. No agents are ever invented.
  *
- * @param {unknown} [hostContext]
+ * @param {unknown} [hostContext] carries the optional roster
+ * @param {string | null} [operatorId] the known operator id, or null/undefined when unknown
  * @returns {AssigneeOption[]}
  */
-export function assigneeOptions(hostContext) {
+export function assigneeOptions(hostContext, operatorId = null) {
   const roster = resolveRoster(hostContext);
   if (roster) {
     return [
@@ -111,27 +118,50 @@ export function assigneeOptions(hostContext) {
       ...roster.agents.map((a) => ({ value: a.id, label: a.label, type: /** @type {'agent'} */ ('agent') })),
     ];
   }
-  // Static fallback — unchanged behaviour.
-  return [
-    { value: CURRENT_USER, label: 'Me', type: 'human' },
-    ...AGENT_ROSTER.map((a) => ({ value: a.id, label: a.label, type: /** @type {'agent'} */ ('agent') })),
-  ];
+  return operatorId
+    ? [{ value: operatorId, label: ME_LABEL, type: /** @type {'human'} */ ('human') }]
+    : [];
 }
 
 /**
  * Resolve a picked `assigned_to` value back to its `assignee_type`. Falls back
- * to the `-agent` naming convention for ids not in the roster (e.g. legacy rows
- * or a future configured agent not yet reflected here).
- *
- * Accepts an optional `hostContext`; threads it through to `assigneeOptions` so
- * the configured roster (when present) is consulted first.
+ * to the `-agent` naming convention for ids not in the list (e.g. legacy rows
+ * or an agent that is not in the current roster).
  *
  * @param {string} value
  * @param {unknown} [hostContext]
+ * @param {string | null} [operatorId]
  * @returns {'human' | 'agent'}
  */
-export function assigneeTypeFor(value, hostContext) {
-  const match = assigneeOptions(hostContext).find((o) => o.value === value);
+export function assigneeTypeFor(value, hostContext, operatorId = null) {
+  const match = assigneeOptions(hostContext, operatorId).find((o) => o.value === value);
   if (match) return match.type;
   return value.endsWith('-agent') ? 'agent' : 'human';
+}
+
+/**
+ * True when an activity-timeline actor is an agent or system process rather
+ * than a person: anything that is not the operator and not an email address.
+ *
+ * @param {string | null | undefined} actor
+ * @param {string | null} [operatorId]
+ */
+export function isAgentActor(actor, operatorId = null) {
+  return !!actor && !isMine(actor, operatorId) && !actor.includes('@');
+}
+
+/**
+ * Label for an activity-timeline actor. The operator's own id reads "You". An
+ * entry with no actor reads "You" too when it is one this app writes on the
+ * operator's behalf (`userAction`) and the operator is unknown — that is what
+ * the write helpers store in that case. Anything else is shown as stored.
+ *
+ * @param {string | null | undefined} actor
+ * @param {string | null} operatorId
+ * @param {boolean} [userAction]
+ * @returns {string | null}
+ */
+export function actorLabel(actor, operatorId, userAction = false) {
+  if (actor) return isMine(actor, operatorId) ? SELF_LABEL : actor;
+  return userAction && operatorId == null ? SELF_LABEL : null;
 }

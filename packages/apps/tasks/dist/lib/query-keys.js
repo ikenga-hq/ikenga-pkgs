@@ -14,5 +14,6 @@ export const queryKeys = {
     /** @param {string} id task whose activity/audit timeline we want */
     events: (id) => [...queryKeys.tasks.all, 'events', id],
     triageCounts: () => [...queryKeys.tasks.all, 'triage-counts'],
+    total: () => [...queryKeys.tasks.all, 'total'],
   },
 };
