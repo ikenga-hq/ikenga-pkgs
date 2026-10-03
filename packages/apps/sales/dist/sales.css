@@ -34,7 +34,7 @@
 
 .sl-forecast-kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
 }
 
@@ -77,6 +77,9 @@
   border: 1px solid var(--border-soft, rgba(0,0,0,0.08));
   border-radius: 8px;
   overflow: hidden;
+  /* The wrap is a scrolling flex column: without this the cards shrink to fit
+     a short pane and clip their rows instead of letting the wrap scroll. */
+  flex-shrink: 0;
 }
 
 .sl-forecast-card-h {
@@ -188,6 +191,13 @@
   color: var(--fg-muted);
 }
 
+.sl-forecast-note {
+  padding: 12px 14px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
 .sl-month-lab {
   font-size: 0.65rem;
   color: var(--fg-faint, var(--fg-muted));
@@ -208,7 +218,7 @@
 
 .sl-won-kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
 }
 

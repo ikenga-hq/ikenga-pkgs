@@ -49,12 +49,5 @@
     ],
     "vault.keys": [],
     "engine": ["invoke"]
-  },
-
-  "requires": [
-    {
-      "kind": "skill",
-      "name": "skill-sales"
-    }
-  ]
+  }
 }

@@ -24,24 +24,36 @@
 // Migration: 0043_sales_domain.sql — app-layer columns (title, owner, next_action,
 //   next_action_mode, win_probability) on sales_deals. Stage enum: lead → qualified →
 //   proposal → negotiation → closing → won | lost.
+//
+// A fresh install has an empty table, and the views say so: no row, field or
+// number here is ever invented. An empty or failed load shows the empty or error
+// state, never made-up deals.
 
 import {
   html, cn, Icon,
   useState, useEffect, useMemo, useCallback,
   useQuery, useMutation, useQueryClient,
 } from '../../lib/ui.js';
-import { hostDbQuery, hostDbExec, setMenu, isStandalone } from '../../lib/bridge.js';
-// create-wire recipe: dead "+ / New deal" buttons dispatch a creation brief to
-// the Chi (R-03: a deal is agent-shaped, never a client-side husk INSERT).
-import { buildCreateBrief, dispatchCreate } from '../../lib/create-dispatch.js';
+import { hostDbQuery, setMenu, isStandalone } from '../../lib/bridge.js';
 // dispatch-wire recipe: deal-detail "Approve & run"/"Confirm & run" seed a
-// structured next-action turn into the active Chi (host.sendToActiveSession).
-import { dispatchItemAction } from '../../lib/dispatch.js';
+// structured next-action turn into the active Chi. buildActionPrompt is the
+// shared prompt builder; the send itself goes through lib/companion.js, which
+// reports a refusal (no chat open, no engine) instead of swallowing it.
+import { buildActionPrompt } from '../../lib/dispatch.js';
 // facet-wire recipe: sidebar filter facets (f:*) narrow the pipeline list/kanban.
 import { applyFacet } from '../../lib/facet-filter.js';
 // operator-identity recipe: hostContext.operator threaded down from app.js —
 // "mine" predicates/fallbacks fail safe (empty/unclaimed) when unknown.
-import { isMine } from '../../lib/operator.js';
+import { isMine, initialOf } from '../../lib/operator.js';
+import { sendToCompanion, askCompanionToAddDeal } from '../../lib/companion.js';
+import {
+  setDealStage, loadSamplePipeline, removeSampleData, countSampleDeals, countLostDeals,
+} from '../../lib/deals-db.js';
+import { SAMPLE_SOURCE } from '../../lib/sample-pipeline.js';
+import {
+  toNumber, dealValue, winProbability, weightedTotals, monthlyForecast, monthLabel,
+} from '../../lib/forecast.js';
+import { CreateDealForm } from './create-deal-form.js';
 
 // ─── Stage enum ───────────────────────────────────────────────────────────────
 // Per the R-04 Pipeline-stages convention (06-skill-action-contract.md §Pipeline-stages).
@@ -72,97 +84,66 @@ const STAGE_LABEL = {
   lost: 'Lost',
 };
 
-// ─── Fixture data (canonical — mirrors sales.md §1) ──────────────────────────
-// Used as app-layer fallback until 0043 migration applies and real columns exist.
-// Mock contract 1: app-layer fallbacks until migration lands. Must flip to real
-// columns before sign-off (DoD: "MOCK: contract 1 … must flip to real columns").
-
-const OPEN_DEALS_FIXTURE = [
-  { id: 'D-01', title: 'Catalog migration',          company: 'Dapper Music',        stage: 'lead',        value: 30000,  currency: 'USD', owner: 'nedjamez',   next_action: 'Discovery call',                    next_action_mode: 'confirm',  win_probability: 0.15, assigned_to: 'nedjamez',   age_days: 12 },
-  { id: 'D-02', title: 'Self-serve → team',           company: 'Tay Iwar',            stage: 'lead',        value: 6000,   currency: 'USD', owner: 'nedjamez',   next_action: 'Qualify fit',                       next_action_mode: 'silent',   win_probability: 0.10, assigned_to: 'nedjamez',   age_days: 5  },
-  { id: 'D-03', title: 'Analytics pilot',             company: 'Aristokrat Records',  stage: 'qualified',   value: 18000,  currency: 'USD', owner: 'sales-agent',next_action: 'Schedule demo',                     next_action_mode: 'silent',   win_probability: 0.40, assigned_to: 'sales-agent',age_days: 8  },
-  { id: 'D-04', title: 'Pilot → migration',           company: 'Baseline Music',      stage: 'qualified',   value: 12000,  currency: 'USD', owner: 'sales-agent',next_action: 'Send pilot scope',                  next_action_mode: 'confirm',  win_probability: 0.35, assigned_to: 'sales-agent',age_days: 14 },
-  { id: 'D-05', title: 'Catalog onboarding',          company: 'Chocolate City',      stage: 'proposal',    value: 48000,  currency: 'USD', owner: 'sales-agent',next_action: 'Send MSA for signature',            next_action_mode: 'approve',  win_probability: 0.60, assigned_to: 'sales-agent',age_days: 21 },
-  { id: 'D-06', title: 'Enterprise — multi-label',    company: 'Mavin Records',       stage: 'negotiation', value: 72000,  currency: 'USD', owner: 'nedjamez',   next_action: 'Pricing call Tue 11:00',            next_action_mode: 'confirm',  win_probability: 0.70, assigned_to: 'nedjamez',   age_days: 19 },
-  { id: 'D-07', title: 'Reseller agreement',          company: 'Empire Distribution', stage: 'negotiation', value: 200000, currency: 'USD', owner: 'nedjamez',   next_action: 'Legal review of reseller terms',    next_action_mode: 'approve',  win_probability: 0.65, assigned_to: 'nedjamez',   age_days: 34 },
-  { id: 'D-08', title: 'Countersign — enterprise',    company: 'Native Records',      stage: 'closing',     value: 120000, currency: 'USD', owner: 'sales-agent',next_action: 'Countersign + provision tenant',    next_action_mode: 'approve',  win_probability: 0.85, assigned_to: 'sales-agent',age_days: 41 },
-];
-
-const WON_DEALS_FIXTURE = [
-  { id: 'W-01', title: 'Mavin catalog sync',        company: 'Mavin Records',       source: 'referral',   owner: 'nedjamez',    closed: 'Apr 28', value: 54000  },
-  { id: 'W-02', title: 'Tooth & Nail migration',    company: 'Tooth & Nail',        source: 'inbound',    owner: 'sales-agent', closed: 'Apr 21', value: 36000  },
-  { id: 'W-03', title: 'Indie bundle',              company: 'Indie Co',            source: 'self-serve', owner: 'nedjamez',    closed: 'Apr 14', value: 18000  },
-  { id: 'W-04', title: 'Analytics annual',          company: 'Aristokrat Records',  source: 'outbound',   owner: 'sales-agent', closed: 'Apr 9',  value: 42000  },
-  { id: 'W-05', title: 'Reseller — West Africa',    company: 'Synco Distribution',  source: 'partner',    owner: 'nedjamez',    closed: 'Mar 30', value: 96000  },
-  { id: 'W-06', title: 'Pilot conversion',          company: 'Baseline Music',      source: 'pilot',      owner: 'sales-agent', closed: 'Mar 22', value: 66000  },
-];
-
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 const QK = {
   openDeals:     ['sales', 'deals', 'open'],
   wonDeals:      ['sales', 'deals', 'won'],
+  lostCount:     ['sales', 'deals', 'lost-count'],
+  sampleCount:   ['sales', 'sample-count'],
   forecasts:     ['sales', 'forecasts'],
   activities:    (dealId) => ['sales', 'activities', dealId],
 };
 
 // ─── Data fetchers ────────────────────────────────────────────────────────────
+// A failed read throws, so the view shows its error state with a Retry. An empty
+// table returns [] and the view shows the empty state. Neither case is ever
+// papered over with made-up rows.
+
+/** Whole days a deal has spent at its current stage: from stage_entered_date when
+ *  it parses, else the stored days_in_stage, else unknown (null). */
+function ageDays(row) {
+  const entered = Date.parse(row.stage_entered_date ?? '');
+  if (Number.isFinite(entered)) return Math.max(0, Math.floor((Date.now() - entered) / 86_400_000));
+  return row.days_in_stage ?? null;
+}
 
 async function fetchOpenDeals() {
-  if (isStandalone()) return OPEN_DEALS_FIXTURE;
-  try {
-    // Try real columns from 0043 migration first (title, owner, next_action, next_action_mode, win_probability).
-    const rows = await hostDbQuery(
-      `SELECT id, company, contact_name, contact_email, stage, value, currency, score,
-              last_contact, assigned_to, notes, source, loss_reason, description,
-              title, owner, next_action, next_action_mode, win_probability,
-              days_in_stage, stage_entered_date, expected_close_date
-       FROM sales_deals
-       WHERE stage NOT IN ('won', 'lost')
-       ORDER BY last_contact DESC`
-    );
-    if (!rows.length) return OPEN_DEALS_FIXTURE;
-    // Merge fixture app-layer fields as fallback when columns are NULL (pre-migration).
-    return rows.map((r, i) => {
-      const fix = OPEN_DEALS_FIXTURE[i % OPEN_DEALS_FIXTURE.length];
-      return {
-        ...r,
-        title: r.title ?? r.company,
-        owner: r.owner ?? r.assigned_to ?? fix.owner,
-        next_action: r.next_action ?? fix.next_action,
-        next_action_mode: r.next_action_mode ?? fix.next_action_mode,
-        win_probability: r.win_probability ?? fix.win_probability,
-        age_days: r.days_in_stage ?? fix.age_days ?? 0,
-        value: typeof r.value === 'string' ? parseFloat(r.value) || 0 : (r.value ?? 0),
-      };
-    });
-  } catch {
-    // Bridge unavailable or table missing — return fixture.
-    return OPEN_DEALS_FIXTURE;
-  }
+  const rows = await hostDbQuery(
+    `SELECT id, company, contact_name, contact_email, stage, value, currency, score,
+            last_contact, assigned_to, notes, source, loss_reason, description,
+            title, owner, next_action, next_action_mode, win_probability,
+            days_in_stage, stage_entered_date, expected_close_date
+     FROM sales_deals
+     WHERE stage NOT IN ('won', 'lost')
+     ORDER BY COALESCE(last_contact, updated_at, created_at, '') DESC`
+  );
+  return rows.map((r) => ({
+    ...r,
+    title: r.title ?? r.company,
+    owner: r.owner ?? r.assigned_to ?? null,
+    age_days: ageDays(r),
+    value: toNumber(r.value),
+    is_sample: r.source === SAMPLE_SOURCE,
+  }));
 }
 
 async function fetchWonDeals(operatorId) {
-  if (isStandalone()) return WON_DEALS_FIXTURE;
-  try {
-    const rows = await hostDbQuery(
-      `SELECT id, company, contact_name, stage, value, currency, source, assigned_to,
-              last_contact, owner, title
-       FROM sales_deals
-       WHERE stage = 'won'
-       ORDER BY last_contact DESC`
-    );
-    if (!rows.length) return WON_DEALS_FIXTURE;
-    return rows.map((r) => ({
-      ...r,
-      title: r.title ?? r.company,
-      owner: r.owner ?? r.assigned_to ?? operatorId ?? null,
-      closed: r.last_contact ? r.last_contact.substring(0, 10) : '—',
-      value: typeof r.value === 'string' ? parseFloat(r.value) || 0 : (r.value ?? 0),
-    }));
-  } catch {
-    return WON_DEALS_FIXTURE;
-  }
+  const rows = await hostDbQuery(
+    `SELECT id, company, contact_name, stage, value, currency, source, assigned_to,
+            last_contact, owner, title
+     FROM sales_deals
+     WHERE stage = 'won'
+     ORDER BY last_contact DESC`
+  );
+  return rows.map((r) => ({
+    ...r,
+    title: r.title ?? r.company,
+    owner: r.owner ?? r.assigned_to ?? operatorId ?? null,
+    closed: r.last_contact ? r.last_contact.substring(0, 10) : '—',
+    value: toNumber(r.value),
+    is_sample: r.source === SAMPLE_SOURCE,
+  }));
 }
 
 async function fetchActivities(dealId) {
@@ -217,9 +198,11 @@ function dealToDispatchItem(deal) {
   };
 }
 
+/** Hand the deal's next action to the companion. Resolves with the outcome so
+ *  the detail pane can say when nothing was sent (no chat open, no engine). */
 function handleAction(deal) {
   const mode = deal.next_action_mode === 'approve' ? 'approve' : 'confirm';
-  dispatchItemAction(dealToDispatchItem(deal), mode, 'com.ikenga.sales').catch(() => {});
+  return sendToCompanion(buildActionPrompt(dealToDispatchItem(deal), mode));
 }
 
 // ─── facet-wire (RECIPE 2) ────────────────────────────────────────────────────
@@ -355,6 +338,16 @@ function buildSalesMenu(activeView, pipeMode, deals, activeFacet, operatorId) {
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
+/** The deal that heads the stage-grouped list, so the detail pane opens on the
+ *  row the person sees first. */
+function firstInListOrder(deals) {
+  const grouped = {};
+  for (const s of STAGES) grouped[s] = [];
+  for (const d of deals) (grouped[d.stage] ??= []).push(d);
+  for (const s of stagesWithExtras(grouped)) if (grouped[s].length > 0) return grouped[s][0];
+  return null;
+}
+
 /** Single deal row in list mode */
 function DealRow({ deal, isSelected, onClick }) {
   const isUrgent = (deal.age_days ?? 0) > 30;
@@ -372,6 +365,7 @@ function DealRow({ deal, isSelected, onClick }) {
         <div class="split-row-sub dense-row-sub">
           ${deal.company}
           ${deal.owner ? html` · <span>${deal.owner === 'sales-agent' ? '⚡ sales-agent' : deal.owner}</span>` : null}
+          ${deal.is_sample ? html` <span class="tag">Sample</span>` : null}
         </div>
         ${deal.next_action ? html`
           <div class="split-row-sub">
@@ -394,11 +388,13 @@ function DealRow({ deal, isSelected, onClick }) {
 
 /** Deal detail pane */
 function DealDetail({ deal, activities }) {
-  // dispatch-wire — local feedback: flips true on click so the operator sees the
-  // hand-off landed and the same click can't double-seed the session. Resets when
-  // the selected deal changes.
-  const [sent, setSent] = useState(false);
-  useEffect(() => { setSent(false); }, [deal?.id]);
+  // dispatch-wire — local feedback. 'sent' only once the host accepted the
+  // request, so the same click can't double-seed the session; a refusal (no chat
+  // open, no engine) shows its message instead of pretending it landed. Resets
+  // when the selected deal changes.
+  const [send, setSend] = useState({ status: 'idle' });
+  useEffect(() => { setSend({ status: 'idle' }); }, [deal?.id]);
+  const sent = send.status === 'sent';
 
   if (!deal) {
     return html`<div class="ip-split-pane split-detail" style=${{ display:'flex', alignItems:'center', justifyContent:'center', color:'var(--fg-muted)', fontSize:'0.85rem' }}>
@@ -409,13 +405,18 @@ function DealDetail({ deal, activities }) {
   const hasApprove = deal.next_action_mode === 'approve';
   const hasConfirm = deal.next_action_mode === 'confirm';
   const showButton = hasApprove || hasConfirm;
-  const onAct = () => { handleAction(deal); setSent(true); };
+  const onAct = async () => {
+    setSend({ status: 'sending' });
+    const result = await handleAction(deal);
+    setSend(result.ok ? { status: 'sent' } : { status: 'failed', message: result.message });
+  };
 
   return html`
     <div class="ip-split-pane split-detail" style=${{ overflowY:'auto' }}>
       <div class="split-detail-wrap">
         <div class="split-detail-eyebrow">
           <span class="stage-chip">${STAGE_LABEL[deal.stage] ?? deal.stage}</span>
+          ${deal.is_sample ? html`<span class="tag">Sample</span>` : null}
           ${deal.next_action_mode ? html`
             <span class="next-chip">
               <span class=${cn('ux-dot', `ux-${deal.next_action_mode}`)}></span>
@@ -446,11 +447,14 @@ function DealDetail({ deal, activities }) {
                   <button
                     class=${cn('btn', hasApprove ? 'affirmative' : '')}
                     type="button"
-                    disabled=${sent}
+                    disabled=${sent || send.status === 'sending'}
                     onClick=${onAct}
                   >
-                    ${sent ? 'Sent to your Chi' : hasApprove ? 'Approve & run' : 'Confirm & run'}
+                    ${sent ? 'Sent to your Chi' : send.status === 'sending' ? 'Sending…' : hasApprove ? 'Approve & run' : 'Confirm & run'}
                   </button>
+                  ${send.status === 'failed' ? html`
+                    <div role="alert" style=${{ marginTop: '6px', fontSize: '0.75rem', color: 'var(--danger)' }}>${send.message}</div>
+                  ` : null}
                 </div>
               ` : null}
             </div>
@@ -518,7 +522,7 @@ function PipelineList({ deals, selectedDeal, onSelectDeal, activities }) {
 /** Kanban mini-avatar */
 function KbAvatar({ owner }) {
   const isAgent = owner === 'sales-agent';
-  const initial = isAgent ? 'S' : (owner?.[0]?.toUpperCase() ?? 'N');
+  const initial = isAgent ? 'S' : initialOf(owner);
   return html`<span class=${cn('kb-mini-avatar', isAgent && 'is-agent')} aria-label=${owner ?? ''}>${initial}</span>`;
 }
 
@@ -579,7 +583,7 @@ function PipelineKanban({ deals, onStageChange, onCreate }) {
                     tabIndex=${0}
                   >
                     <div class="kb-card-title">${d.title ?? d.company}</div>
-                    <div class="kb-card-sub">${d.company}</div>
+                    <div class="kb-card-sub">${d.company}${d.is_sample ? html` <span class="tag">Sample</span>` : null}</div>
                     <div class="kb-card-foot">
                       <span class="kb-card-amt">${fmtCurrency(d.value)}</span>
                       <div class="kb-card-owner">
@@ -604,35 +608,38 @@ function PipelineKanban({ deals, onStageChange, onCreate }) {
   `;
 }
 
-/** Forecast view */
+/** Forecast view.
+ *  Every figure comes from the open deals in the table. A deal with no win
+ *  probability is left out of the weighted figures (and the pane says how many
+ *  were), and the month chart is built only from expected close dates that are
+ *  actually set; with none, it asks for them instead of drawing a chart. */
 function ForecastView({ deals }) {
   const kpis = useMemo(() => {
-    const openPipeline = deals.reduce((s, d) => s + (parseFloat(d.value) || 0), 0);
-    const weighted = deals.reduce((s, d) => s + ((parseFloat(d.value) || 0) * (d.win_probability ?? 0.5)), 0);
+    const openPipeline = deals.reduce((s, d) => s + dealValue(d), 0);
+    const { weighted, withProbability } = weightedTotals(deals);
     const commit = deals
-      .filter((d) => (d.stage === 'closing' || d.stage === 'negotiation') && (d.win_probability ?? 0) >= 0.70)
-      .reduce((s, d) => s + (parseFloat(d.value) || 0), 0);
-    return { openPipeline, weighted, commit, target: 300_000 };
+      .filter((d) => (d.stage === 'closing' || d.stage === 'negotiation') && (winProbability(d) ?? 0) >= 0.70)
+      .reduce((s, d) => s + dealValue(d), 0);
+    return { openPipeline, weighted, withProbability, commit };
   }, [deals]);
 
   const funnelRows = useMemo(() => {
-    const maxVal = Math.max(...STAGES.map((s) => {
-      return deals.filter((d) => d.stage === s).reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
-    }), 1);
-    return STAGES.map((s) => {
-      const total = deals.filter((d) => d.stage === s).reduce((sum, d) => sum + (parseFloat(d.value) || 0), 0);
-      const wt = deals.filter((d) => d.stage === s).reduce((sum, d) => sum + ((parseFloat(d.value) || 0) * (d.win_probability ?? 0.5)), 0);
-      return { stage: s, total, wt, pctTotal: total / maxVal, pctWt: wt / maxVal };
+    const byStage = STAGES.map((s) => {
+      const inStage = deals.filter((d) => d.stage === s);
+      const total = inStage.reduce((sum, d) => sum + dealValue(d), 0);
+      const wt = inStage.reduce((sum, d) => sum + dealValue(d) * (winProbability(d) ?? 0), 0);
+      return { stage: s, total, wt };
     });
+    const maxVal = Math.max(...byStage.map((r) => r.total), 1);
+    return byStage.map((r) => ({ ...r, pctTotal: r.total / maxVal, pctWt: r.wt / maxVal }));
   }, [deals]);
 
-  // Expected close by month (Apr/May/Jun — derived from fixture)
-  const months = [
-    { label: 'Apr', val: 180000, maxVal: 280000 },
-    { label: 'May', val: 280000, maxVal: 280000 },
-    { label: 'Jun', val: 46000,  maxVal: 280000 },
-  ];
-  const maxMonthVal = Math.max(...months.map((m) => m.val), 1);
+  // Expected close by month: derived from expected_close_date, never constants.
+  const months = useMemo(() => monthlyForecast(deals), [deals]);
+  const maxMonthVal = Math.max(...months.map((m) => m.value), 1);
+  const spansYears = months.length > 0 && months[0].year !== months[months.length - 1].year;
+
+  const allWeighted = kpis.withProbability === deals.length;
 
   return html`
     <div class="sl-forecast-wrap frame-body-flush">
@@ -640,22 +647,23 @@ function ForecastView({ deals }) {
         <div class="sl-forecast-kpi">
           <span class="sl-kpi-k">Open pipeline</span>
           <span class="sl-kpi-v">${fmtCurrency(kpis.openPipeline)}</span>
-          <span class="sl-kpi-sub">8 active deals</span>
+          <span class="sl-kpi-sub">${deals.length} open ${deals.length === 1 ? 'deal' : 'deals'}</span>
         </div>
         <div class="sl-forecast-kpi">
           <span class="sl-kpi-k">Weighted</span>
-          <span class="sl-kpi-v">${fmtCurrency(kpis.weighted)}</span>
-          <span class="sl-kpi-sub">by win prob.</span>
+          <span class="sl-kpi-v">${kpis.withProbability > 0 ? fmtCurrency(kpis.weighted) : '—'}</span>
+          <span class="sl-kpi-sub">${
+            kpis.withProbability === 0
+              ? 'no win probabilities set'
+              : allWeighted
+                ? 'by win prob.'
+                : `by win prob. · ${kpis.withProbability} of ${deals.length} deals`
+          }</span>
         </div>
         <div class="sl-forecast-kpi">
           <span class="sl-kpi-k">Commit</span>
           <span class="sl-kpi-v">${fmtCurrency(kpis.commit)}</span>
           <span class="sl-kpi-sub">closing + neg ≥70%</span>
-        </div>
-        <div class="sl-forecast-kpi">
-          <span class="sl-kpi-k">Quarter target</span>
-          <span class="sl-kpi-v">${fmtCurrency(kpis.target)}</span>
-          <span class="sl-kpi-sub">Q2 2026</span>
         </div>
       </div>
 
@@ -675,49 +683,53 @@ function ForecastView({ deals }) {
 
       <div class="sl-forecast-card">
         <div class="sl-forecast-card-h">Expected close by month</div>
-        <div class="sl-months">
-          ${months.map((m) => html`
-            <div class="sl-month" key=${m.label}>
-              <span class="sl-month-val">${fmtCurrency(m.val)}</span>
-              <div class="sl-month-bar-wrap">
-                <div class="sl-month-bar" style=${{ height: `${Math.round((m.val / maxMonthVal) * 100)}%` }}></div>
+        ${months.length === 0 ? html`
+          <div class="sl-forecast-note">Add expected close dates to see a forecast</div>
+        ` : html`
+          <div class="sl-months">
+            ${months.map((m) => html`
+              <div class="sl-month" key=${m.key} title=${`${m.count} ${m.count === 1 ? 'deal' : 'deals'}`}>
+                <span class="sl-month-val">${fmtCurrency(m.value)}</span>
+                <div class="sl-month-bar-wrap">
+                  <div class="sl-month-bar" style=${{ height: `${Math.round((m.value / maxMonthVal) * 100)}%` }}></div>
+                </div>
+                <span class="sl-month-lab">${monthLabel(m, spansYears)}</span>
               </div>
-              <span class="sl-month-lab">${m.label}</span>
-            </div>
-          `)}
-        </div>
+            `)}
+          </div>
+          <div class="sl-forecast-note">Weighted by win probability where one is set; deals without an expected close date are not shown.</div>
+        `}
       </div>
     </div>
   `;
 }
 
 /** Won view */
-function WonView({ wonDeals }) {
+function WonView({ wonDeals, lostCount }) {
   const kpis = useMemo(() => {
-    const total = wonDeals.reduce((s, d) => s + (parseFloat(d.value) || 0), 0);
+    const total = wonDeals.reduce((s, d) => s + dealValue(d), 0);
     const avg = wonDeals.length ? total / wonDeals.length : 0;
-    return { total, avg, cycle: 34, winRate: 41 };
-  }, [wonDeals]);
+    const decided = wonDeals.length + lostCount;
+    const winRate = decided > 0 ? Math.round((wonDeals.length / decided) * 100) : null;
+    return { total, avg, winRate };
+  }, [wonDeals, lostCount]);
 
   return html`
     <div class="sl-won-wrap frame-body-flush">
       <div class="sl-won-kpis">
         <div class="sl-forecast-kpi">
-          <span class="sl-kpi-k">Won this quarter</span>
+          <span class="sl-kpi-k">Total won</span>
           <span class="sl-kpi-v" style=${{ color: 'var(--live)' }}>${fmtCurrency(kpis.total)}</span>
-          <span class="sl-kpi-sub">${wonDeals.length} deals</span>
+          <span class="sl-kpi-sub">${wonDeals.length} ${wonDeals.length === 1 ? 'deal' : 'deals'}</span>
         </div>
         <div class="sl-forecast-kpi">
           <span class="sl-kpi-k">Avg deal size</span>
-          <span class="sl-kpi-v">${fmtCurrency(kpis.avg)}</span>
-        </div>
-        <div class="sl-forecast-kpi">
-          <span class="sl-kpi-k">Avg cycle</span>
-          <span class="sl-kpi-v">${kpis.cycle}d</span>
+          <span class="sl-kpi-v">${wonDeals.length ? fmtCurrency(kpis.avg) : '—'}</span>
         </div>
         <div class="sl-forecast-kpi">
           <span class="sl-kpi-k">Win rate</span>
-          <span class="sl-kpi-v">${kpis.winRate}%</span>
+          <span class="sl-kpi-v">${kpis.winRate == null ? '—' : `${kpis.winRate}%`}</span>
+          <span class="sl-kpi-sub">${wonDeals.length} won · ${lostCount} lost</span>
         </div>
       </div>
 
@@ -738,7 +750,7 @@ function WonView({ wonDeals }) {
               <tr key=${d.id}>
                 <td>${d.title ?? d.company}</td>
                 <td style=${{ color:'var(--fg-muted)' }}>${d.company}</td>
-                <td><span class="sl-won-badge">${d.source ?? '—'}</span></td>
+                <td><span class="sl-won-badge">${d.is_sample ? 'Sample' : (d.source ?? '—')}</span></td>
                 <td style=${{ color:'var(--fg-muted)', fontSize:'0.75rem' }}>${d.owner ?? d.assigned_to ?? '—'}</td>
                 <td style=${{ color:'var(--fg-muted)', fontFamily:'var(--font-mono)', fontSize:'0.72rem' }}>${d.closed ?? d.last_contact ?? '—'}</td>
                 <td style=${{ textAlign:'right' }}><span class="sl-won-amt">${fmtCurrency(d.value)}</span></td>
@@ -762,16 +774,96 @@ function LoadingState() {
   `;
 }
 
-function EmptyState({ onCreate }) {
+const noteStyle = { margin: 0, maxWidth: '46ch', fontSize: 'var(--text-body-sm, 0.8rem)', color: 'var(--fg-muted)', lineHeight: 1.55 };
+
+/** First run: the table has no deals at all. Offers the manual form first, the
+ *  labelled sample pipeline second, and the companion as a third route. While
+ *  the form is open (`formOpen`) it is the call to action, so the buttons step
+ *  aside. */
+function EmptyState({ onCreate, onLoadSample, onAskCompanion, sampleBusy, formOpen }) {
   return html`
     <div class="atelier-state is-empty" id="view-stage">
       <span>No deals yet</span>
-      <button
-        class="btn btn-sm"
-        type="button"
-        style=${{ marginTop:'8px' }}
-        onClick=${() => onCreate?.()}
-      >New deal</button>
+      <p style=${noteStyle}>Add your first deal. It is saved on this computer.</p>
+      ${formOpen ? null : html`
+        <div style=${{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '4px' }}>
+          <button class="btn btn-sm btn-primary" type="button" onClick=${() => onCreate?.()}>New deal</button>
+          <button class="btn btn-sm btn-outline" type="button" disabled=${sampleBusy} onClick=${() => onLoadSample?.()}>
+            ${sampleBusy ? 'Loading…' : 'Load sample pipeline'}
+          </button>
+        </div>
+        <button class="btn btn-sm btn-ghost" type="button" title="Needs an AI engine and an open chat session" onClick=${() => onAskCompanion?.()}>
+          Ask the companion to add it
+        </button>
+        <p style=${{ ...noteStyle, fontSize: '0.72rem' }}>
+          The sample pipeline is made-up data. Every sample deal is labelled, and you can remove them all in one click.
+        </p>
+      `}
+    </div>
+  `;
+}
+
+/** Deals exist, but the active sidebar filter matches none of them. */
+function FilterEmptyState({ onShowAll }) {
+  return html`
+    <div class="atelier-state is-empty" id="view-stage">
+      <span>No deals match this filter</span>
+      <button class="btn btn-sm" type="button" style=${{ marginTop: '8px' }} onClick=${() => onShowAll?.()}>Show all deals</button>
+    </div>
+  `;
+}
+
+/** Won view with no won deals (deals exist elsewhere in the pipeline). */
+function NoWonYet() {
+  return html`
+    <div class="atelier-state is-empty" id="view-stage">
+      <span>No won deals yet</span>
+      <p style=${noteStyle}>A deal is listed here once its stage is Won.</p>
+    </div>
+  `;
+}
+
+/** One-line result of an action the person took (a companion request, loading or
+ *  removing sample data). Errors read as errors; both can be dismissed. */
+function Notice({ notice, onDismiss }) {
+  return html`
+    <div
+      role=${notice.kind === 'error' ? 'alert' : 'status'}
+      style=${{
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '6px var(--space-5, 16px)',
+        fontSize: '0.75rem',
+        borderBottom: '1px solid var(--border-soft)',
+        color: notice.kind === 'error' ? 'var(--danger)' : 'var(--fg-muted)',
+      }}
+    >
+      <span style=${{ flex: 1 }}>${notice.text}</span>
+      <button class="btn btn-sm btn-ghost" type="button" onClick=${onDismiss}>Dismiss</button>
+    </div>
+  `;
+}
+
+/** Shown on every view while any sample deal is in the table. */
+function SampleBanner({ count, onRemove, busy }) {
+  return html`
+    <div
+      class="sl-sample-banner"
+      style=${{
+        display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+        padding: '6px var(--space-5, 16px)',
+        fontSize: '0.75rem',
+        borderBottom: '1px solid var(--border-soft)',
+        background: 'var(--bg-sunken)',
+        color: 'var(--fg-muted)',
+      }}
+    >
+      <span class="tag">Sample</span>
+      <span style=${{ flex: 1 }}>
+        ${count} sample ${count === 1 ? 'deal is' : 'deals are'} loaded. They are made-up and stored only on this computer.
+      </span>
+      <button class="btn btn-sm btn-outline" type="button" disabled=${busy} onClick=${onRemove}>
+        ${busy ? 'Removing…' : 'Remove sample data'}
+      </button>
     </div>
   `;
 }
@@ -803,26 +895,40 @@ export function SalesView({ activeFeature, operatorId }) {
     return [0, 1, 2].includes(v) ? v : 0;
   });
   const [pipeMode, setPipeMode] = useState('list'); // 'list' | 'kanban'
-  const [selectedDeal, setSelectedDeal] = useState(null);
+  // The selected deal is kept by id and looked up in the current rows, so a deal
+  // that disappears (sample data removed, a row deleted elsewhere) never lingers
+  // in the detail pane.
+  const [selectedId, setSelectedId] = useState(null);
   // facet-wire — last-applied sidebar filter facet. 'f:open-pipeline' is the
   // reset/"all" affordance (no predicate → applyFacet returns every deal).
   const [activeFacet, setActiveFacet] = useState(SALES_RESET_FACET);
+  // In-pane "New deal" form: null when closed, else { stage } with the column the
+  // "+" was clicked in (undefined from the header button).
+  const [createForm, setCreateForm] = useState(null);
+  // Result line for the last companion request / sample-data action.
+  const [notice, setNotice] = useState(null);
   const qc = useQueryClient();
 
   // ── Data queries ────────────────────────────────────────────────────────────
-  const openDealsQ = useQuery({ queryKey: QK.openDeals, queryFn: fetchOpenDeals });
+  const openDealsQ = useQuery({
+    queryKey: QK.openDeals,
+    queryFn: fetchOpenDeals,
+    // While the pipeline is empty, re-check every few seconds so a deal added
+    // from outside this pane (the companion creating one) replaces the first-run
+    // state without a reload. Stops as soon as there is a row.
+    refetchInterval: (query) => (query.state.data?.length === 0 ? 5000 : false),
+  });
   const wonDealsQ = useQuery({
     queryKey: QK.wonDeals,
     queryFn: () => fetchWonDeals(operatorId),
     enabled: activeView === 2,
   });
-
-  const activitiesQ = useQuery({
-    queryKey: QK.activities(selectedDeal?.id ?? null),
-    queryFn: () => fetchActivities(selectedDeal?.id),
-    enabled: !!selectedDeal?.id,
-    staleTime: 60_000,
+  const lostCountQ = useQuery({
+    queryKey: QK.lostCount,
+    queryFn: countLostDeals,
+    enabled: activeView === 2,
   });
+  const sampleCountQ = useQuery({ queryKey: QK.sampleCount, queryFn: countSampleDeals });
 
   const deals = openDealsQ.data ?? [];
   // facet-wire — the visible slice: full list narrowed by the active facet.
@@ -833,6 +939,14 @@ export function SalesView({ activeFeature, operatorId }) {
     () => applyFacet(deals, activeFacet, salesFacetPredicates(operatorId), SALES_RESET_FACET),
     [deals, activeFacet, operatorId],
   );
+  const selectedDeal = visibleDeals.find((d) => d.id === selectedId) ?? firstInListOrder(visibleDeals);
+
+  const activitiesQ = useQuery({
+    queryKey: QK.activities(selectedDeal?.id ?? null),
+    queryFn: () => fetchActivities(selectedDeal?.id),
+    enabled: !!selectedDeal?.id,
+    staleTime: 60_000,
+  });
 
   // ── db-updated refresh ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -860,14 +974,6 @@ export function SalesView({ activeFeature, operatorId }) {
     }
   }, [activeFeature]);
 
-  // ── Pre-select hero deal (D-05 — Catalog onboarding · Chocolate City) ──────
-  useEffect(() => {
-    if (deals.length > 0 && !selectedDeal) {
-      const hero = deals.find((d) => d.id === 'D-05') ?? deals[0];
-      setSelectedDeal(hero);
-    }
-  }, [deals]);
-
   // ── setMenu publish ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (isStandalone()) return;
@@ -877,38 +983,48 @@ export function SalesView({ activeFeature, operatorId }) {
 
   // ── Stage change mutation (kanban drag) ─────────────────────────────────────
   const stageChange = useMutation({
-    mutationFn: async ({ deal, newStage }) => {
-      if (isStandalone()) return;
-      await hostDbExec(
-        `UPDATE sales_deals SET stage = ?, updated_at = datetime('now') WHERE id = ?`,
-        [newStage, deal.id]
-      );
-    },
+    mutationFn: ({ deal, newStage }) => setDealStage(deal.id, newStage),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.openDeals }),
+    onError: (e) => setNotice({ kind: 'error', text: `Could not move the deal: ${e?.message ?? e}` }),
   });
 
-  // ── Dispatch-mode creation (create-wire recipe) ─────────────────────────────
-  // R-03: a deal is agent-shaped — it needs company research plus owner,
-  // next_action, next_action_mode and win_probability, and links to `contacts`.
-  // Seeding an empty client-side INSERT would leave a husk the user must
-  // hand-fill, so creation dispatches a structured brief to the active Chi
-  // session instead (host.sendToActiveSession, via lib/create-dispatch.js).
-  // `stage` is the kanban column's pre-filled context; undefined for the
-  // empty-state "New deal" which seeds a full brief.
-  const createDeal = useCallback((stage) => {
-    const label = stage ? (STAGE_LABEL[stage] ?? stage) : null;
-    const brief = buildCreateBrief({
-      entity: 'sales deal',
-      table: 'sales_deals',
-      seed: label ? { stage: label } : {},
-      instruction:
-        'Research the company, then set the title, company, owner, value, '
-        + 'next action, and win probability'
-        + (label ? `, and file it at the ${label} stage` : '')
-        + '. Ask me for anything you still need, then add it to the sales_deals table.',
-    });
-    void dispatchCreate(brief, 'com.ikenga.sales');
+  // ── Adding a deal ───────────────────────────────────────────────────────────
+  // Manual first: the form writes the row straight to sales_deals, so it works
+  // with no AI engine. `stage` is the kanban column's pre-filled context;
+  // undefined from the header or empty-state "New deal".
+  const openCreate = useCallback((stage) => {
+    setNotice(null);
+    setCreateForm({ stage });
   }, []);
+
+  // Secondary route: ask the companion to research and add the deal. Needs an AI
+  // engine and an open chat, and reports plainly when it cannot run.
+  const askCompanion = useCallback(async () => {
+    setNotice(null);
+    const result = await askCompanionToAddDeal();
+    setNotice(
+      result.ok
+        ? { kind: 'info', text: 'Sent to the companion. The deal appears here once it has been added.' }
+        : { kind: 'error', text: result.message },
+    );
+  }, []);
+
+  // ── Sample data (opt-in, labelled, removable) ───────────────────────────────
+  const sampleChange = useMutation({
+    mutationFn: ({ action }) => (action === 'load' ? loadSamplePipeline() : removeSampleData()),
+    onSuccess: (_data, { action }) => {
+      setNotice(null);
+      if (action === 'load') setSelectedId(null);
+      qc.invalidateQueries({ queryKey: ['sales'] });
+    },
+    onError: (e, { action }) =>
+      setNotice({
+        kind: 'error',
+        text: `Could not ${action === 'load' ? 'load' : 'remove'} the sample pipeline: ${e?.message ?? e}`,
+      }),
+  });
+  const sampleBusy = sampleChange.isPending;
+  const sampleCount = sampleCountQ.data ?? 0;
 
   // ── Head label ──────────────────────────────────────────────────────────────
   const headLabel = activeView === 0 ? `Sales · ${deals.length} open`
@@ -916,6 +1032,15 @@ export function SalesView({ activeFeature, operatorId }) {
     : 'Won';
 
   // ── Render ──────────────────────────────────────────────────────────────────
+  // First run = the table has no open deals. Every view then says so, with the
+  // same actions, instead of drawing zeroed charts.
+  const firstRunEmpty = html`<${EmptyState}
+    onCreate=${openCreate}
+    onLoadSample=${() => sampleChange.mutate({ action: 'load' })}
+    onAskCompanion=${askCompanion}
+    sampleBusy=${sampleBusy}
+    formOpen=${createForm !== null}
+  />`;
   let body;
 
   if (activeView === 0) {
@@ -924,32 +1049,44 @@ export function SalesView({ activeFeature, operatorId }) {
       body = html`<${LoadingState} />`;
     } else if (openDealsQ.isError) {
       body = html`<${ErrorState} error=${openDealsQ.error?.message ?? 'unknown'} onRetry=${() => openDealsQ.refetch()} />`;
+    } else if (deals.length === 0) {
+      body = firstRunEmpty;
     } else if (visibleDeals.length === 0) {
-      body = html`<${EmptyState} onCreate=${createDeal} />`;
+      body = html`<${FilterEmptyState} onShowAll=${() => setActiveFacet(SALES_RESET_FACET)} />`;
     } else if (pipeMode === 'kanban') {
       body = html`<${PipelineKanban}
         deals=${visibleDeals}
         onStageChange=${(deal, newStage) => stageChange.mutate({ deal, newStage })}
-        onCreate=${createDeal}
+        onCreate=${openCreate}
       />`;
     } else {
       body = html`<${PipelineList}
         deals=${visibleDeals}
         selectedDeal=${selectedDeal}
-        onSelectDeal=${setSelectedDeal}
+        onSelectDeal=${(d) => setSelectedId(d.id)}
         activities=${activitiesQ.data ?? []}
       />`;
     }
   } else if (activeView === 1) {
-    body = html`<${ForecastView} deals=${deals} />`;
+    if (openDealsQ.isLoading) {
+      body = html`<${LoadingState} />`;
+    } else if (openDealsQ.isError) {
+      body = html`<${ErrorState} error=${openDealsQ.error?.message ?? 'unknown'} onRetry=${() => openDealsQ.refetch()} />`;
+    } else if (deals.length === 0) {
+      body = firstRunEmpty;
+    } else {
+      body = html`<${ForecastView} deals=${deals} />`;
+    }
   } else {
     // Won view
-    if (wonDealsQ.isLoading) {
+    if (wonDealsQ.isLoading || openDealsQ.isLoading) {
       body = html`<${LoadingState} />`;
     } else if (wonDealsQ.isError) {
       body = html`<${ErrorState} error=${wonDealsQ.error?.message ?? 'unknown'} onRetry=${() => wonDealsQ.refetch()} />`;
+    } else if ((wonDealsQ.data ?? []).length === 0) {
+      body = deals.length === 0 ? firstRunEmpty : html`<${NoWonYet} />`;
     } else {
-      body = html`<${WonView} wonDeals=${wonDealsQ.data ?? WON_DEALS_FIXTURE} />`;
+      body = html`<${WonView} wonDeals=${wonDealsQ.data ?? []} lostCount=${lostCountQ.data ?? 0} />`;
     }
   }
 
@@ -961,7 +1098,28 @@ export function SalesView({ activeFeature, operatorId }) {
           <polyline points="16 7 22 7 22 13"></polyline>
         </svg>
         <span>${headLabel}</span>
+        <button
+          class="btn btn-sm"
+          type="button"
+          style=${{ marginLeft: 'auto' }}
+          disabled=${createForm !== null}
+          onClick=${() => openCreate()}
+        >New deal</button>
       </div>
+      ${createForm !== null && html`<${CreateDealForm}
+        key=${createForm.stage ?? 'any'}
+        stages=${STAGES}
+        stageLabels=${STAGE_LABEL}
+        initialStage=${createForm.stage}
+        operatorId=${operatorId}
+        onClose=${() => setCreateForm(null)}
+      />`}
+      ${notice ? html`<${Notice} notice=${notice} onDismiss=${() => setNotice(null)} />` : null}
+      ${sampleCount > 0 ? html`<${SampleBanner}
+        count=${sampleCount}
+        busy=${sampleBusy}
+        onRemove=${() => sampleChange.mutate({ action: 'remove' })}
+      />` : null}
       <div class="frame-body-flush" id="view-stage" style=${{ flex:1, overflow:'hidden' }}>
         ${body}
       </div>
