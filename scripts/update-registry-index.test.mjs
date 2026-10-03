@@ -8,6 +8,8 @@ import {
   catalogPackage,
   loadRetiredPkgNames,
   dropRetiredFromIndex,
+  reconcileVisibility,
+  HIDDEN_PKGS,
 } from './update-registry-index.mjs';
 
 describe('npmDistInfo retry and error handling', () => {
@@ -422,5 +424,55 @@ describe('catalogPackage never re-catalogues a retired pkg (DEC-72)', () => {
     });
     assert.equal(findPackageDirCalled, false, 'retired check must short-circuit before any pkg-dir lookup');
     assert.deepEqual(mockIndex.pkgs, []);
+  });
+});
+
+describe('reconcileVisibility hides apps held back from the catalogue', () => {
+  const HELD_APPS = [
+    '@ikenga/pkg-finance',
+    '@ikenga/pkg-mail',
+    '@ikenga/pkg-content',
+    '@ikenga/pkg-research',
+    '@ikenga/pkg-strategy',
+    '@ikenga/pkg-outbound',
+    '@ikenga/pkg-agent-ops',
+  ];
+  const PUBLIC_APPS = ['@ikenga/pkg-tasks', '@ikenga/pkg-sales'];
+
+  const entry = (name) => ({ name, latest: '1.0.0', detail: `pkgs/${name}.json` });
+
+  it('stamps visibility "hidden" on all seven held apps', () => {
+    const pkgs = [...HELD_APPS, ...PUBLIC_APPS].map(entry);
+    reconcileVisibility(pkgs);
+    for (const name of HELD_APPS) {
+      assert.equal(pkgs.find((e) => e.name === name).visibility, 'hidden', `${name} should be hidden`);
+    }
+  });
+
+  it('leaves Tasks and Sales public, with no visibility field at all', () => {
+    const pkgs = [...HELD_APPS, ...PUBLIC_APPS].map(entry);
+    reconcileVisibility(pkgs);
+    for (const name of PUBLIC_APPS) {
+      const e = pkgs.find((x) => x.name === name);
+      assert.ok(!('visibility' in e), `${name} must stay public (visibility omitted)`);
+    }
+  });
+
+  it('keeps every earlier hidden entry hidden', () => {
+    const earlier = ['@ikenga/pkg-hello', '@ikenga/pkg-engine-noop', '@ikenga/pkg-engine-cursor-agent'];
+    const pkgs = earlier.map(entry);
+    reconcileVisibility(pkgs);
+    for (const e of pkgs) assert.equal(e.visibility, 'hidden');
+  });
+
+  it('un-hides an entry that is no longer in the hidden set, so removing a name here re-publishes it', () => {
+    const pkgs = [{ ...entry('@ikenga/pkg-finance'), visibility: 'hidden' }];
+    reconcileVisibility(pkgs, new Set());
+    assert.ok(!('visibility' in pkgs[0]));
+  });
+
+  it('the shipped HIDDEN_PKGS set names the seven held apps and neither public app', () => {
+    for (const name of HELD_APPS) assert.ok(HIDDEN_PKGS.has(name), `${name} missing from HIDDEN_PKGS`);
+    for (const name of PUBLIC_APPS) assert.ok(!HIDDEN_PKGS.has(name), `${name} must not be hidden`);
   });
 });

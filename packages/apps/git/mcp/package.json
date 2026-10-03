@@ -2,7 +2,7 @@
   "name": "@ikenga/git-mcp",
   "version": "0.0.0",
   "private": true,
-  "description": "com.ikenga.git MCP server — read-first tool surface over git-core (git_status/diff/log/branch_list/worktree_list/ahead_behind + git_commit). Local config holder; NOT a workspace participant (the parent @ikenga/pkg-git package owns its deps). WP-02 scaffold stub; tool surface locked by G-MCP lands in WP-05.",
+  "description": "com.ikenga.git MCP server — read-first tool surface over git-core (git_status/diff/log/branch_list/worktree_list/ahead_behind + git_commit). Local config holder; NOT a workspace participant (the parent @ikenga/pkg-git package owns its deps).",
   "type": "module",
   "scripts": {
     "build": "bash build.sh",

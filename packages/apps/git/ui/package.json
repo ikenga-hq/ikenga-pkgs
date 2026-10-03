@@ -2,7 +2,7 @@
   "name": "@ikenga/pkg-git-ui",
   "version": "0.0.0",
   "private": true,
-  "description": "com.ikenga.git iframe UI (WP-06) — side-menu shell (Changes · History · Branches · Worktrees · PRs), theme mirroring, no-root empty states, mocked-sidecar dev mode. Bundled by vite into the PKG ROOT's ../dist (not ui/dist) — the shell hardcodes an iframe pkg's content root to <pkg>/dist, so that is where manifest.json's ui.routes source `dist/index.html` resolves.",
+  "description": "com.ikenga.git iframe UI — side-menu shell (Changes · History · Branches · Worktrees · PRs), theme mirroring, no-root empty states, mocked-sidecar dev mode. Bundled by vite into the PKG ROOT's ../dist (not ui/dist) — the shell hardcodes an iframe pkg's content root to <pkg>/dist, so that is where manifest.json's ui.routes source `dist/index.html` resolves.",
   "type": "module",
   "scripts": {
     "dev": "vite",

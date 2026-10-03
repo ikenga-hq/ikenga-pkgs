@@ -23,7 +23,7 @@
         "type": "string",
         "label": "Path to `cursor-agent` CLI",
         "default": "cursor-agent",
-        "description": "Resolved against $PATH if not absolute. Runtime is stubbed per ADR-013 Phase 4 — setting this has no effect today."
+        "description": "Resolved against $PATH if not absolute. The runtime is not implemented yet, so setting this has no effect today."
       }
     ]
   },

@@ -1,7 +1,7 @@
 {
   "name": "@ikenga/pkg-engine-cursor-agent",
   "version": "0.1.0",
-  "description": "Cursor agent CLI engine adapter for Ikenga (scaffold-only; runtime stubbed per ADR-013 Phase 4).",
+  "description": "Cursor agent CLI engine adapter for Ikenga. Scaffold only: the runtime is not implemented yet.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

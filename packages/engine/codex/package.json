@@ -1,7 +1,7 @@
 {
   "name": "@ikenga/pkg-engine-codex",
   "version": "0.2.1",
-  "description": "Codex CLI engine adapter for Ikenga — install-time portability for the OpenAI `codex` CLI (ADR-012 Track C).",
+  "description": "Codex CLI engine adapter for Ikenga. Runs agent sessions on the OpenAI `codex` CLI and, at install time, writes pkg-shipped MCP servers, subagents and skills into Codex's own configuration.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
