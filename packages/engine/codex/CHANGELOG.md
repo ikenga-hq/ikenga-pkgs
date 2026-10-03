@@ -1,5 +1,11 @@
 # @ikenga/pkg-engine-codex
 
+## 0.2.2
+
+### Patch Changes
+
+- [#124](https://github.com/ikenga-hq/ikenga-pkgs/pull/124) [`cb8a411`](https://github.com/ikenga-hq/ikenga-pkgs/commit/cb8a4116a68cf31ce67da0951485b9021b8fd96b) Thanks [@nedjamez](https://github.com/nedjamez)! - Clearer package description in the registry and on the packages page. No change to how the engine behaves.
+
 ## 0.2.1
 
 ### Patch Changes
