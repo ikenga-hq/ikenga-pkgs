@@ -149,6 +149,85 @@ export function reconcileVisibility(pkgs, hiddenNames = HIDDEN_PKGS) {
   }
 }
 
+/**
+ * What a pkg actually is, derived from its manifest. The registry `kind` field
+ * is a free-form hint (the MCP servers say "skill", the apps say "embedded"),
+ * so every consumer used to re-derive the real kind and they disagreed. Stamping
+ * the answer into the signed index gives them all the same one. Additive:
+ * `kind` is untouched.
+ *
+ * "Present" means the key exists and is not null, so an empty object counts
+ * (`ui: {}` is present). "Non-empty" means an array with at least one element.
+ * First match wins:
+ *   1. `engine` present            -> engine
+ *   2. `kind` is "bundle"          -> bundle
+ *   3. `ui` present                -> app
+ *   4. `mcp` non-empty             -> tool
+ *   5. `sidecars` non-empty        -> sidecar
+ *   6. `kind` is "skill"           -> skill
+ *   7. anything else               -> app
+ * Steps 1, 3, 4, 5 and 7 are the order the shell uses when it lists installed
+ * pkgs. Steps 2 and 6 are the only departures: the shell lists skills and
+ * bundles elsewhere, so without them every skill and bundle pkg would fall
+ * through to "app". `requires` never makes a pkg a bundle.
+ */
+export function deriveNgwaKind(manifest) {
+  const m = manifest ?? {};
+  const present = (v) => v !== undefined && v !== null;
+  const nonEmpty = (v) => Array.isArray(v) && v.length > 0;
+  const kind = typeof m.kind === 'string' ? m.kind.toLowerCase() : '';
+  if (present(m.engine)) return 'engine';
+  if (kind === 'bundle') return 'bundle';
+  if (present(m.ui)) return 'app';
+  if (nonEmpty(m.mcp)) return 'tool';
+  if (nonEmpty(m.sidecars)) return 'sidecar';
+  if (kind === 'skill') return 'skill';
+  return 'app';
+}
+
+/**
+ * Stamp `ngwaKind` on every index entry, derived from the manifest of its
+ * latest version. Runs over the whole index on every update, like
+ * `reconcileVisibility`, so the field back-fills on the next registry update
+ * without republishing anything. Mutates `pkgs` in place; no fs of its own:
+ * `readDetailManifest(entry)` returns the entry's latest manifest, or a
+ * nullish value when it cannot be read, in which case the entry is left as it
+ * is. Returns the names it stamped and the names it could not.
+ */
+export function reconcileNgwaKind(pkgs, readDetailManifest) {
+  const stamped = [];
+  const unresolved = [];
+  for (const e of pkgs) {
+    const manifest = readDetailManifest(e);
+    if (manifest === undefined || manifest === null) {
+      unresolved.push(e.name);
+      continue;
+    }
+    e.ngwaKind = deriveNgwaKind(manifest);
+    stamped.push(e.name);
+  }
+  return { stamped, unresolved };
+}
+
+/**
+ * Build the `readDetailManifest` callback for `reconcileNgwaKind` from a
+ * registry clone: the manifest of the entry's `latest` version in its detail
+ * file (newest version if `latest` is not listed). Returns null when the file
+ * is missing or unreadable.
+ */
+export function detailManifestReader(registryDir, readFileFn = readFileSync) {
+  return (entry) => {
+    try {
+      const detail = JSON.parse(readFileFn(join(registryDir, entry.detail), 'utf8'));
+      const versions = detail.versions ?? [];
+      const v = versions.find((x) => x.version === entry.latest) ?? versions[0];
+      return v?.manifest ?? null;
+    } catch {
+      return null;
+    }
+  };
+}
+
 /** `@ikenga/pkg-engine-claude-code` → `engine-claude-code` */
 export function shortName(npmName) {
   return npmName.replace(/^@ikenga\//, '').replace(/^pkg-/, '');
@@ -423,6 +502,7 @@ export async function catalogPackage(
     detail: `pkgs/${short}.json`,
     description: pkgJson.description,
     kind: manifest.kind,
+    ngwaKind: deriveNgwaKind(manifest),
     ...(members ? { members } : {}),
     ...(boundPublisherKey ? { publisherKey: boundPublisherKey } : {}),
   };
@@ -565,6 +645,16 @@ export async function updateRegistry(env = process.env, options = {}) {
   // flag and re-signs the index. `hidden` is omitted (not set to "public") so
   // public entries stay byte-identical to before this feature.
   reconcileVisibility(index.pkgs);
+
+  // Same for the derived kind: stamped across ALL entries from each pkg's
+  // latest manifest, so rows catalogued before the field existed pick it up on
+  // the next update. A row whose detail file cannot be read keeps what it has.
+  const kindResult = reconcileNgwaKind(index.pkgs, detailManifestReader(registryDir));
+  if (kindResult.unresolved.length > 0) {
+    console.warn(
+      `⚠ could not derive ngwaKind for ${kindResult.unresolved.length} pkg(s): ${kindResult.unresolved.join(', ')}`,
+    );
+  }
 
   index.updatedAt = nowIso;
   writeFileSync(indexPath, JSON.stringify(index, null, 2) + '\n');
