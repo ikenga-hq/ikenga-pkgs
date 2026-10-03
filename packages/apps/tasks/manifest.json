@@ -68,11 +68,5 @@
     "engine": [
       "invoke"
     ]
-  },
-  "requires": [
-    {
-      "kind": "skill",
-      "name": "skill-tasks"
-    }
-  ]
+  }
 }

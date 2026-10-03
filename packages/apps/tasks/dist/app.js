@@ -15,6 +15,7 @@ import {
   QueryClientProvider,
 } from './lib/ui.js';
 import { connectBridge, isStandalone } from './lib/bridge.js';
+import { operatorIdFrom } from './lib/assignees.js';
 import { TasksView } from './features/tasks/tasks-view.js';
 import tokensCss from './lib/tokens-css.js';
 import appKitCss from './lib/app-kit-css.js';
@@ -134,6 +135,11 @@ function App() {
   const [bridgeError, setBridgeError] = useState(null);
   // Active side-menu item (shell PkgMode → hostContext.royaltiSuite.activeFeature).
   const [activeFeature, setActiveFeature] = useState(null);
+  // Operator identity (hostContext.operator — see @ikenga/contract's
+  // host-context). OPTIONAL: absent means an unknown operator, never a default
+  // one. The shell resolves it asynchronously, so it can be missing from the
+  // first handshake and arrive on a later hostContext change.
+  const [operatorId, setOperatorId] = useState(null);
 
   useEffect(() => {
     if (isStandalone()) {
@@ -143,19 +149,23 @@ function App() {
       setBridgeReady(true);
       return;
     }
-    // Bridge carries dispatch + activeFeature only — theme is handled by the
-    // parent-<html> mirror above, and data flows through host.dbQuery/dbExec.
+    // Bridge carries dispatch + activeFeature + operator only — theme is handled
+    // by the parent-<html> mirror above, and data flows through host.dbQuery/dbExec.
     connectBridge({
       name: 'Tasks',
       version: '0.3.0',
       onContextChange: (ctx) => {
         const af = ctx?.royaltiSuite?.activeFeature;
         if (typeof af === 'string') setActiveFeature(af);
+        // Only a payload that carries the operator updates it, so a partial
+        // change (e.g. a theme switch) never wipes a known identity.
+        if (ctx && 'operator' in ctx) setOperatorId(operatorIdFrom(ctx));
       },
     })
       .then((ctx) => {
         const af = ctx?.royaltiSuite?.activeFeature;
         if (typeof af === 'string') setActiveFeature(af);
+        setOperatorId(operatorIdFrom(ctx));
         // The side menu is published by TasksView once it mounts (it owns the
         // view + filter state the menu reflects). No initial setMenu here.
         setBridgeReady(true);
@@ -170,7 +180,7 @@ function App() {
     return html`<div style=${{ padding: '2rem', color: 'var(--fg-muted)' }}>Connecting…</div>`;
   }
 
-  return html`<${QueryClientProvider} client=${queryClient}><${TasksView} activeFeature=${activeFeature} /></${QueryClientProvider}>`;
+  return html`<${QueryClientProvider} client=${queryClient}><${TasksView} activeFeature=${activeFeature} operatorId=${operatorId} /></${QueryClientProvider}>`;
 }
 
 createRoot(document.getElementById('root')).render(html`<${App} />`);

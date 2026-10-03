@@ -9,7 +9,6 @@
 
 import { hostDbExec, hostDbQuery } from './bridge.js';
 import { queryKeys } from './query-keys.js';
-import { CURRENT_USER } from './assignees.js';
 
 // ikenga.db stores former Postgres array/json columns as TEXT (the Pg→SQLite
 // down-map, shell migration 0025). `tags` arrives as a string, not a JS array
@@ -61,6 +60,7 @@ function normalizeTaskRow(row) {
  * @property {string|null} blocked_by_task_id
  * @property {string|null} source_email_id
  * @property {string|null} agent_source
+ * @property {string|null} [created_by]
  * @property {string|null} initiative_id
  * @property {string|null} risk_id
  * @property {string|null} effort_estimate
@@ -144,6 +144,27 @@ export function triageCountsQuery() {
         blocked,
         needsAttention,
       };
+    },
+  };
+}
+
+/**
+ * How many task rows exist at all (any status). Zero means a true first run, as
+ * opposed to a list that is merely empty because of a filter or because
+ * everything is done. Lives under `tasks.all` so every write invalidates it.
+ */
+export function totalTasksQuery() {
+  return {
+    queryKey: queryKeys.tasks.total(),
+    // While the table is empty, re-check every few seconds so tasks added from
+    // outside this pane (an assistant creating one, say) replace the first-run
+    // state without a reload. Stops as soon as there is a row.
+    refetchInterval: (/** @type {{ state: { data?: number } }} */ query) =>
+      query.state.data === 0 ? 5000 : false,
+    /** @returns {Promise<number>} */
+    queryFn: async () => {
+      const rows = await hostDbQuery('SELECT count(*) AS n FROM tasks', []);
+      return Number(rows[0]?.n ?? 0);
     },
   };
 }
@@ -256,6 +277,7 @@ export function taskEventsQuery(taskId) {
  * Append an audit event. Best-effort: the audit trail must never block the
  * primary mutation, so a failed write (e.g. table absent on an old DB) is
  * swallowed. This is the forward-capture path complementing the 0048 backfill.
+ * `actor` is the operator's id, or null when the shell did not report one.
  *
  * @param {string} taskId
  * @param {string} eventType
@@ -271,7 +293,7 @@ export async function logTaskEvent(taskId, eventType, meta = {}) {
         eventType,
         meta.fromValue ?? null,
         meta.toValue ?? null,
-        meta.actor ?? CURRENT_USER,
+        meta.actor ?? null,
         meta.detail ?? null,
         new Date().toISOString(),
       ],
@@ -289,9 +311,10 @@ export async function logTaskEvent(taskId, eventType, meta = {}) {
  *
  * @param {string} taskId
  * @param {string|null} dueDate ISO timestamp / date, or null to clear
+ * @param {string|null} [actor] the operator's id (null when unknown)
  * @returns {Promise<void>}
  */
-export async function rescheduleTask(taskId, dueDate) {
+export async function rescheduleTask(taskId, dueDate, actor = null) {
   let prev = null;
   try {
     const rows = await hostDbQuery('SELECT due_date FROM tasks WHERE id = ? LIMIT 1', [taskId]);
@@ -304,7 +327,7 @@ export async function rescheduleTask(taskId, dueDate) {
     new Date().toISOString(),
     taskId,
   ]);
-  await logTaskEvent(taskId, 'rescheduled', { fromValue: prev, toValue: dueDate });
+  await logTaskEvent(taskId, 'rescheduled', { fromValue: prev, toValue: dueDate, actor });
 }
 
 /**
@@ -315,9 +338,10 @@ export async function rescheduleTask(taskId, dueDate) {
  *
  * @param {string} taskId
  * @param {TaskStatus} status
+ * @param {string|null} [actor] the operator's id (null when unknown)
  * @returns {Promise<void>}
  */
-export async function updateTaskStatus(taskId, status) {
+export async function updateTaskStatus(taskId, status, actor = null) {
   let prev = null;
   try {
     const rows = await hostDbQuery('SELECT status FROM tasks WHERE id = ? LIMIT 1', [taskId]);
@@ -334,6 +358,7 @@ export async function updateTaskStatus(taskId, status) {
   await logTaskEvent(taskId, status === 'completed' ? 'completed' : 'status_changed', {
     fromValue: prev,
     toValue: status,
+    actor,
   });
 }
 
@@ -346,6 +371,7 @@ export async function updateTaskStatus(taskId, status) {
  * @property {string|null} [dueDate]              ISO timestamp or null
  * @property {string|null} [description]
  * @property {string|null} [category]
+ * @property {string|null} [createdBy]            the operator's id; null/absent when the shell did not report one
  */
 
 /**
@@ -377,7 +403,7 @@ export async function createTask(input) {
       input.dueDate ?? null,
       now,
       now,
-      CURRENT_USER,
+      input.createdBy ?? null,
     ],
   );
   return id;
@@ -393,12 +419,13 @@ export async function createTask(input) {
  * @param {string} taskId
  * @param {string|null} assignedTo
  * @param {'human'|'agent'|null} assigneeType
+ * @param {string|null} [actor] the operator's id (null when unknown)
  * @returns {Promise<void>}
  */
-export async function reassignTask(taskId, assignedTo, assigneeType) {
+export async function reassignTask(taskId, assignedTo, assigneeType, actor = null) {
   await hostDbExec(
     'UPDATE tasks SET assigned_to = ?, assignee_type = ?, updated_at = ? WHERE id = ?',
     [assignedTo, assigneeType, new Date().toISOString(), taskId],
   );
-  await logTaskEvent(taskId, 'assigned', { toValue: assignedTo ?? 'unassigned' });
+  await logTaskEvent(taskId, 'assigned', { toValue: assignedTo ?? 'unassigned', actor });
 }

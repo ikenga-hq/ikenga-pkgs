@@ -21,7 +21,7 @@ import {
   taskEventsQuery,
   updateTaskStatus,
 } from '../../lib/queries.js';
-import { assigneeOptions } from '../../lib/assignees.js';
+import { actorLabel, assigneeOptions, isAgentActor } from '../../lib/assignees.js';
 import { getContext } from '../../lib/bridge.js';
 import {
   assigneeIsAgent,
@@ -55,10 +55,9 @@ function tlWhen(iso) {
   return d.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-/** Actors that aren't email addresses are agents/system (styled distinctly). */
-function isAgentActor(actor) {
-  return !!actor && !actor.includes('@');
-}
+// Event types this app writes on the operator's behalf. An entry of one of these
+// types with no actor is the operator's own, recorded while no operator was known.
+const USER_EVENT_TYPES = new Set(['created', 'status_changed', 'completed', 'rescheduled', 'assigned']);
 
 /** @param {string|null|undefined} iso */
 function tlDate(iso) {
@@ -123,9 +122,11 @@ function tlDisplay(it, task) {
  * The shipped pane is always the full-density master/detail pane; the dead
  * `density='side'` variant (no `/tasks/$taskId` route, zero call sites) was
  * removed 2026-07-03 (Section B decision, WP-14). Full is the only mode.
- * @param {{ taskId: string, onNavigateTask?: (id: string) => void }} props
+ * @param {{ taskId: string, onNavigateTask?: (id: string) => void, operatorId?: string | null }} props
+ *   operatorId: who "Me" is (hostContext.operator); null when unknown — then
+ *   edits are logged with no actor and "Me" is not offered as an assignee.
  */
-export function TaskDetailPane({ taskId, onNavigateTask }) {
+export function TaskDetailPane({ taskId, onNavigateTask, operatorId = null }) {
   const queryClient = useQueryClient();
 
   const { data: task, isLoading, error } = useQuery(taskDetailQuery(taskId));
@@ -143,7 +144,7 @@ export function TaskDetailPane({ taskId, onNavigateTask }) {
   const updateStatus = useMutation({
     /** @param {TaskStatus} status */
     mutationFn: async (status) => {
-      await updateTaskStatus(taskId, status);
+      await updateTaskStatus(taskId, status, operatorId);
     },
     onSuccess: () =>
       void queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
@@ -155,7 +156,7 @@ export function TaskDetailPane({ taskId, onNavigateTask }) {
   const reschedule = useMutation({
     /** @param {string|null} dueDate */
     mutationFn: async (dueDate) => {
-      await rescheduleTask(taskId, dueDate);
+      await rescheduleTask(taskId, dueDate, operatorId);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
@@ -170,8 +171,8 @@ export function TaskDetailPane({ taskId, onNavigateTask }) {
   const reassign = useMutation({
     /** @param {string} value picked assigned_to ('' = unassign) */
     mutationFn: async (value) => {
-      const picked = assigneeOptions(getContext()).find((o) => o.value === value);
-      await reassignTask(taskId, value || null, picked ? picked.type : null);
+      const picked = assigneeOptions(getContext(), operatorId).find((o) => o.value === value);
+      await reassignTask(taskId, value || null, picked ? picked.type : null, operatorId);
     },
     onSuccess: () => {
       // tasks.all covers every list view (assigned_to is shown across them);
@@ -287,9 +288,9 @@ export function TaskDetailPane({ taskId, onNavigateTask }) {
               }}
             >
               <option value="">Unassigned</option>
-              ${task.assigned_to && !assigneeOptions(getContext()).some((o) => o.value === task.assigned_to) &&
+              ${task.assigned_to && !assigneeOptions(getContext(), operatorId).some((o) => o.value === task.assigned_to) &&
                 html`<option value=${task.assigned_to}>${task.assigned_to} (current)</option>`}
-              ${assigneeOptions(getContext()).map(
+              ${assigneeOptions(getContext(), operatorId).map(
                 (o) => html`<option key=${o.value} value=${o.value}>${o.label}</option>`,
               )}
             </select>
@@ -641,7 +642,10 @@ export function TaskDetailPane({ taskId, onNavigateTask }) {
                   return html`
                     <div class=${cn('tk-tl-item', d.cls)} key=${i}>
                       <span class="when">${tlWhen(it.when)}</span>
-                      ${it.actor && html`<span class=${cn('actor', isAgentActor(it.actor) && 'is-agent')}>${it.actor}</span>`}
+                      ${(() => {
+                        const who = actorLabel(it.actor, operatorId, USER_EVENT_TYPES.has(it.type));
+                        return who && html`<span class=${cn('actor', isAgentActor(it.actor, operatorId) && 'is-agent')}>${who}</span>`;
+                      })()}
                       ${d.label}
                     </div>
                   `;

@@ -4,7 +4,7 @@
 // buildTasksMenu + the publish effect); there's no in-pane tab bar. View
 // choice persists to localStorage.
 
-import { html, cn, Icon, Button, useState, useMemo, useEffect, useQuery } from '../../lib/ui.js';
+import { html, cn, Icon, Button, useState, useMemo, useEffect, useRef, useQuery, useQueryClient } from '../../lib/ui.js';
 import {
   hostDbQuery,
   hostSendToActiveSession,
@@ -13,8 +13,8 @@ import {
   setMenu,
 } from '../../lib/bridge.js';
 import { queryKeys } from '../../lib/query-keys.js';
-import { TASKS_LIST_COLUMNS, triageCountsQuery } from '../../lib/queries.js';
-import { CURRENT_USER } from '../../lib/assignees.js';
+import { TASKS_LIST_COLUMNS, totalTasksQuery, triageCountsQuery } from '../../lib/queries.js';
+import { ME_LABEL } from '../../lib/assignees.js';
 import { groupTasks } from '../../lib/shared.js';
 import { TaskRow } from './task-row.js';
 import { CreateTaskForm } from './create-task-form.js';
@@ -23,6 +23,7 @@ import { AgendaView } from './agenda-view.js';
 import { TriageView } from './triage-view.js';
 import { SweeperView } from './sweeper-view.js';
 import { DoneView } from './done-view.js';
+import { NoTasksYet } from './empty-state.js';
 
 // Shell side-menu model. Per the user's call (2026-05-28), the five VIEW modes
 // live in the sidebar alongside the list FILTER facets — one nav surface, like
@@ -49,7 +50,7 @@ const FILTER_ITEMS = [
   { id: 'd:mail', label: 'Mail', icon: 'mail', section: 'By domain' },
   { id: 'd:content', label: 'Content', icon: 'pencil', section: 'By domain' },
   { id: 'd:outbound', label: 'Outbound', icon: 'send', section: 'By domain' },
-  { id: 'o:me', label: 'Me', icon: 'list-checks', section: 'By owner' },
+  { id: 'o:me', label: ME_LABEL, icon: 'list-checks', section: 'By owner' },
   { id: 'o:agents', label: 'Agents', icon: 'activity', section: 'By owner' },
 ];
 
@@ -57,8 +58,9 @@ const FILTER_ITEMS = [
  * @param {TaskView} view current mounted view
  * @param {string | null} activeFilter last-applied filter id (e.g. 'f:today')
  * @param {number | null} triageBadge needs-attention count for the Triage row
+ * @param {boolean} hasOperator whether the shell reported who "Me" is; the Me row is offered only then
  */
-function buildTasksMenu(view, activeFilter, triageBadge) {
+function buildTasksMenu(view, activeFilter, triageBadge, hasOperator) {
   const filtersInert = view !== 'tasks';
   const viewRows = VIEW_ITEMS.map((it) => ({
     ...it,
@@ -66,7 +68,7 @@ function buildTasksMenu(view, activeFilter, triageBadge) {
     active: `v:${view}` === it.id,
     badge: it.id === 'v:triage' && triageBadge ? triageBadge : undefined,
   }));
-  const filterRows = FILTER_ITEMS.map((it) => ({
+  const filterRows = FILTER_ITEMS.filter((it) => hasOperator || it.id !== 'o:me').map((it) => ({
     ...it,
     disabled: filtersInert,
     // Highlight the applied filter only while the list is the active view.
@@ -84,9 +86,9 @@ const VIEW_STORAGE_KEY = 'ikenga-tasks-view';
 
 // Owner-filter identities. The sidebar "By owner" facet and the in-pane Owner
 // dropdown MUST agree on these values, or selecting one won't reflect in the
-// other (and "Me" filtered to a different person than the sidebar did).
-// CURRENT_USER is imported from lib/assignees.js (the one place that literal
-// lives, shared with the create form + reassign picker).
+// other. "Me" is the operator id the shell reports (hostContext.operator),
+// threaded down from app.js as `operatorId`; with no operator there is no Me
+// facet and no Me option.
 // Sentinel for "any agent" — the query maps it to assignee_type='agent' rather
 // than a literal assigned_to (agents aren't a single owner id).
 const OWNER_AGENTS = '__agents__';
@@ -125,8 +127,8 @@ const STATUS_OPTIONS = [
   { value: 'completed', label: 'Completed' },
 ];
 
-/** @param {{ activeFeature?: string | null }} props */
-export function TasksView({ activeFeature } = {}) {
+/** @param {{ activeFeature?: string | null, operatorId?: string | null }} props */
+export function TasksView({ activeFeature, operatorId = null } = {}) {
   /** @type {[string | null, (v: string | null) => void]} */
   const [selectedId, setSelectedId] = useState(/** @type {string | null} */ (null));
   /** @type {['' | TaskStatus, (v: '' | TaskStatus) => void]} */
@@ -158,6 +160,11 @@ export function TasksView({ activeFeature } = {}) {
     }
   }
 
+  // Read by the side-menu effect below without making it re-run (and re-apply a
+  // stale facet) when the operator resolves a moment after mount.
+  const operatorIdRef = useRef(operatorId);
+  operatorIdRef.current = operatorId;
+
   // Shell side-menu selection (host.pkg.setMenu → royaltiSuite.activeFeature).
   // The sidebar carries BOTH the view switcher and the list filters (one nav
   // surface, Ngwa-style). id taxonomy:
@@ -169,7 +176,7 @@ export function TasksView({ activeFeature } = {}) {
   //   f:thisweek    — list: expand "week" group + scroll
   //   f:autoclosed  — list: toggle Show auto-closed on + expand "autoclosed"
   //   d:<category>  — list: filter by category column (Finance/Mail/…)
-  //   o:me|o:agents — list: filter by owner (me = hello@royalti.io)
+  //   o:me|o:agents — list: filter by owner (me = the operator the shell reports)
   //
   // Filter ids only fire while the list is (or becomes) the active view; the
   // shell already dims them on other views, but we also force view→tasks here
@@ -225,14 +232,16 @@ export function TasksView({ activeFeature } = {}) {
       return;
     }
 
-    // Owner filter (`By owner` section). `me` maps to the logged-in email;
-    // `agents` is a sentinel the query layer doesn't yet honour — we fall
-    // back to clearing the human filter so the agent rows show through.
+    // Owner filter (`By owner` section). `me` maps to the operator id the shell
+    // reported; with no operator it matches nothing, so it is ignored rather than
+    // showing everyone. `agents` is the OWNER_AGENTS sentinel the list query maps
+    // to assignee_type = 'agent'.
     if (activeFeature.startsWith('o:')) {
+      const who = activeFeature.slice(2);
+      if (who === 'me' && !operatorIdRef.current) return;
       setView('tasks');
       setActiveFilter(activeFeature);
-      const who = activeFeature.slice(2);
-      setOwnerFilter(who === 'me' ? CURRENT_USER : who === 'agents' ? OWNER_AGENTS : '');
+      setOwnerFilter(who === 'me' ? operatorIdRef.current : who === 'agents' ? OWNER_AGENTS : '');
       return;
     }
   }, [activeFeature]);
@@ -241,6 +250,24 @@ export function TasksView({ activeFeature } = {}) {
   // view's stat cards), correct independent of the list filter + 200-row cap.
   const { data: triageCounts } = useQuery(triageCountsQuery());
   const triageBadge = triageCounts ? triageCounts.needsAttention : null;
+
+  // How many task rows exist at all. 0 is a true first run (every view shows
+  // the "No tasks yet" state with a New task action); a non-zero count with an
+  // empty list just means a filter, or nothing open — those say so instead.
+  const { data: totalTasks, isError: totalError } = useQuery(totalTasksQuery());
+  const noTasksYet = totalTasks === 0;
+  const totalSettled = totalTasks !== undefined || totalError;
+  // The first row can arrive from outside this pane (the total query polls while
+  // empty). Cached lists were fetched when there was nothing, so refresh them the
+  // moment the count leaves zero.
+  const queryClient = useQueryClient();
+  const prevTotalRef = useRef(/** @type {number | undefined} */ (undefined));
+  useEffect(() => {
+    if (prevTotalRef.current === 0 && typeof totalTasks === 'number' && totalTasks > 0) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all });
+    }
+    prevTotalRef.current = totalTasks;
+  }, [totalTasks, queryClient]);
 
   // Distinct categories straight from the table (NOT from the filtered list, or
   // the option set would collapse to the active filter). Drives the Category
@@ -277,7 +304,7 @@ export function TasksView({ activeFeature } = {}) {
     set('status', statusFilter);
     set('owner', ownerFilter);
     set('category', categoryFilter);
-  }, [view, statusFilter, ownerFilter, categoryFilter, categoryOptions]);
+  }, [view, statusFilter, ownerFilter, categoryFilter, categoryOptions, operatorId, noTasksYet]);
 
   // Publish (and keep refreshing) the shell side-menu. Re-sends whenever the
   // view, the active filter, or the triage badge changes so the sidebar's
@@ -285,10 +312,10 @@ export function TasksView({ activeFeature } = {}) {
   // pane. Skipped in standalone preview (no host to publish to).
   useEffect(() => {
     if (isStandalone()) return;
-    setMenu(buildTasksMenu(view, activeFilter, triageBadge)).catch((e) =>
+    setMenu(buildTasksMenu(view, activeFilter, triageBadge, !!operatorId)).catch((e) =>
       console.warn('[tasks] setMenu failed', e),
     );
-  }, [view, activeFilter, triageBadge]);
+  }, [view, activeFilter, triageBadge, operatorId]);
 
   // Publish the mounted view + open-task selection to the shell's iyke
   // iframe-state registry, so external agents can answer "what's open in
@@ -357,6 +384,17 @@ export function TasksView({ activeFeature } = {}) {
   const visibleGroups = useMemo(
     () => (timeBucket ? groups.filter((g) => g.key === timeBucket) : groups),
     [groups, timeBucket],
+  );
+
+  // The list opens with "Later" collapsed so dated work leads. When it is the
+  // ONLY group (the usual first run: tasks with no due date) there is nothing
+  // for it to give way to, so it opens expanded — otherwise a new user's first
+  // task hides behind a collapsed header — until they collapse or expand a group
+  // themselves.
+  const [groupsTouched, setGroupsTouched] = useState(false);
+  const effectiveCollapsed = useMemo(
+    () => (!groupsTouched && visibleGroups.length === 1 ? new Set() : collapsed),
+    [groupsTouched, visibleGroups, collapsed],
   );
 
   // Default selection (F-01): the design shows a populated detail pane on load,
@@ -434,12 +472,11 @@ export function TasksView({ activeFeature } = {}) {
 
   /** @param {GroupKey} key */
   function toggleGroup(key) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    const next = new Set(effectiveCollapsed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setCollapsed(() => next);
+    setGroupsTouched(true);
   }
 
   return html`
@@ -478,14 +515,20 @@ export function TasksView({ activeFeature } = {}) {
           </div>
         </div>
 
-        ${showCreate && html`<${CreateTaskForm} onClose=${() => setShowCreate(false)} />`}
+        ${showCreate && html`<${CreateTaskForm} operatorId=${operatorId} onClose=${() => setShowCreate(false)} />`}
 
-        ${view === 'agenda' && html`<${AgendaView} tasks=${data ?? []} filterActive=${filterActive} />`}
-        ${view === 'triage' && html`<${TriageView} listTasks=${data ?? []} />`}
-        ${view === 'sweeper' && html`<${SweeperView} />`}
-        ${view === 'done' && html`<${DoneView} onSelectTask=${(id) => { setSelectedId(id); changeView('tasks'); }} />`}
+        ${/* True first run: no task rows at all. Every view shows the same
+              "No tasks yet" state with a New task action instead of its own
+              (empty or zeroed) layout. While the create form is open the form
+              itself is the call to action. */ ''}
+        ${noTasksYet && !showCreate && html`<${NoTasksYet} view=${view} onCreate=${() => setShowCreate(true)} />`}
 
-        ${view === 'tasks' && html`
+        ${!noTasksYet && view === 'agenda' && html`<${AgendaView} tasks=${data ?? []} filterActive=${filterActive} />`}
+        ${!noTasksYet && view === 'triage' && html`<${TriageView} listTasks=${data ?? []} />`}
+        ${!noTasksYet && view === 'sweeper' && html`<${SweeperView} />`}
+        ${!noTasksYet && view === 'done' && html`<${DoneView} onSelectTask=${(id) => { setSelectedId(id); changeView('tasks'); }} />`}
+
+        ${!noTasksYet && view === 'tasks' && html`
           <div class="tk-filterbar">
             <div class="input-search-wrap">
               <${Icon} name="search" size=${13} />
@@ -510,7 +553,7 @@ export function TasksView({ activeFeature } = {}) {
             <span class="label">Owner</span>
             <select data-filter="owner" onChange=${(e) => setOwnerFilter(e.target.value)}>
               <option value="">Anyone</option>
-              <option value=${CURRENT_USER}>Me</option>
+              ${operatorId && html`<option value=${operatorId}>${ME_LABEL}</option>`}
               <option value=${OWNER_AGENTS}>Agents</option>
             </select>
             <span class="label">Category</span>
@@ -547,11 +590,14 @@ export function TasksView({ activeFeature } = {}) {
                   </div>
                 </div>
               `}
-              ${!isLoading && !error && visibleGroups.length === 0 && html`
-                <div class="tk-empty-box">No tasks match.</div>
+              ${/* A filter (or sidebar facet) that matches nothing says so; with no
+                    filter and rows that are all done it says nothing is open. The
+                    true first run is handled above, not here. */ ''}
+              ${!isLoading && !error && totalSettled && visibleGroups.length === 0 && html`
+                <div class="tk-empty-box">${filterActive || timeBucket ? 'No tasks match.' : 'Nothing open right now.'}</div>
               `}
               ${visibleGroups.flatMap((g) => {
-                const isCollapsed = collapsed.has(g.key);
+                const isCollapsed = effectiveCollapsed.has(g.key);
                 // Group head + rows are emitted FLAT (direct children of
                 // .tk-list), not wrapped in a per-group div — so the head's
                 // `position:sticky; top:0` pins to the scroll container and the
@@ -606,7 +652,7 @@ export function TasksView({ activeFeature } = {}) {
 
             <div class="tk-detail">
               ${selectedId
-                ? html`<${TaskDetailPane} taskId=${selectedId} onNavigateTask=${setSelectedId} />`
+                ? html`<${TaskDetailPane} taskId=${selectedId} operatorId=${operatorId} onNavigateTask=${setSelectedId} />`
                 : html`<div class="tk-empty">Select a task</div>`}
             </div>
           </div>
