@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-sales",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Sales: a pipeline, forecast and won-deals view for your deals, stored on this computer.",
   "license": "Apache-2.0",
   "repository": {

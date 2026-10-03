@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-engine-openrouter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenRouter engine adapter for Ikenga. Runs chat sessions on any model available through OpenRouter, using a single API key.",
   "license": "Apache-2.0",
   "repository": {
