@@ -49,7 +49,8 @@ const REQUIRED_ENV = ['PUBLISHED', 'REGISTRY_REPO_PAT', 'REGISTRY_SIGNING_PRIVAT
 /**
  * Catalog curation: pkgs kept installable (by exact name) but HIDDEN from the
  * default browse/catalog surfaces. Dev/test fixtures + non-functional
- * scaffolds. Reconciled across the whole index on every publish (below), so
+ * scaffolds, plus apps held back until they work on a fresh install.
+ * Reconciled across the whole index on every publish (below), so
  * adding/removing a name here takes effect on the next publish — no manual
  * re-sign needed.
  */
@@ -57,6 +58,13 @@ export const HIDDEN_PKGS = new Set([
   '@ikenga/pkg-hello', // registry-pipeline smoke fixture
   '@ikenga/pkg-engine-noop', // test fixture / shell-without-AI mode
   '@ikenga/pkg-engine-cursor-agent', // scaffold-only; runtime stubbed (ADR-013 Phase 4)
+  '@ikenga/pkg-finance', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-mail', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-content', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-research', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-strategy', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-outbound', // held from the catalogue until it works on a fresh install
+  '@ikenga/pkg-agent-ops', // held from the catalogue until it works on a fresh install
 ]);
 
 /**
@@ -122,6 +130,23 @@ export function dropRetiredFromIndex(pkgs, retiredNames) {
     }
   }
   return { kept, dropped };
+}
+
+/**
+ * Stamp `visibility: "hidden"` on every index entry named in `hiddenNames`, and
+ * clear the flag from every entry that is not. Mutates `pkgs` in place. Pure
+ * aside from that — no fs — so it is testable without a registry clone.
+ * `hidden` is omitted (never set to "public") so public entries stay
+ * byte-identical to before this feature existed.
+ */
+export function reconcileVisibility(pkgs, hiddenNames = HIDDEN_PKGS) {
+  for (const e of pkgs) {
+    if (hiddenNames.has(e.name)) {
+      e.visibility = 'hidden';
+    } else if (e.visibility) {
+      delete e.visibility;
+    }
+  }
 }
 
 /** `@ikenga/pkg-engine-claude-code` → `engine-claude-code` */
@@ -539,13 +564,7 @@ export async function updateRegistry(env = process.env, options = {}) {
   // this run) so the HIDDEN_PKGS set is self-healing: any publish re-stamps the
   // flag and re-signs the index. `hidden` is omitted (not set to "public") so
   // public entries stay byte-identical to before this feature.
-  for (const e of index.pkgs) {
-    if (HIDDEN_PKGS.has(e.name)) {
-      e.visibility = 'hidden';
-    } else if (e.visibility) {
-      delete e.visibility;
-    }
-  }
+  reconcileVisibility(index.pkgs);
 
   index.updatedAt = nowIso;
   writeFileSync(indexPath, JSON.stringify(index, null, 2) + '\n');
