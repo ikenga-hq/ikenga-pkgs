@@ -1,0 +1,220 @@
+{
+  "indexUpdatedAt": "2026-10-01T12:39:14.137Z",
+  "manifests": [
+    {
+      "name": "@ikenga/mcp-browser",
+      "kind": "skill",
+      "mcp": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/mcp-devin",
+      "kind": "skill",
+      "mcp": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/mcp-iyke",
+      "kind": "skill",
+      "mcp": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/pkg-agent-ops",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-browser",
+      "kind": "embedded",
+      "sidecars": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/pkg-content",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-antigravity",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-claude-code",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-codex",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-cursor-agent",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-noop",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-opencode",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-openrouter",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-engine-pi",
+      "kind": "engine",
+      "engine": {},
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-finance",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-git",
+      "kind": "embedded",
+      "ui": {},
+      "mcp": [
+        {}
+      ],
+      "sidecars": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/pkg-hello",
+      "kind": "skill",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-mail",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-meetings",
+      "kind": "app",
+      "ui": {},
+      "mcp": [
+        {}
+      ],
+      "sidecars": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/pkg-notion",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-outbound",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-research",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-sales",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-sentry",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-spotify",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-strategy",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-studio",
+      "kind": "embedded",
+      "ui": {},
+      "mcp": [
+        {}
+      ],
+      "sidecars": [
+        {}
+      ]
+    },
+    {
+      "name": "@ikenga/pkg-tasks",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/pkg-wikipedia",
+      "kind": "embedded",
+      "ui": {}
+    },
+    {
+      "name": "@ikenga/skill-groundwork",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/skill-thunderbird",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/storyboard-workflow",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/studio-archetypes",
+      "kind": "bundle"
+    },
+    {
+      "name": "@ikenga/studio-beat-detect",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/studio-breakdown",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/studio-doctor",
+      "kind": "skill"
+    },
+    {
+      "name": "@ikenga/studio-toolchain",
+      "kind": "bundle"
+    },
+    {
+      "name": "@ikenga/video-script-structure",
+      "kind": "skill"
+    }
+  ]
+}
