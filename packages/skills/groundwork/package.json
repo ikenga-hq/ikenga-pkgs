@@ -34,6 +34,7 @@
     "README.md"
   ],
   "scripts": {
+    "test": "python3 -B skills/groundwork/scripts/test_groundwork_state.py && python3 -B skills/groundwork/scripts/test_fence_integrity.py",
     "build:mirror": "node ./scripts/build-mirror.mjs"
   }
 }
