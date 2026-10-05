@@ -48,6 +48,14 @@ jobs:
         with:
           bun-version: latest
 
+      # @ikenga/skill-groundwork's `test` runs its stdlib-only Python suites
+      # (test_groundwork_state.py + test_fence_integrity.py). Pinned rather than
+      # relying on the runner image's python3; these suites are the hard gate for
+      # the groundwork mirror publish (build-mirror.mjs re-runs them).
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       # minisign is needed by the sign-manifest round-trip test (scripts/).
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign

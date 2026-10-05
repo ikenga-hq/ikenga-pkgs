@@ -45,7 +45,13 @@ needed a sync hop that could silently drift. The script is gone; there is nothin
 Files no longer carry a `GENERATED` banner, because they are no longer generated.
 `PORTABILITY.md` was emitted by the old sync script and is now hand-maintained source.
 
-- `pnpm build:mirror` — emits the standalone `ikenga-hq/groundwork` mirror tree
+- `pnpm test` — the deterministic hard gate: `skills/groundwork/scripts/test_groundwork_state.py`
+  (state machine, profiles, ids, designs) and `test_fence_integrity.py` (fixture plan: writes
+  touch only fenced regions, identical re-runs are byte- and mtime-exact no-ops, and
+  deliberately broken writers are caught). Python 3 stdlib only. Runs in ikenga-pkgs CI
+  (`ci.yml`, on PRs that touch this package and nightly).
+- `pnpm build:mirror` — **runs `pnpm test` first and refuses to build if it fails** (no skip
+  flag; the mirror push is manual, so this is where the publish depends on the tests), then emits the standalone `ikenga-hq/groundwork` mirror tree
   (package.json + README + install.sh + `skills/groundwork/`) to `./dist-mirror` for review
   before pushing. Note the mirror repo's own `README.md`, `CONTRIBUTING.md`, `.github/` and
   `assets/` are hand-maintained there and are **not** emitted — a blanket sync would delete

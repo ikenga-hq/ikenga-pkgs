@@ -3,7 +3,7 @@
   "name": "dev.ikenga/mcp-iyke",
   "title": "Ikenga iyke (control bridge)",
   "description": "Drive a running Ikenga desktop app from MCP clients — DOM, click, type, navigate, screenshot.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "websiteUrl": "https://github.com/ikenga-hq/ikenga-pkgs/tree/main/packages/mcp/iyke#readme",
   "repository": {
     "url": "https://github.com/ikenga-hq/ikenga-pkgs",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@ikenga/mcp-iyke",
-      "version": "0.2.3",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

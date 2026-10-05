@@ -22,6 +22,23 @@ claude mcp add iyke -s user -- iyke-mcp
 
 After that, any Claude Code session can call `iyke_state`, `iyke_go`, `iyke_mode`, `iyke_open`, `iyke_split`, `iyke_focus`, `iyke_close`, plus the runtime-inspection tools (`iyke_dom`, `iyke_logs`, `iyke_network`, `iyke_screenshot`, `iyke_wait`, `iyke_click`, `iyke_type`, `iyke_key`, `iyke_query_cache`, `iyke_devtools`) and iframe tools (`iyke_iframe_state`, `iyke_iframe_send`).
 
+### As a Claude Code plugin (self-contained)
+
+The package is also a Claude Code plugin (`.claude-plugin/plugin.json`). Its MCP server is
+`dist/plugin/server/index.js`, a single bundled file with every dependency inlined, so it
+runs on plain `node` (>=20) with no `node_modules` (the `ERR_MODULE_NOT_FOUND` failure in
+ikenga#150 can't happen). `pnpm build` produces it along with `dist/iyke.mcpb`, the same
+server packed as an [MCP Bundle](https://github.com/modelcontextprotocol/mcpb) for Claude
+Desktop and for plugins that bundle iyke (`"mcpServers": "./iyke.mcpb"`).
+
+```bash
+pnpm build
+claude --plugin-dir packages/mcp/iyke     # server shows as plugin:iyke:iyke in /mcp
+```
+
+Install it this way **or** with `claude mcp add` below, not both, or Claude Code lists two
+iyke servers.
+
 ### Via npx (no install)
 
 ```bash

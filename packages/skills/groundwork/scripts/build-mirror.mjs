@@ -45,6 +45,14 @@
  *
  * Pass --allow-version-drift to bypass both and build anyway.
  *
+ * --- Test gate (WP-03a) -------------------------------------------------
+ * The mirror is the public install surface, so it is only built from a tree
+ * whose deterministic tests pass: `pnpm test` in this package
+ * (test_groundwork_state.py + test_fence_integrity.py — fence-only writes and
+ * idempotent re-runs). The same suite runs in ikenga-pkgs CI. A failing (or
+ * unrunnable — no python3) suite aborts the build before anything is emitted.
+ * There is deliberately no skip flag.
+ *
  * Usage:
  *   node ./scripts/build-mirror.mjs [--out <dir>] [--allow-version-drift]
  *   (--out default: ./dist-mirror)
@@ -53,6 +61,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync, existsSync, cpSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(__dirname, '..');
@@ -74,6 +83,7 @@ async function main() {
   }
 
   const src = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8'));
+  runTestGate(src);
   if (!ALLOW_DRIFT) {
     await checkVersionParity(src);
   } else {
@@ -134,6 +144,25 @@ async function main() {
   const fileCount = listFiles(OUT).length;
   console.log(`[mirror] emitted ${fileCount} files → ${OUT}`);
   console.log(`[mirror] next: review, then push to ${MIRROR_REPO} (gated on user approval).`);
+}
+
+// The mirror publish depends on the deterministic suite (WP-03a). Runs the
+// package's own `test` script so CI and the mirror gate can never diverge.
+function runTestGate(src) {
+  const cmd = src.scripts?.test;
+  if (!cmd) {
+    console.error('[mirror] refusing to build: package.json has no `test` script (the mirror test gate).');
+    process.exit(1);
+  }
+  console.log('[mirror] test gate: running `' + cmd + '`');
+  const res = spawnSync(cmd, { cwd: PKG_ROOT, shell: true, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
+  const tail = (res.stdout || '').trim().split('\n').filter((l) => /passed, \d+ failed|FAIL/.test(l));
+  for (const l of tail) console.log('[mirror]   ' + l.trim());
+  if (res.status !== 0) {
+    console.error(`[mirror] refusing to build: the groundwork test suite failed (exit ${res.status ?? res.signal}).`);
+    console.error('[mirror] run `pnpm --filter @ikenga/skill-groundwork test` for the full output.');
+    process.exit(1);
+  }
 }
 
 // Guards against the publish-order race: building the mirror from a
