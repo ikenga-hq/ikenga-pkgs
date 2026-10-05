@@ -30,6 +30,56 @@ import type {
 const ID = 'com.ikenga.engine-claude-code';
 const VERSION = '0.2.0';
 
+/** Launch role the shell maps to a catalog default model (WP-11). */
+export type ClaudeRole = 'chi' | 'pane' | 'plan';
+
+/**
+ * `SessionOpts` plus the Claude-specific launch options the shell's
+ * `ClaudeOpts` accepts (ikenga commit 756b921). Both are optional: callers
+ * typed against the plain contract `SessionOpts` keep working unchanged.
+ */
+export interface ClaudeSessionOpts extends SessionOpts {
+	role?: ClaudeRole;
+	pluginDirs?: string[];
+}
+
+/**
+ * The payload handed to `HostBridge.spawn`: the contract's fields plus the
+ * shell `ClaudeOpts` names (serde camelCase). The shell reads the system
+ * prompt as `appendSystemPrompt` (→ `--append-system-prompt`), so it is sent
+ * under that name; the contract's `systemPrompt` is kept for hosts that
+ * still implement the contract shape literally.
+ */
+export type ClaudeSpawnOpts = Parameters<HostBridge['spawn']>[0] & {
+	appendSystemPrompt?: string;
+	role?: ClaudeRole;
+	pluginDirs?: string[];
+};
+
+/**
+ * Map session options to the spawn payload. Unset or empty options are
+ * omitted, so a session without them spawns exactly as before (no
+ * `--append-system-prompt`, no `--model`, no plugin dirs).
+ *
+ * No `role` default: the legacy `Engine` surface serves any caller pkg
+ * (`callerPkg`), not specifically a pane, so the role is passed only when
+ * the caller states it.
+ */
+export function buildSpawnOpts(sessionId: string, opts: ClaudeSessionOpts): ClaudeSpawnOpts {
+	const out: ClaudeSpawnOpts = { sessionId };
+	if (opts.cwd) out.cwd = opts.cwd;
+	if (opts.systemPrompt) {
+		out.systemPrompt = opts.systemPrompt;
+		out.appendSystemPrompt = opts.systemPrompt;
+	}
+	if (opts.model) out.model = opts.model;
+	if (opts.resumeSessionId) out.resumeSessionId = opts.resumeSessionId;
+	if (opts.role) out.role = opts.role;
+	const dirs = opts.pluginDirs?.filter((d) => d.length > 0);
+	if (dirs && dirs.length > 0) out.pluginDirs = dirs;
+	return out;
+}
+
 class ClaudeSession implements Session {
 	constructor(
 		readonly id: string,
@@ -75,13 +125,9 @@ export class ClaudeCodeEngine implements Engine {
 
 	constructor(private readonly host: HostBridge) {}
 
-	async startSession(opts: SessionOpts): Promise<Session> {
+	async startSession(opts: ClaudeSessionOpts): Promise<Session> {
 		const sessionId = crypto.randomUUID();
-		await this.host.spawn({
-			sessionId,
-			cwd: opts.cwd,
-			systemPrompt: opts.systemPrompt,
-		});
+		await this.host.spawn(buildSpawnOpts(sessionId, opts));
 		return new ClaudeSession(sessionId, this.host);
 	}
 
