@@ -131,10 +131,12 @@ export function signManifest(manifestValue, secretKeyPem, secretKeyPassword = ''
     writeFileSync(dataPath, canonical);
     // `-S` sign, `-m` message file, `-s` secret key, `-x` output sig path.
     // Password on stdin so it never lands in argv / process listing. An
-    // unencrypted (`-W`) key still reads (and ignores) the empty line.
+    // unencrypted (`-W`) key never prompts, and minisign may exit before
+    // reading stdin, so writing an empty line there races into EPIPE —
+    // only open a stdin pipe when there is a password to send.
     execFileSync('minisign', ['-S', '-s', keyPath, '-m', dataPath, '-x', sigPath], {
-      input: `${secretKeyPassword}\n`,
-      stdio: ['pipe', 'ignore', 'inherit'],
+      ...(secretKeyPassword ? { input: `${secretKeyPassword}\n` } : {}),
+      stdio: [secretKeyPassword ? 'pipe' : 'ignore', 'ignore', 'inherit'],
     });
     return readFileSync(sigPath, 'utf8');
   } finally {
