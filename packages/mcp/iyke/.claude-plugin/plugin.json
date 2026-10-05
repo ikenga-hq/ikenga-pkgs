@@ -1,0 +1,28 @@
+{
+  "name": "iyke",
+  "displayName": "Ikenga iyke",
+  "version": "0.3.0",
+  "description": "Drive a running Ikenga desktop app from Claude Code: the iyke control-bridge MCP server, bundled self-contained (needs only node >=20, no install step).",
+  "author": {
+    "name": "Royalti, Inc.",
+    "url": "https://ikenga.dev"
+  },
+  "homepage": "https://github.com/ikenga-hq/ikenga-pkgs/tree/main/packages/mcp/iyke#readme",
+  "repository": "https://github.com/ikenga-hq/ikenga-pkgs",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ikenga",
+    "iyke",
+    "mcp",
+    "desktop",
+    "control-bridge"
+  ],
+  "mcpServers": {
+    "iyke": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/plugin/server/index.js"
+      ]
+    }
+  }
+}

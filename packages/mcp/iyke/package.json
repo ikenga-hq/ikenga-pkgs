@@ -41,6 +41,7 @@
   "files": [
     "dist",
     "src",
+    ".claude-plugin",
     "manifest.json",
     "README.md"
   ],
@@ -48,11 +49,12 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ./scripts/build-plugin.mjs",
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run build",
-    "test": "npm run build && node --test dist/nouns.test.js"
+    "test": "npm run build && node --test dist/nouns.test.js",
+    "build:plugin": "node ./scripts/build-plugin.mjs"
   },
   "dependencies": {
     "@ikenga/contract": "^0.3.0",

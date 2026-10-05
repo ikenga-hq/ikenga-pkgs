@@ -20,6 +20,18 @@
  * destroy the formatting. A guard asserts each manifest has exactly one
  * `"version"` key before touching it.
  *
+ * Also synced, when present (same WHY — every place a pkg states its own version
+ * must agree with package.json, or installs/registries show a stale version):
+ *   - Claude Code plugin manifests: `<pkg>/.claude-plugin/plugin.json` and
+ *     `<pkg>/skills/<name>/.claude-plugin/plugin.json` (layout A — WP-03/WP-04).
+ *     A pinned plugin `version` keeps users on it until it changes, so a stale
+ *     one silently stops updates.
+ *   - MCP registry `server.json`: the top-level `version` and every
+ *     `packages[]` entry whose `identifier` is this package (WP-07 found
+ *     mcp-iyke's stuck at 0.2.3 while the package was 0.3.0).
+ * These files are machine-formatted, so they are rewritten via JSON round-trip
+ * (2-space indent, trailing newline).
+ *
  * Usage:
  *   node scripts/sync-manifest-versions.mjs           # write
  *   node scripts/sync-manifest-versions.mjs --check   # exit 1 on drift, write nothing
@@ -53,6 +65,36 @@ function findPkgDirs() {
 let drift = 0;
 let synced = 0;
 
+/** Version-bearing JSON files beside manifest.json, keyed by path → setter. */
+function extraVersionFiles(dir, pkgName) {
+  const out = [];
+  const plugins = [join(dir, '.claude-plugin', 'plugin.json')];
+  const skillsDir = join(dir, 'skills');
+  if (existsSync(skillsDir) && statSync(skillsDir).isDirectory()) {
+    for (const name of readdirSync(skillsDir)) {
+      plugins.push(join(skillsDir, name, '.claude-plugin', 'plugin.json'));
+    }
+  }
+  for (const p of plugins) {
+    if (!existsSync(p)) continue;
+    out.push({
+      path: p,
+      versions: (j) => [j.version],
+      set: (j, v) => { j.version = v; },
+    });
+  }
+  const server = join(dir, 'server.json');
+  if (existsSync(server)) {
+    const ours = (j) => (j.packages ?? []).filter((e) => e.identifier === pkgName);
+    out.push({
+      path: server,
+      versions: (j) => [j.version, ...ours(j).map((e) => e.version)],
+      set: (j, v) => { j.version = v; for (const e of ours(j)) e.version = v; },
+    });
+  }
+  return out;
+}
+
 for (const dir of findPkgDirs()) {
   const rel = relative(REPO_ROOT, dir);
   const pkgJson = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
@@ -65,6 +107,22 @@ for (const dir of findPkgDirs()) {
     process.exitCode = 1;
     continue;
   }
+  for (const f of extraVersionFiles(dir, pkgJson.name)) {
+    const json = JSON.parse(readFileSync(f.path, 'utf8'));
+    const stale = f.versions(json).filter((v) => v !== pkgJson.version);
+    if (stale.length === 0) continue;
+    const frel = relative(REPO_ROOT, f.path);
+    drift++;
+    if (CHECK) {
+      console.error(`✗ ${frel}: ${stale.join(', ')} ≠ package.json ${pkgJson.version}`);
+      continue;
+    }
+    f.set(json, pkgJson.version);
+    writeFileSync(f.path, JSON.stringify(json, null, 2) + '\n');
+    synced++;
+    console.log(`✓ ${frel}: ${stale.join(', ')} → ${pkgJson.version}`);
+  }
+
   if (manifest.version === pkgJson.version) continue;
 
   // Guard: exactly one `"version"` key in the file, so the line replace below
