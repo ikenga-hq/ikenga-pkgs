@@ -107,6 +107,32 @@ describe('MattermostGate (Unit Tests)', () => {
     assert.match(res.reason!, /not in allowed_users/);
   });
 
+  it('ignores a client-supplied props.username (cannot impersonate an allowed user)', () => {
+    const gate = new MattermostGate({
+      mattermostUrl: 'http://localhost',
+      mattermostToken: 'token',
+      allowedUsers: ['alice'],
+      allowedChannels: ['general'],
+    });
+
+    const post: MattermostPost = {
+      id: 'p1',
+      user_id: 'mallory',
+      channel_id: 'c1',
+      message: 'spoof',
+      props: { username: 'alice' },
+    };
+    const event: MattermostPostEvent = {
+      event: 'posted',
+      data: { channel_name: 'general', sender_name: '@mallory', post: JSON.stringify(post) },
+      seq: 1,
+    };
+
+    const res = gate.check(event, post);
+    assert.equal(res.allowed, false);
+    assert.match(res.reason!, /not in allowed_users/);
+  });
+
   it('denies unlisted channel', () => {
     const gate = new MattermostGate({
       mattermostUrl: 'http://localhost',

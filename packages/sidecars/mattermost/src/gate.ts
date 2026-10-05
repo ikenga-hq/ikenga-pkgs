@@ -31,8 +31,11 @@ export class MattermostGate {
       return { allowed: false, reason: 'no allowed users configured (deny by default)' };
     }
 
-    // 4. Check user: match by user_id or sender_name / username
-    const username = (post.props?.username as string) || event.data?.sender_name || '';
+    // 4. Check user: match by user_id or the server-set sender_name. Never
+    //    read `post.props`: any client can put arbitrary keys there, so
+    //    `props.username` would let an unlisted channel member impersonate an
+    //    allowed user.
+    const username = event.data?.sender_name || '';
     const userAllowed =
       this.allowedUsersSet.has(post.user_id) ||
       (username && this.allowedUsersSet.has(username)) ||
