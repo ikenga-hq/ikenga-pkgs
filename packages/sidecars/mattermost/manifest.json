@@ -1,0 +1,26 @@
+{
+  "id": "com.ikenga.mattermost",
+  "name": "Mattermost Bridge",
+  "version": "0.1.0",
+  "ikenga_api": "3",
+  "kind": "embedded",
+  "author": {
+    "name": "Royalti, Inc.",
+    "key": "royalti"
+  },
+  "sidecars": [
+    {
+      "name": "pa-com-ikenga-mattermost-bridge",
+      "bin": "dist/bridge.js",
+      "stdio": "json",
+      "auto_restart": true
+    }
+  ],
+  "permissions": {
+    "net": ["*"],
+    "vault.keys": [
+      "MATTERMOST_URL",
+      "MATTERMOST_TOKEN"
+    ]
+  }
+}

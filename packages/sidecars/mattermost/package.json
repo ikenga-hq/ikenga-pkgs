@@ -1,0 +1,25 @@
+{
+  "name": "@ikenga/pkg-mattermost",
+  "version": "0.1.0",
+  "description": "Mattermost bridge sidecar for Ikenga remote agents (B1 read-only echo)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/bridge.js",
+  "types": "dist/bridge.d.ts",
+  "files": [
+    "dist",
+    "manifest.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
+    "test": "node --test --import=tsx src/bridge.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.0"
+  }
+}
