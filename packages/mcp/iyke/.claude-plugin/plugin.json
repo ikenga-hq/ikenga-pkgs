@@ -1,7 +1,7 @@
 {
   "name": "iyke",
   "displayName": "Ikenga iyke",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Drive a running Ikenga desktop app from Claude Code: the iyke control-bridge MCP server, bundled self-contained (needs only node >=20, no install step).",
   "author": {
     "name": "Royalti, Inc.",

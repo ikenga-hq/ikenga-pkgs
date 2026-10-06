@@ -1,6 +1,6 @@
 {
   "name": "groundwork",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Scaffold and maintain a reusable research → design → plan → orchestrate → act folder for any non-trivial work. Re-runs augment hand-written prose, never overwrite it.",
   "author": {
     "name": "Royalti",

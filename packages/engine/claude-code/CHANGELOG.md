@@ -1,5 +1,13 @@
 # @ikenga/pkg-engine-claude-code
 
+## 0.2.2
+
+### Patch Changes
+
+- [#129](https://github.com/ikenga-hq/ikenga-pkgs/pull/129) [`eb66c16`](https://github.com/ikenga-hq/ikenga-pkgs/commit/eb66c16c5dc75bbff41ad1c3ccd53b23f99aee9f) Thanks [@nedjamez](https://github.com/nedjamez)! - Default model setting is now `claude-sonnet-5-5` (was `claude-sonnet-4-6`).
+
+- [#129](https://github.com/ikenga-hq/ikenga-pkgs/pull/129) [`0034a66`](https://github.com/ikenga-hq/ikenga-pkgs/commit/0034a665d91a424ee4d68f5f2490ccc09eee744d) Thanks [@nedjamez](https://github.com/nedjamez)! - Stop dropping the session system prompt. `startSession` now sends `systemPrompt` to the host as `appendSystemPrompt` (the shell's `ClaudeOpts` name, which becomes `--append-system-prompt`), and also passes through `model` and `resumeSessionId`, which were dropped the same way. New optional `role` (`chi` | `pane` | `plan`) and `pluginDirs` session options are forwarded when set. Unset options are omitted, so existing sessions spawn unchanged.
+
 ## 0.2.1
 
 ### Patch Changes
