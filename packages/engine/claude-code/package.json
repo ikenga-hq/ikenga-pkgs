@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-engine-claude-code",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Claude Code engine adapter for Ikenga — wraps the `claude` CLI as the default AI engine.",
   "license": "Apache-2.0",
   "repository": {

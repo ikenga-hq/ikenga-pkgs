@@ -1,5 +1,17 @@
 # @ikenga/mcp-iyke
 
+## 0.3.1
+
+### Patch Changes
+
+- [#129](https://github.com/ikenga-hq/ikenga-pkgs/pull/129) [`210cca9`](https://github.com/ikenga-hq/ikenga-pkgs/commit/210cca9f612a531ba8531a8dd133ed34a7863397) Thanks [@nedjamez](https://github.com/nedjamez)! - Ship mcp-iyke as a self-contained Claude Code plugin (WP-07; fixes ikenga#150).
+
+  - `pnpm build` now also bundles the server into `dist/plugin/server/index.js` (every dependency inlined; needs only `node` >=20, no `node_modules`) and packs `dist/iyke.mcpb` (MCPB manifest 0.3) for Claude Desktop and for plugins that bundle iyke.
+  - New `.claude-plugin/plugin.json` declares the bundled server inline (`plugin:iyke:iyke`).
+  - `server.json` version corrected from 0.2.3 to the package version; `sync-manifest-versions` now keeps `server.json` and Claude plugin manifests in step with `package.json`.
+
+- [#132](https://github.com/ikenga-hq/ikenga-pkgs/pull/132) [`45064f5`](https://github.com/ikenga-hq/ikenga-pkgs/commit/45064f5a5f473d59431ef9a380918f6e2ecfb937) Thanks [@nedjamez](https://github.com/nedjamez)! - Pack `dist/iyke.mcpb` on Windows without `zip`: fall back to System32 `tar.exe` (bsdtar), which writes zip archives. Unblocks the desktop release's Windows build.
+
 ## 0.3.0
 
 ### Minor Changes
