@@ -43,6 +43,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	statSync,
 	utimesSync,
@@ -121,11 +122,27 @@ const EPOCH = new Date('2020-01-01T00:00:00Z');
 	}
 	utimesSync(dir, EPOCH, EPOCH);
 })(STAGE);
-if (!existsSync('/usr/bin/zip') && spawnSync('zip', ['-v']).status !== 0) {
-	throw new Error('`zip` is required to pack dist/iyke.mcpb');
+// An MCPB is a zip. Use Info-ZIP where it exists (Linux, macOS). Windows
+// runners have no `zip`, which failed the v0.20.0 desktop release; Windows 10+
+// ships bsdtar as System32\tar.exe, which writes zip archives. It must be the
+// System32 one: Git for Windows puts GNU tar first on PATH, and GNU tar
+// cannot write zip.
+const MCPB_FILES = ['manifest.json', 'package.json', 'server'];
+const haveZip = existsSync('/usr/bin/zip') || spawnSync('zip', ['-v']).status === 0;
+const winTar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : null;
+if (!haveZip && !(winTar && existsSync(winTar))) {
+	throw new Error('`zip` (or, on Windows, System32\\tar.exe) is required to pack dist/iyke.mcpb');
 }
 try {
-	run('zip', ['-q', '-X', '-r', MCPB, 'manifest.json', 'package.json', 'server'], { cwd: STAGE });
+	if (haveZip) {
+		run('zip', ['-q', '-X', '-r', MCPB, ...MCPB_FILES], { cwd: STAGE });
+	} else {
+		// bsdtar picks the archive format from the .zip suffix (-a).
+		const asZip = MCPB.replace(/\.mcpb$/, '.zip');
+		rmSync(asZip, { force: true });
+		run(winTar, ['-a', '-c', '-f', asZip, ...MCPB_FILES], { cwd: STAGE });
+		renameSync(asZip, MCPB);
+	}
 } finally {
 	rmSync(STAGE, { recursive: true, force: true });
 }
