@@ -5,6 +5,15 @@ import { MockMattermostServer } from './mock-server.js';
 import { MattermostBridge } from './bridge.js';
 import type { MattermostPost, MattermostPostEvent } from './types.js';
 
+/** Poll instead of a fixed sleep: a loaded CI box can miss a 150 ms window. */
+async function until(cond: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 describe('MattermostGate (Unit Tests)', () => {
   it('denies by default when allowed_users is empty', () => {
     const gate = new MattermostGate({
@@ -201,8 +210,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
     });
 
     await bridge.start();
-    // Wait briefly for WS handshake
-    await new Promise((r) => setTimeout(r, 100));
+    await until(() => mockServer.clientCount > 0, 'WebSocket handshake');
   });
 
   after(async () => {
@@ -224,7 +232,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
     );
 
     // Wait for async processing
-    await new Promise((r) => setTimeout(r, 150));
+    await until(() => mockServer.receivedPosts.length >= initialCount + 1, 'echo reply');
 
     assert.equal(mockServer.receivedPosts.length, initialCount + 1);
     const reply = mockServer.receivedPosts[mockServer.receivedPosts.length - 1]!;
@@ -247,7 +255,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
       'c-allowed'
     );
 
-    await new Promise((r) => setTimeout(r, 150));
+    await until(() => mockServer.receivedPosts.length >= initialCount + 1, 'echo reply');
 
     assert.equal(mockServer.receivedPosts.length, initialCount + 1);
     const reply = mockServer.receivedPosts[mockServer.receivedPosts.length - 1]!;
