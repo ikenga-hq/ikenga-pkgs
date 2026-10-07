@@ -80,7 +80,17 @@ function makeRig(approvals: BotApprovalsConfig = { approvers: ['alice', 'bob'], 
     await waitFor(() => daemon.runs.size === before + 1, 'plan run');
     daemon.settle(`run-${before + 1}`, 'done', { output });
     await waitFor(() => approvalPostId(root) !== undefined, 'approval post');
-    return approvalPostId(root) as string;
+    const id = approvalPostId(root) as string;
+    // The approval post goes up before its record is stored; wait for the
+    // record too, or a test racing ahead sees no pending approval.
+    await waitFor(() => {
+      try {
+        return Boolean(JSON.parse(readFileSync(path.join(dir, 'approvals-rex.json'), 'utf8')).approvals?.[id]);
+      } catch {
+        return false;
+      }
+    }, 'approval record');
+    return id;
   };
 
   return {
