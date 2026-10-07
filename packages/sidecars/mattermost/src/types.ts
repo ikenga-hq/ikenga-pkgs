@@ -56,6 +56,48 @@ export interface BotApprovalsConfig {
   actingMode?: string;
 }
 
+/**
+ * B4: a scheduled post. At each due time (cron, 5 fields, UTC) the bot starts a Chi run of `task` in the
+ * daemon's read-only `plan` mode and posts the result to `channel` as a new root post. There is no `mode`
+ * field on purpose: a scheduled run is always read-only and never goes through approvals (D-B7).
+ */
+export interface ScheduleConfig {
+  /** Unique within the bot. Letters, digits, `.`, `_`, `-`. Used in the header, the state file and `--run-schedule`. */
+  name: string;
+  /** 5-field cron, UTC: `minute hour day-of-month month day-of-week`. */
+  cron: string;
+  /** Channel name (with or without `#`) or id to post in. Must also be in the bot's `allowedChannels`. */
+  channel: string;
+  /** The prompt of the run. */
+  task: string;
+  /** Overrides `chi.cwd` for this schedule. */
+  cwd?: string;
+  /** Overrides `chi.engine` for this schedule. */
+  engine?: string;
+  /** Overrides `chi.timeoutSeconds` for this schedule. */
+  timeoutSeconds?: number;
+  /** Default true. A disabled schedule is validated but never runs. */
+  enabled?: boolean;
+  /**
+   * What to do about an occurrence that came due while the bridge was down (more than a few minutes ago).
+   * `once` (default): run the latest missed occurrence, once. `skip`: run nothing until the next one.
+   */
+  onMissed?: 'skip' | 'once';
+  /**
+   * Post only problems. The run is told to answer with one line starting `ALL_OK` when nothing needs attention;
+   * the bridge posts that line at most once per UTC day and posts anything else in full.
+   */
+  quiet?: boolean;
+}
+
+/** Scheduler timing. Optional; defaults suit production. Mostly for tests. */
+export interface SchedulerOptions {
+  /** How often the scheduler looks for due schedules, ms. Default 15 000. */
+  tickMs?: number;
+  /** A due time older than this when it is noticed counts as missed (see `onMissed`), ms. Default 5 minutes. */
+  lateGraceMs?: number;
+}
+
 export interface MattermostBridgeConfig {
   mattermostUrl: string;
   mattermostToken: string;
@@ -77,6 +119,11 @@ export interface MattermostBridgeConfig {
   progress?: ProgressConfig;
   /** B3: gate the bot's actions behind an approver's reaction. Needs `daemon` + `chi`. */
   approvals?: BotApprovalsConfig;
+  /** B4: scheduled posts. Needs `daemon` + `chi`. */
+  schedules?: ScheduleConfig[];
+  scheduler?: SchedulerOptions;
+  /** Scheduler state file. Default `<dataDir>/schedules-<name>.json`. */
+  schedulesPath?: string;
 }
 
 export interface MattermostPost {

@@ -5,8 +5,9 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 
 - **B1** (still the fallback): read-only echo bridge. A bot with no `daemon` + `chi` config echoes.
 - **B2**: sessions + threading. New thread starts a run, replies resume it, "stop" cancels it.
-- **B3** (this): approvals. Optional per bot: plan first, an approver's reaction decides whether it is carried out.
-- B4 scheduled posts, B5 rails/audit are not here yet. The bridge has no tool beyond the Chi run.
+- **B3**: approvals. Optional per bot: plan first, an approver's reaction decides whether it is carried out.
+- **B4** (this): scheduled posts. Per-bot cron schedules start a read-only Chi run and post the result in a channel.
+- B5 rails/audit is not here yet. The bridge has no tool beyond the Chi run.
 
 ## How a thread maps to a run
 
@@ -103,6 +104,101 @@ Known limits of this approach:
 - A plan longer than the daemon's 100 KB output limit is not offered for approval.
 - Reactions made while the WebSocket is down but the bridge is up are not seen until the next restart (the client does not reconnect).
 
+## Scheduled posts (B4)
+
+A bot may carry `schedules`: each is a name, a 5-field cron (**UTC**), a channel, and a task (the prompt). At each due time the
+bridge starts a Chi run of the task and posts the result to the channel as a **new root post**:
+
+```
+**Scheduled run: weekly-standup** (2026-10-12 08:00 UTC)
+
+<the run's final message>
+```
+
+```json
+"schedules": [
+  { "name": "weekly-standup", "cron": "0 8 * * 1", "channel": "rex-test", "task": "Post a weekly engineering standup summary. ..." },
+  { "name": "box-alerts", "cron": "7 * * * *", "channel": "rex-test", "quiet": true, "onMissed": "once", "task": "..." }
+]
+```
+
+Fields: `name` (letters, digits, `.` `_` `-`; unique per bot, case-insensitive), `cron`, `channel` (name, with or without `#`, or id; it
+must also be in the bot's `allowedChannels`, so a bot only posts where it may listen), `task`, and optional `cwd` / `engine` /
+`timeoutSeconds` (override `chi.*` for this schedule), `enabled` (default true), `onMissed` (`once` default, or `skip`), `quiet`.
+A full, loadable example is `bridge.example.json` (the three duties below, pointed at the side-by-side test channels).
+
+**Read-only, never through approvals (D-B7).** Every scheduled run is started with `mode: plan`, always: not from `chi.mode`, not from
+`approvals.actingMode`, and a schedule has no `mode` field (a `mode` key is refused at load). The scheduler has no handle on the
+approval manager and records no thread, so a bot with approvals switched on still posts the result directly, and a 👍 on a
+scheduled post does nothing. A person who replies in the scheduled post's thread starts an ordinary fresh thread run (the bridge has
+no record of the scheduled run, so it never resumes it).
+
+**Validation at load** (the bridge refuses to start, naming the bot and the schedule): a bad or never-firing cron, a channel that is not in
+`allowedChannels`, a duplicate name, an unknown field, a missing task, a bad `onMissed`. At start it also looks the channel up in
+Mattermost (every team the bot is in); a channel the bot cannot see refuses the start, while a transient Mattermost error only logs and
+is retried when the schedule is due.
+
+**Cron.** `minute hour day-of-month month day-of-week`, each field `*`, a number, `a-b`, `a,b`, `*/n`, `a-b/n`, `a/n`; names `jan`..`dec` and
+`sun`..`sat`; Sunday is 0 or 7. As in Vixie cron, when both day-of-month and day-of-week are restricted either matching is enough.
+No `@daily` aliases, no seconds, no time zones. The scheduler checks every 15 s.
+
+**No catch-up storm; no double post.** The bridge persists, per schedule, the latest due time it has handled (`last_slot`) in
+`<dataDir>/schedules-<bot>.json` (mode 0600, temp file + rename). It is written **before** the run starts, so a restart never posts the
+same occurrence twice (the price: a restart in the middle of a run loses that run, see below).
+
+- A schedule seen for the first time (no state) is only recorded; it never runs "for the past".
+- At start, and on every tick, the occurrences in `(last_slot, now]` collapse into the **latest one**: at most one run, however long the outage.
+- An occurrence noticed more than 5 minutes after it was due counts as missed (a quick restart across 08:00 is still "on time").
+  `onMissed: once` (default) runs it, the header says "run late after downtime"; `onMissed: skip` drops it and waits for the next.
+- Removing or disabling a schedule drops its state, so turning it back on starts fresh instead of catching up.
+- One run per schedule at a time: an occurrence that comes due while the previous run is still going is skipped and logged (consumed, not queued).
+- A restart that cut a run short posts one notice ("the bridge restarted while this run was in progress ... not retried") and moves on.
+
+**Failures** post a short notice instead of a result: the run failed, timed out or was cancelled, it could not start, the daemon lost it or
+went unreachable, or it finished with no text. Daemon errors are redacted. Nothing is retried; the next occurrence runs normally.
+
+**`quiet: true`** is for alert-style duties: the run is told to answer with one line starting `ALL_OK` when nothing needs attention. The
+bridge posts that line at most once per UTC day (remembered across restarts) and posts anything else, in full, every time. A reply that
+starts with `ALL_OK` but has more than one line is treated as a problem report and posted.
+
+**Manual trigger (the operator CLI, not a chat command).** On the host:
+
+```bash
+MATTERMOST_BRIDGE_CONFIG=/etc/ikenga/bridge.json node dist/bridge.js --list-schedules          # name + next due time
+MATTERMOST_BRIDGE_CONFIG=/etc/ikenga/bridge.json node dist/bridge.js --run-schedule rex/box-alerts
+```
+
+`--run-schedule <bot>/<name>` runs that schedule once now (also if it is `enabled: false`), in plan mode, posts to its channel with
+"manual run" in the header (always, even a `quiet` OK line), waits for the outcome, prints `posted | failed (reason) | overlap` and exits
+0 / 1. It does not start the websocket and never touches the persisted timetable, so it cannot cause or suppress a real occurrence.
+I chose the CLI over a "run schedule x" thread command because a chat command would need its own who-may-trigger list (a bot without
+`approvals` has no approvers) and shell access on the box already is the operator boundary. The cost: it is a separate process, so it
+does not see a run the service has in flight (it can overlap one).
+
+### The three duties (D-B5), as configuration
+
+None is hard-coded; they are entries in `bridge.example.json`. During the side-by-side period all three point at the test channels
+(D-B8: `#rex-test`, `#ruby-test`); at the per-duty flip change `channel` (to `engineering`, and wherever Ruby's digest belongs) and add
+it to `allowedChannels`.
+
+| Bot | Schedule | Cron (UTC) | Task |
+|---|---|---|---|
+| rex | `weekly-standup` | `0 8 * * 1` | the old `schedules.yaml` text, unchanged |
+| ruby | `daily-reply-digest` | `0 7 * * *` | the old `schedules.yaml` text, unchanged (it still says "Post a concise digest to #sales"; the post is now made by the bridge into `channel`) |
+| rex | `box-alerts` | `7 * * * *`, `quiet` | health checks below; posts problems, one OK line a day at most |
+
+`box-alerts` asks the run to check: the server's `/api/health`, disk (above 85%), memory/swap, failed or timed-out Chi runs in the last 24 h
+(via the `chi_list` tool), `update-available.json`, and the age of the newest file in each backup directory (older than 26 h, empty or
+missing). The URL, `/var/lib/ikenga` and `/var/backups/ikenga` in the example are placeholders for the real box; adapt them. Each check
+is a model run, so an hourly cadence has a usage cost; lengthen the cron to taste.
+
+**Not verified here, check on the box before relying on `box-alerts`.** Plan mode stops Claude Code from running anything that needs
+permission, and with no one to answer, a command outside its read-only allow-list fails closed. I could not confirm that `curl`, `df`,
+`free` or reading the backup directories pass in plan mode (or that Rex has `chi_list`). If they do not, the run will report that it
+could not check, which is a visible failure rather than a silent one; the fix is allow rules in the project's `.claude/settings.json`
+(for example `Bash(curl http://127.0.0.1:*/api/health)`, `Bash(df -h)`, `Bash(free -m)`), not a looser mode. The same goes for Ruby's
+digest, which queries `email_drafts`. The "fleet audit as today" part of D-B5 is not included: it needs `fleet-audit.sh` read first.
+
 ## Configuration
 
 Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: each is `{"env":"NAME"}` or `{"file":"/path"}`.
@@ -122,6 +218,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
       },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Rex, ...", "persistent": true },
       "approvals": { "approvers": ["alice"], "timeoutMs": 900000, "actingMode": "auto" },
+      "schedules": [{ "name": "weekly-standup", "cron": "0 8 * * 1", "channel": "rex-test", "task": "..." }],
       "progress": { "pollMinMs": 1000, "pollMaxMs": 10000, "editIntervalMs": 5000 }
     },
     "ruby": { "...": "own entry, own credentials" }
@@ -131,6 +228,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 
 - `daemon.auth.kind: "session"` is **T1** (production): `POST /auth/login`, `ikenga_session` cookie, one re-login on a 401.
   `"bearer"` is **T0** (local testing): `Authorization: Bearer`. Under T1 the daemon refuses bearer tokens.
+- `schedules` is optional; see "Scheduled posts (B4)". Needs the same `daemon` and `chi` as thread runs.
 - `approvals` is optional. Without it the bot behaves as in B2 (`chi.mode`, no gate). With it, see "Approvals (B3)".
   Do not set `chi.mode` together with it.
 - No `Origin` header is sent (the daemon allows a missing one for non-browser clients). Set `daemon.origin` only if needed.
@@ -175,7 +273,10 @@ The result text is `chi_status.output` once the status is `done`.
 - **Replies in a thread the bridge never saw** (e.g. a human thread in an allowed channel) start a fresh run.
 - `awaiting_auth` (the engine needs a human to sign in on the host) is reported but the bridge cannot fix it.
 - Daemon login is throttled server-side; a wrong password is retried only once per request.
-- Not here: scheduled posts (B4), audit and branch rails (B5), DMs, files, slash commands.
+- **A bridge restart in the middle of a scheduled run loses that run's post** (the occurrence is already marked handled, to rule out a
+  double post). The bridge posts a notice saying so and names the Chi run, which may have finished in the Chi view; it does not
+  re-attach to it the way a thread turn does. A run that exceeds `progress.maxWaitMs` (2 hours) is reported as "stopped watching".
+- Not here: audit and branch rails (B5), DMs, files, slash commands.
 
 ## Testing
 

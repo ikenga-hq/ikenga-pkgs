@@ -87,6 +87,15 @@ export class MockMattermostServer {
   ]);
   /** Make `GET /users/{id}` fail (a Mattermost outage). */
   failUserLookups = false;
+  /** Channels the bot can see, `name -> id`, in one team. A missing name is a 404. */
+  readonly channels = new Map<string, string>([
+    ['engineering', 'c1'],
+    ['rex-test', 'c-rex-test'],
+    ['ruby-test', 'c-ruby-test'],
+    ['rex-alerts', 'c-alerts'],
+  ]);
+  /** Make channel lookups fail with a 500 (a Mattermost outage). */
+  failChannelLookups = false;
   private nextPostId = 1;
   readonly botId = 'bot-12345';
   readonly botUsername = 'ikenga-bot';
@@ -143,6 +152,21 @@ export class MockMattermostServer {
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ id, username }));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v4/users/me/teams') {
+        res.writeHead(this.failChannelLookups ? 500 : 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(this.failChannelLookups ? { error: 'down' } : [{ id: 'team1', name: 'royalti' }]));
+        return;
+      }
+
+      const channelByName = /^\/api\/v4\/teams\/([^/]+)\/channels\/name\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && channelByName) {
+        const id = this.channels.get(decodeURIComponent(channelByName[2] as string));
+        const status = this.failChannelLookups ? 500 : id ? 200 : 404;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(status === 200 ? { id, name: decodeURIComponent(channelByName[2] as string) } : { error: 'no such channel' }));
         return;
       }
 
