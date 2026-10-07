@@ -1,7 +1,7 @@
 {
   "name": "@ikenga/pkg-mattermost",
   "version": "0.1.0",
-  "description": "Mattermost bridge sidecar for Ikenga remote agents (B2: threads mapped onto Chi runs)",
+  "description": "Mattermost bridge sidecar for Ikenga remote agents (B3: threads mapped onto Chi runs, plan-then-approve)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/bridge.js",
@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
-    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts"
+    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts src/approvals.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -12,6 +12,13 @@ export interface ActiveTurn {
   started_at: number;
   /** The notice shown above the progress text ("started a fresh run..."), if any. */
   notice?: string;
+  /**
+   * `plan` (default): the thread's own run, read-only when approvals are on.
+   * `act`: the run an approver's 👍 started; `run_id` is that run, not the thread's.
+   */
+  kind?: 'plan' | 'act';
+  /** The prompt an `act` run started with, to recognise its echoed `brief` after a restart. */
+  brief?: string;
 }
 
 export interface ThreadRecord {
@@ -25,6 +32,14 @@ export interface ThreadRecord {
    * the bridge must recognise it and not post it back as a "result".
    */
   brief: string;
+  /**
+   * The Claude Code permission mode `run_id` was started in. Only recorded when
+   * approvals are on: a thread whose run is not in plan mode is never resumed
+   * under an approval gate (a resume cannot change the mode).
+   */
+  mode?: string;
+  /** Report of the last approved run, handed to the next plan turn (it cannot remember it). */
+  carry?: string;
   created_at: number;
   updated_at: number;
   active?: ActiveTurn;

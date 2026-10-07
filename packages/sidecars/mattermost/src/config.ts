@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveSecret } from './secrets.js';
 import type { SecretSource } from './secrets.js';
-import type { BotChiConfig, MattermostBridgeConfig, ProgressConfig } from './types.js';
+import { resolveApprovals } from './approvals.js';
+import type { BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig } from './types.js';
 
 /**
  * On-disk bridge config (`MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`).
@@ -30,6 +31,8 @@ export interface BotFileConfig {
   storePath?: string;
   retentionMs?: number;
   progress?: ProgressConfig;
+  /** B3: gate actions behind an approver's reaction. Omitted = no gate (B2). */
+  approvals?: BotApprovalsConfig;
 }
 
 export interface BridgeFileConfig {
@@ -80,6 +83,10 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
               throw new Error(`${where}: daemon.auth.kind must be 'session' (T1) or 'bearer' (T0)`);
             })();
     if (auth.kind === 'session' && !auth.username) throw new Error(`${where}: daemon.auth.username is required`);
+    if (bot.approvals) {
+      resolveApprovals(bot.approvals, where); // fail at load, naming the bot
+      if (bot.chi.mode) throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
+    }
 
     return {
       name,
@@ -99,6 +106,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       storePath: bot.storePath,
       retentionMs: bot.retentionMs,
       progress: bot.progress,
+      approvals: bot.approvals,
     };
   });
 }

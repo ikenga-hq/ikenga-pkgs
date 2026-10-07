@@ -1,7 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import type { Socket } from 'node:net';
-import type { MattermostPost } from './types.js';
+import type { MattermostPost, MattermostReaction } from './types.js';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -77,6 +77,16 @@ export class MockMattermostServer {
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
   /** Every `PUT /posts/{id}/patch` the bridge made, in order. */
   readonly patches: Array<{ id: string; message: string }> = [];
+  /** Reactions by post id, as `GET /posts/{id}/reactions` returns them. */
+  readonly reactions = new Map<string, MattermostReaction[]>();
+  /** `user_id -> username`, for `GET /users/{id}`. A missing id is a 404. */
+  readonly users = new Map<string, string>([
+    ['alice', 'alice'],
+    ['bob', 'bob'],
+    ['mallory', 'mallory'],
+  ]);
+  /** Make `GET /users/{id}` fail (a Mattermost outage). */
+  failUserLookups = false;
   private nextPostId = 1;
   readonly botId = 'bot-12345';
   readonly botUsername = 'ikenga-bot';
@@ -111,6 +121,28 @@ export class MockMattermostServer {
             res.end(JSON.stringify({ error: 'invalid json' }));
           }
         });
+        return;
+      }
+
+      const reactionsOf = /^\/api\/v4\/posts\/([^/]+)\/reactions$/.exec(url.pathname);
+      if (req.method === 'GET' && reactionsOf) {
+        const list = this.reactions.get(decodeURIComponent(reactionsOf[1] as string));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(list && list.length ? list : null)); // Mattermost answers null for none
+        return;
+      }
+
+      const userOf = /^\/api\/v4\/users\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && userOf) {
+        const id = decodeURIComponent(userOf[1] as string);
+        const username = this.users.get(id);
+        if (this.failUserLookups || !username) {
+          res.writeHead(this.failUserLookups ? 500 : 404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'no such user' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id, username }));
         return;
       }
 
@@ -215,6 +247,23 @@ export class MockMattermostServer {
       },
       seq: this.seq++,
     };
+    const frame = encodeFrame(JSON.stringify(event));
+    for (const client of this.wsClients) {
+      client.write(frame);
+    }
+  }
+
+  /** Record a reaction without telling the bridge (one made while it was down). */
+  addReaction(reaction: MattermostReaction): MattermostReaction {
+    const r = { create_at: Date.now(), ...reaction };
+    this.reactions.set(r.post_id, [...(this.reactions.get(r.post_id) ?? []), r]);
+    return r;
+  }
+
+  /** A user reacts: recorded, and sent to every connected bridge as `reaction_added`. */
+  broadcastReaction(reaction: MattermostReaction): void {
+    const r = this.addReaction(reaction);
+    const event = { event: 'reaction_added', data: { reaction: JSON.stringify(r) }, seq: this.seq++ };
     const frame = encodeFrame(JSON.stringify(event));
     for (const client of this.wsClients) {
       client.write(frame);
