@@ -36,6 +36,8 @@ interface Turn {
   cancelRequested: boolean;
   finished: boolean;
   abort: AbortController;
+  /** Kept through to the final summary so it isn't edited away. */
+  notice?: string;
   done?: Promise<void>;
 }
 
@@ -163,7 +165,10 @@ export class ThreadRouter {
   private async start(turn: Turn, post: MattermostPost, text: string, isReply: boolean): Promise<void> {
     const { daemon, store, chi } = this.opts;
     const rootId = turn.rootId;
-    const rec = store.get(rootId);
+    // Ignore a record from another channel (defence in depth; Mattermost
+    // already keeps a reply's root in its own channel).
+    const stored = store.get(rootId);
+    const rec = stored && stored.channel_id === post.channel_id ? stored : undefined;
 
     // Say something straight away; the engine can take a while to boot.
     const working = await this.opts.client.reply(post.channel_id, 'Working…', rootId);
@@ -269,6 +274,7 @@ export class ThreadRouter {
     const p = this.progress;
     const runId = turn.runId as string;
     const progressId = turn.progressPostId as string;
+    if (notice) turn.notice = notice;
     let delay = p.pollMinMs;
     let failures = 0;
     let lastEdit = this.now();
@@ -393,7 +399,7 @@ export class ThreadRouter {
     turn.finished = true;
     try {
       if (clearActive) await this.opts.store.update(turn.rootId, { active: undefined }).catch(() => undefined);
-      await this.edit(progressId, summary);
+      await this.edit(progressId, turn.notice ? `${turn.notice}\n\n${summary}` : summary);
       if (body) await this.say(turn.channelId, turn.rootId, body);
     } finally {
       this.turns.delete(turn.rootId);

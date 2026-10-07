@@ -352,6 +352,11 @@ describe('thread routing (bridge + fake daemon)', () => {
     await waitFor(() => rig.mm.thread('root-4').some((m) => /started a fresh one/.test(m)), 'notice');
     rig.daemon.settle('run-2', 'done', { output: 'b' });
     await waitFor(() => rig.mm.thread('root-4').includes('b'), 'fresh result');
+    // The notice must survive completion, not be edited away by "Done in Ns.".
+    await waitFor(
+      () => rig.mm.thread('root-4').some((m) => /started a fresh one/.test(m) && /Done in/.test(m)),
+      'notice kept in final summary',
+    );
 
     // The mapping now points at the new run.
     const saved = JSON.parse(readFileSync(path.join(rig.dir, 'threads-rex.json'), 'utf8'));
@@ -364,6 +369,12 @@ describe('thread routing (bridge + fake daemon)', () => {
     await waitFor(() => rig.daemon.rpcCalls('chi_run').length === 1, 'chi_run');
     assert.equal(rig.daemon.rpcCalls('chi_resume').length, 0);
     await waitFor(() => rig.mm.thread('someone-elses-root').some((m) => /no earlier run/.test(m)), 'notice');
+    rig.daemon.settle('run-1', 'done', { output: 'hi' });
+    await waitFor(() => rig.mm.thread('someone-elses-root').includes('hi'), 'result');
+    await waitFor(
+      () => rig.mm.thread('someone-elses-root').some((m) => /no earlier run/.test(m) && /Done in/.test(m)),
+      'notice kept in final summary',
+    );
   });
 
   it('"stop" as a thread reply calls chi_cancel and reports it', async () => {

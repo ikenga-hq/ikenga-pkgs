@@ -121,7 +121,7 @@ export class ThreadStore {
     const body = JSON.stringify(snapshot, null, 2);
     this.writing = this.writing.then(() => {
       const dir = path.dirname(this.filePath);
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
       const tmp = `${this.filePath}.${process.pid}.tmp`;
       try {
         writeFileSync(tmp, body, { mode: 0o600 });
