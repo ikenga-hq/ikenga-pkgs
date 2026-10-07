@@ -72,6 +72,11 @@ function decodeFrames(buf: Buffer): string[] {
 export class MockMattermostServer {
   private server: http.Server;
   private wsClients: Set<Socket> = new Set();
+
+  /** Connected WebSocket clients (tests wait on this instead of sleeping). */
+  get clientCount(): number {
+    return this.wsClients.size;
+  }
   readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string }> = [];
   /** Every post the bridge created, by id, with its CURRENT message (patches applied). */
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();

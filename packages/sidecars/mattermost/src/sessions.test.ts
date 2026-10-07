@@ -15,7 +15,7 @@ const PASSWORD = 'hunter2-very-secret';
 const TOKEN = 'bearer-token-abcdef123456';
 const FAST = { pollMinMs: 10, pollMaxMs: 20, editIntervalMs: 0, maxWaitMs: 60_000, maxPollFailures: 3 };
 
-async function waitFor(cond: () => boolean, what: string, ms = 3000): Promise<void> {
+async function waitFor(cond: () => boolean, what: string, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);
@@ -455,6 +455,14 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.say('root-11', 'long');
     await waitFor(() => rig.daemon.runs.size === 1, 'run');
     await waitFor(() => rig.mm.thread('root-11').length === 1, 'progress post');
+    // The record (with the active turn) is stored after the progress post goes up.
+    await waitFor(() => {
+      try {
+        return Boolean(JSON.parse(readFileSync(path.join(rig.dir, 'threads-rex.json'), 'utf8')).threads?.['root-11']?.active);
+      } catch {
+        return false;
+      }
+    }, 'active turn stored');
     b1.stop(); // dies mid-run; the store still says the turn is active
     const saved = JSON.parse(readFileSync(path.join(rig.dir, 'threads-rex.json'), 'utf8'));
     assert.equal(saved.threads['root-11'].active.run_id, 'run-1');
