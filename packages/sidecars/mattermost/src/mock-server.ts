@@ -72,7 +72,12 @@ function decodeFrames(buf: Buffer): string[] {
 export class MockMattermostServer {
   private server: http.Server;
   private wsClients: Set<Socket> = new Set();
-  readonly receivedPosts: Array<{ channel_id: string; message: string; root_id?: string }> = [];
+  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string }> = [];
+  /** Every post the bridge created, by id, with its CURRENT message (patches applied). */
+  readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
+  /** Every `PUT /posts/{id}/patch` the bridge made, in order. */
+  readonly patches: Array<{ id: string; message: string }> = [];
+  private nextPostId = 1;
   readonly botId = 'bot-12345';
   readonly botUsername = 'ikenga-bot';
   private port = 0;
@@ -96,13 +101,38 @@ export class MockMattermostServer {
         req.on('end', () => {
           try {
             const data = JSON.parse(body);
-            this.receivedPosts.push(data);
+            const id = `bot-post-${this.nextPostId++}`;
+            this.receivedPosts.push({ ...data, id });
+            this.posts.set(id, { id, ...data });
             res.writeHead(201, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ id: `post-${Date.now()}`, ...data }));
+            res.end(JSON.stringify({ id, ...data }));
           } catch (err) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid json' }));
           }
+        });
+        return;
+      }
+
+      const patch = /^\/api\/v4\/posts\/([^/]+)\/patch$/.exec(url.pathname);
+      if (req.method === 'PUT' && patch) {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          const id = decodeURIComponent(patch[1] as string);
+          const existing = this.posts.get(id);
+          if (!existing) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'no such post' }));
+            return;
+          }
+          const { message } = JSON.parse(body) as { message: string };
+          existing.message = message;
+          this.patches.push({ id, message });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(existing));
         });
         return;
       }
@@ -168,6 +198,11 @@ export class MockMattermostServer {
         resolve(`http://127.0.0.1:${this.port}`);
       });
     });
+  }
+
+  /** Messages of the bot's posts in a thread, current text, oldest first. */
+  thread(rootId: string): string[] {
+    return [...this.posts.values()].filter((p) => p.root_id === rootId).map((p) => p.message);
   }
 
   broadcastPost(post: MattermostPost, channelName = 'general'): void {
