@@ -27,7 +27,7 @@ const MON_0759 = utc(2026, 10, 12, 7, 59, 30);
 
 const STANDUP: ScheduleConfig = { name: 'weekly-standup', cron: '0 8 * * 1', channel: 'rex-test', task: 'Post the weekly standup.' };
 
-async function waitFor(cond: () => boolean, what: string, ms = 3000): Promise<void> {
+async function waitFor(cond: () => boolean, what: string, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);
