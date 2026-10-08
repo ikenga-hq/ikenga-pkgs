@@ -38,6 +38,8 @@ export class MockDaemon {
   readonly calls: RpcCall[] = [];
   readonly sessions = new Set<string>();
   loginCount = 0;
+  /** Engines the daemon will not launch: `chi_run` leaves a failed row behind and answers with an error (seen live with cursor-agent). */
+  readonly refuseEngines = new Set<string>();
   private nextRun = 1;
 
   constructor(
@@ -124,6 +126,10 @@ export class MockDaemon {
             parentId?: string;
           };
           const run_id = `run-${this.nextRun++}`;
+          if (this.refuseEngines.has(opts.engineId)) {
+            this.runs.set(run_id, { run_id, status: 'failed', brief: opts.prompt, engineId: opts.engineId, mode: opts.mode, hasSession: false, prompts: [opts.prompt] });
+            return err(`engine '${opts.engineId}' could not be launched`);
+          }
           this.runs.set(run_id, {
             run_id,
             status: 'running',

@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { AuditLog } from './audit.js';
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BotApprovalsConfig, MattermostPost, MattermostReaction } from './types.js';
@@ -58,8 +59,16 @@ export interface ApprovalRecord {
   plan_run_id: string;
   /** The plan text as the approver saw it; the approved run is given exactly this. */
   plan: string;
+  /** Who asked for the plan (Mattermost id and username), for the audit trail. Absent on records from before B5. */
+  requester_id?: string;
+  requester_name?: string;
   created_at: number;
   expires_at: number;
+}
+
+/** SHA-256 (hex) of the plan text exactly as the approver saw it: what an audit record names instead of the plan. */
+export function planHash(plan: string): string {
+  return createHash('sha256').update(plan).digest('hex');
 }
 
 interface ApprovalFile {
@@ -180,7 +189,9 @@ export interface ApprovalManagerOptions {
   store: ApprovalStore;
   approvals: ResolvedApprovals;
   /** Called once, after a 👍 from an approver has claimed the approval and the post says so. */
-  onApproved: (rec: ApprovalRecord, approver: string) => Promise<void>;
+  onApproved: (rec: ApprovalRecord, approver: { id: string; name: string }) => Promise<void>;
+  /** B5: every request, decision, expiry and withdrawal is recorded here. */
+  audit: AuditLog;
   now?: () => number;
   log?: (msg: string) => void;
 }
@@ -190,6 +201,7 @@ export interface ApprovalRequest {
   channelId: string;
   planRunId: string;
   plan: string;
+  requester?: { id: string; name?: string };
 }
 
 /** Mattermost emoji names for 👍 / 👎; a skin tone rides after `::`. */
@@ -253,6 +265,8 @@ export class ApprovalManager {
       bot: this.opts.bot,
       plan_run_id: req.planRunId,
       plan: req.plan,
+      requester_id: req.requester?.id,
+      requester_name: req.requester?.name,
       created_at: t,
       expires_at: t + this.opts.approvals.timeoutMs,
     };
@@ -260,6 +274,17 @@ export class ApprovalManager {
     rec.post_id = post.id;
     await this.opts.store.put(rec);
     this.arm(rec);
+    this.opts.audit.record('approval.requested', {
+      request_id: rec.request_id,
+      thread_root: rec.root_id,
+      channel_id: rec.channel_id,
+      plan_run_id: rec.plan_run_id,
+      plan_hash: planHash(rec.plan),
+      requester_id: rec.requester_id,
+      requester_name: rec.requester_name,
+      acting_mode: this.opts.approvals.actingMode,
+      expires_at: new Date(rec.expires_at).toISOString(),
+    });
   }
 
   /** A `reaction_added` event. Everything that is not a decision on a pending approval is ignored. */
@@ -276,9 +301,19 @@ export class ApprovalManager {
       return;
     }
 
-    const who = await this.approverName(r.user_id);
+    const check = await this.approverName(r.user_id);
+    const who = check.allowed ? check.name : undefined;
     if (!who) {
       this.log(`ignored ${r.emoji_name} on approval ${rec.request_id} from non-approver ${r.user_id}`);
+      this.opts.audit.record('approval.rejected', {
+        request_id: rec.request_id,
+        thread_root: rec.root_id,
+        plan_hash: planHash(rec.plan),
+        user_id: r.user_id,
+        user_name: check.name,
+        verdict,
+        reason: check.name === undefined ? 'unverifiable_user' : 'not_approver',
+      });
       return;
     }
 
@@ -289,6 +324,15 @@ export class ApprovalManager {
     if (!taken) return;
     this.disarm(taken.post_id);
 
+    this.opts.audit.record('approval.decided', {
+      request_id: taken.request_id,
+      thread_root: taken.root_id,
+      plan_run_id: taken.plan_run_id,
+      plan_hash: planHash(taken.plan),
+      decision: verdict === 'approve' ? 'approved' : 'denied',
+      approver_id: r.user_id,
+      approver_name: who,
+    });
     if (verdict === 'deny') {
       await this.edit(taken.post_id, `**Denied** by @${who} at ${hhmm(this.now())}. Nothing was run.`);
       this.log(`approval ${taken.request_id} denied by ${who}`);
@@ -299,17 +343,23 @@ export class ApprovalManager {
       `**Approved** by @${who} at ${hhmm(this.now())}. Carrying out the plan with \`${this.opts.approvals.actingMode}\` permissions.`,
     );
     this.log(`approval ${taken.request_id} approved by ${who}`);
-    await this.opts.onApproved(taken, who);
+    await this.opts.onApproved(taken, { id: r.user_id, name: who });
   }
 
   /** Withdraw every pending approval of a thread (the conversation moved on, or someone said `stop`). */
-  async withdraw(rootId: string, reason: string): Promise<number> {
+  async withdraw(rootId: string, reason: string, code: 'superseded' | 'cancelled'): Promise<number> {
     let n = 0;
     for (const rec of this.opts.store.all().filter((r) => r.root_id === rootId)) {
       const taken = this.opts.store.take(rec.post_id);
       if (!taken) continue;
       this.disarm(taken.post_id);
       n += 1;
+      this.opts.audit.record('approval.withdrawn', {
+        request_id: taken.request_id,
+        thread_root: taken.root_id,
+        plan_hash: planHash(taken.plan),
+        reason: code,
+      });
       await this.edit(taken.post_id, `**Withdrawn**: ${reason}. Nothing was run.`);
     }
     return n;
@@ -365,6 +415,11 @@ export class ApprovalManager {
     if (!taken) return;
     this.disarm(postId);
     const mins = Math.max(1, Math.round((taken.expires_at - taken.created_at) / 60000));
+    this.opts.audit.record('approval.expired', {
+      request_id: taken.request_id,
+      thread_root: taken.root_id,
+      plan_hash: planHash(taken.plan),
+    });
     await this.edit(
       postId,
       `**Expired**: no approver decided within ${mins} min, so this is a denial. Nothing was run. Reply in this thread to start again.`,
@@ -373,7 +428,7 @@ export class ApprovalManager {
   }
 
   /** The approver's username, or `undefined` for anyone who may not decide (or cannot be checked). */
-  private async approverName(userId: string): Promise<string | undefined> {
+  private async approverName(userId: string): Promise<{ name?: string; allowed: boolean }> {
     const allow = new Set(this.opts.approvals.approvers.map((a) => a.replace(/^@/, '')));
     let username = this.users.get(userId);
     if (username === undefined) {
@@ -381,11 +436,11 @@ export class ApprovalManager {
         username = (await this.opts.client.getUser(userId)).username;
       } catch (err) {
         this.log(`could not resolve user ${userId}: ${(err as Error).message}`);
-        return undefined; // cannot verify, so not an approver
+        return { allowed: false }; // cannot verify, so not an approver
       }
       this.users.set(userId, username);
     }
-    return allow.has(userId) || allow.has(username) ? username : undefined;
+    return { name: username, allowed: allow.has(userId) || allow.has(username) };
   }
 
   private requestText(rec: ApprovalRecord): string {

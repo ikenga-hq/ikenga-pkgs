@@ -1,7 +1,8 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,9 @@ import { DaemonError } from './daemon.js';
 import type { ChiRunOpts, ChiRunResult } from './daemon.js';
 import { MockDaemon } from './mock-daemon.js';
 import { MockMattermostServer } from './mock-server.js';
+import { AuditLog } from './audit.js';
+import { Rails } from './rails.js';
+import type { WireMode } from './rails.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules, SCHEDULE_NOTE, QUIET_NOTE } from './schedules.js';
 import type { ScheduleApi, ScheduleChiApi } from './schedules.js';
 import type { MattermostPost, ScheduleConfig } from './types.js';
@@ -100,7 +104,7 @@ interface Unit {
   statePath: string;
   logs: string[];
   store: ScheduleStore;
-  make: (over?: { schedules?: ScheduleConfig[]; chi?: object; lateGraceMs?: number }) => ScheduleRunner;
+  make: (over?: { schedules?: ScheduleConfig[]; chi?: object; lateGraceMs?: number; maxMode?: WireMode }) => ScheduleRunner;
   /** A new runner over the same state file, as after a bridge restart. */
   restart: (over?: { schedules?: ScheduleConfig[]; lateGraceMs?: number }) => ScheduleRunner;
 }
@@ -109,14 +113,14 @@ let u: Unit;
 const dirs: string[] = [];
 
 function unit(): Unit {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b4-'));
+  const dir = tmpDir('mm-b4-');
   dirs.push(dir);
   const statePath = path.join(dir, 'schedules-rex.json');
   const client = new FakeClient();
   const daemon = new FakeDaemon();
   const clock = { t: MON_0759 };
   const logs: string[] = [];
-  const build = (over: { schedules?: ScheduleConfig[]; chi?: object; lateGraceMs?: number } = {}) => {
+  const build = (over: { schedules?: ScheduleConfig[]; chi?: object; lateGraceMs?: number; maxMode?: WireMode } = {}) => {
     const store = new ScheduleStore(statePath);
     out.store = store;
     return new ScheduleRunner({
@@ -126,6 +130,12 @@ function unit(): Unit {
       daemon,
       store,
       chi: { engine: 'claude-code', cwd: '~/work/royalti', systemPrompt: 'You are Rex.', ...over.chi },
+      rails: new Rails({
+        bot: 'rex',
+        maxMode: over.maxMode ?? 'plan',
+        threadMode: 'plan',
+        audit: new AuditLog({ file: path.join(dir, 'audit-rex.jsonl'), bot: 'rex', now: () => clock.t }),
+      }),
       progress: FAST,
       scheduler: { tickMs: 60_000, lateGraceMs: over.lateGraceMs },
       now: () => clock.t,
@@ -276,6 +286,7 @@ describe('B4 scheduler', () => {
     const r = u.make({
       schedules: [{ ...STANDUP, cwd: '/srv/other', engine: 'codex', timeoutSeconds: 300 }],
       chi: { model: 'sonnet' },
+      maxMode: 'bypassPermissions', // codex gets no permission flag, so only a bypass ceiling lets it run at all
     });
     await r.tick();
     u.clock.t = utc(2026, 10, 12, 8, 0, 5);
@@ -749,7 +760,7 @@ describe('B4 through the bridge (mock Mattermost + mock daemon)', () => {
     daemon = new MockDaemon('t1', { username: 'rex', password: PASSWORD });
     mmUrl = await mm.listen();
     daemonUrl = await daemon.listen();
-    dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b4-int-'));
+    dir = tmpDir('mm-b4-int-');
   });
 
   afterEach(async () => {
@@ -796,7 +807,7 @@ describe('B4 through the bridge (mock Mattermost + mock daemon)', () => {
     seed();
     const stop = settleRuns();
     const b = new MattermostBridge(
-      bridgeConfig({ approvals: { approvers: ['alice'], actingMode: 'bypassPermissions' } }) as never,
+      bridgeConfig({ maxMode: 'bypassPermissions', approvals: { approvers: ['alice'], actingMode: 'bypassPermissions' } }) as never,
     );
     bridges.push(b);
     await b.start();
@@ -824,7 +835,7 @@ describe('B4 through the bridge (mock Mattermost + mock daemon)', () => {
   it('plan mode when approvals are off and chi.mode asks for more', async () => {
     seed();
     const stop = settleRuns();
-    const b = new MattermostBridge(bridgeConfig({ chi: { engine: 'claude-code', mode: 'bypassPermissions' } }) as never);
+    const b = new MattermostBridge(bridgeConfig({ maxMode: 'bypassPermissions', chi: { engine: 'claude-code', mode: 'bypassPermissions' } }) as never);
     bridges.push(b);
     await b.start();
     await waitFor(() => channelPosts('c-rex-test').length >= 1, 'scheduled post');
@@ -882,7 +893,7 @@ describe('B4 CLI: --run-schedule and --list-schedules', () => {
     daemon = new MockDaemon('t1', { username: 'rex', password: PASSWORD });
     const mmUrl = await mm.listen();
     const daemonUrl = await daemon.listen();
-    dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b4-cli-'));
+    dir = tmpDir('mm-b4-cli-');
     cfgPath = path.join(dir, 'bridge.json');
     writeFileSync(
       cfgPath,
@@ -992,3 +1003,6 @@ describe('B4 bridge.example.json', () => {
     assert.match(by('rex', 'box-alerts')?.task ?? '', /chi_list/);
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());

@@ -6,8 +6,8 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 - **B1** (still the fallback): read-only echo bridge. A bot with no `daemon` + `chi` config echoes.
 - **B2**: sessions + threading. New thread starts a run, replies resume it, "stop" cancels it.
 - **B3**: approvals. Optional per bot: plan first, an approver's reaction decides whether it is carried out.
-- **B4** (this): scheduled posts. Per-bot cron schedules start a read-only Chi run and post the result in a channel.
-- B5 rails/audit is not here yet. The bridge has no tool beyond the Chi run.
+- **B4**: scheduled posts. Per-bot cron schedules start a read-only Chi run and post the result in a channel.
+- **B5** (this): safety rails and audit. A per-bot mode ceiling (`maxMode`), an append-only audit log, and an honest table of what is enforced where. The bridge still has no tool beyond the Chi run.
 
 ## How a thread maps to a run
 
@@ -199,6 +199,151 @@ could not check, which is a visible failure rather than a silent one; the fix is
 (for example `Bash(curl http://127.0.0.1:*/api/health)`, `Bash(df -h)`, `Bash(free -m)`), not a looser mode. The same goes for Ruby's
 digest, which queries `email_drafts`. The "fleet audit as today" part of D-B5 is not included: it needs `fleet-audit.sh` read first.
 
+## Safety rails and audit (B5)
+
+The old Rex/Ruby rails lived in code and prompts of `royalti-agents`: a `rex/` branch rule in Rex's `CLAUDE.md`, Ruby's "read-only"
+rule plus four allowlisted write scripts, and a `mutation_audit` table. (That table recorded who pushed the cockpit read model over
+HTTP, not what Rex did, so there is no old agent-action audit to port.) B5 replaces them with what the bridge can enforce and says,
+rule by rule, what it cannot. **Read "Enforced where" before relying on any of it.**
+
+### Enforced where
+
+| Rule | Enforced by | Strength, and what it does not cover |
+|---|---|---|
+| Only allowed users in allowed channels reach the bot | the bridge (gate, B1) | Enforced for posts that reach this bridge. Says nothing about someone logged in to the daemon as the bot's account |
+| Only a configured approver can approve; first decision wins; timeout = deny | the bridge (B3) | Enforced. The daemon does not know an approval exists |
+| A plan turn and a scheduled run cannot write | the daemon / Claude Code (`--permission-mode plan`) | **On `claude-code` only.** Enforced by the daemon, verified in B3 for file edits. On any other engine nothing restricts the run: see the next row. It may not stop a write that an allow rule plus a write-capable credential already permit (untested; see Ruby, below) |
+| **A mode binds only on an engine the daemon maps it for** (`claude-code`). `chi.engine` and every `schedules[].engine` that is anything else is refused unless `maxMode` is `bypassPermissions` | the bridge, from the daemon's `build_engine_command_with` | Enforced at config load and again in `Rails.authorizeRun` with the engine actually sent. The daemon turns `mode` into a permission flag for `claude-code` only; `antigravity-cli` is handed the raw string as `--mode` (nothing here knows its agent honours it); `codex`, `opencode` and `pi` get no permission argument at all. Such a run is unrestricted whatever mode it is given, so it is held to the ceiling, and audited, as `bypassPermissions`. **So `maxMode: plan` or `acceptEdits` means `claude-code` only.** Re-check the table in the daemon when it adds an engine or a mode flag: the list here is `ENFORCING_ENGINES` in `src/rails.ts` |
+| **`maxMode` at config load**: `chi.mode`, `approvals.actingMode` above it are refused | the bridge | Enforced. Whoever can edit `bridge.json` on the host can raise it; that is the operator boundary, and `config.loaded` in the audit log shows the value in force at each start |
+| **`maxMode` at every `chi_run` / `chi_resume`** (threads, approved runs, schedules, resumes) | the bridge | Enforced for what the **bridge asks the daemon for**. Not covered: what a run does inside the mode it got; a run that reaches the daemon API itself (for example through an MCP tool such as `iyke_chi_run`, which takes `mode: bypassPermissions`); any other client logged in as the bot's account. See "Gaps" |
+| **No audit record, no run**: a `run.requested` / `schedule.requested` record is written (and fsynced) before the daemon is asked | the bridge | Enforced for runs the bridge starts. If the log cannot be written, the run is refused, and the bridge will not start at all |
+| The audit log never holds message text, plans, outputs, errors, tokens or passwords | the bridge | Enforced by construction (call sites pass named fields only; values are redacted and length-capped). Optional: a 16-hex SHA-256 prefix and length of the prompt (`audit.promptHash`), which can be brute-forced for short messages |
+| The audit log cannot be altered unnoticed | hash chain + file mode 0600 | **Partly.** Edits, deletions and reordering inside the retained history are detected by `--audit <bot> --verify`. Truncating the tail, or rewriting the whole chain, is not. If the bridge and the agent's runs share a Unix user, the agent can do either. Real tamper-resistance needs the log owned by another account, or the off-box copy in the audit channel |
+| An acting run works only on `<prefix>/` branches (`branchPrefix`) | **advisory**: one line in the plan and acting prompts | A prompt, not a control. The bridge cannot see the agent's clone (it lives in the bot's home) and a git hook in that clone can be bypassed by the agent (`--no-verify`, editing `.git/hooks`), so none is installed |
+| Never push to `main`; push only `rex/*` | **the git host**: the GitHub ruleset below | Enforced by GitHub once the checklist is applied and the bot's credential is not a bypass actor. **Not applied by this WP**, and the bridge cannot check it |
+| The approved run does what the plan said | nobody | As in B3 |
+| Ruby may write only the four things it used to | nothing yet | Under `maxMode: plan` Ruby writes nothing. Open item, below |
+
+### The audit log
+
+One file per bot, `<dataDir>/audit-<bot>.jsonl` (`audit.path` overrides), mode 0600 in a 0700 directory. One JSON object per line, appended
+with a single write, never rewritten. Appends take an exclusive lock file (`<file>.lock`, made with O_EXCL; no dependency), so the service and `--run-schedule` share one chain; a lock left by a dead process is taken over, and an append that cannot get the lock within 5 s fails (so a gating record fails closed). The `*.requested` records that gate a run (and `config.loaded`) are fsynced before the run starts; the rest are not, so they survive a bridge crash but the last few may not survive a power cut. Size-rotated at `audit.maxBytes` (default 10 MiB): `audit-rex.jsonl.1` is the newest rotated
+file, up to `audit.keep` (default 10); older files are deleted, so ship them somewhere if you need more history. The audit log cannot be switched
+off (`audit.enabled` is refused).
+
+Every record has `v`, `ts` (ISO, UTC), `bot`, `event`, event fields, and `prev`: the SHA-256 of the previous line, which is what `--verify` checks.
+
+| Event | When | Fields (besides the common ones) |
+|---|---|---|
+| `config.loaded` | the bridge starts | `max_mode`, `thread_mode`, `acting_mode`, `approvals`, `approvers` (count), `schedules` (names), `branch_prefix`, `allowed_users` / `allowed_channels` (counts), `audit_channel`, `prompt_hash`, `chi` |
+| `gate.denied` | a post from an unlisted user or channel | `reason` (`user_not_allowed`, `channel_not_allowed`, `no_allowed_users`, `no_allowed_channels`), `user_id`, `user_name`, `channel_id`, `channel_name`. No text. At most one per user, channel and reason per minute; the next one says how many were left out (`suppressed`). The bot's own posts and system posts are not denials |
+| `run.requested` | before `chi_run` / `chi_resume` | `kind` (`thread`, `resume`, `act`), `engine`, `mode` (the **effective** mode: `bypassPermissions` on an engine that ignores modes), `requested_mode`, `mode_enforced`, `max_mode`, `request_id`, `thread_root`, `channel_id`, `user_id`, `user_name`; for `act` also `approver_id`, `approver_name`, `requester_*`, `plan_hash`, `approval_id`, `plan_run_id`, `branch_prefix` |
+| `run.started` / `run.resumed` | the daemon answered | `request_id`, `run_id`, `kind`, `engine`, `mode` (effective), the same who/where |
+| `run.start_failed` | authorised, but the daemon gave no run | `request_id`, `thread_root`, `kind`, `engine`, `mode`, `error_kind`, `run_id` (only when the bridge had one), `run_unjoined` (true when none: the daemon can leave a failed row in `chi_list` that a failed `chi_run` gives no id for) |
+| `run.cancelled` | someone said `stop` | `run_id`, `thread_root`, `user_id`, `user_name`, `engine`, `mode` |
+| `run.finished` | the bridge saw the run end | `run_id`, `thread_root`, `kind`, `engine`, `mode` (the mode the run STARTED with, persisted with the active turn, so it survives a restart and a config change), `status` (`done`, `failed`, `cancelled`, `timed_out`, `run_gone`, `lost_contact`, `unwatched`), `duration_s` |
+| `run.refused` | the mode rail said no | `kind`, `reason: mode_exceeds_max`, `engine`, `requested_mode`, `effective_mode`, `mode_enforced`, `max_mode`, `run_id` (resumes) |
+| `audit.recovered` | the first append after a crash that left a half-written last line | `torn_sha` (SHA-256 of the half line, which stays in the file as evidence), `torn_bytes`. `--verify` then reports `recovered after crash at <file>:<line>` instead of a broken chain |
+| `approval.requested` | the plan was posted for approval | `request_id`, `thread_root`, `plan_run_id`, `plan_hash` (SHA-256 of the plan exactly as shown), `requester_*`, `acting_mode`, `expires_at` |
+| `approval.decided` | a 👍 or 👎 from an approver | `decision` (`approved`, `denied`), `approver_id`, `approver_name`, `plan_hash`, `request_id` |
+| `approval.expired` / `approval.withdrawn` | timeout; a newer message (`superseded`) or `stop` (`cancelled`) | `request_id`, `plan_hash`, `reason` |
+| `approval.rejected` | a 👍/👎 from someone who may not decide, or who could not be looked up | `user_id`, `user_name`, `verdict`, `reason` (`not_approver`, `unverifiable_user`) |
+| `schedule.requested` | before a scheduled (or manual) run | `schedule`, `engine`, `mode` (effective), `requested_mode`, `mode_enforced`, `slot`, `late`, `manual`, `request_id` |
+| `schedule.finished` | the occurrence ended | `schedule`, `run_id`, `engine`, `mode` (effective; absent when no run was authorised), `outcome` (`posted`, `quiet`, `failed`, `overlap`), `stage` (failures), `manual`, `duration_s` |
+
+A request with no matching `started` / `finished` is the truthful trace of a crash or a refusal. Errors are recorded by code, never by message.
+
+**Reading it** (on the host; needs `MATTERMOST_BRIDGE_CONFIG` but no secrets, and never contacts Mattermost or the daemon):
+
+```bash
+node dist/bridge.js --audit rex                    # every retained record, oldest first, one JSON object per line
+node dist/bridge.js --audit rex --since 24h        # also: 30m, 7d, or 2026-10-01T00:00:00Z
+node dist/bridge.js --audit rex --verify           # check the hash chain; exit 1 and the first bad line if broken
+node dist/bridge.js --audit rex --since 7d | jq -c 'select(.event=="approval.decided" or .event=="run.requested" and .kind=="act")'
+```
+
+**Mirror to a channel.** `"audit": { "channel": "rex-audit" }` posts a one-line summary of every record
+(`` `rex run.started run_id=... mode=plan ...` ``) to that channel, one at a time, best effort: if Mattermost is down the lines are lost from the
+channel (and logged), never from the file. A channel Mattermost does not know refuses the start. The channel must **not** be in `allowedChannels`: checked by name at config load and, at start, by what each entry resolves to (a name in one place and the id in the other is the same channel and is refused; a lookup that cannot be done leaves the mirror off rather than guessing).
+It is the one copy of the trail that the agent's account cannot edit, so restrict who can delete posts there.
+
+### Mode ceiling: `maxMode`
+
+`maxMode` is `plan` | `acceptEdits` | `bypassPermissions` (`auto` is accepted as the daemon's name for `acceptEdits`), **default `plan`**. Ranked
+`plan` < `default` < `acceptEdits` < `bypassPermissions`. At load the bridge refuses (naming the bot and the field) a `chi.mode` or an
+`approvals.actingMode` above it, an unknown `chi.mode` (the daemon would silently run it as `default`), and a `maxMode` of anything else.
+At every `chi_run` and `chi_resume` call site it asserts the mode again, and a run that would exceed it is not started: a `run.refused` record is
+written and the thread gets a short notice. The mode is checked as it will really apply on the engine sent: `claude-code` keeps the mode it is given; any other engine is unrestricted, so a run on it counts as `bypassPermissions` (refused at load unless `maxMode: bypassPermissions`, see the table above). Resumes use the mode **and the engine** stored on the run (a run stored without an engine counts as unrestricted), so a stored run above the ceiling, or one from before modes were
+recorded (which the daemon ran as `default`), is not resumed; a fresh run starts in the allowed mode and says so.
+
+**Behaviour change from B2-B4 (breaking for existing configs).**
+
+- A config with `approvals` must now set `maxMode` (`acceptEdits` for the default `actingMode: auto`, `bypassPermissions` for that acting mode). Without it the bot refuses to load, with the message above. It is refused, not downgraded.
+- A config with `chi.mode` above `plan` must now set `maxMode`.
+- A bot with no `chi.mode` and no approvals used to send no mode, which the daemon ran as `default`. It now sends `plan` explicitly. In headless runs `default` could not get permission for anything either, but allow rules in the account's Claude settings may behave differently under `plan`; check Ruby's `psql` reads on the box.
+
+`bridge.example.json` sets Rex to `acceptEdits` with `branchPrefix: "rex/"` and Ruby to `plan`.
+
+### Branch rail
+
+`branchPrefix` (for example `"rex/"`) is a per-bot setting. The bridge uses it for two things only: a note appended to the plan prompt and the acting
+prompt ("work only on branches starting `rex/`, never commit to or push main, master or any other branch, never force-push"), and the `branch_prefix` field in
+`config.loaded` and in the `run.requested` record of every acting run. **Both are advisory.** The old `royalti-agents` rule was the same kind of thing (Rex's
+`CLAUDE.md`, plus a comment about a git pre-push hook that is not in that repo). A hook in the agent's own clone is not a control, because the agent owns the clone.
+
+The real control is on the git host. Checklist for GitHub, per repository the bot can reach (or once at organisation level). I wrote it from GitHub's ruleset model; **I have not
+applied it to a live repository**, so run the verification steps at the end before trusting it. Rulesets on private repositories need a paid plan; check yours.
+
+1. **Give the bot the least credential.** A fine-grained token or a GitHub App installation token limited to the repositories it needs, with Contents: write, Pull requests: write, Metadata: read. Not Administration, not Workflows (so it cannot edit `.github/workflows`), not a "bypass branch protections" permission. It must not be the credential of a person.
+2. **Settings > Rules > Rulesets > New branch ruleset**, name `agents-confined`:
+   - Enforcement status: start at **Evaluate**, look at Rule Insights for a day, then **Active**.
+   - **Bypass list**: the human maintainers' team (and nothing else). Never the bot's account, its team, a role the bot holds (such as Write, if the bot has Write), or a GitHub App it uses. This is the whole control: the bot is not on the list, so every rule below applies to it and to nobody who is.
+   - Target branches: **Include all branches**, **Exclude** `refs/heads/rex/**` (the prefix, as a pattern; one ruleset per bot or one exclusion per bot prefix).
+   - Rules: **Restrict creations**, **Restrict updates**, **Restrict deletions**, **Block force pushes**. Together these mean a non-bypass actor can neither create, move nor delete any branch except `rex/**`, which the exclusion leaves free. (Ordinary contributors who are not on the bypass list are confined too, so put your developers' team on it.)
+3. **Second ruleset**, name `main-via-pr`: target the default branch and any release branches; bypass list empty or maintainers only; rules **Require a pull request before merging** (at least 1 approval, dismiss stale approvals, require approval of the most recent reviewable push), **Require status checks to pass**, **Block force pushes**, **Restrict deletions**. This keeps the bot's work reviewable even on `rex/*`.
+4. **Third ruleset**, name `no-agent-tags`: target all tags, **Restrict creations / updates / deletions**, same bypass list as (2).
+5. **Verify, with the bot's own credential** (a scratch clone; not through the bridge):
+   - `git push origin HEAD:refs/heads/main` must be rejected with a repository rule violation.
+   - `git push origin HEAD:refs/heads/someone-elses-branch` and `git push origin :refs/heads/someone-elses-branch` (delete) must be rejected.
+   - `git push origin HEAD:refs/tags/v9.9.9` must be rejected.
+   - `git push origin HEAD:refs/heads/rex/b5-check` must succeed, and `git push origin :refs/heads/rex/b5-check` (delete it again) must too. If GitHub refuses either, the ruleset is stricter than intended; that is safe, but the bot cannot then do its job.
+   - `gh api -X PUT repos/OWNER/REPO/branches/main/protection ...` must fail (no admin).
+6. **Close the CI path.** A branch ruleset stops the bot reaching `main`; it does not stop code the bot pushes to `rex/**` from running in CI, with the repository's secrets and `GITHUB_TOKEN`, in any workflow triggered by `push` or `pull_request` (leaving out the Workflows permission stops the bot editing `.github/workflows`, not the scripts those workflows call). So:
+   - **Deploy only from protected environments**: Settings > Environments, deployment branches limited to `main` (or protected branches), **required reviewers**, and the deploy jobs declare `environment:`.
+   - **Keep secrets in those environments, not at repository or organisation level.** A repository secret is readable by any workflow run on any branch, including `rex/**`; an environment secret is released only to a job that passed the environment's rules.
+   - **Default workflow permissions: read-only** (Settings > Actions > General), and raise per job with `permissions:`. Do not tick "Allow GitHub Actions to create and approve pull requests". Prefer `pull_request` over `pull_request_target`, and never check out and run the PR head in a `pull_request_target` job.
+   - Make that checkable: protect `.github/workflows/**` and any script a deploy job runs with a CODEOWNERS entry that the bot's account is not in.
+7. **Reviews: the bot has Pull requests: write, so it can approve.** A bot account that can approve counts toward "1 approval" on a PR written by someone else. Either require **review from Code Owners** (CODEOWNERS naming humans only, the bot absent) or require **2 approvals**, and keep the bot out of the CODEOWNERS file. Enable "Require approval of the most recent reviewable push".
+8. **Bypass lists: teams are an organisation feature.** A repository owned by a personal account has no teams, so there is no "maintainers' team" to put on a bypass list. There the bypass list can only hold the repository admin role (or specific users, on plans that allow it); the owner is the human and the bot must not hold admin. If you want a team-based bypass, move the repository into an organisation. Whichever you have, the bot is on no bypass list and holds no role that is on one.
+9. Re-run the five checks after any change to the bot's credential, team membership or the rulesets, and after changing CI secrets or environments (add a check: a throwaway workflow on a `rex/` branch must not be able to read a deployment-environment secret).
+
+### Ruby's writes (open item; nothing here grants any)
+
+Ruby's old `email_handler` mode had four writes, all through scripts in `royalti-agents/scripts/`: `ruby-insert-draft.ts insert` (INSERT into `email_replies`,
+status forced to `pending_review`), `ruby-insert-draft.ts update-parent` (UPDATE reply-tracking columns of a sent `email_drafts` row), `listmonk-blocklist.mjs` (blocklist an
+address, only for `not_now` / `unsubscribe`) and `ruby-twenty-opportunity.ts` (upsert a Person, create an Opportunity at `DEMO`, only for `interested`). The email pipeline has been
+off since 2026-06-15, so these are dormant. Note how weak the old "allowlist" was: the scripts hold `PA_SUPABASE_SERVICE_ROLE_KEY`, so they are an allowlist only for an agent that cannot read that key or call Supabase itself.
+
+Ruby is now `maxMode: plan`, so she can write nothing, and this WP adds no write path. When the pipeline comes back, the decision is between:
+
+1. **A database role with only those grants, enforced by Postgres.** `GRANT INSERT ON email_replies`, a `CHECK (status = 'pending_review')`, column-level `GRANT UPDATE (reply_classification, sequence_exit, ...) ON email_drafts`, no `DELETE`, no other table; RLS if the tables are exposed through Supabase. Ruby's account gets only that role's connection string (D-B3 per-account secrets). Strongest and simplest. Does not cover Listmonk or Twenty, whose API users need the narrowest role those products offer (to be checked).
+2. **A small allowlisted write tool** (an MCP server or HTTP shim) run as a different Unix user, holding the real credentials and exposing exactly the four operations with validated inputs. Ruby's account holds only the shim's endpoint. Covers all four systems. More code to own.
+
+Either way there is one more question that I could not answer here: a write needs a run that is allowed to call it, and in `plan` mode a tool that is not read-only may be refused even with an allow rule. If it is, Ruby needs an approvals-style acting run for these writes (so `maxMode` above `plan` for Ruby), or the tool must be something plan mode accepts. Test on the box before choosing.
+
+Related, and true today: Ruby's "read-only" at the data layer is whatever her database credential permits. whether `psql` passes plan mode at all depends on an allow rule in her account's Claude settings (the B4 `box-alerts` caveat), and if plan mode honours that rule it would pass an `UPDATE` too, if her role could do one (I did not test this). Give her a read-only role.
+
+### Gaps and open items (B5)
+
+- **Plan mode can be left by a run that reaches the daemon itself.** `mcp-iyke` exposes `iyke_chi_run` with `mode: bypassPermissions`. If a bot account's Claude config allows that tool (or any tool or token that reaches `/api/rpc` as the bot), a plan-mode run could start a run in any mode, and `maxMode` would never see it, because it is not the bridge asking. I did not verify whether the daemon's Chi runs can reach it. Before relying on `maxMode: plan`, check the bot accounts' MCP servers and allow rules, and that no daemon token is in a run's environment (the shell's memory notes that PTYs inherit `IKENGA_AUTH_TOKEN`; I did not check Chi runs).
+- **Audit-log ownership.** Run the bridge as a different Unix user from the one the bot's Chi runs execute as, or use the audit channel, if you need the log to survive an agent that wants to hide something. Not verified on the box: which uid the sidecar runs as.
+- **Refusals at config load are not in the audit log** (there is no log yet); they go to stderr and the process exits 1. With `auto_restart` that is a restart loop whose journal line names the field.
+- **`gate.denied` has a user name only when Mattermost puts `sender_name` on the event.** The id is always there.
+- **Two processes appending** (the service plus `--run-schedule`) stay on one chain: each append holds the lock file while it reads the last line and writes the next. The lock is advisory and cooperative (no `flock` in Node), and the take-over of a stale lock has a window of microseconds in which two processes could both take it; that needs a crashed writer plus two new ones at the same instant. Two *services* for one bot still make no sense. Do not run two.
+- **A mode on a non-`claude-code` engine is not a restriction.** If you run `pi`, `opencode`, `codex` or `antigravity-cli` you need `maxMode: bypassPermissions`, and then the plan-then-approve gate (approvals) does not make the plan phase read-only. `approval.*` records and the approval post name the mode that was ASKED for.
+- A reaction made while the bot has no websocket is not seen until the next start (unchanged from B3), so it is not in the audit log either.
+- The prompt-hash option hashes the message the bot received (after stripping `@bot`), not what the model finally saw.
+
 ## Configuration
 
 Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: each is `{"env":"NAME"}` or `{"file":"/path"}`.
@@ -217,6 +362,9 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
         "auth": { "kind": "session", "username": "rex", "password": { "file": "/etc/ikenga/rex.pw" } }
       },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Rex, ...", "persistent": true },
+      "maxMode": "acceptEdits",
+      "branchPrefix": "rex/",
+      "audit": { "channel": "rex-audit", "promptHash": false },
       "approvals": { "approvers": ["alice"], "timeoutMs": 900000, "actingMode": "auto" },
       "schedules": [{ "name": "weekly-standup", "cron": "0 8 * * 1", "channel": "rex-test", "task": "..." }],
       "progress": { "pollMinMs": 1000, "pollMaxMs": 10000, "editIntervalMs": 5000 }
@@ -231,6 +379,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 - `schedules` is optional; see "Scheduled posts (B4)". Needs the same `daemon` and `chi` as thread runs.
 - `approvals` is optional. Without it the bot behaves as in B2 (`chi.mode`, no gate). With it, see "Approvals (B3)".
   Do not set `chi.mode` together with it.
+- `maxMode` (B5, default `plan`) caps every run the bot starts, and `approvals` or a `chi.mode` above `plan` need it raised; see "Mode ceiling". `branchPrefix` is advisory. `audit` takes `channel`, `promptHash`, `maxBytes`, `keep`, `path`; the log itself is always on.
 - No `Origin` header is sent (the daemon allows a missing one for non-browser clients). Set `daemon.origin` only if needed.
 - Passwords, tokens and the session cookie are redacted from every error and log line.
 - `persistent` (default true) starts the first turn as a detached chi-runner so it survives a daemon restart. Resumed
@@ -276,7 +425,7 @@ The result text is `chi_status.output` once the status is `done`.
 - **A bridge restart in the middle of a scheduled run loses that run's post** (the occurrence is already marked handled, to rule out a
   double post). The bridge posts a notice saying so and names the Chi run, which may have finished in the Chi view; it does not
   re-attach to it the way a thread turn does. A run that exceeds `progress.maxWaitMs` (2 hours) is reported as "stopped watching".
-- Not here: audit and branch rails (B5), DMs, files, slash commands.
+- Not here: DMs, files, slash commands. B5 gaps are listed under "Safety rails and audit".
 
 ## Testing
 

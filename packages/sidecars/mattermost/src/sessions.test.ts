@@ -1,6 +1,7 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MattermostBridge } from './bridge.js';
@@ -42,7 +43,7 @@ async function makeRig(mode: 't0' | 't1' = 't1'): Promise<Rig> {
   const daemon = new MockDaemon(mode, { username: 'rex', password: PASSWORD, token: TOKEN });
   const mmUrl = await mm.listen();
   const daemonUrl = await daemon.listen();
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b2-'));
+  const dir = tmpDir('mm-b2-');
   const bridges: MattermostBridge[] = [];
 
   const config = (over: Partial<MattermostBridgeConfig> = {}): MattermostBridgeConfig => ({
@@ -487,6 +488,7 @@ describe('thread routing (bridge + fake daemon)', () => {
       mattermostToken: 'mm-token',
       allowedUsers: ['alice'],
       allowedChannels: ['engineering'],
+      dataDir: rig.dir,
     });
     await b.start();
     rig.bridges.push(b);
@@ -496,3 +498,6 @@ describe('thread routing (bridge + fake daemon)', () => {
     assert.equal(rig.daemon.calls.length, 0);
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());
