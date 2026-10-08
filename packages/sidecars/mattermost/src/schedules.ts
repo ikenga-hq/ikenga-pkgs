@@ -301,6 +301,9 @@ interface ExecOptions {
 /** What `executeInner` learned, for the one `schedule.finished` record. */
 interface RunTrace {
   requestId?: string;
+  /** The engine asked for, and the EFFECTIVE mode once the run was authorised (`bypassPermissions` on an engine that ignores modes). */
+  engine?: string;
+  mode?: string;
   runId?: string;
   stage: 'channel' | 'start' | 'run' | 'aborted';
 }
@@ -447,7 +450,7 @@ export class ScheduleRunner {
   // ── one run ─────────────────────────────────────────────────────────────────
 
   private async execute(s: ResolvedSchedule, o: ExecOptions): Promise<RunOutcome> {
-    const trace: RunTrace = { stage: 'channel' };
+    const trace: RunTrace = { stage: 'channel', engine: s.engine ?? this.opts.chi.engine };
     const startedAt = this.now();
     let outcome: RunOutcome | undefined;
     try {
@@ -458,7 +461,8 @@ export class ScheduleRunner {
         schedule: s.name,
         request_id: trace.requestId,
         run_id: outcome && 'runId' in outcome ? (outcome.runId ?? trace.runId) : trace.runId,
-        mode: PLAN_MODE,
+        engine: trace.engine,
+        mode: trace.mode,
         outcome: outcome ? outcome.kind : 'error',
         stage: outcome?.kind === 'failed' ? trace.stage : undefined,
         manual: o.manual,
@@ -497,13 +501,17 @@ export class ScheduleRunner {
       trace.stage = 'start';
       try {
         // B5: the mode ceiling and the audit record come first; if either refuses, no run is started.
-        trace.requestId = this.opts.rails.authorizeRun({
+        const engine = s.engine ?? chi.engine;
+        const auth = this.opts.rails.authorizeRun({
           kind: 'schedule',
+          engine,
           mode: PLAN_MODE,
           fields: { schedule: s.name, manual: o.manual, slot: o.slot === undefined ? undefined : iso(o.slot), late: o.late },
         });
+        trace.requestId = auth.requestId;
+        trace.mode = auth.mode;
         result = await daemon.chiRun({
-          engineId: s.engine ?? chi.engine,
+          engineId: engine,
           prompt,
           cwd: s.cwd ?? chi.cwd,
           model: chi.model,

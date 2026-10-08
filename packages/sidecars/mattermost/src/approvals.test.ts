@@ -1,6 +1,7 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MattermostBridge } from './bridge.js';
@@ -43,7 +44,7 @@ let rig: Rig;
 function makeRig(approvals: BotApprovalsConfig = { approvers: ['alice', 'bob'], timeoutMs: 60_000 }): Rig {
   const mm = new MockMattermostServer();
   const daemon = new MockDaemon('t1', { username: 'rex', password: PASSWORD });
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b3-'));
+  const dir = tmpDir('mm-b3-');
   const bridges: MattermostBridge[] = [];
   let urls: { mm: string; daemon: string } | undefined;
 
@@ -112,6 +113,12 @@ function makeRig(approvals: BotApprovalsConfig = { approvers: ['alice', 'bob'], 
 beforeEach(() => {
   rig = makeRig();
 });
+
+/** A test that wants a differently configured rig discards the one `beforeEach` made (never booted, but its data dir exists). */
+function swapRig(approvals: BotApprovalsConfig): Rig {
+  rmSync(rig.dir, { recursive: true, force: true });
+  return makeRig(approvals);
+}
 
 afterEach(async () => {
   for (const b of rig.bridges) b.stop();
@@ -308,7 +315,7 @@ describe('plan, then approve', () => {
   });
 
   it('the acting mode comes from config (bypassPermissions when the operator asks for it)', async () => {
-    rig = makeRig({ approvers: ['alice'], timeoutMs: 60_000, actingMode: 'bypassPermissions' });
+    rig = swapRig({ approvers: ['alice'], timeoutMs: 60_000, actingMode: 'bypassPermissions' });
     await rig.boot({ maxMode: 'bypassPermissions' });
     const post = await rig.planned('root-9');
     assert.match(rig.current(post), /`bypassPermissions` permissions/);
@@ -347,7 +354,7 @@ describe('who may decide', () => {
   });
 
   it("the bot's own 👍 never counts, even if the bot is (mis)listed as an approver", async () => {
-    rig = makeRig({ approvers: ['alice', 'ikenga-bot'], timeoutMs: 60_000 });
+    rig = swapRig({ approvers: ['alice', 'ikenga-bot'], timeoutMs: 60_000 });
     rig.mm.users.set(rig.mm.botId, rig.mm.botUsername);
     await rig.boot();
     const post = await rig.planned('root-10b');
@@ -358,7 +365,7 @@ describe('who may decide', () => {
   });
 
   it('allowedUsers is not enough to approve: a user who may talk to the bot cannot decide', async () => {
-    rig = makeRig({ approvers: ['bob'], timeoutMs: 60_000 });
+    rig = swapRig({ approvers: ['bob'], timeoutMs: 60_000 });
     await rig.boot(); // alice is in allowedUsers, only bob approves
     const post = await rig.planned('root-11');
     rig.react(post, 'alice');
@@ -371,15 +378,18 @@ describe('who may decide', () => {
   it('an approver can be named by user id, and by @username', async () => {
     for (const approver of ['u1abc', '@carol']) {
       const r = makeRig({ approvers: [approver], timeoutMs: 60_000 });
-      r.mm.users.set('u1abc', 'carol');
-      await r.boot();
-      const post = await r.planned('root-12');
-      r.react(post, 'u1abc');
-      await waitFor(() => r.daemon.runs.size === 2, `acting run for approver ${approver}`);
-      for (const b of r.bridges) b.stop();
-      await r.mm.close();
-      await r.daemon.close();
-      rmSync(r.dir, { recursive: true, force: true });
+      try {
+        r.mm.users.set('u1abc', 'carol');
+        await r.boot();
+        const post = await r.planned('root-12');
+        r.react(post, 'u1abc');
+        await waitFor(() => r.daemon.runs.size === 2, `acting run for approver ${approver}`);
+      } finally {
+        for (const b of r.bridges) b.stop();
+        await r.mm.close();
+        await r.daemon.close();
+        rmSync(r.dir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -405,7 +415,7 @@ describe('who may decide', () => {
 
 describe('timeout, withdrawal and thread changes', () => {
   it('no decision in time is a denial: the post is edited and a late 👍 does nothing', async () => {
-    rig = makeRig({ approvers: ['alice'], timeoutMs: 150 });
+    rig = swapRig({ approvers: ['alice'], timeoutMs: 150 });
     await rig.boot();
     const post = await rig.planned('root-15');
     await waitFor(() => /^\*\*Expired\*\*/.test(rig.current(post)), 'expiry edit');
@@ -491,7 +501,7 @@ describe('restart', () => {
   });
 
   it('honours expiry across a restart: an approval that ran out while the bridge was down is a denial', async () => {
-    rig = makeRig({ approvers: ['alice'], timeoutMs: 200 });
+    rig = swapRig({ approvers: ['alice'], timeoutMs: 200 });
     const b1 = await rig.boot();
     const post = await rig.planned('root-20');
     await b1.router!.whenIdle();
@@ -505,7 +515,7 @@ describe('restart', () => {
   });
 
   it('keeps the REMAINING time across a restart (the clock is not reset)', async () => {
-    rig = makeRig({ approvers: ['alice'], timeoutMs: 600 });
+    rig = swapRig({ approvers: ['alice'], timeoutMs: 600 });
     const b1 = await rig.boot();
     const post = await rig.planned('root-21');
     await b1.router!.whenIdle();
@@ -542,3 +552,6 @@ describe('restart', () => {
     assert.match(rig.current(post), /^\*\*Approval needed\*\*/, 'untouched');
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());

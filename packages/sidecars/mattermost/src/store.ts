@@ -21,6 +21,12 @@ export interface ActiveTurn {
   brief?: string;
   /** Who asked for this turn (Mattermost id and username): carried across a restart for the audit trail. */
   by?: { id: string; name?: string };
+  /**
+   * The EFFECTIVE mode and the engine this run STARTED with (`bypassPermissions` on an engine that ignores modes).
+   * Persisted so that after a restart `run.finished` records what the run had, not what the config says today.
+   */
+  mode?: string;
+  engine?: string;
 }
 
 export interface ThreadRecord {
@@ -40,6 +46,8 @@ export interface ThreadRecord {
    * `plan`. Records from before B5 have none: they count as the daemon's `default`.
    */
   mode?: string;
+  /** The engine `run_id` was started on. Which mode applies to a resume depends on it. Records without one count as an engine that enforces nothing. */
+  engine?: string;
   /** Report of the last approved run, handed to the next plan turn (it cannot remember it). */
   carry?: string;
   created_at: number;

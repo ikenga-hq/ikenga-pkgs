@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { MattermostGate } from './gate.js';
@@ -200,7 +201,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
   let serverUrl: string;
   let bridge: MattermostBridge;
   // B5: every bot writes an audit file; keep it out of the real home directory.
-  const dataDir = mkdtempSync(path.join(os.tmpdir(), 'mm-b1-'));
+  const dataDir = tmpDir('mm-b1-');
 
   before(async () => {
     mockServer = new MockMattermostServer();
@@ -322,3 +323,6 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
     assert.equal(mockServer.receivedPosts.length, initialCount);
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());

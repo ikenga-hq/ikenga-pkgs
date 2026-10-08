@@ -1,9 +1,12 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   AuditLog,
   AuditMirror,
@@ -23,7 +26,7 @@ let file: string;
 const clock = { t: Date.UTC(2026, 9, 8, 12, 0, 0) };
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b5-audit-'));
+  dir = tmpDir('mm-b5-audit-');
   file = path.join(dir, 'sub', 'audit-rex.jsonl');
   clock.t = Date.UTC(2026, 9, 8, 12, 0, 0);
 });
@@ -85,14 +88,148 @@ describe('AuditLog: append-only and restart-safe', () => {
     assert.deepEqual(verifyAudit(file), { ok: true, records: 3 });
   });
 
-  it('a torn last line (crash mid-write) is left alone and the next record starts on its own line', () => {
+  it('a torn last line (crash mid-write) is never rewritten; the next writer seals it with an audit.recovered record', () => {
+    mk().record('one', {});
+    const torn = '{"v":1,"ts":"2026-10-08T12:00:00.000Z","bot":"rex","event":"half';
+    appendFileSync(file, torn);
+    mk().record('two', {});
+    const all = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    assert.equal(all.length, 4, 'one, the torn line, the recovery record, two');
+    assert.equal(all[1], torn, 'the torn bytes are kept as evidence, not dropped or repaired');
+    const rec = JSON.parse(all[2] as string) as AuditRecord;
+    assert.equal(rec.event, 'audit.recovered');
+    assert.equal(rec.torn_sha, createHash('sha256').update(torn).digest('hex'), 'carries the torn line hash');
+    assert.equal(rec.prev, rec.torn_sha);
+    assert.equal(rec.torn_bytes, Buffer.byteLength(torn));
+    assert.equal(JSON.parse(all[3] as string).event, 'two');
+    assert.equal(readAudit(file).filter((l) => !l.rec).length, 1, 'the torn line is still reported as unreadable by --audit');
+  });
+});
+
+describe('verifyAudit after a crash', () => {
+  const crash = () => {
     mk().record('one', {});
     appendFileSync(file, '{"v":1,"ts":"2026-10-08T12:00:00.000Z","bot":"rex","event":"half');
     mk().record('two', {});
-    const all = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-    assert.equal(all.length, 3);
-    assert.equal(JSON.parse(all[2] as string).event, 'two');
-    assert.equal(readAudit(file).filter((l) => !l.rec).length, 1, 'the torn line is reported as unreadable, not dropped');
+    mk().record('three', {});
+  };
+
+  it('reports "recovered after crash at line N" (ok, not tampering), and counts only real records', () => {
+    crash();
+    const v = verifyAudit(file);
+    assert.equal(v.ok, true, JSON.stringify(v));
+    assert.equal(v.records, 4, 'one, recovered, two, three');
+    assert.deepEqual(v.recovered?.map((r) => r.line), [2]);
+  });
+
+  it('the --verify CLI says it was a crash, with the line, and exits 0', () => {
+    crash();
+    writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify({ dataDir: path.join(dir, 'sub'), bots: { rex: {} } }));
+    const out: string[] = [];
+    const code = runAuditCli(path.join(dir, 'bridge.json'), { bot: 'rex', verify: true }, { out: (l) => out.push(l), err: () => undefined });
+    assert.equal(code, 0);
+    assert.match(out[0] ?? '', /chain ok, 4 records.*recovered after crash at .*audit-rex\.jsonl:2/);
+    assert.match(out[0] ?? '', /not tampering/);
+  });
+
+  it('a crash is not a licence: an edited line, or garbage that no recovery record names, still fails', () => {
+    crash();
+    const l = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    // edit a real record after the crash point
+    const edited = [...l];
+    edited[3] = (edited[3] as string).replace('"event":"two"', '"event":"TWO"');
+    writeFileSync(file, `${edited.join('\n')}\n`);
+    assert.equal(verifyAudit(file).ok, false);
+    // garbage line in the middle whose hash the recovery record does not carry
+    const garbled = [...l];
+    garbled[1] = '{"v":1,"event":"something else entirely';
+    writeFileSync(file, `${garbled.join('\n')}\n`);
+    const v = verifyAudit(file);
+    assert.equal(v.ok, false);
+    assert.equal(v.brokenAt?.line, 2);
+    // a torn line with no recovery record after it (still the live tail, nobody has written yet)
+    writeFileSync(file, `${l[0]}\n${l[1]}\n`);
+    assert.equal(verifyAudit(file).ok, false, 'a torn tail nobody has sealed yet is reported, not waved through');
+  });
+
+  it('a second crash gets its own recovery record', () => {
+    crash();
+    appendFileSync(file, '{"v":1,"half-again');
+    mk().record('four', {});
+    const v = verifyAudit(file);
+    assert.equal(v.ok, true, JSON.stringify(v));
+    assert.equal(v.recovered?.length, 2);
+  });
+
+  it('a crash right at a size rotation: the torn line is sealed in the file it is in, and the chain holds across the rotation', () => {
+    const a = mk({ maxBytes: 1024 });
+    for (let i = 0; i < 6; i++) a.record('tick', { i, pad: 'p'.repeat(100) });
+    appendFileSync(file, '{"v":1,"torn-before-rotation');
+    const b = mk({ maxBytes: 1024 });
+    for (let i = 0; i < 12; i++) b.record('tick', { i, pad: 'p'.repeat(100) });
+    const v = verifyAudit(file);
+    assert.equal(v.ok, true, JSON.stringify(v));
+    assert.equal(v.recovered?.length, 1);
+  });
+});
+
+describe('AuditLog: two writers', () => {
+  const CHILD = `
+    const { AuditLog } = await import(process.env.AUDIT_MODULE);
+    const a = new AuditLog({ file: process.env.AUDIT_FILE, bot: 'rex', log: () => undefined });
+    const go = Number(process.env.START_AT);
+    while (Date.now() < go) { /* start together */ }
+    for (let i = 0; i < Number(process.env.N); i++) a.record('tick', { who: process.env.WHO, i });
+  `;
+  const child = (who: string, startAt: number, n: number) =>
+    new Promise<{ code: number | null; err: string }>((resolve) => {
+      const c = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', CHILD], {
+        env: { ...process.env, AUDIT_MODULE: pathToFileURL(path.join(path.dirname(new URL(import.meta.url).pathname), 'audit.ts')).href, AUDIT_FILE: file, WHO: who, START_AT: String(startAt), N: String(n) },
+      });
+      let err = '';
+      c.stderr.on('data', (d) => (err += d));
+      c.on('close', (code) => resolve({ code, err }));
+    });
+
+  it('two processes appending to one file at once keep one unbroken chain (the service and --run-schedule)', async () => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    const N = 300;
+    const startAt = Date.now() + 2500; // both children are up and spinning before this
+    const [a, b] = await Promise.all([child('a', startAt, N), child('b', startAt, N)]);
+    assert.deepEqual([a.code, b.code], [0, 0], a.err + b.err);
+    const v = verifyAudit(file);
+    assert.equal(v.ok, true, `chain broken: ${JSON.stringify(v)}`);
+    assert.equal(v.records, 2 * N);
+    const all = recs();
+    for (const who of ['a', 'b']) assert.deepEqual(all.filter((r) => r.who === who).map((r) => r.i), Array.from({ length: N }, (_, i) => i), `${who} in order, none lost`);
+    assert.equal(existsSync(`${file}.lock`), false, 'no lock left behind');
+  });
+
+  it('a lock left by a process that died is taken over, and the record is written', () => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(`${file}.lock`, `2147483646:dead-writer`); // no such pid
+    const logs: string[] = [];
+    assert.equal(mk({ log: (m) => logs.push(m) }).record('x', {}), true);
+    assert.equal(recs().length, 1);
+    assert.ok(logs.some((l) => /stale audit lock/.test(l)));
+    assert.equal(existsSync(`${file}.lock`), false);
+  });
+
+  it('a live writer holding the lock makes must() fail closed after the timeout, and record() return false; nothing is written', () => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(`${file}.lock`, `${process.pid}:somebody-else`); // alive, fresh
+    const a = mk({ lockTimeoutMs: 60 });
+    assert.throws(() => a.must('x', {}), (e: unknown) => e instanceof AuditUnavailableError && e.reason === 'lock-timeout');
+    assert.equal(a.record('x', {}), false);
+    assert.equal(existsSync(file), false);
+    assert.equal(readFileSync(`${file}.lock`, 'utf8'), `${process.pid}:somebody-else`, 'a lock that is not ours is never removed');
+  });
+
+  it('a lock held for longer than the stale window is taken over even if its pid is alive', () => {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(`${file}.lock`, `${process.pid}:wedged`);
+    assert.equal(mk({ lockStaleMs: 0 }).record('x', {}), true);
+    assert.equal(recs().length, 1);
   });
 });
 
@@ -291,3 +428,6 @@ describe('--audit CLI function', () => {
     assert.match(r.err[0] ?? '', /no audit records/);
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());

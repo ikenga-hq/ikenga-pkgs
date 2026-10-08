@@ -56,7 +56,8 @@ export function runAuditCli(configFile: string | undefined, args: AuditCliArgs, 
     }
     const r = verifyAudit(file);
     if (r.ok) {
-      io.out(`${args.bot}: chain ok, ${r.records} records in ${files.length} file${files.length === 1 ? '' : 's'}`);
+      const crash = (r.recovered ?? []).map((x) => `recovered after crash at ${x.file}:${x.line}`).join('; ');
+      io.out(`${args.bot}: chain ok, ${r.records} records in ${files.length} file${files.length === 1 ? '' : 's'}${crash ? ` (${crash}: a half-written line was sealed, not tampering)` : ''}`);
       return 0;
     }
     io.out(`${args.bot}: chain BROKEN at ${r.brokenAt?.file}:${r.brokenAt?.line} (${r.brokenAt?.reason}) after ${r.records} good records`);

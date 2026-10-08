@@ -67,12 +67,10 @@ export function loadBridgeConfigs(file: string): MattermostBridgeConfig[] {
 }
 
 export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeConfig[] {
-  const names = Object.keys(cfg.bots ?? {});
-  if (names.length === 0) throw new Error('bridge config: "bots" must name at least one bot');
+  if (Object.keys(cfg.bots ?? {}).length === 0) throw new Error('bridge config: "bots" must name at least one bot');
   const dataDir = cfg.dataDir ?? defaultDataDir();
 
-  return names.map((name) => {
-    const bot = (cfg.bots as Record<string, BotFileConfig>)[name] as BotFileConfig;
+  return Object.entries(cfg.bots).map(([name, bot]) => {
     const where = `bot '${name}'`;
     const mattermostUrl = bot.mattermostUrl ?? cfg.mattermostUrl;
     if (!mattermostUrl) throw new Error(`${where}: mattermostUrl is required`);

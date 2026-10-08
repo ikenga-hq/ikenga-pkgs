@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { AuditLog, AuditMirror, auditPath, resolveAuditConfig } from './audit.js';
+import { AuditChannelOverlapError, AuditLog, AuditMirror, assertAuditChannelWriteOnly, auditPath, resolveAuditConfig } from './audit.js';
 import { runAuditCli } from './audit-cli.js';
 import type { ResolvedAuditConfig } from './audit.js';
 import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js';
@@ -7,7 +7,7 @@ import { ChannelLookupError, MattermostClient } from './client.js';
 import { loadBridgeConfigs, defaultDataDir } from './config.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
-import { Rails, resolveBranchPrefix, resolveModeRails } from './rails.js';
+import { Rails, effectiveMode, resolveBranchPrefix, resolveModeRails } from './rails.js';
 import { Redactor } from './secrets.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules } from './schedules.js';
 import type { RunOutcome } from './schedules.js';
@@ -166,10 +166,34 @@ export class MattermostBridge {
     if (this.auditCfg.channel) {
       const ref = this.auditCfg.channel;
       let channelId: string | undefined;
-      const resolve = async () => (channelId ??= await this.client.resolveChannelId(ref));
+      const botWhere = `bot '${this.config.name ?? 'bot'}'`;
+      const resolve = async () => {
+        if (channelId) return channelId;
+        const id = await this.client.resolveChannelId(ref);
+        // Names are compared at config load; whether two spellings are one channel is only known now.
+        await assertAuditChannelWriteOnly(
+          id,
+          ref,
+          this.config.allowedChannels,
+          async (r) => {
+            try {
+              return await this.client.resolveChannelId(r);
+            } catch (err) {
+              if (err instanceof ChannelLookupError && err.notFound) return undefined;
+              throw err;
+            }
+          },
+          botWhere,
+        );
+        return (channelId = id);
+      };
       try {
         await resolve();
       } catch (err) {
+        if (err instanceof AuditChannelOverlapError) {
+          this.client.close();
+          throw err;
+        }
         if (err instanceof ChannelLookupError && err.notFound) {
           this.client.close();
           throw new Error(`bot '${this.config.name ?? 'bot'}': audit.channel: ${err.message}`);
@@ -188,8 +212,13 @@ export class MattermostBridge {
     try {
       this.audit.must('config.loaded', {
         max_mode: this.rails?.maxMode,
+        // The modes ASKED for. They bind only on an engine that enforces modes (claude-code); `*_effective` is what applies.
         thread_mode: this.rails?.threadMode,
         acting_mode: this.rails?.actingMode,
+        engine: cfg.chi?.engine,
+        thread_mode_effective: cfg.chi ? effectiveMode(cfg.chi.engine, this.rails?.threadMode) : undefined,
+        acting_mode_effective: cfg.chi && this.rails?.actingMode ? effectiveMode(cfg.chi.engine, this.rails.actingMode) : undefined,
+        schedule_engines: cfg.schedules?.map((x) => x.engine ?? cfg.chi?.engine ?? ''),
         approvals: Boolean(this.approvals),
         approvers: cfg.approvals?.approvers?.length,
         schedules: cfg.schedules?.map((x) => x.name),

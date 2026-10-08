@@ -1,8 +1,9 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
+import { sweepTmp, tmpDir } from './test-tmp.js';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,7 +57,7 @@ beforeEach(async () => {
   daemon = new MockDaemon('t1', { username: 'rex', password: PASSWORD });
   mmUrl = await mm.listen();
   daemonUrl = await daemon.listen();
-  dir = mkdtempSync(path.join(os.tmpdir(), 'mm-b5-int-'));
+  dir = tmpDir('mm-b5-int-');
 });
 
 afterEach(async () => {
@@ -468,7 +469,7 @@ describe('audit unavailable refuses the action', () => {
 
 describe('maxMode is asserted at every call site, not only at config load', () => {
   /** A router whose Rails disagrees with the modes it is asked for, as if the load-time check were bypassed. */
-  function rig(rails: { maxMode: WireMode; threadMode: WireMode; actingMode?: WireMode }) {
+  function rig(rails: { maxMode: WireMode; threadMode: WireMode; actingMode?: WireMode }, chi: { engine: string } = { engine: 'claude-code' }) {
     const file = path.join(dir, 'audit-direct.jsonl');
     const log = new AuditLog({ file, bot: 'rex', log: () => undefined });
     const posts: Array<{ id: string; text: string }> = [];
@@ -490,7 +491,7 @@ describe('maxMode is asserted at every call site, not only at config load', () =
       client,
       daemon: new DaemonClient({ url: daemonUrl, auth: { kind: 'session', username: 'rex', password: PASSWORD } }),
       store,
-      chi: { engine: 'claude-code', cwd: '~/w' },
+      chi: { ...chi, cwd: '~/w' },
       rails: new Rails({ bot: 'rex', audit: log, ...rails }),
       progress: FAST,
       // the approval manager is only used to withdraw; a stub is enough for the act-site test
@@ -559,6 +560,250 @@ describe('maxMode is asserted at every call site, not only at config load', () =
   });
 });
 
+// ── B1 through the router: the engine decides what mode a run really has ─────
+
+describe('B1 engine vs maxMode at the call sites', () => {
+  function rigFor(rails: { maxMode: WireMode; threadMode: WireMode; actingMode?: WireMode }, engine: string) {
+    // reuse the rig of the block above through a fresh router (same wiring, other engine)
+    const file = path.join(dir, 'audit-direct.jsonl');
+    const log = new AuditLog({ file, bot: 'rex', log: () => undefined });
+    const posts: Array<{ id: string; text: string }> = [];
+    const client = {
+      async reply(_c: string, message: string): Promise<MattermostPost> {
+        const id = `p${posts.length + 1}`;
+        posts.push({ id, text: message });
+        return { id, user_id: 'bot', channel_id: 'c1', message };
+      },
+      async updatePost(id: string, message: string): Promise<MattermostPost> {
+        const p = posts.find((x) => x.id === id);
+        if (p) p.text = message;
+        return { id, user_id: 'bot', channel_id: 'c1', message };
+      },
+    };
+    const store = new ThreadStore(path.join(dir, 'threads-direct.json'), 'rex');
+    const router = new ThreadRouter({
+      bot: 'rex',
+      client,
+      daemon: new DaemonClient({ url: daemonUrl, auth: { kind: 'session', username: 'rex', password: PASSWORD } }),
+      store,
+      chi: { engine, cwd: '~/w' },
+      rails: new Rails({ bot: 'rex', audit: log, ...rails }),
+      progress: FAST,
+      approvals: rails.actingMode ? { manager: { withdraw: async () => 0 } as never, actingMode: rails.actingMode } : undefined,
+      log: () => undefined,
+    });
+    const recs = () => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as AuditRecord) : []);
+    const post = (id: string, root?: string): MattermostPost => ({ id, user_id: 'alice', channel_id: 'c1', message: 'do it', root_id: root });
+    return { router, store, posts, recs, post };
+  }
+
+  it('a new thread on an engine that ignores modes is refused under a plan ceiling, even though the request says plan; nothing reaches the daemon', async () => {
+    const r = rigFor({ maxMode: 'plan', threadMode: 'plan' }, 'pi');
+    await r.router.handle(r.post('t1'), { id: 'alice', name: 'alice' });
+    await r.router.whenIdle();
+    assert.equal(daemon.calls.filter((c) => c.cmd === 'chi_run').length, 0);
+    const refused = r.recs().find((x) => x.event === 'run.refused');
+    assert.equal(refused?.engine, 'pi');
+    assert.equal(refused?.requested_mode, 'plan');
+    assert.equal(refused?.effective_mode, 'bypassPermissions');
+    assert.ok(!r.recs().some((x) => x.event === 'run.requested'));
+  });
+
+  it('under a bypass ceiling the run goes ahead, and every record says engine pi and bypassPermissions, never plan', async () => {
+    const r = rigFor({ maxMode: 'bypassPermissions', threadMode: 'plan' }, 'pi');
+    await r.router.handle(r.post('t1'), { id: 'alice', name: 'alice' });
+    await waitFor(() => daemon.runs.size === 1, 'run');
+    daemon.settle('run-1', 'done', { output: 'ok' });
+    await r.router.whenIdle();
+    const mine = r.recs().filter((x) => ['run.requested', 'run.started', 'run.finished'].includes(x.event));
+    assert.deepEqual(mine.map((x) => x.event), ['run.requested', 'run.started', 'run.finished']);
+    for (const x of mine) {
+      assert.equal(x.engine, 'pi', x.event);
+      assert.equal(x.mode, 'bypassPermissions', x.event);
+    }
+    assert.equal(r.store.get('t1')?.engine, 'pi', 'the engine is stored with the run, for the resume check');
+  });
+
+  it('resume: a stored run on an engine that ignores modes is not resumed under acceptEdits, even though it was started "in plan"', async () => {
+    const r = rigFor({ maxMode: 'auto', threadMode: 'plan' }, 'claude-code');
+    await r.store.put({ root_id: 'old', run_id: 'run-old', bot: 'rex', channel_id: 'c1', brief: 'b', mode: 'plan', engine: 'pi', created_at: 1, updated_at: 1 });
+    daemon.runs.set('run-old', { run_id: 'run-old', status: 'done', brief: 'b', engineId: 'pi', hasSession: true, prompts: [], mode: 'plan' });
+    await r.router.handle(r.post('rep', 'old'), { id: 'alice', name: 'alice' });
+    await waitFor(() => daemon.calls.some((c) => c.cmd === 'chi_run'), 'fresh run');
+    r.router.stop();
+    assert.equal(daemon.calls.filter((c) => c.cmd === 'chi_resume').length, 0);
+    const refused = r.recs().find((x) => x.event === 'run.refused');
+    assert.equal(refused?.kind, 'resume');
+    assert.equal(refused?.engine, 'pi');
+    assert.equal(refused?.effective_mode, 'bypassPermissions');
+  });
+
+  it('resume: a stored run with no recorded engine counts as unrestricted (fails closed)', async () => {
+    const r = rigFor({ maxMode: 'plan', threadMode: 'plan' }, 'claude-code');
+    await r.store.put({ root_id: 'old', run_id: 'run-old', bot: 'rex', channel_id: 'c1', brief: 'b', mode: 'plan', created_at: 1, updated_at: 1 });
+    daemon.runs.set('run-old', { run_id: 'run-old', status: 'done', brief: 'b', engineId: 'claude-code', hasSession: true, prompts: [], mode: 'plan' });
+    await r.router.handle(r.post('rep', 'old'), { id: 'alice', name: 'alice' });
+    await waitFor(() => daemon.calls.some((c) => c.cmd === 'chi_run'), 'fresh run');
+    r.router.stop();
+    assert.equal(daemon.calls.filter((c) => c.cmd === 'chi_resume').length, 0);
+  });
+
+  it('resume of a claude-code plan run under a plan ceiling still works, and the records carry engine and mode', async () => {
+    const r = rigFor({ maxMode: 'plan', threadMode: 'plan' }, 'claude-code');
+    await r.store.put({ root_id: 'old', run_id: 'run-old', bot: 'rex', channel_id: 'c1', brief: 'b', mode: 'plan', engine: 'claude-code', created_at: 1, updated_at: 1 });
+    daemon.runs.set('run-old', { run_id: 'run-old', status: 'done', brief: 'b', engineId: 'claude-code', hasSession: true, prompts: [], mode: 'plan' });
+    await r.router.handle(r.post('rep', 'old'), { id: 'alice', name: 'alice' });
+    await waitFor(() => daemon.calls.some((c) => c.cmd === 'chi_resume'), 'resume');
+    r.router.stop();
+    const resumed = r.recs().find((x) => x.event === 'run.resumed');
+    assert.equal(resumed?.engine, 'claude-code');
+    assert.equal(resumed?.mode, 'plan');
+  });
+
+  it('a schedule on an engine override that ignores modes is refused at run time under a plan ceiling', async () => {
+    const b = await boot({ schedules: [{ name: 'check', cron: '0 8 * * 1', channel: 'rex-test', task: 't' }], scheduler: { tickMs: 600_000 } });
+    // the config-load refusal already stops a bad engine override; this is the wall behind it
+    (b.scheduler as unknown as { byName: Map<string, { engine?: string }> }).byName.get('check')!.engine = 'opencode';
+    const outcome = await b.runScheduleNow('check');
+    assert.equal(outcome.kind, 'failed');
+    assert.equal(daemon.rpcCalls('chi_run').length, 0);
+    const refused = events('run.refused')[0];
+    assert.equal(refused?.engine, 'opencode');
+    assert.equal(refused?.effective_mode, 'bypassPermissions');
+    const fin = events('schedule.finished')[0];
+    assert.equal(fin?.engine, 'opencode');
+    assert.notEqual(fin?.mode, 'plan', 'a schedule that never started must not claim plan');
+  });
+
+  it('the bridge refuses to be built with such an engine under a plan ceiling', () => {
+    assert.throws(() => new MattermostBridge(baseConfig({ chi: { engine: 'pi' } })), /chi.engine 'pi' does not enforce permission modes/);
+    assert.throws(
+      () => new MattermostBridge(baseConfig({ schedules: [{ name: 'c', cron: '0 8 * * 1', channel: 'rex-test', task: 't', engine: 'codex' }] })),
+      /schedule 'c' engine 'codex' does not enforce/,
+    );
+  });
+});
+
+// ── restart: the mode a run STARTED with ─────────────────────────────────────
+
+describe('recover() records the mode the run started with', () => {
+  it('an acting run that started in auto is still auto in run.finished after the config dropped to plan with no approvals', async () => {
+    const file = path.join(dir, 'audit-direct.jsonl');
+    const store = new ThreadStore(path.join(dir, 'threads-direct.json'), 'rex');
+    await store.put({
+      root_id: 'r1', run_id: 'run-plan', bot: 'rex', channel_id: 'c1', brief: 'b', mode: 'plan', engine: 'claude-code', created_at: 1, updated_at: 1,
+      active: { run_id: 'run-act', progress_post_id: 'pp1', started_at: Date.now(), kind: 'act', brief: 'act brief', by: { id: 'bob', name: 'bob' }, mode: 'auto', engine: 'claude-code' },
+    });
+    daemon.runs.set('run-act', { run_id: 'run-act', status: 'done', brief: 'act brief', engineId: 'claude-code', hasSession: true, prompts: [], mode: 'auto', output: 'done it' });
+    const posts: string[] = [];
+    const client = {
+      async reply(_c: string, m: string): Promise<MattermostPost> { posts.push(m); return { id: `n${posts.length}`, user_id: 'bot', channel_id: 'c1', message: m }; },
+      async updatePost(id: string, m: string): Promise<MattermostPost> { posts.push(m); return { id, user_id: 'bot', channel_id: 'c1', message: m }; },
+    };
+    const router = new ThreadRouter({
+      bot: 'rex',
+      client,
+      daemon: new DaemonClient({ url: daemonUrl, auth: { kind: 'session', username: 'rex', password: PASSWORD } }),
+      store,
+      chi: { engine: 'claude-code', cwd: '~/w' },
+      // today's config: plan only, no approvals, so no acting mode at all
+      rails: new Rails({ bot: 'rex', maxMode: 'plan', threadMode: 'plan', audit: new AuditLog({ file, bot: 'rex', log: () => undefined }) }),
+      progress: FAST,
+      log: () => undefined,
+    });
+    router.recover();
+    await router.whenIdle();
+    const fin = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as AuditRecord).find((x) => x.event === 'run.finished');
+    assert.equal(fin?.run_id, 'run-act');
+    assert.equal(fin?.mode, 'auto', 'the mode the run started with, not the current config');
+    assert.equal(fin?.engine, 'claude-code');
+    assert.equal(fin?.kind, 'act');
+  });
+
+  it('end to end: an acting run persists its mode and engine in the active-turn record when it starts', async () => {
+    await boot({ maxMode: 'acceptEdits', approvals: APPROVALS });
+    const post = await planned('a1');
+    react(post, 'alice');
+    await waitFor(() => daemon.runs.size === 2, 'acting run');
+    await waitFor(() => {
+      try {
+        return JSON.parse(readFileSync(path.join(dir, 'threads-rex.json'), 'utf8')).threads?.a1?.active?.kind === 'act';
+      } catch {
+        return false;
+      }
+    }, 'active record');
+    const active = JSON.parse(readFileSync(path.join(dir, 'threads-rex.json'), 'utf8')).threads.a1.active;
+    assert.equal(active.mode, 'auto');
+    assert.equal(active.engine, 'claude-code');
+  });
+});
+
+// ── run.start_failed ─────────────────────────────────────────────────────────
+
+describe('run.start_failed', () => {
+  it('is recorded when the daemon refuses to launch the engine, joined by request_id, with no run id and an explicit "unjoined" flag', async () => {
+    daemon.refuseEngines.add('claude-code');
+    await boot();
+    say('p1', 'hello');
+    await waitFor(() => hasEvent('run.start_failed'), 'run.start_failed');
+    const req = events('run.requested')[0];
+    const failed = events('run.start_failed')[0];
+    assert.equal(failed?.request_id, req?.request_id);
+    assert.equal(failed?.thread_root, 'p1');
+    assert.equal(failed?.kind, 'thread');
+    assert.equal(failed?.engine, 'claude-code');
+    assert.equal(failed?.mode, 'plan');
+    assert.equal(failed?.error_kind, 'rpc');
+    assert.equal(failed?.run_unjoined, true, 'the daemon left a row but returned no id to join it by');
+    assert.equal('run_id' in (failed ?? {}), false);
+    assert.equal(daemon.runs.size, 1, 'and the daemon did create a row, which is why the flag matters');
+    assert.ok(!hasEvent('run.started'));
+  });
+
+  it('carries the daemon run id when one exists (the failure came after the run was created)', async () => {
+    await boot({ maxMode: 'acceptEdits', approvals: APPROVALS });
+    const post = await planned('a1');
+    // lose the thread record between the approval and the start, so runApproved fails after chi_run succeeded
+    const bridge = bridges[bridges.length - 1] as MattermostBridge;
+    const real = (bridge.router as unknown as { opts: { store: ThreadStore } }).opts.store;
+    const realGet = real.get.bind(real);
+    real.get = (id: string) => (id === 'a1' && daemon.runs.size >= 2 ? undefined : realGet(id));
+    react(post, 'alice');
+    await waitFor(() => hasEvent('run.start_failed'), 'run.start_failed');
+    const failed = events('run.start_failed')[0];
+    assert.equal(failed?.kind, 'act');
+    assert.equal(failed?.run_id, 'run-2');
+    assert.equal(failed?.run_unjoined, false);
+  });
+});
+
+// ── the audit channel is compared by what it resolves to ─────────────────────
+
+describe('audit channel overlap by id', () => {
+  const ID = 'a'.repeat(26);
+
+  it('audit.channel by NAME while allowedChannels lists the same channel by ID: start() refuses', async () => {
+    mm.channels.set('rex-audit', ID);
+    const b = new MattermostBridge(baseConfig({ allowedChannels: ['engineering', ID], audit: { channel: 'rex-audit' } }));
+    bridges.push(b);
+    await assert.rejects(b.start(), /audit\.channel 'rex-audit' is the same channel as allowedChannels entry/);
+    assert.equal(b.isRunning(), false);
+  });
+
+  it('audit.channel by ID while allowedChannels lists the same channel by NAME: start() refuses', async () => {
+    mm.channels.set('rex-audit', ID);
+    const b = new MattermostBridge(baseConfig({ allowedChannels: ['engineering', 'rex-audit'], audit: { channel: ID } }));
+    bridges.push(b);
+    await assert.rejects(b.start(), /is the same channel as allowedChannels entry 'rex-audit'/);
+  });
+
+  it('a different channel, by id or by name, is fine', async () => {
+    mm.channels.set('rex-audit', ID);
+    const b = await boot({ audit: { channel: ID } });
+    assert.equal(b.isRunning(), true);
+  });
+});
+
 // ── the Mattermost mirror ────────────────────────────────────────────────────
 
 describe('audit mirror', () => {
@@ -571,7 +816,7 @@ describe('audit mirror', () => {
     await waitFor(() => mm.receivedPosts.filter((p) => p.channel_id === 'c-audit').length >= 4, 'mirror lines');
     const lines = mm.receivedPosts.filter((p) => p.channel_id === 'c-audit').map((p) => p.message);
     assert.match(lines[0] as string, /^`rex config.loaded /);
-    assert.match(lines[1] as string, /^`rex run.requested thread_root=p1 channel_id=c1 user_id=alice user_name=alice kind=thread mode=plan max_mode=plan request_id=\S+`$/);
+    assert.match(lines[1] as string, /^`rex run.requested thread_root=p1 channel_id=c1 user_id=alice user_name=alice kind=thread engine=claude-code mode=plan requested_mode=plan mode_enforced=true max_mode=plan request_id=\S+`$/);
     assert.match(lines[2] as string, /^`rex run.started /);
     for (const l of lines) {
       assert.ok(!l.includes('\n') || l.startsWith('`'), 'one line');
@@ -698,3 +943,6 @@ describe('bridge.example.json', () => {
     assert.equal(ruby?.audit?.channel, 'ruby-audit');
   });
 });
+
+// Remove every temp directory the file made, including ones a stopped bridge wrote into again.
+after(() => sweepTmp());

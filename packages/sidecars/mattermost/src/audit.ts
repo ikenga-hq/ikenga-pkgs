@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -28,6 +28,11 @@ import path from 'node:path';
  * previous line, so an edit, deletion or reordering in the middle of the retained history is detectable
  * (`--audit <bot> --verify`). Truncating the tail, or rewriting the whole chain, is not: that needs the file to be
  * owned by a different account than the agent, or the audit-channel mirror (an off-box copy).
+ *
+ * Two writers (the running service and a `--run-schedule` process) share one chain, so every append takes an
+ * exclusive lock file (`<file>.lock`, created with O_EXCL) around "read the last line, append the next". A crash
+ * mid-write leaves a torn last line; the next writer seals it with an explicit `audit.recovered` record carrying the
+ * torn line's hash, so `--verify` can tell a crash from tampering.
  */
 
 export const AUDIT_VERSION = 1;
@@ -41,6 +46,9 @@ const MAX_KEYS = 40;
 const RESERVED = new Set(['v', 'ts', 'bot', 'event', 'prev']);
 /** Mattermost caps a post at 16383 characters; a mirror line is far smaller. */
 const MIRROR_MAX_QUEUE = 100;
+/** How long an append waits for the other writer, and how old a lock must be before it may be taken from a live pid. */
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_STALE_MS = 30_000;
 
 export type AuditValue = string | number | boolean | null | undefined | string[];
 export type AuditFields = Record<string, AuditValue>;
@@ -73,6 +81,10 @@ export interface AuditOptions {
   /** Rotated files kept (`<file>.1` newest ... `<file>.<keep>` oldest). Older ones are deleted. Default 10. */
   keep?: number;
   now?: () => number;
+  /** Give up on the lock after this long (default 5 s): `must` then throws `AuditUnavailableError('lock-timeout')`. */
+  lockTimeoutMs?: number;
+  /** A lock older than this is taken over even if its pid looks alive (default 30 s); a dead pid's lock is taken at once. */
+  lockStaleMs?: number;
   /** Applied to every string value before it is written. */
   redact?: (s: string) => string;
   log?: (msg: string) => void;
@@ -132,6 +144,39 @@ export function resolveAuditConfig(cfg: unknown, where: string, allowedChannels:
   return out;
 }
 
+/** Thrown when the audit channel and an `allowedChannels` entry turn out to be the same Mattermost channel. */
+export class AuditChannelOverlapError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuditChannelOverlapError';
+  }
+}
+
+/**
+ * The audit channel must be write-only, but a name in `audit.channel` and an id in `allowedChannels` (or the reverse, or
+ * `#name` against `name` in another spelling) look different while being one channel, and the gate matches on both. So
+ * compare what they RESOLVE to. `resolve` returns the channel id, or undefined when there is no such channel (it cannot
+ * be the audit channel). A lookup that fails otherwise throws, and the caller treats that as "cannot verify": fail closed.
+ */
+export async function assertAuditChannelWriteOnly(
+  auditChannelId: string,
+  auditRef: string,
+  allowedChannels: string[],
+  resolve: (ref: string) => Promise<string | undefined>,
+  where: string,
+): Promise<void> {
+  for (const entry of allowedChannels) {
+    const ref = entry.replace(/^#/, '').trim();
+    if (!ref) continue;
+    const id = ref === auditChannelId ? ref : await resolve(ref);
+    if (id === auditChannelId) {
+      throw new AuditChannelOverlapError(
+        `${where}: audit.channel '${auditRef}' is the same channel as allowedChannels entry '${entry}'; the audit channel must be write-only (people talking there would reach the bot)`,
+      );
+    }
+  }
+}
+
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
 export class AuditLog {
@@ -140,6 +185,8 @@ export class AuditLog {
   private readonly maxBytes: number;
   private readonly keep: number;
   private readonly now: () => number;
+  private readonly lockTimeoutMs: number;
+  private readonly lockStaleMs: number;
   private readonly redact: (s: string) => string;
   private readonly log: (msg: string) => void;
   private sink?: (rec: AuditRecord) => void;
@@ -151,6 +198,8 @@ export class AuditLog {
     this.maxBytes = Math.max(1024, opts.maxBytes ?? DEFAULT_MAX_BYTES);
     this.keep = Math.max(1, Math.floor(opts.keep ?? DEFAULT_KEEP));
     this.now = opts.now ?? Date.now;
+    this.lockTimeoutMs = opts.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    this.lockStaleMs = opts.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
     this.redact = opts.redact ?? ((s) => s);
     this.log = opts.log ?? ((m) => console.error(`[mattermost:${opts.bot}:audit] ${m}`));
   }
@@ -214,22 +263,53 @@ export class AuditLog {
       rec[k] = this.clean(raw);
     }
 
-    const tail = this.tail();
-    rec.prev = tail.hash;
-    let torn = tail.torn;
-    const body = `${JSON.stringify(rec)}\n`;
-    // Rotate before writing. The hash of the last line does not change by renaming it, so the first record of the
-    // new file chains onto the last record of the old one.
-    if (tail.size > 0 && tail.size + body.length > this.maxBytes) {
-      this.rotate();
-      torn = false;
+    const written: AuditRecord[] = [];
+    const release = this.lock();
+    try {
+      let tail = this.tail();
+      if (tail.torn) {
+        // A crash left half a line. Terminate it and say so in the chain, with the half line's hash, before anything else.
+        const recovered: AuditRecord = {
+          v: AUDIT_VERSION,
+          ts: new Date(this.now()).toISOString(),
+          bot: this.bot,
+          event: 'audit.recovered',
+          prev: tail.hash,
+          torn_sha: tail.hash,
+          torn_bytes: tail.lastBytes,
+        };
+        this.write(`\n${JSON.stringify(recovered)}\n`, true);
+        written.push(recovered);
+        tail = this.tail();
+      }
+      rec.prev = tail.hash;
+      const body = `${JSON.stringify(rec)}\n`;
+      // Rotate before writing. The hash of the last line does not change by renaming it, so the first record of the
+      // new file chains onto the last record of the old one.
+      if (tail.size > 0 && tail.size + body.length > this.maxBytes) this.rotate();
+      this.write(body, durable);
+      written.push(rec);
+    } finally {
+      release();
     }
-    const line = `${torn ? '\n' : ''}${body}`;
 
+    if (this.sink) {
+      for (const r of written) {
+        try {
+          this.sink(r);
+        } catch (err) {
+          this.log(`audit mirror failed: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
+
+  /** One `open(O_APPEND)` + write loop. `durable` fsyncs. Creates the file 0600. */
+  private write(text: string, durable: boolean): void {
     const created = !existsSync(this.file);
     const fd = openSync(this.file, 'a', 0o600);
     try {
-      const buf = Buffer.from(line, 'utf8');
+      const buf = Buffer.from(text, 'utf8');
       let off = 0;
       while (off < buf.length) off += writeSync(fd, buf, off);
       if (durable) fsyncSync(fd);
@@ -243,14 +323,75 @@ export class AuditLog {
         /* the open already asked for 0600 */
       }
     }
+  }
 
-    if (this.sink) {
+  /**
+   * Exclusive lock for "read the last line, append the next": a `<file>.lock` file made with O_EXCL (no flock in Node,
+   * no dependency). Held for one append. The owner token is the pid plus a random id; release only removes a lock that
+   * is still ours. A lock whose pid is gone, or that is older than `lockStaleMs`, is taken over (a crashed writer must
+   * not wedge the log). Waiting is a synchronous sleep: `record` is synchronous by design (no record, no action).
+   */
+  private lock(): () => void {
+    const lockFile = `${this.file}.lock`;
+    const token = `${process.pid}:${randomUUID()}`;
+    const deadline = Date.now() + this.lockTimeoutMs;
+    for (;;) {
       try {
-        this.sink(rec);
+        const fd = openSync(lockFile, 'wx', 0o600);
+        try {
+          writeSync(fd, token);
+        } finally {
+          closeSync(fd);
+        }
+        return () => {
+          try {
+            if (readFileSync(lockFile, 'utf8') === token) unlinkSync(lockFile);
+          } catch {
+            /* already gone */
+          }
+        };
       } catch (err) {
-        this.log(`audit mirror failed: ${(err as Error).message}`);
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      if (this.breakStaleLock(lockFile)) continue;
+      if (Date.now() >= deadline) {
+        const e = new Error('audit lock is held by another writer') as NodeJS.ErrnoException;
+        e.code = 'lock-timeout';
+        throw e;
+      }
+      sleepSync(2);
+    }
+  }
+
+  /** Remove a lock left by a dead process or held for too long. True when it is gone (or was just removed). */
+  private breakStaleLock(lockFile: string): boolean {
+    let owner: string;
+    let age: number;
+    try {
+      owner = readFileSync(lockFile, 'utf8');
+      age = Date.now() - statSync(lockFile).mtimeMs;
+    } catch {
+      return true; // released between our open and our read
+    }
+    const pid = Number(owner.split(':')[0]);
+    let alive = true;
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        alive = (err as NodeJS.ErrnoException).code !== 'ESRCH'; // EPERM = alive, owned by someone else
       }
     }
+    // An empty file is a writer between create and write (a few microseconds): give it the stale window, not an instant.
+    if (alive && age < this.lockStaleMs) return false;
+    try {
+      // Only remove what we just read: if the owner changed, someone else already took it over.
+      if (readFileSync(lockFile, 'utf8') === owner) unlinkSync(lockFile);
+    } catch {
+      /* gone already */
+    }
+    this.log(`took over a stale audit lock (${alive ? 'held too long' : 'owner process is gone'})`);
+    return true;
   }
 
   private clean(v: Exclude<AuditValue, undefined>): unknown {
@@ -260,15 +401,15 @@ export class AuditLog {
   }
 
   /** Hash of the last line of the live file (else of the newest rotated file), plus whether that line was torn by a crash. */
-  private tail(): { hash: string; torn: boolean; size: number } {
+  private tail(): { hash: string; torn: boolean; size: number; lastBytes: number } {
     for (const f of [this.file, `${this.file}.1`]) {
       const t = readTail(f);
       if (t === 'missing') continue;
       if (t.size === 0) continue;
       const live = f === this.file;
-      return { hash: t.lastLine ? sha(t.lastLine) : GENESIS, torn: live && t.torn, size: live ? t.size : 0 };
+      return { hash: t.lastLine ? sha(t.lastLine) : GENESIS, torn: live && t.torn, size: live ? t.size : 0, lastBytes: Buffer.byteLength(t.lastLine) };
     }
-    return { hash: GENESIS, torn: false, size: 0 };
+    return { hash: GENESIS, torn: false, size: 0, lastBytes: 0 };
   }
 
   private rotate(): void {
@@ -287,6 +428,10 @@ export class AuditLog {
     }
     renameSync(f, `${f}.1`);
   }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function readTail(file: string): 'missing' | { size: number; lastLine: string; torn: boolean } {
@@ -366,23 +511,40 @@ export interface VerifyResult {
   records: number;
   /** Where the chain first fails: the line whose `prev` does not match the line before it. */
   brokenAt?: { file: string; line: number; reason: string };
+  /** Half-written lines (a crash mid-write) that the next writer sealed with an `audit.recovered` record. Not tampering. */
+  recovered?: Array<{ file: string; line: number }>;
 }
 
-/** Check that every record's `prev` is the SHA-256 of the line before it, across rotated files. */
+/**
+ * Check that every record's `prev` is the SHA-256 of the line before it, across rotated files. A line that is not JSON
+ * is accepted only as a crash artefact: the very next record must be an `audit.recovered` one that names that exact
+ * line's hash (and chains onto it). Anything else there is reported as broken.
+ */
 export function verifyAudit(file: string): VerifyResult {
   const lines = readAudit(file);
   let prevText: string | undefined;
   let records = 0;
-  for (const l of lines) {
-    if (!l.rec) return { ok: false, records, brokenAt: { file: l.file, line: l.line, reason: 'not valid JSON' } };
+  const recovered: Array<{ file: string; line: number }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i] as AuditLine;
+    if (!l.rec) {
+      const next = lines[i + 1]?.rec;
+      const hash = sha(l.text);
+      if (next && next.event === 'audit.recovered' && next.torn_sha === hash && next.prev === hash) {
+        recovered.push({ file: l.file, line: l.line });
+        prevText = l.text;
+        continue;
+      }
+      return { ok: false, records, brokenAt: { file: l.file, line: l.line, reason: 'not valid JSON' }, ...(recovered.length ? { recovered } : {}) };
+    }
     // The oldest retained line has nothing before it to check against (older files may have been deleted).
     if (prevText !== undefined && l.rec.prev !== sha(prevText)) {
-      return { ok: false, records, brokenAt: { file: l.file, line: l.line, reason: 'prev does not match the line before it' } };
+      return { ok: false, records, brokenAt: { file: l.file, line: l.line, reason: 'prev does not match the line before it' }, ...(recovered.length ? { recovered } : {}) };
     }
     prevText = l.text;
     records += 1;
   }
-  return { ok: true, records };
+  return { ok: true, records, ...(recovered.length ? { recovered } : {}) };
 }
 
 /** `2026-10-01T00:00:00Z`, a date, or a relative `30m` / `12h` / `7d`. */

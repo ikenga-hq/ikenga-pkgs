@@ -175,6 +175,18 @@ export class MockMattermostServer {
         return;
       }
 
+      // `GET /channels/{id}`: a 26-character id the bot can see (the ids in `channels` are short, so a test that wants
+      // to name a channel by id gives it a 26-character one).
+      const channelById = /^\/api\/v4\/channels\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && channelById) {
+        const id = decodeURIComponent(channelById[1] as string);
+        const name = [...this.channels.entries()].find(([, v]) => v === id)?.[0];
+        const status = this.failChannelLookups ? 500 : name ? 200 : 404;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(status === 200 ? { id, name } : { error: 'no such channel' }));
+        return;
+      }
+
       const patch = /^\/api\/v4\/posts\/([^/]+)\/patch$/.exec(url.pathname);
       if (req.method === 'PUT' && patch) {
         let body = '';
