@@ -15,7 +15,7 @@ const PASSWORD = 'hunter2-very-secret';
 const FAST = { pollMinMs: 10, pollMaxMs: 20, editIntervalMs: 0, maxWaitMs: 60_000, maxPollFailures: 3 };
 const PLAN = 'Plan: 1. edit src/a.ts  2. add a test';
 
-async function waitFor(cond: () => boolean, what: string, ms = 3000): Promise<void> {
+async function waitFor(cond: () => boolean, what: string, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`);

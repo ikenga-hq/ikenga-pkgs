@@ -9,6 +9,17 @@ export interface MattermostClientEvents {
   error: (err: Error) => void;
 }
 
+/** `notFound` is a definite "no such channel for this bot"; otherwise the lookup itself failed and may be retried. */
+export class ChannelLookupError extends Error {
+  constructor(
+    message: string,
+    readonly notFound: boolean,
+  ) {
+    super(message);
+    this.name = 'ChannelLookupError';
+  }
+}
+
 export class MattermostClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private config: MattermostBridgeConfig;
@@ -98,6 +109,36 @@ export class MattermostClient extends EventEmitter {
       throw new Error(`Mattermost getUser failed: HTTP ${res.status} ${res.statusText}`);
     }
     return (await res.json()) as { id: string; username: string };
+  }
+
+  /**
+   * Turn a channel name (`engineering`, `#engineering`) or id into a channel id. A name is looked up in every team the
+   * bot belongs to. Throws `ChannelLookupError` with `notFound` true when no such channel is visible to the bot.
+   */
+  async resolveChannelId(ref: string): Promise<string> {
+    const name = ref.replace(/^#/, '');
+    const auth = { Authorization: `Bearer ${this.config.mattermostToken}` };
+    const base = this.config.mattermostUrl;
+    if (/^[a-z0-9]{26}$/.test(name)) {
+      const res = await fetch(`${base}/api/v4/channels/${encodeURIComponent(name)}`, { headers: auth });
+      if (res.ok) return ((await res.json()) as { id: string }).id;
+      if (res.status === 404 || res.status === 403) throw new ChannelLookupError(`channel id '${name}' not found or not visible to the bot`, true);
+      throw new ChannelLookupError(`channel lookup failed: HTTP ${res.status} ${res.statusText}`, false);
+    }
+    const teamsRes = await fetch(`${base}/api/v4/users/me/teams`, { headers: auth });
+    if (!teamsRes.ok) throw new ChannelLookupError(`team lookup failed: HTTP ${teamsRes.status} ${teamsRes.statusText}`, false);
+    const teams = ((await teamsRes.json()) as Array<{ id: string }> | null) ?? [];
+    for (const team of teams) {
+      const res = await fetch(
+        `${base}/api/v4/teams/${encodeURIComponent(team.id)}/channels/name/${encodeURIComponent(name)}`,
+        { headers: auth },
+      );
+      if (res.ok) return ((await res.json()) as { id: string }).id;
+      if (res.status !== 404 && res.status !== 403) {
+        throw new ChannelLookupError(`channel lookup failed: HTTP ${res.status} ${res.statusText}`, false);
+      }
+    }
+    throw new ChannelLookupError(`channel '#${name}' not found in any team the bot belongs to (is the bot a member?)`, true);
   }
 
   connect(): Promise<void> {

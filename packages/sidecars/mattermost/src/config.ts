@@ -4,7 +4,8 @@ import path from 'node:path';
 import { resolveSecret } from './secrets.js';
 import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
-import type { BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig } from './types.js';
+import { resolveSchedules } from './schedules.js';
+import type { BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
 
 /**
  * On-disk bridge config (`MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`).
@@ -33,6 +34,8 @@ export interface BotFileConfig {
   progress?: ProgressConfig;
   /** B3: gate actions behind an approver's reaction. Omitted = no gate (B2). */
   approvals?: BotApprovalsConfig;
+  /** B4: scheduled posts (read-only plan-mode Chi runs). Needs `daemon` + `chi`. */
+  schedules?: ScheduleConfig[];
 }
 
 export interface BridgeFileConfig {
@@ -88,6 +91,9 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       if (bot.chi.mode) throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
     }
 
+    // B4: refuse a bad schedule (cron, channel, duplicate name, unknown field) at load, naming the bot and the schedule.
+    resolveSchedules(bot.schedules, where, bot.allowedChannels ?? []);
+
     return {
       name,
       mattermostUrl,
@@ -107,6 +113,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       retentionMs: bot.retentionMs,
       progress: bot.progress,
       approvals: bot.approvals,
+      schedules: bot.schedules,
     };
   });
 }

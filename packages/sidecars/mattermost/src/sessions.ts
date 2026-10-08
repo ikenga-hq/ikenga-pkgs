@@ -24,7 +24,7 @@ export const PROGRESS_DEFAULTS: ResolvedProgress = {
 };
 
 /** Mattermost rejects posts over 16383 characters; stay under it. */
-const MAX_POST_CHARS = 15_000;
+export const MAX_POST_CHARS = 15_000;
 
 /** A thread reply that is only this (case-insensitive) cancels the thread's run. */
 const CANCEL_RE = /^(?:\/|!)?(?:cancel|stop)[.!]?$/i;
@@ -657,7 +657,7 @@ function stripUndefined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();
     const t = setTimeout(done, ms);

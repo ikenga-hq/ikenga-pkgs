@@ -1,0 +1,54 @@
+{
+  "mattermostUrl": "https://mm.example.com",
+  "dataDir": "/var/lib/ikenga/mattermost",
+  "bots": {
+    "rex": {
+      "mattermostToken": { "env": "MM_REX_TOKEN" },
+      "allowedUsers": ["alice", "bob"],
+      "allowedChannels": ["engineering", "rex-alerts", "rex-test"],
+      "daemon": {
+        "url": "https://ikenga.example.com",
+        "auth": { "kind": "session", "username": "rex", "password": { "file": "/etc/ikenga/rex.pw" } }
+      },
+      "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Rex, the engineering agent at Royalti.", "persistent": true },
+      "approvals": { "approvers": ["alice"], "timeoutMs": 900000, "actingMode": "auto" },
+      "schedules": [
+        {
+          "name": "weekly-standup",
+          "cron": "0 8 * * 1",
+          "channel": "rex-test",
+          "onMissed": "once",
+          "task": "Post a weekly engineering standup summary. Check git activity across all projects for the past 7 days: branches created, commits made, PRs opened. Summarize what Rex worked on this week (from your task history). List any open rex/ branches that need review."
+        },
+        {
+          "name": "box-alerts",
+          "cron": "7 * * * *",
+          "channel": "rex-test",
+          "onMissed": "once",
+          "quiet": true,
+          "timeoutSeconds": 600,
+          "task": "Check the health of the Royalti Ikenga box and report only problems. Checks: (1) the Ikenga server answers GET https://ikenga.example.com/api/health with a healthy status; (2) disk: any filesystem above 85% used, and /var/lib/ikenga in particular; (3) memory: available memory below 10% of total, or swap in heavy use; (4) failed Chi runs: use the chi_list tool and report every run from the last 24 hours whose status is failed or timed_out, with its run id and engine; (5) updates: if /var/lib/ikenga/update-available.json exists, report the version it announces; (6) backups: list the newest file in each backup directory under /var/backups/ikenga and report any whose newest file is older than 26 hours, empty, or missing. Report each problem as one line with the measured value. If every check passes, reply with a single line starting ALL_OK and the key numbers."
+        }
+      ]
+    },
+    "ruby": {
+      "mattermostToken": { "env": "MM_RUBY_TOKEN" },
+      "allowedUsers": ["alice", "bob"],
+      "allowedChannels": ["royalti-co", "ruby-log", "ruby-test"],
+      "daemon": {
+        "url": "https://ikenga.example.com",
+        "auth": { "kind": "session", "username": "ruby", "password": { "file": "/etc/ikenga/ruby.pw" } }
+      },
+      "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Ruby, the sales and customer-reply agent at Royalti. You are read-only.", "persistent": true },
+      "schedules": [
+        {
+          "name": "daily-reply-digest",
+          "cron": "0 7 * * *",
+          "channel": "ruby-test",
+          "onMissed": "once",
+          "task": "Produce the daily Ruby re-engagement digest. Query email_drafts for the last 24h across active campaigns (slug LIKE 'reengage-%' OR 'trial-reactivate-%'): count sent, count replies by classification, list pending-review drafts with their IDs and recipient context, list auto-handled (not_now/unsubscribe) counts, list sequence_exit contacts added. Post a concise digest to #sales. Format per agents/ruby/email-handler-plan.md §6.\n"
+        }
+      ]
+    }
+  }
+}
