@@ -1,4 +1,6 @@
-import { PLAN_MODE } from './approvals.js';
+import { PLAN_MODE, planHash } from './approvals.js';
+import { modeRank } from './rails.js';
+import type { Rails } from './rails.js';
 import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
@@ -9,6 +11,12 @@ import type { BotChiConfig, MattermostPost, ProgressConfig } from './types.js';
 export interface PostApi {
   reply(channelId: string, message: string, rootId?: string): Promise<MattermostPost>;
   updatePost(postId: string, message: string): Promise<MattermostPost>;
+}
+
+/** The Mattermost user a turn is for. */
+export interface Who {
+  id: string;
+  name?: string;
 }
 
 export type ChiApi = Pick<DaemonClient, 'chiRun' | 'chiResume' | 'chiStatus' | 'chiCancel' | 'redact'>;
@@ -49,6 +57,14 @@ interface Turn {
   progressPostId?: string;
   startedAt: number;
   cancelRequested: boolean;
+  /** Who said `stop`, for the audit record of the cancellation. */
+  cancelledBy?: Who;
+  /** Who asked for this turn. */
+  by?: Who;
+  /** The permission mode of `runId`. */
+  mode?: string;
+  /** Ties the `run.requested` record to `run.started` / `run.start_failed`. */
+  requestId?: string;
   finished: boolean;
   abort: AbortController;
   /** Kept through to the final summary so it isn't edited away. */
@@ -62,6 +78,8 @@ export interface RouterOptions {
   daemon: ChiApi;
   store: ThreadStore;
   chi: BotChiConfig;
+  /** B5: the mode ceiling, the audit log and the branch note. Every `chi_run` / `chi_resume` below goes through it first. */
+  rails: Rails;
   progress?: ProgressConfig;
   /**
    * B3. When set, thread turns run in plan mode and an approved plan runs once, in
@@ -118,7 +136,8 @@ export class ThreadRouter {
     for (const t of this.turns.values()) t.abort.abort();
   }
 
-  async handle(post: MattermostPost): Promise<void> {
+  async handle(post: MattermostPost, who?: Who): Promise<void> {
+    const by: Who = who ?? { id: post.user_id };
     const rootId = post.root_id || post.id;
     const isReply = Boolean(post.root_id);
     const text = this.stripMention(post.message).trim();
@@ -127,7 +146,7 @@ export class ThreadRouter {
     const existing = this.turns.get(rootId);
 
     if (isReply && CANCEL_RE.test(text)) {
-      await this.cancel(rootId, post.channel_id, existing);
+      await this.cancel(rootId, post.channel_id, existing, by);
       return;
     }
 
@@ -148,6 +167,7 @@ export class ThreadRouter {
       channelId: post.channel_id,
       startedAt: this.now(),
       cancelRequested: false,
+      by,
       finished: false,
       abort: new AbortController(),
     };
@@ -156,7 +176,7 @@ export class ThreadRouter {
     try {
       // A new message supersedes a plan still waiting for a decision: an approver
       // must not be able to 👍 a plan the conversation has moved past.
-      await this.opts.approvals?.manager.withdraw(rootId, 'a newer message arrived in this thread');
+      await this.opts.approvals?.manager.withdraw(rootId, 'a newer message arrived in this thread', 'superseded');
       await this.start(turn, post, text, isReply);
     } catch (err) {
       await this.failStart(turn, err);
@@ -176,6 +196,8 @@ export class ThreadRouter {
         progressPostId: active.progress_post_id,
         startedAt: active.started_at,
         cancelRequested: false,
+        by: active.by,
+        mode: active.kind === 'act' ? this.opts.approvals?.actingMode : rec.mode,
         finished: false,
         abort: new AbortController(),
       };
@@ -191,10 +213,10 @@ export class ThreadRouter {
    * plan run. The thread's own run stays the plan run, so a later reply is
    * planned (read-only) and approved again, never resumed with write access.
    */
-  async runApproved(a: ApprovalRecord, approver: string): Promise<void> {
+  async runApproved(a: ApprovalRecord, approver: Who & { name: string }): Promise<void> {
     const gate = this.opts.approvals;
     if (!gate) return;
-    const { daemon, store, chi } = this.opts;
+    const { daemon, store, chi, rails } = this.opts;
     const rootId = a.root_id;
     if (this.turns.has(rootId)) {
       await this.say(a.channel_id, rootId, 'The plan was approved, but another turn is running in this thread, so I did not start it. Send the request again once that finishes.');
@@ -206,6 +228,8 @@ export class ThreadRouter {
       channelId: a.channel_id,
       startedAt: this.now(),
       cancelRequested: false,
+      by: approver,
+      mode: gate.actingMode,
       finished: false,
       abort: new AbortController(),
     };
@@ -214,8 +238,24 @@ export class ThreadRouter {
       const working = await this.opts.client.reply(a.channel_id, 'Working…', rootId);
       turn.progressPostId = working.id;
       const prompt = this.withPrefix(
-        `The plan below was approved by @${approver} in Mattermost. Carry it out now, exactly as written, and do not widen its scope. Then report briefly what you did and anything that failed.\n\n--- approved plan ---\n${a.plan}`,
+        `The plan below was approved by @${approver.name} in Mattermost. Carry it out now, exactly as written, and do not widen its scope. Then report briefly what you did and anything that failed.\n\n--- approved plan ---\n${a.plan}${rails.branchNote()}`,
       );
+      turn.requestId = rails.authorizeRun({
+        kind: 'act',
+        mode: gate.actingMode,
+        fields: {
+          thread_root: rootId,
+          channel_id: a.channel_id,
+          plan_run_id: a.plan_run_id,
+          approval_id: a.request_id,
+          plan_hash: planHash(a.plan),
+          approver_id: approver.id,
+          approver_name: approver.name,
+          requester_id: a.requester_id,
+          requester_name: a.requester_name,
+          branch_prefix: rails.branchPrefix,
+        },
+      });
       const result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
@@ -227,10 +267,21 @@ export class ThreadRouter {
         parentId: a.plan_run_id,
       });
       turn.runId = result.run_id;
+      rails.audit.record('run.started', {
+        request_id: turn.requestId,
+        run_id: result.run_id,
+        kind: 'act',
+        mode: gate.actingMode,
+        thread_root: rootId,
+        channel_id: a.channel_id,
+        parent_run_id: a.plan_run_id,
+        approver_id: approver.id,
+        approver_name: approver.name,
+      });
       const thread = store.get(rootId);
       if (!thread) throw new Error('the thread record is gone');
       await store.update(rootId, {
-        active: { run_id: result.run_id, progress_post_id: working.id, started_at: turn.startedAt, kind: 'act', brief: prompt },
+        active: { run_id: result.run_id, progress_post_id: working.id, started_at: turn.startedAt, kind: 'act', brief: prompt, by: approver },
       });
       if (turn.cancelRequested) {
         await this.cancelRun(turn);
@@ -245,8 +296,16 @@ export class ThreadRouter {
   // ── starting / resuming ────────────────────────────────────────────────────
 
   private async start(turn: Turn, post: MattermostPost, text: string, isReply: boolean): Promise<void> {
-    const { daemon, store, chi } = this.opts;
+    const { daemon, store, chi, rails } = this.opts;
     const rootId = turn.rootId;
+    const by = turn.by ?? { id: post.user_id };
+    const base = {
+      thread_root: rootId,
+      channel_id: post.channel_id,
+      user_id: by.id,
+      user_name: by.name,
+      ...rails.promptFields(text),
+    };
     // Ignore a record from another channel (defence in depth; Mattermost
     // already keeps a reply's root in its own channel).
     const stored = store.get(rootId);
@@ -270,12 +329,31 @@ export class ThreadRouter {
       rec = undefined;
     }
 
+    // B5: a resume cannot change a run's mode, so a stored run above the ceiling (or from before modes were
+    // recorded, which the daemon ran as `default`) is never resumed. This is the resume-side mode rail.
+    if (rec && modeRank(rec.mode) > modeRank(rails.maxMode)) {
+      rails.audit.record('run.refused', {
+        ...base,
+        kind: 'resume',
+        reason: 'mode_exceeds_max',
+        run_id: rec.run_id,
+        requested_mode: rec.mode ?? 'default',
+        max_mode: rails.maxMode,
+      });
+      notice =
+        'The earlier run in this thread has more permissions than this bot is now allowed (maxMode), so I cannot continue it. I started a fresh run; it will not remember the earlier messages.';
+      rec = undefined;
+    }
+
     if (rec) {
       try {
+        turn.requestId = rails.authorizeRun({ kind: 'resume', mode: rec.mode, fields: { ...base, run_id: rec.run_id } });
         const carry = rec.carry ? `[What happened since your last turn: an approved run carried out your plan. Its report follows.]\n${rec.carry}\n\n---\n\n` : '';
-        result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE : ''}`);
+        result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE + rails.branchNote() : ''}`);
         if (rec.carry) await store.update(rootId, { carry: '' });
         record = rec;
+        turn.mode = rec.mode;
+        rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', mode: rec.mode ?? 'default' });
       } catch (err) {
         if (err instanceof DaemonError && err.runGone) {
           notice =
@@ -286,6 +364,8 @@ export class ThreadRouter {
           notice = 'The previous message in this thread is still being worked on; I am following that run.';
           result = { run_id: rec.run_id, status: 'running' };
           record = rec;
+          turn.mode = rec.mode;
+          rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', mode: rec.mode ?? 'default', attached: true });
         } else {
           throw err;
         }
@@ -296,8 +376,10 @@ export class ThreadRouter {
     }
 
     if (!record) {
-      const prompt = this.withPrefix(gated ? `${text}${PLAN_NOTE}` : text);
-      const mode = gated ? PLAN_MODE : chi.mode;
+      const prompt = this.withPrefix(gated ? `${text}${PLAN_NOTE}${rails.branchNote()}` : text);
+      // Under approvals the thread is always read-only; otherwise `chi.mode`, which is `plan` when unset (B5).
+      const mode = gated ? PLAN_MODE : rails.threadMode;
+      turn.requestId = rails.authorizeRun({ kind: 'thread', mode, fields: base });
       result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
@@ -307,6 +389,8 @@ export class ThreadRouter {
         timeoutSeconds: chi.timeoutSeconds,
         persistent: chi.persistent ?? true,
       });
+      turn.mode = mode;
+      rails.audit.record('run.started', { ...base, request_id: turn.requestId, run_id: result.run_id, kind: 'thread', mode });
       const t = this.now();
       record = {
         root_id: rootId,
@@ -330,7 +414,7 @@ export class ThreadRouter {
     }
 
     await store.update(rootId, {
-      active: { run_id: started.run_id, progress_post_id: working.id, started_at: turn.startedAt, notice, kind: 'plan' },
+      active: { run_id: started.run_id, progress_post_id: working.id, started_at: turn.startedAt, notice, kind: 'plan', by },
     });
 
     if (notice) await this.edit(working.id, `${notice}\n\n${this.statusLine('running', turn)}`);
@@ -348,6 +432,10 @@ export class ThreadRouter {
   private async failStart(turn: Turn, err: unknown): Promise<void> {
     const msg = this.errText(err);
     this.log(`start failed for thread ${turn.rootId}: ${msg}`);
+    if (turn.requestId) {
+      // Authorized and recorded, but the daemon never produced a run: say so, so `*.requested` is not left dangling.
+      this.opts.rails.audit.record('run.start_failed', { request_id: turn.requestId, thread_root: turn.rootId, kind: turn.kind === 'act' ? 'act' : 'thread' });
+    }
     this.turns.delete(turn.rootId);
     turn.finished = true;
     const text = `I could not start the run: ${msg}`;
@@ -387,7 +475,7 @@ export class ThreadRouter {
           failures = 0;
         } catch (err) {
           if (err instanceof DaemonError && err.runGone) {
-            await this.finish(turn, progressId, 'The run is no longer on the daemon (it expired or was removed).', undefined, true);
+            await this.finish(turn, progressId, 'The run is no longer on the daemon (it expired or was removed).', undefined, true, 'run_gone');
             return;
           }
           failures += 1;
@@ -399,6 +487,7 @@ export class ThreadRouter {
               'Lost contact with the Ikenga daemon, so I cannot tell how this run ended.',
               `Run \`${runId}\` may still be going; check Ikenga's Chi view. Last error: ${this.errText(err)}`,
               false,
+              'lost_contact',
             );
             return;
           }
@@ -419,6 +508,7 @@ export class ThreadRouter {
             'Still running, but I have stopped watching it.',
             `Run \`${runId}\` is still going on the daemon; follow it in Ikenga's Chi view.`,
             false,
+            'unwatched',
           );
           return;
         }
@@ -460,14 +550,14 @@ export class ThreadRouter {
         const body = output
           ? `${output}${trunc}`
           : `The run finished, but the daemon returned no result text for it. Run \`${st.run_id}\` is in Ikenga's Chi view.`;
-        await this.finish(turn, progressId, `Done in ${secs}s.`, body, true);
+        await this.finish(turn, progressId, `Done in ${secs}s.`, body, true, 'done');
         if (turn.kind === 'plan' && this.opts.approvals && output) {
           await this.offerApproval(turn, output, Boolean(st.output_truncated));
         }
         return;
       }
       case 'cancelled':
-        await this.finish(turn, progressId, `Cancelled after ${secs}s.`, 'Run cancelled.', true);
+        await this.finish(turn, progressId, `Cancelled after ${secs}s.`, 'Run cancelled.', true, 'cancelled');
         return;
       case 'timed_out':
         await this.finish(
@@ -476,6 +566,7 @@ export class ThreadRouter {
           `Timed out after ${secs}s.`,
           [`The run timed out.${error ? ` ${error}` : ''}`, output ? `Partial output:\n\n${output}` : ''].filter(Boolean).join('\n\n'),
           true,
+          'timed_out',
         );
         return;
       default:
@@ -485,6 +576,7 @@ export class ThreadRouter {
           `Failed after ${secs}s.`,
           [`The run failed: ${error ?? 'the daemon gave no reason'}.`, output ? `Partial output:\n\n${output}` : ''].filter(Boolean).join('\n\n'),
           true,
+          'failed',
         );
     }
   }
@@ -501,9 +593,18 @@ export class ThreadRouter {
     summary: string,
     body: string | undefined,
     clearActive: boolean,
+    outcome: string,
   ): Promise<void> {
     if (turn.finished) return;
     turn.finished = true;
+    this.opts.rails.audit.record('run.finished', {
+      run_id: turn.runId,
+      thread_root: turn.rootId,
+      kind: turn.kind === 'act' ? 'act' : 'thread',
+      mode: turn.mode,
+      status: outcome,
+      duration_s: secondsSince(turn.startedAt, this.now()),
+    });
     try {
       if (clearActive) await this.opts.store.update(turn.rootId, { active: undefined }).catch(() => undefined);
       await this.edit(progressId, turn.notice ? `${turn.notice}\n\n${summary}` : summary);
@@ -523,7 +624,7 @@ export class ThreadRouter {
       return;
     }
     try {
-      await gate.manager.request({ rootId: turn.rootId, channelId: turn.channelId, planRunId: turn.runId as string, plan });
+      await gate.manager.request({ rootId: turn.rootId, channelId: turn.channelId, planRunId: turn.runId as string, plan, requester: turn.by });
     } catch (err) {
       this.log(`could not post the approval request for ${turn.runId}: ${this.errText(err)}`);
     }
@@ -531,9 +632,9 @@ export class ThreadRouter {
 
   // ── cancel ───────────────────────────────────────────────────────────────
 
-  private async cancel(rootId: string, channelId: string, turn: Turn | undefined): Promise<void> {
+  private async cancel(rootId: string, channelId: string, turn: Turn | undefined, by: Who): Promise<void> {
     if (!turn) {
-      if (await this.opts.approvals?.manager.withdraw(rootId, 'cancelled by a reply')) {
+      if (await this.opts.approvals?.manager.withdraw(rootId, 'cancelled by a reply', 'cancelled')) {
         await this.say(channelId, rootId, 'Plan withdrawn. Nothing was run.');
         return;
       }
@@ -541,6 +642,7 @@ export class ThreadRouter {
       return;
     }
     turn.cancelRequested = true;
+    turn.cancelledBy = by;
     if (!turn.runId) return; // still starting; `start` cancels once it has a run id
     await this.cancelRun(turn);
   }
@@ -564,6 +666,15 @@ export class ThreadRouter {
     if (turn.finished) return;
     turn.finished = true;
     turn.abort.abort();
+    const by = turn.cancelledBy;
+    this.opts.rails.audit.record('run.cancelled', {
+      run_id: runId,
+      thread_root: turn.rootId,
+      kind: turn.kind === 'act' ? 'act' : 'thread',
+      mode: turn.mode,
+      user_id: by?.id,
+      user_name: by?.name,
+    });
     try {
       await this.opts.store.update(turn.rootId, { active: undefined }).catch(() => undefined);
       const secs = secondsSince(turn.startedAt, this.now());

@@ -1,9 +1,14 @@
 import path from 'node:path';
+import { AuditLog, AuditMirror, auditPath, resolveAuditConfig } from './audit.js';
+import { runAuditCli } from './audit-cli.js';
+import type { ResolvedAuditConfig } from './audit.js';
 import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js';
-import { MattermostClient } from './client.js';
+import { ChannelLookupError, MattermostClient } from './client.js';
 import { loadBridgeConfigs, defaultDataDir } from './config.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
+import { Rails, resolveBranchPrefix, resolveModeRails } from './rails.js';
+import { Redactor } from './secrets.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules } from './schedules.js';
 import type { RunOutcome } from './schedules.js';
 import { ThreadRouter } from './sessions.js';
@@ -22,6 +27,12 @@ export class MattermostBridge {
   readonly approvals?: ApprovalManager;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
+  /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
+  readonly audit: AuditLog;
+  /** B5: mode ceiling + audit choke point for every Chi run. Present when the bot runs Chi (B2+). */
+  readonly rails?: Rails;
+  private readonly auditCfg: ResolvedAuditConfig;
+  private auditMirror?: AuditMirror;
   private running = false;
 
   constructor(config: MattermostBridgeConfig) {
@@ -30,8 +41,35 @@ export class MattermostBridge {
     this.gate = new MattermostGate(config);
     this.client = new MattermostClient(config);
 
+    const botName = config.name ?? 'bot';
+    const botWhere = `bot '${botName}'`;
+    // B5: refuse, before anything starts, a mode above the ceiling (default `plan`), a bad branch prefix or audit block.
+    const modes = resolveModeRails(config, botWhere);
+    const branchPrefix = resolveBranchPrefix(config.branchPrefix, botWhere);
+    this.auditCfg = resolveAuditConfig(config.audit, botWhere, config.allowedChannels);
+    const redactor = new Redactor();
+    redactor.add(config.mattermostToken);
+    const dAuth = config.daemon?.auth;
+    if (dAuth) redactor.add(dAuth.kind === 'session' ? dAuth.password : dAuth.token);
+    this.audit = new AuditLog({
+      file: auditPath(config.dataDir ?? defaultDataDir(), botName, this.auditCfg.path),
+      bot: botName,
+      maxBytes: this.auditCfg.maxBytes,
+      keep: this.auditCfg.keep,
+      redact: (t) => redactor.redact(t),
+    });
+
     if (config.daemon && config.chi) {
-      const name = config.name ?? 'bot';
+      const name = botName;
+      this.rails = new Rails({
+        bot: name,
+        maxMode: modes.maxMode,
+        threadMode: modes.threadMode,
+        actingMode: modes.actingMode,
+        branchPrefix,
+        promptHash: this.auditCfg.promptHash,
+        audit: this.audit,
+      });
       this.daemon = new DaemonClient(config.daemon);
       const store = new ThreadStore(
         config.storePath ?? path.join(config.dataDir ?? defaultDataDir(), `threads-${name}.json`),
@@ -52,8 +90,10 @@ export class MattermostBridge {
           store: new ApprovalStore(path.join(config.dataDir ?? defaultDataDir(), `approvals-${name}.json`), name),
           approvals: resolved,
           onApproved: (rec, approver) => this.router?.runApproved(rec, approver) ?? Promise.resolve(),
+          audit: this.audit,
         });
-        gate = { manager: this.approvals, actingMode: resolved.actingMode };
+        // The daemon id of the acting mode (`auto` for acceptEdits), already checked against maxMode above.
+        gate = { manager: this.approvals, actingMode: modes.actingMode ?? resolved.actingMode };
       }
       this.router = new ThreadRouter({
         bot: name,
@@ -61,6 +101,7 @@ export class MattermostBridge {
         daemon: this.daemon,
         store,
         chi: config.chi,
+        rails: this.rails,
         progress: config.progress,
         approvals: gate,
       });
@@ -75,6 +116,7 @@ export class MattermostBridge {
             config.schedulesPath ?? path.join(config.dataDir ?? defaultDataDir(), `schedules-${name}.json`),
           ),
           chi: config.chi,
+          rails: this.rails,
           progress: config.progress,
           scheduler: config.scheduler,
         });
@@ -119,16 +161,74 @@ export class MattermostBridge {
     // Connect WebSocket
     await this.client.connect();
 
+    // B5: optional off-box copy of the audit trail. A channel Mattermost does not know refuses the start (a mirror that
+    // silently goes nowhere is worse than none); a transient error only logs and the lines retry on the next record.
+    if (this.auditCfg.channel) {
+      const ref = this.auditCfg.channel;
+      let channelId: string | undefined;
+      const resolve = async () => (channelId ??= await this.client.resolveChannelId(ref));
+      try {
+        await resolve();
+      } catch (err) {
+        if (err instanceof ChannelLookupError && err.notFound) {
+          this.client.close();
+          throw new Error(`bot '${this.config.name ?? 'bot'}': audit.channel: ${err.message}`);
+        }
+        console.error(`[mattermost:${this.config.name ?? 'bot'}] audit channel lookup failed (${(err as Error).message}); will retry`);
+      }
+      this.auditMirror = new AuditMirror(async (text) => {
+        await this.client.reply(await resolve(), text);
+      });
+      const mirror = this.auditMirror;
+      this.audit.setSink((rec) => mirror.push(rec));
+    }
+
+    // B5: nothing runs unless the audit log is writable. Same rule as every run: no record, no action.
+    const cfg = this.config;
+    try {
+      this.audit.must('config.loaded', {
+        max_mode: this.rails?.maxMode,
+        thread_mode: this.rails?.threadMode,
+        acting_mode: this.rails?.actingMode,
+        approvals: Boolean(this.approvals),
+        approvers: cfg.approvals?.approvers?.length,
+        schedules: cfg.schedules?.map((x) => x.name),
+        branch_prefix: this.rails?.branchPrefix,
+        allowed_users: cfg.allowedUsers.length,
+        allowed_channels: cfg.allowedChannels.length,
+        audit_channel: Boolean(this.auditCfg.channel),
+        prompt_hash: this.auditCfg.promptHash,
+        chi: Boolean(this.router),
+      });
+    } catch (err) {
+      this.audit.setSink(undefined);
+      this.client.close();
+      throw err;
+    }
+
     this.client.on('post', async (event: MattermostPostEvent, post: MattermostPost) => {
       const gateResult = this.gate.check(event, post);
       if (!gateResult.allowed) {
+        // B5: a refusal is recorded (who and where, never what they said). The bot's own posts and system posts are not refusals.
+        const code = gateResult.code;
+        if (code && code !== 'own_post' && code !== 'system_post') {
+          const userName = event.data?.sender_name?.replace(/^@/, '') || undefined;
+          const channelName = event.data?.channel_name || undefined;
+          this.audit.recordCoalesced(`${code}|${post.user_id}|${post.channel_id}`, 'gate.denied', {
+            reason: code,
+            user_id: post.user_id,
+            user_name: userName,
+            channel_id: post.channel_id,
+            channel_name: channelName,
+          });
+        }
         return;
       }
 
       if (this.router) {
         // The gate has already run: everything below is for allowed users in allowed channels.
         try {
-          await this.router.handle(post);
+          await this.router.handle(post, { id: post.user_id, name: event.data?.sender_name?.replace(/^@/, '') || undefined });
         } catch (err) {
           console.error('Failed to route post:', err instanceof Error ? err.message : err);
         }
@@ -171,6 +271,7 @@ export class MattermostBridge {
 
   stop(): void {
     this.running = false;
+    this.audit.setSink(undefined);
     this.router?.stop();
     this.approvals?.stop();
     this.scheduler?.stop();
@@ -182,12 +283,32 @@ export class MattermostBridge {
   }
 }
 
-/** `--run-schedule <bot>/<name>` and `--list-schedules`: operator commands that never start the websocket. */
-function parseCli(argv: string[]): { runSchedule?: string; listSchedules: boolean } {
-  const out: { runSchedule?: string; listSchedules: boolean } = { listSchedules: false };
+interface CliArgs {
+  runSchedule?: string;
+  listSchedules: boolean;
+  /** `--audit <bot>` (B5). */
+  audit?: string;
+  since?: string;
+  verify: boolean;
+}
+
+/** `--run-schedule <bot>/<name>`, `--list-schedules` and `--audit <bot>`: operator commands that never start the websocket. */
+function parseCli(argv: string[]): CliArgs {
+  const out: CliArgs = { listSchedules: false, verify: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--list-schedules') out.listSchedules = true;
+    else if (a === '--verify') out.verify = true;
+    else if (a === '--audit' || a === '--since') {
+      const v = argv[++i];
+      if (!v || v.startsWith('--')) {
+        console.error(`error: ${a} needs a value`);
+        process.exit(2);
+      }
+      if (a === '--audit') out.audit = v;
+      else out.since = v;
+    } else if (a.startsWith('--audit=')) out.audit = a.slice('--audit='.length);
+    else if (a.startsWith('--since=')) out.since = a.slice('--since='.length);
     else if (a === '--run-schedule') {
       const v = argv[++i];
       if (!v) {
@@ -201,7 +322,7 @@ function parseCli(argv: string[]): { runSchedule?: string; listSchedules: boolea
 }
 
 /** Operator commands. Returns the process exit code. */
-async function runOperatorCommand(bridges: MattermostBridge[], cli: ReturnType<typeof parseCli>): Promise<number> {
+async function runOperatorCommand(bridges: MattermostBridge[], cli: CliArgs): Promise<number> {
   if (cli.listSchedules) {
     for (const b of bridges) {
       for (const name of b.scheduler?.names() ?? []) {
@@ -234,6 +355,11 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
   const configFile = process.env.MATTERMOST_BRIDGE_CONFIG;
   const cli = parseCli(process.argv.slice(2));
   const operator = Boolean(cli.runSchedule) || cli.listSchedules;
+
+  if (cli.audit) {
+    // Reads the audit file only: no secrets resolved, no bridge constructed, nothing written.
+    process.exit(runAuditCli(configFile, { bot: cli.audit, since: cli.since, verify: cli.verify }, { out: (l) => console.log(l), err: (l) => console.error(l) }));
+  }
 
   try {
     if (configFile) {

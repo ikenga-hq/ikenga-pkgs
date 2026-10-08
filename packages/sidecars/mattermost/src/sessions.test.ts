@@ -487,6 +487,7 @@ describe('thread routing (bridge + fake daemon)', () => {
       mattermostToken: 'mm-token',
       allowedUsers: ['alice'],
       allowedChannels: ['engineering'],
+      dataDir: rig.dir,
     });
     await b.start();
     rig.bridges.push(b);

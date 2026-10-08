@@ -18,17 +18,17 @@ export class MattermostGate {
   check(event: MattermostPostEvent, post: MattermostPost): GateResult {
     // 1. Ignore own bot posts to prevent reply loops
     if (this.botUserId && post.user_id === this.botUserId) {
-      return { allowed: false, reason: 'ignored own post' };
+      return { allowed: false, reason: 'ignored own post', code: 'own_post' };
     }
 
     // 2. Ignore system messages
     if (post.type && post.type.startsWith('system_')) {
-      return { allowed: false, reason: 'ignored system message' };
+      return { allowed: false, reason: 'ignored system message', code: 'system_post' };
     }
 
     // 3. Deny by default: require non-empty allowedUsers
     if (this.allowedUsersSet.size === 0) {
-      return { allowed: false, reason: 'no allowed users configured (deny by default)' };
+      return { allowed: false, reason: 'no allowed users configured (deny by default)', code: 'no_allowed_users' };
     }
 
     // 4. Check user: match by user_id or the server-set sender_name. Never
@@ -42,12 +42,12 @@ export class MattermostGate {
       (username && this.allowedUsersSet.has(`@${username}`));
 
     if (!userAllowed) {
-      return { allowed: false, reason: `user '${post.user_id}' (${username || 'unknown'}) is not in allowed_users` };
+      return { allowed: false, reason: `user '${post.user_id}' (${username || 'unknown'}) is not in allowed_users`, code: 'user_not_allowed' };
     }
 
     // 5. Deny by default: require non-empty allowedChannels
     if (this.allowedChannelsSet.size === 0) {
-      return { allowed: false, reason: 'no allowed channels configured (deny by default)' };
+      return { allowed: false, reason: 'no allowed channels configured (deny by default)', code: 'no_allowed_channels' };
     }
 
     // 6. Check channel: match by channel_id or channel_name
@@ -58,7 +58,7 @@ export class MattermostGate {
       (channelName && this.allowedChannelsSet.has(`#${channelName}`));
 
     if (!channelAllowed) {
-      return { allowed: false, reason: `channel '${post.channel_id}' (${channelName || 'unknown'}) is not in allowed_channels` };
+      return { allowed: false, reason: `channel '${post.channel_id}' (${channelName || 'unknown'}) is not in allowed_channels`, code: 'channel_not_allowed' };
     }
 
     return { allowed: true };

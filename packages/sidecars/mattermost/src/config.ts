@@ -5,7 +5,9 @@ import { resolveSecret } from './secrets.js';
 import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
-import type { BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
+import { resolveAuditConfig } from './audit.js';
+import { resolveBranchPrefix, resolveModeRails } from './rails.js';
+import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
 
 /**
  * On-disk bridge config (`MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`).
@@ -36,6 +38,12 @@ export interface BotFileConfig {
   approvals?: BotApprovalsConfig;
   /** B4: scheduled posts (read-only plan-mode Chi runs). Needs `daemon` + `chi`. */
   schedules?: ScheduleConfig[];
+  /** B5: ceiling for every Chi run this bot starts: plan | acceptEdits | bypassPermissions. Default plan. */
+  maxMode?: string;
+  /** B5: branch prefix told to acting runs (`rex/`). Advisory. */
+  branchPrefix?: string;
+  /** B5: audit options (the log itself is always on). */
+  audit?: AuditConfig;
 }
 
 export interface BridgeFileConfig {
@@ -91,6 +99,11 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       if (bot.chi.mode) throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
     }
 
+    // B5: the ceiling. Refuses chi.mode / approvals.actingMode above maxMode (default plan) rather than downgrading.
+    resolveModeRails(bot, where);
+    resolveBranchPrefix(bot.branchPrefix, where);
+    resolveAuditConfig(bot.audit, where, bot.allowedChannels ?? []);
+
     // B4: refuse a bad schedule (cron, channel, duplicate name, unknown field) at load, naming the bot and the schedule.
     resolveSchedules(bot.schedules, where, bot.allowedChannels ?? []);
 
@@ -114,6 +127,9 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       progress: bot.progress,
       approvals: bot.approvals,
       schedules: bot.schedules,
+      maxMode: bot.maxMode,
+      branchPrefix: bot.branchPrefix,
+      audit: bot.audit,
     };
   });
 }

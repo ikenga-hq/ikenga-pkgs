@@ -19,6 +19,8 @@ export interface ActiveTurn {
   kind?: 'plan' | 'act';
   /** The prompt an `act` run started with, to recognise its echoed `brief` after a restart. */
   brief?: string;
+  /** Who asked for this turn (Mattermost id and username): carried across a restart for the audit trail. */
+  by?: { id: string; name?: string };
 }
 
 export interface ThreadRecord {
@@ -33,9 +35,9 @@ export interface ThreadRecord {
    */
   brief: string;
   /**
-   * The Claude Code permission mode `run_id` was started in. Only recorded when
-   * approvals are on: a thread whose run is not in plan mode is never resumed
-   * under an approval gate (a resume cannot change the mode).
+   * The Claude Code permission mode `run_id` was started in (a daemon mode id). A resume cannot change it, so the
+   * bridge checks it against `maxMode` before every resume, and under approvals never resumes a run that is not
+   * `plan`. Records from before B5 have none: they count as the daemon's `default`.
    */
   mode?: string;
   /** Report of the last approved run, handed to the next plan turn (it cannot remember it). */

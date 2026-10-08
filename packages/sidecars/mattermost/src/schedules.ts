@@ -6,6 +6,7 @@ import { minuteFloor, nextRun, occurrencesBetween, parseCron } from './cron.js';
 import type { CronSpec } from './cron.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
+import type { Rails } from './rails.js';
 import { MAX_POST_CHARS, PROGRESS_DEFAULTS, chunkText, sleep } from './sessions.js';
 import type { ResolvedProgress } from './sessions.js';
 import type { BotChiConfig, MattermostPost, ProgressConfig, ScheduleConfig, SchedulerOptions } from './types.js';
@@ -280,6 +281,8 @@ export interface ScheduleRunnerOptions {
   daemon: ScheduleChiApi;
   store: ScheduleStore;
   chi: BotChiConfig;
+  /** B5: audit log and mode ceiling. A scheduled run is `schedule.requested` (must be recorded first) ... `schedule.finished`. */
+  rails: Rails;
   progress?: ProgressConfig;
   scheduler?: SchedulerOptions;
   now?: () => number;
@@ -293,6 +296,13 @@ interface ExecOptions {
   manual: boolean;
   /** Noticed more than `lateGraceMs` after it was due. */
   late: boolean;
+}
+
+/** What `executeInner` learned, for the one `schedule.finished` record. */
+interface RunTrace {
+  requestId?: string;
+  runId?: string;
+  stage: 'channel' | 'start' | 'run' | 'aborted';
 }
 
 export class ScheduleRunner {
@@ -437,6 +447,28 @@ export class ScheduleRunner {
   // ── one run ─────────────────────────────────────────────────────────────────
 
   private async execute(s: ResolvedSchedule, o: ExecOptions): Promise<RunOutcome> {
+    const trace: RunTrace = { stage: 'channel' };
+    const startedAt = this.now();
+    let outcome: RunOutcome | undefined;
+    try {
+      outcome = await this.executeInner(s, o, trace);
+      return outcome;
+    } finally {
+      this.opts.rails.audit.record('schedule.finished', {
+        schedule: s.name,
+        request_id: trace.requestId,
+        run_id: outcome && 'runId' in outcome ? (outcome.runId ?? trace.runId) : trace.runId,
+        mode: PLAN_MODE,
+        outcome: outcome ? outcome.kind : 'error',
+        stage: outcome?.kind === 'failed' ? trace.stage : undefined,
+        manual: o.manual,
+        slot: o.slot === undefined ? undefined : iso(o.slot),
+        duration_s: Math.max(0, Math.round((this.now() - startedAt) / 1000)),
+      });
+    }
+  }
+
+  private async executeInner(s: ResolvedSchedule, o: ExecOptions, trace: RunTrace): Promise<RunOutcome> {
     // Claim before the first await: a manual run and a tick must not both start one.
     if (this.active.has(s.name)) {
       this.log(`schedule '${s.name}': previous run still going; not starting another`);
@@ -462,7 +494,14 @@ export class ScheduleRunner {
 
       let result: ChiRunResult;
       const prompt = this.prompt(s);
+      trace.stage = 'start';
       try {
+        // B5: the mode ceiling and the audit record come first; if either refuses, no run is started.
+        trace.requestId = this.opts.rails.authorizeRun({
+          kind: 'schedule',
+          mode: PLAN_MODE,
+          fields: { schedule: s.name, manual: o.manual, slot: o.slot === undefined ? undefined : iso(o.slot), late: o.late },
+        });
         result = await daemon.chiRun({
           engineId: s.engine ?? chi.engine,
           prompt,
@@ -477,9 +516,12 @@ export class ScheduleRunner {
         return await this.fail(s, o, channelId, undefined, `could not start: ${this.errText(err)}`, track);
       }
       runId = result.run_id;
+      trace.runId = runId;
+      trace.stage = 'run';
       if (track) await store.patch(s.name, { in_flight: { run_id: runId, slot: o.slot as number, started_at: startedAt } });
 
       const final = await this.watch(runId, startedAt);
+      if (final === 'aborted') trace.stage = 'aborted';
       if (final === 'aborted') return { kind: 'failed', runId, reason: 'the bridge was stopping' }; // in_flight stays: reported on next start
       if (final.kind === 'lost') return await this.fail(s, o, channelId, runId, final.reason, track);
 

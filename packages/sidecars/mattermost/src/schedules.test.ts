@@ -14,6 +14,8 @@ import { DaemonError } from './daemon.js';
 import type { ChiRunOpts, ChiRunResult } from './daemon.js';
 import { MockDaemon } from './mock-daemon.js';
 import { MockMattermostServer } from './mock-server.js';
+import { AuditLog } from './audit.js';
+import { Rails } from './rails.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules, SCHEDULE_NOTE, QUIET_NOTE } from './schedules.js';
 import type { ScheduleApi, ScheduleChiApi } from './schedules.js';
 import type { MattermostPost, ScheduleConfig } from './types.js';
@@ -126,6 +128,12 @@ function unit(): Unit {
       daemon,
       store,
       chi: { engine: 'claude-code', cwd: '~/work/royalti', systemPrompt: 'You are Rex.', ...over.chi },
+      rails: new Rails({
+        bot: 'rex',
+        maxMode: 'plan',
+        threadMode: 'plan',
+        audit: new AuditLog({ file: path.join(dir, 'audit-rex.jsonl'), bot: 'rex', now: () => clock.t }),
+      }),
       progress: FAST,
       scheduler: { tickMs: 60_000, lateGraceMs: over.lateGraceMs },
       now: () => clock.t,
@@ -796,7 +804,7 @@ describe('B4 through the bridge (mock Mattermost + mock daemon)', () => {
     seed();
     const stop = settleRuns();
     const b = new MattermostBridge(
-      bridgeConfig({ approvals: { approvers: ['alice'], actingMode: 'bypassPermissions' } }) as never,
+      bridgeConfig({ maxMode: 'bypassPermissions', approvals: { approvers: ['alice'], actingMode: 'bypassPermissions' } }) as never,
     );
     bridges.push(b);
     await b.start();
@@ -824,7 +832,7 @@ describe('B4 through the bridge (mock Mattermost + mock daemon)', () => {
   it('plan mode when approvals are off and chi.mode asks for more', async () => {
     seed();
     const stop = settleRuns();
-    const b = new MattermostBridge(bridgeConfig({ chi: { engine: 'claude-code', mode: 'bypassPermissions' } }) as never);
+    const b = new MattermostBridge(bridgeConfig({ maxMode: 'bypassPermissions', chi: { engine: 'claude-code', mode: 'bypassPermissions' } }) as never);
     bridges.push(b);
     await b.start();
     await waitFor(() => channelPosts('c-rex-test').length >= 1, 'scheduled post');

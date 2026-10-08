@@ -11,6 +11,9 @@
         "auth": { "kind": "session", "username": "rex", "password": { "file": "/etc/ikenga/rex.pw" } }
       },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Rex, the engineering agent at Royalti.", "persistent": true },
+      "maxMode": "acceptEdits",
+      "branchPrefix": "rex/",
+      "audit": { "channel": "rex-audit" },
       "approvals": { "approvers": ["alice"], "timeoutMs": 900000, "actingMode": "auto" },
       "schedules": [
         {
@@ -39,6 +42,8 @@
         "url": "https://ikenga.example.com",
         "auth": { "kind": "session", "username": "ruby", "password": { "file": "/etc/ikenga/ruby.pw" } }
       },
+      "maxMode": "plan",
+      "audit": { "channel": "ruby-audit" },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Ruby, the sales and customer-reply agent at Royalti. You are read-only.", "persistent": true },
       "schedules": [
         {

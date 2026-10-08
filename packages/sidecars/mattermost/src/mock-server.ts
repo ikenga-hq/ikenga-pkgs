@@ -266,12 +266,13 @@ export class MockMattermostServer {
     return [...this.posts.values()].filter((p) => p.root_id === rootId).map((p) => p.message);
   }
 
-  broadcastPost(post: MattermostPost, channelName = 'general'): void {
+  broadcastPost(post: MattermostPost, channelName = 'general', senderName?: string): void {
     const event = {
       event: 'posted',
       data: {
         channel_name: channelName,
         channel_type: 'O',
+        ...(senderName ? { sender_name: senderName } : {}),
         post: JSON.stringify(post),
       },
       seq: this.seq++,

@@ -60,6 +60,8 @@ function makeRig(approvals: BotApprovalsConfig = { approvers: ['alice', 'bob'], 
       chi: { engine: 'claude-code', cwd: '~/work/rex', systemPrompt: 'You are Rex.' },
       progress: FAST,
       approvals,
+      // B5: the default ceiling is plan; these tests exercise an acting run, so raise it explicitly.
+      maxMode: 'acceptEdits',
       ...over,
     });
     await b.start();
@@ -159,13 +161,13 @@ describe('approvals config', () => {
         () =>
           resolveBridgeConfigs({
             mattermostUrl: 'http://mm',
-            bots: { rex: { ...withEnv, chi: { engine: 'claude-code', mode: 'bypassPermissions' }, approvals: { approvers: ['bob'] } } },
+            bots: { rex: { ...withEnv, maxMode: 'acceptEdits', chi: { engine: 'claude-code', mode: 'bypassPermissions' }, approvals: { approvers: ['bob'] } } },
           }),
         /chi.mode is ignored under approvals/,
       );
       const [cfg] = resolveBridgeConfigs({
         mattermostUrl: 'http://mm',
-        bots: { rex: { ...withEnv, chi: { engine: 'claude-code' }, approvals: { approvers: ['bob'], timeoutMs: 5000 } } },
+        bots: { rex: { ...withEnv, maxMode: 'acceptEdits', chi: { engine: 'claude-code' }, approvals: { approvers: ['bob'], timeoutMs: 5000 } } },
       });
       assert.deepEqual(cfg?.approvals, { approvers: ['bob'], timeoutMs: 5000 });
     } finally {
@@ -182,6 +184,7 @@ describe('approvals config', () => {
           allowedUsers: ['alice'],
           allowedChannels: ['eng'],
           approvals: { approvers: ['bob'] },
+          maxMode: 'acceptEdits',
         }),
       /approvals needs daemon and chi/,
     );
@@ -306,7 +309,7 @@ describe('plan, then approve', () => {
 
   it('the acting mode comes from config (bypassPermissions when the operator asks for it)', async () => {
     rig = makeRig({ approvers: ['alice'], timeoutMs: 60_000, actingMode: 'bypassPermissions' });
-    await rig.boot();
+    await rig.boot({ maxMode: 'bypassPermissions' });
     const post = await rig.planned('root-9');
     assert.match(rig.current(post), /`bypassPermissions` permissions/);
     rig.react(post, 'alice');

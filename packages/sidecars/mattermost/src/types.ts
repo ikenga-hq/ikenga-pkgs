@@ -98,6 +98,23 @@ export interface SchedulerOptions {
   lateGraceMs?: number;
 }
 
+/** B5: the audit log (always on) and its options. */
+export interface AuditConfig {
+  /**
+   * Mirror a one-line summary of every audit record to this channel (name or id). Write-only: it must NOT be in the
+   * bot's `allowedChannels`. The file stays the record; the mirror is an off-box copy.
+   */
+  channel?: string;
+  /** Add `prompt_sha` (16 hex of SHA-256) and `prompt_len` to run records. Default false. Message text is never recorded. */
+  promptHash?: boolean;
+  /** Rotate the file at this size. Default 10 MiB. */
+  maxBytes?: number;
+  /** Rotated files kept. Default 10. */
+  keep?: number;
+  /** File path. Default `<dataDir>/audit-<bot>.jsonl`. */
+  path?: string;
+}
+
 export interface MattermostBridgeConfig {
   mattermostUrl: string;
   mattermostToken: string;
@@ -122,6 +139,15 @@ export interface MattermostBridgeConfig {
   /** B4: scheduled posts. Needs `daemon` + `chi`. */
   schedules?: ScheduleConfig[];
   scheduler?: SchedulerOptions;
+  /**
+   * B5: the most permissive Chi permission mode this bot may ever ask the daemon for: `plan` | `acceptEdits` |
+   * `bypassPermissions`. Default `plan`. A config whose `chi.mode` or `approvals.actingMode` is above it is refused at load.
+   */
+  maxMode?: string;
+  /** B5: branch prefix an acting run is told to confine itself to (`rex/`). ADVISORY; see the README for the real control. */
+  branchPrefix?: string;
+  /** B5: audit options. The audit log itself cannot be switched off. */
+  audit?: AuditConfig;
   /** Scheduler state file. Default `<dataDir>/schedules-<name>.json`. */
   schedulesPath?: string;
 }
@@ -171,4 +197,6 @@ export interface MattermostReaction {
 export interface GateResult {
   allowed: boolean;
   reason?: string;
+  /** Machine-readable denial reason (the audit log records this, not `reason`, which names a user). */
+  code?: 'own_post' | 'system_post' | 'no_allowed_users' | 'user_not_allowed' | 'no_allowed_channels' | 'channel_not_allowed';
 }

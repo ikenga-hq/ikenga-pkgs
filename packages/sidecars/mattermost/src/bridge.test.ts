@@ -1,5 +1,8 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { MattermostGate } from './gate.js';
 import { MockMattermostServer } from './mock-server.js';
 import { MattermostBridge } from './bridge.js';
@@ -196,6 +199,8 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
   let mockServer: MockMattermostServer;
   let serverUrl: string;
   let bridge: MattermostBridge;
+  // B5: every bot writes an audit file; keep it out of the real home directory.
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), 'mm-b1-'));
 
   before(async () => {
     mockServer = new MockMattermostServer();
@@ -207,6 +212,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
       allowedUsers: ['alice-uid', 'bob-uid'],
       allowedChannels: ['c-allowed', 'engineering'],
       echoPrefix: 'echo: ',
+      dataDir,
     });
 
     await bridge.start();
@@ -216,6 +222,7 @@ describe('MattermostBridge against Mock Server (Hermetic Integration)', () => {
   after(async () => {
     bridge.stop();
     await mockServer.close();
+    rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('receives post from allowed user on allowed channel and sends echo reply', async () => {
