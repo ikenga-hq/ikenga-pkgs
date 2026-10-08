@@ -226,7 +226,7 @@ rule by rule, what it cannot. **Read "Enforced where" before relying on any of i
 ### The audit log
 
 One file per bot, `<dataDir>/audit-<bot>.jsonl` (`audit.path` overrides), mode 0600 in a 0700 directory. One JSON object per line, appended
-with a single write and fsynced, never rewritten. Size-rotated at `audit.maxBytes` (default 10 MiB): `audit-rex.jsonl.1` is the newest rotated
+with a single write, never rewritten. The `*.requested` records that gate a run (and `config.loaded`) are fsynced before the run starts; the rest are not, so they survive a bridge crash but the last few may not survive a power cut. Size-rotated at `audit.maxBytes` (default 10 MiB): `audit-rex.jsonl.1` is the newest rotated
 file, up to `audit.keep` (default 10); older files are deleted, so ship them somewhere if you need more history. The audit log cannot be switched
 off (`audit.enabled` is refused).
 

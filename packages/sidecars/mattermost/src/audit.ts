@@ -163,7 +163,7 @@ export class AuditLog {
   /** Append a record. Returns false (and logs) instead of throwing, for events that follow something already done. */
   record(event: string, fields: AuditFields = {}): boolean {
     try {
-      this.append(event, fields);
+      this.append(event, fields, false);
       return true;
     } catch (err) {
       this.log(`FAILED to record ${event}: ${(err as Error).message}`);
@@ -171,10 +171,10 @@ export class AuditLog {
     }
   }
 
-  /** Append a record or throw `AuditUnavailableError`: for events that must exist before an action is taken. */
+  /** Append a record (fsynced) or throw `AuditUnavailableError`: for events that must exist before an action is taken. */
   must(event: string, fields: AuditFields = {}): void {
     try {
-      this.append(event, fields);
+      this.append(event, fields, true);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code ?? 'write-failed';
       this.log(`FAILED to record ${event}: ${(err as Error).message}`);
@@ -201,7 +201,8 @@ export class AuditLog {
 
   // ── internals ──────────────────────────────────────────────────────────────
 
-  private append(event: string, fields: AuditFields): void {
+  /** `durable` fsyncs: only for records that precede an action (a slow disk must not stall every event). */
+  private append(event: string, fields: AuditFields, durable: boolean): void {
     const dir = path.dirname(this.file);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -231,7 +232,7 @@ export class AuditLog {
       const buf = Buffer.from(line, 'utf8');
       let off = 0;
       while (off < buf.length) off += writeSync(fd, buf, off);
-      fsyncSync(fd);
+      if (durable) fsyncSync(fd);
     } finally {
       closeSync(fd);
     }

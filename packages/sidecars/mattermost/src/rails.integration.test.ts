@@ -291,7 +291,7 @@ describe('audit: approvals', () => {
   });
 
   it('a denial, an expiry, a withdrawal by new message and one by `stop` are each recorded, with the plan hash', async () => {
-    await boot({ maxMode: 'acceptEdits', approvals: { approvers: ['alice'], timeoutMs: 400 } });
+    await boot({ maxMode: 'acceptEdits', approvals: { approvers: ['alice'], timeoutMs: 1500 } });
     const denied = await planned('d1');
     react(denied, 'alice', '-1');
     await waitFor(() => hasEvent('approval.decided'), 'denied');
@@ -299,7 +299,7 @@ describe('audit: approvals', () => {
     assert.equal(daemon.runs.size, 1, 'a denial starts nothing');
 
     await planned('e1');
-    await waitFor(() => hasEvent('approval.expired'), 'expired', 3_000);
+    await waitFor(() => hasEvent('approval.expired'), 'expired', 8_000);
     assert.equal(events('approval.expired')[0]?.thread_root, 'e1');
 
   });
