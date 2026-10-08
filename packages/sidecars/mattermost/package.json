@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/pkg-mattermost",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mattermost bridge sidecar for Ikenga remote agents (B5: threads mapped onto Chi runs, plan-then-approve, scheduled posts, mode ceiling and audit log)",
   "license": "Apache-2.0",
   "type": "module",
