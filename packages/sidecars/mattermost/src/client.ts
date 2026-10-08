@@ -59,6 +59,24 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as MattermostPost;
   }
 
+  /** Edit a post's message in place (`PUT /posts/{id}/patch`). Edits do not notify. */
+  async updatePost(postId: string, message: string): Promise<MattermostPost> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}/patch`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${this.config.mattermostToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Mattermost updatePost failed: HTTP ${res.status} ${res.statusText}`);
+    }
+
+    return (await res.json()) as MattermostPost;
+  }
+
   connect(): Promise<void> {
     this.isClosed = false;
     const wsUrl = this.getWebSocketUrl();
