@@ -1,5 +1,0 @@
----
-"@ikenga/pkg-mattermost": minor
----
-
-B4 scheduled posts: a bot may carry `schedules` (name, 5-field UTC cron, channel, task; optional cwd/engine/timeout overrides, `enabled`, `onMissed: once|skip`, `quiet`). At each due time the bridge starts a Chi run in the daemon's read-only `plan` mode, never through approvals even when the bot has them, and posts a header plus the result as a new root post; failures post a short notice. One run per schedule at a time. Last-run state is persisted (mode 0600, atomic) before a run starts, so a restart never double-posts, and at most one missed occurrence per schedule runs after downtime (`once`, or `skip`). Bad cron, a channel outside `allowedChannels` or unknown to Mattermost, duplicate names and a `mode` field are refused at load. `quiet` schedules post only problems plus one OK line per UTC day. Operator CLI: `node dist/bridge.js --run-schedule <bot>/<name>` and `--list-schedules`. `bridge.example.json` ships the Rex weekly standup, Rex box alerts and Ruby daily reply digest pointed at the test channels.
