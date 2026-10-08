@@ -1,11 +1,12 @@
 import path from 'node:path';
+import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js';
 import { MattermostClient } from './client.js';
 import { loadBridgeConfigs, defaultDataDir } from './config.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
 import { ThreadRouter } from './sessions.js';
 import { ThreadStore } from './store.js';
-import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent } from './types.js';
+import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
 
 export class MattermostBridge {
   readonly config: MattermostBridgeConfig;
@@ -15,6 +16,8 @@ export class MattermostBridge {
   /** Present when the bot is configured for Chi runs (B2); absent means B1 echo. */
   readonly router?: ThreadRouter;
   readonly daemon?: DaemonClient;
+  /** Present when the bot has an `approvals` block (B3). */
+  readonly approvals?: ApprovalManager;
   private running = false;
 
   constructor(config: MattermostBridgeConfig) {
@@ -31,6 +34,23 @@ export class MattermostBridge {
         name,
         config.retentionMs,
       );
+      let gate: { manager: ApprovalManager; actingMode: string } | undefined;
+      if (config.approvals) {
+        const where = `bot '${name}'`;
+        const resolved = resolveApprovals(config.approvals, where);
+        // The daemon takes the mode of a run from `chi.mode`; under approvals the bridge owns it.
+        if (config.chi.mode) {
+          throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
+        }
+        this.approvals = new ApprovalManager({
+          bot: name,
+          client: this.client,
+          store: new ApprovalStore(path.join(config.dataDir ?? defaultDataDir(), `approvals-${name}.json`), name),
+          approvals: resolved,
+          onApproved: (rec, approver) => this.router?.runApproved(rec, approver) ?? Promise.resolve(),
+        });
+        gate = { manager: this.approvals, actingMode: resolved.actingMode };
+      }
       this.router = new ThreadRouter({
         bot: name,
         client: this.client,
@@ -38,7 +58,10 @@ export class MattermostBridge {
         store,
         chi: config.chi,
         progress: config.progress,
+        approvals: gate,
       });
+    } else if (config.approvals) {
+      throw new Error(`bot '${config.name ?? 'bot'}': approvals needs daemon and chi (B2) to be configured`);
     }
   }
 
@@ -50,12 +73,14 @@ export class MattermostBridge {
       const me = await this.client.getMe();
       if (me?.id) {
         this.gate.setBotUserId(me.id);
+        this.approvals?.setBotUserId(me.id);
       }
       if (me?.username) this.router?.setBotUsername(me.username);
     } catch (err) {
       // If getMe fails or botUserId was provided in config, fallback
       if (this.config.botUserId) {
         this.gate.setBotUserId(this.config.botUserId);
+        this.approvals?.setBotUserId(this.config.botUserId);
       }
     }
 
@@ -87,13 +112,28 @@ export class MattermostBridge {
       }
     });
 
+    // Reactions are not post events, so the post gate does not see them: the approver
+    // list inside the manager is their gate (separate from `allowedUsers`).
+    if (this.approvals) {
+      const approvals = this.approvals;
+      this.client.on('reaction', (reaction: MattermostReaction) => {
+        approvals.handleReaction(reaction).catch((err) => {
+          console.error('Failed to handle reaction:', err instanceof Error ? err.message : err);
+        });
+      });
+    }
+
     this.router?.recover();
+    await this.approvals?.recover().catch((err) => {
+      console.error('Failed to recover approvals:', err instanceof Error ? err.message : err);
+    });
     this.running = true;
   }
 
   stop(): void {
     this.running = false;
     this.router?.stop();
+    this.approvals?.stop();
     this.client.close();
   }
 

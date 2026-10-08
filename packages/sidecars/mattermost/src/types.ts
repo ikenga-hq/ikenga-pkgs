@@ -38,6 +38,24 @@ export interface ProgressConfig {
   maxPollFailures?: number;
 }
 
+/**
+ * B3 approvals. When present the bot runs every thread turn in the daemon's
+ * read-only `plan` mode, posts the plan, and only an approver's reaction starts
+ * a second run in `actingMode`. Deny by default: `approvers` must be non-empty
+ * and is separate from `allowedUsers`.
+ */
+export interface BotApprovalsConfig {
+  /** Usernames (or user ids) whose 👍/👎 may decide. Required, non-empty. */
+  approvers: string[];
+  /** An undecided approval expires (= deny) after this long, ms. Default 15 minutes. */
+  timeoutMs?: number;
+  /**
+   * Claude Code permission mode of the approved run: `auto` (acceptEdits, the
+   * default) or `bypassPermissions`. `plan` and `default` are refused.
+   */
+  actingMode?: string;
+}
+
 export interface MattermostBridgeConfig {
   mattermostUrl: string;
   mattermostToken: string;
@@ -57,6 +75,8 @@ export interface MattermostBridgeConfig {
   /** Forget threads idle for longer than this, ms. Default 30 days. */
   retentionMs?: number;
   progress?: ProgressConfig;
+  /** B3: gate the bot's actions behind an approver's reaction. Needs `daemon` + `chi`. */
+  approvals?: BotApprovalsConfig;
 }
 
 export interface MattermostPost {
@@ -91,6 +111,14 @@ export interface MattermostPostEvent {
     team_id?: string;
   };
   seq: number;
+}
+
+/** A `reaction_added` payload (`data.reaction` is this, JSON-serialized). */
+export interface MattermostReaction {
+  user_id: string;
+  post_id: string;
+  emoji_name: string;
+  create_at?: number;
 }
 
 export interface GateResult {

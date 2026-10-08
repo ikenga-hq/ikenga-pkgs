@@ -16,6 +16,8 @@ export interface FakeRun {
   brief: string;
   engineId: string;
   cwd?: string;
+  mode?: string;
+  parentId?: string;
   output?: string;
   error?: string;
   output_truncated?: boolean;
@@ -114,7 +116,13 @@ export class MockDaemon {
 
       switch (cmd) {
         case 'chi_run': {
-          const opts = (args.opts ?? args) as { engineId: string; prompt: string; cwd?: string };
+          const opts = (args.opts ?? args) as {
+            engineId: string;
+            prompt: string;
+            cwd?: string;
+            mode?: string;
+            parentId?: string;
+          };
           const run_id = `run-${this.nextRun++}`;
           this.runs.set(run_id, {
             run_id,
@@ -122,6 +130,8 @@ export class MockDaemon {
             brief: opts.prompt,
             engineId: opts.engineId,
             cwd: opts.cwd,
+            mode: opts.mode,
+            parentId: opts.parentId,
             hasSession: true,
             prompts: [opts.prompt],
           });

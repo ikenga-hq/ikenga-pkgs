@@ -1,3 +1,5 @@
+import { PLAN_MODE } from './approvals.js';
+import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
 import type { ThreadRecord, ThreadStore } from './store.js';
@@ -27,7 +29,20 @@ const MAX_POST_CHARS = 15_000;
 /** A thread reply that is only this (case-insensitive) cancels the thread's run. */
 const CANCEL_RE = /^(?:\/|!)?(?:cancel|stop)[.!]?$/i;
 
+/**
+ * Appended to every prompt of a gated bot. Plan mode is enforced by the daemon
+ * (Claude Code's `--permission-mode plan`); this note only stops the model from
+ * calling `ExitPlanMode`, which nobody could answer, and from describing that
+ * failure as its result.
+ */
+export const PLAN_NOTE =
+  '\n\n[Bridge note: this turn runs in plan mode, so nothing can be changed. Reply with your answer or, if changes are needed, your complete step-by-step plan as your final message. Do not call ExitPlanMode: no one can answer it. A human approver decides afterwards whether a plan is carried out.]';
+
+/** How much of an approved run's report is handed to the thread's next plan turn. */
+const CARRY_CHARS = 4_000;
+
 interface Turn {
+  kind: 'plan' | 'act';
   rootId: string;
   channelId: string;
   runId?: string;
@@ -48,6 +63,11 @@ export interface RouterOptions {
   store: ThreadStore;
   chi: BotChiConfig;
   progress?: ProgressConfig;
+  /**
+   * B3. When set, thread turns run in plan mode and an approved plan runs once, in
+   * `actingMode`. Unset keeps the B2 behaviour (`chi.mode`, no gate).
+   */
+  approvals?: { manager: ApprovalManager; actingMode: string };
   botUsername?: string;
   now?: () => number;
   log?: (msg: string) => void;
@@ -123,6 +143,7 @@ export class ThreadRouter {
     // Claim the thread before the first await: two quick replies must not
     // both start a run.
     const turn: Turn = {
+      kind: 'plan',
       rootId,
       channelId: post.channel_id,
       startedAt: this.now(),
@@ -133,6 +154,9 @@ export class ThreadRouter {
     this.turns.set(rootId, turn);
 
     try {
+      // A new message supersedes a plan still waiting for a decision: an approver
+      // must not be able to 👍 a plan the conversation has moved past.
+      await this.opts.approvals?.manager.withdraw(rootId, 'a newer message arrived in this thread');
       await this.start(turn, post, text, isReply);
     } catch (err) {
       await this.failStart(turn, err);
@@ -145,6 +169,7 @@ export class ThreadRouter {
       const active = rec.active;
       if (!active || this.turns.has(rec.root_id)) continue;
       const turn: Turn = {
+        kind: active.kind ?? 'plan',
         rootId: rec.root_id,
         channelId: rec.channel_id,
         runId: active.run_id,
@@ -156,7 +181,64 @@ export class ThreadRouter {
       };
       this.turns.set(rec.root_id, turn);
       this.log(`re-attached to run ${active.run_id} for thread ${rec.root_id}`);
-      turn.done = this.track(turn, rec, active.notice);
+      turn.done = this.track(turn, active.brief ? { ...rec, brief: active.brief } : rec, active.notice);
+    }
+  }
+
+  /**
+   * An approver's 👍 (the approval is already claimed and its post edited):
+   * start the approved plan as a NEW run in the acting mode, parented to the
+   * plan run. The thread's own run stays the plan run, so a later reply is
+   * planned (read-only) and approved again, never resumed with write access.
+   */
+  async runApproved(a: ApprovalRecord, approver: string): Promise<void> {
+    const gate = this.opts.approvals;
+    if (!gate) return;
+    const { daemon, store, chi } = this.opts;
+    const rootId = a.root_id;
+    if (this.turns.has(rootId)) {
+      await this.say(a.channel_id, rootId, 'The plan was approved, but another turn is running in this thread, so I did not start it. Send the request again once that finishes.');
+      return;
+    }
+    const turn: Turn = {
+      kind: 'act',
+      rootId,
+      channelId: a.channel_id,
+      startedAt: this.now(),
+      cancelRequested: false,
+      finished: false,
+      abort: new AbortController(),
+    };
+    this.turns.set(rootId, turn);
+    try {
+      const working = await this.opts.client.reply(a.channel_id, 'Working…', rootId);
+      turn.progressPostId = working.id;
+      const prompt = this.withPrefix(
+        `The plan below was approved by @${approver} in Mattermost. Carry it out now, exactly as written, and do not widen its scope. Then report briefly what you did and anything that failed.\n\n--- approved plan ---\n${a.plan}`,
+      );
+      const result = await daemon.chiRun({
+        engineId: chi.engine,
+        prompt,
+        cwd: chi.cwd,
+        model: chi.model,
+        mode: gate.actingMode,
+        timeoutSeconds: chi.timeoutSeconds,
+        persistent: chi.persistent ?? true,
+        parentId: a.plan_run_id,
+      });
+      turn.runId = result.run_id;
+      const thread = store.get(rootId);
+      if (!thread) throw new Error('the thread record is gone');
+      await store.update(rootId, {
+        active: { run_id: result.run_id, progress_post_id: working.id, started_at: turn.startedAt, kind: 'act', brief: prompt },
+      });
+      if (turn.cancelRequested) {
+        await this.cancelRun(turn);
+        return;
+      }
+      turn.done = this.track(turn, { ...thread, brief: prompt });
+    } catch (err) {
+      await this.failStart(turn, err);
     }
   }
 
@@ -168,7 +250,8 @@ export class ThreadRouter {
     // Ignore a record from another channel (defence in depth; Mattermost
     // already keeps a reply's root in its own channel).
     const stored = store.get(rootId);
-    const rec = stored && stored.channel_id === post.channel_id ? stored : undefined;
+    let rec = stored && stored.channel_id === post.channel_id ? stored : undefined;
+    const gated = Boolean(this.opts.approvals);
 
     // Say something straight away; the engine can take a while to boot.
     const working = await this.opts.client.reply(post.channel_id, 'Working…', rootId);
@@ -178,9 +261,20 @@ export class ThreadRouter {
     let record: ThreadRecord | undefined;
     let result: ChiRunResult | undefined;
 
+    // A resume cannot change a run's permission mode. Under approvals only a run
+    // that was itself started in plan mode may be resumed; anything else (a B2
+    // thread, or one from before approvals were switched on) could write.
+    if (rec && gated && rec.mode !== PLAN_MODE) {
+      notice =
+        'The earlier run in this thread was not started under approvals, so I cannot safely continue it. I started a fresh read-only run; it will not remember the earlier messages.';
+      rec = undefined;
+    }
+
     if (rec) {
       try {
-        result = await daemon.chiResume(rec.run_id, text);
+        const carry = rec.carry ? `[What happened since your last turn: an approved run carried out your plan. Its report follows.]\n${rec.carry}\n\n---\n\n` : '';
+        result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE : ''}`);
+        if (rec.carry) await store.update(rootId, { carry: '' });
         record = rec;
       } catch (err) {
         if (err instanceof DaemonError && err.runGone) {
@@ -196,19 +290,20 @@ export class ThreadRouter {
           throw err;
         }
       }
-    } else if (isReply) {
+    } else if (isReply && !notice) {
       notice =
         'I have no earlier run for this thread (it may predate me or have been cleared), so I started a new one with just this message.';
     }
 
     if (!record) {
-      const prompt = this.withPrefix(text);
+      const prompt = this.withPrefix(gated ? `${text}${PLAN_NOTE}` : text);
+      const mode = gated ? PLAN_MODE : chi.mode;
       result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
         cwd: chi.cwd,
         model: chi.model,
-        mode: chi.mode,
+        mode,
         timeoutSeconds: chi.timeoutSeconds,
         persistent: chi.persistent ?? true,
       });
@@ -219,6 +314,7 @@ export class ThreadRouter {
         bot: this.opts.bot,
         channel_id: post.channel_id,
         brief: prompt,
+        mode,
         created_at: t,
         updated_at: t,
       };
@@ -234,7 +330,7 @@ export class ThreadRouter {
     }
 
     await store.update(rootId, {
-      active: { run_id: started.run_id, progress_post_id: working.id, started_at: turn.startedAt, notice },
+      active: { run_id: started.run_id, progress_post_id: working.id, started_at: turn.startedAt, notice, kind: 'plan' },
     });
 
     if (notice) await this.edit(working.id, `${notice}\n\n${this.statusLine('running', turn)}`);
@@ -351,12 +447,23 @@ export class ThreadRouter {
     const output = this.usableOutput(st.output, rec);
     const trunc = st.output_truncated ? '\n\n(The daemon marked this output as truncated.)' : '';
 
+    // The thread's next plan turn cannot remember an approved run: hand it the report.
+    if (turn.kind === 'act') {
+      const report = output
+        ? `Run ${st.run_id} ended ${st.status}. Its report:\n${output.slice(0, CARRY_CHARS)}`
+        : `Run ${st.run_id} ended ${st.status}${error ? `: ${error}` : ''}.`;
+      await this.opts.store.update(turn.rootId, { carry: report }).catch(() => undefined);
+    }
+
     switch (st.status) {
       case 'done': {
         const body = output
           ? `${output}${trunc}`
           : `The run finished, but the daemon returned no result text for it. Run \`${st.run_id}\` is in Ikenga's Chi view.`;
         await this.finish(turn, progressId, `Done in ${secs}s.`, body, true);
+        if (turn.kind === 'plan' && this.opts.approvals && output) {
+          await this.offerApproval(turn, output, Boolean(st.output_truncated));
+        }
         return;
       }
       case 'cancelled':
@@ -406,10 +513,30 @@ export class ThreadRouter {
     }
   }
 
+  /** Post the approval request under a finished plan. Never throws: the plan is already in the thread. */
+  private async offerApproval(turn: Turn, plan: string, truncated: boolean): Promise<void> {
+    const gate = this.opts.approvals;
+    if (!gate) return;
+    if (truncated) {
+      // Approving would run a plan the approver never saw in full.
+      await this.say(turn.channelId, turn.rootId, 'The daemon truncated that plan, so I am not offering it for approval. Ask for a shorter plan.');
+      return;
+    }
+    try {
+      await gate.manager.request({ rootId: turn.rootId, channelId: turn.channelId, planRunId: turn.runId as string, plan });
+    } catch (err) {
+      this.log(`could not post the approval request for ${turn.runId}: ${this.errText(err)}`);
+    }
+  }
+
   // ── cancel ───────────────────────────────────────────────────────────────
 
   private async cancel(rootId: string, channelId: string, turn: Turn | undefined): Promise<void> {
     if (!turn) {
+      if (await this.opts.approvals?.manager.withdraw(rootId, 'cancelled by a reply')) {
+        await this.say(channelId, rootId, 'Plan withdrawn. Nothing was run.');
+        return;
+      }
       await this.say(channelId, rootId, 'Nothing is running in this thread.');
       return;
     }

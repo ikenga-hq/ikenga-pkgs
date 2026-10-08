@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
-import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent } from './types.js';
+import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
 
 export interface MattermostClientEvents {
   post: (event: MattermostPostEvent, post: MattermostPost) => void;
+  reaction: (reaction: MattermostReaction) => void;
   open: () => void;
   close: (code: number, reason: string) => void;
   error: (err: Error) => void;
@@ -77,6 +78,28 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as MattermostPost;
   }
 
+  /** Reactions on a post (`GET /posts/{id}/reactions`; Mattermost answers `null` for none). */
+  async getReactions(postId: string): Promise<MattermostReaction[]> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}/reactions`, {
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`Mattermost getReactions failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    return ((await res.json()) as MattermostReaction[] | null) ?? [];
+  }
+
+  /** A user's profile, to turn a reaction's `user_id` into a username. */
+  async getUser(userId: string): Promise<{ id: string; username: string }> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/users/${encodeURIComponent(userId)}`, {
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`Mattermost getUser failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as { id: string; username: string };
+  }
+
   connect(): Promise<void> {
     this.isClosed = false;
     const wsUrl = this.getWebSocketUrl();
@@ -108,6 +131,10 @@ export class MattermostClient extends EventEmitter {
             if (msg.event === 'posted' && msg.data?.post) {
               const post: MattermostPost = JSON.parse(msg.data.post);
               this.emit('post', msg as MattermostPostEvent, post);
+            } else if (msg.event === 'reaction_added' && msg.data?.reaction) {
+              // `data.reaction` is a JSON string, like `data.post`.
+              const reaction: MattermostReaction = JSON.parse(msg.data.reaction);
+              this.emit('reaction', reaction);
             }
           } catch (err) {
             this.emit('error', err instanceof Error ? err : new Error(String(err)));
