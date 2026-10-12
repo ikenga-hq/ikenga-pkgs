@@ -28,7 +28,7 @@
 1. **Verify** `.groundwork.json` and the profile's `produces_designs`. Refuse if not visual.
 2. **Detect Ikenga context** *(G9 step 1)*. Before invoking `design-language`, decide whether this plan is targeting an Ikenga app/feature. Auto-detect signals (any one is enough):
    - The plan folder sits under a directory whose `pnpm-workspace.yaml` lists a `tokens` package whose `package.json` declares `"name": "@ikenga/tokens"`.
-   - A `CLAUDE.md` at the workspace root mentions Ikenga as the workspace identity (`/home/nedjamez/royalti-co/ikenga/CLAUDE.md` is the canonical example).
+   - A `CLAUDE.md` at the workspace root mentions Ikenga as the workspace identity (e.g. `<your-workspace>/CLAUDE.md` or `~/<workspace>/CLAUDE.md`).
    - The workspace has a `tokens/tokens.css` exporting the `@ikenga/tokens` token surface.
    - The user explicitly says so (`--workspace=ikenga` flag, or the goal in `.groundwork.json` names an Ikenga pkg / surface).
    Record the result as `ikenga_context: true|false`. Falls through transparently for non-Ikenga plans — no warning, no nag.

@@ -1,5 +1,7 @@
 # @ikenga/skill-groundwork
 
+**Groundwork: research → design → plan → orchestrate for Claude Code, with plan folders that don't rot.**
+
 A Claude Code skill that scaffolds and maintains a reusable
 **research → design → plan → orchestrate → act** folder for any
 non-trivial work — software features, marketing campaigns, org changes.
@@ -9,8 +11,8 @@ research · `04-discussion` newest-first · `05-tracking` ·
 `09-orchestration`) plus stateless action-skills that augment the docs in
 place without clobbering hand-written prose. Profile-driven: `software`,
 `general`, `content`, and `design-system`. Each plan also gets self-contained
-HTML views — a **board** (`artifact/board.html`), a fully-offline file
-**explorer** with search (`artifact/explorer.html`), and a cross-plan
+HTML views — a **board** (`artifact/board.html`), a file
+**explorer** (fully offline) with search (`artifact/explorer.html`), and a cross-plan
 **plans index** (`<plans-dir>/_index.html`).
 
 ## Install
@@ -56,6 +58,42 @@ Files no longer carry a `GENERATED` banner, because they are no longer generated
   before pushing. Note the mirror repo's own `README.md`, `CONTRIBUTING.md`, `.github/` and
   `assets/` are hand-maintained there and are **not** emitted — a blanket sync would delete
   them.
+
+## How it compares
+
+groundwork is one option among several planning skills. Superpowers and `etr/groundwork` are different tools; the points below describe only what this repo implements and make no claims about their internals.
+
+- Plan state lives in a `.groundwork.json` anchor plus fenced generated regions in the markdown docs; re-runs write only inside fences, and `test_fence_integrity.py` checks this.
+- Stable IDs (`WP-NN`, `G-NN`, `D-NN`) link plan, tracking, orchestration and the HTML views.
+- Profiles (`software`, `general`, `content`, `design-system`, `film`) change vocabulary and optional docs without changing the spine.
+- Produces standalone HTML views (board, explorer, plans index) per plan, plus an optional `orchestrate --emit-workflow` multi-agent kickoff.
+- State logic is stdlib-only Python with a deterministic test suite (`npm test`).
+
+## Commands this skill runs
+
+For users who want to allowlist rather than blanket-approve `Bash`. Derived from `SKILL.md` and `actions/*.md`; `<skill>` is the installed `skills/groundwork/` directory.
+
+```text
+python3 <skill>/scripts/groundwork_state.py <subcommand> --plan <plan>
+    scaffold, spine-gate, resolve-profile, next-id, write-region, stamp-research,
+    status-data, board-data, explorer-data, living-spec-data, plans-index-data,
+    register-subplan, register-id, register-design, register-design-impl,
+    design-data, design-lock, design-migrate,
+    issue-sync-data, register-issue, register-milestone, apply-issue-sync
+python3 <skill>/scripts/generate_explorer.py --plan <plan> | --all-under <plans-dir> [--missing-only]
+python3 <skill>/scripts/generate_plans_index.py --plans-dir <plans-dir>
+python3 <skill>/scripts/watch.py --plan <plan> | --plans-dir <plans-dir>
+node    <skill>/scripts/build-offline-artifacts.mjs     # maintainers only
+```
+
+`issue-sync` additionally runs `gh repo view`, `gh issue create|close|reopen|list`, `gh pr list`, `gh api repos/{owner}/{repo}/milestones` and `glab repo view`, `glab issue create|list`, `glab api projects/:id/milestones` with your credentials. It asks for confirmation (target repo, visibility, exact text) before any write.
+
+## Security notes
+
+- **Web research is untrusted data.** The `research` action writes fetched web content into `02-research-external.md`, and plan docs later become briefs for build agents. Fetched text is kept in the delimited research section, cited, and must be treated as data, never instructions, when briefing agents. Review `02` before orchestrating.
+- **`issue-sync` writes to your Git forge** with your credentials and publishes plan text to the repo. It confirms the target repo, its visibility and the exact text before any write.
+- **CDN scripts.** `board.html` and the living spec (`artifact/index.html`) load React and `@babel/standalone` from `cdn.jsdelivr.net`, pinned to exact versions with SRI (`integrity`) hashes. They need network on first open; only the explorer and plans index are fully offline.
+- **Explorer iframes.** Gallery thumbnails use `sandbox="allow-scripts"` (opaque origin, no access to the explorer). The full viewer keeps `allow-same-origin` because previewed plan artifacts (the board, living spec) use `localStorage` and fetch sibling plan files; the explorer only talks to them via `postMessage` (theme push). Plan folders from untrusted clones are untrusted input: previewed HTML runs scripts, so do not open them in the viewer.
 
 ## Portability
 

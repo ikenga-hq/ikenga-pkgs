@@ -165,7 +165,7 @@ Print at most three suggestions, prioritized in the order above. The `explorer` 
 ## Edge cases
 
 - **No `.groundwork.json`** — refuse with "not a groundwork plan folder; run `groundwork init` first."
-- **`.groundwork.json` references a file that doesn't exist** — report it as `✗ missing — restore or run init --force`.
+- **`.groundwork.json` references a file that doesn't exist** — report it as ``✗ missing — restore it (re-run `groundwork init`, which recreates missing files without touching existing ones)``. Doc entries may also come back `state: "rejected"` (the recorded path escapes the plan folder, is not a regular file, or exceeds the read cap) — report them as `✗ rejected — <reason>` and do not read them yourself.
 - **`.groundwork.json` is corrupt** — refuse, suggest restoring from git.
 - **Workspace context with multiple groundwork folders** — status scans only the folder argument (or cwd); never recurses into subdirs. Multi-plan reporting is out of scope for P1.
 

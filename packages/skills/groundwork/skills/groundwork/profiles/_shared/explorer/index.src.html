@@ -721,7 +721,7 @@
       }, [show]);
       return (
         <div className="gthumb" ref={ref}>
-          {show ? <iframe src={srcFor(node.path)} title={node.name} loading="lazy" sandbox="allow-scripts allow-same-origin" />
+          {show ? <iframe src={srcFor(node.path)} title={node.name} loading="lazy" sandbox="allow-scripts" />
                 : <div className="gthumb-ph">{(node.name.split('.').pop() || 'file').toUpperCase()}</div>}
         </div>
       );
