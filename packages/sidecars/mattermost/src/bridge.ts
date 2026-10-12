@@ -15,6 +15,7 @@ import { ThreadRouter } from './sessions.js';
 import { ThreadStore } from './store.js';
 import { DraftApprovalManager } from './outbox-approvals.js';
 import type { ApproveDraftResult, CanonicalDraftPayload } from './outbox-approvals.js';
+import { DraftAnnouncer, SqliteDraftReader, AnnouncementStore } from './draft-announcer.js';
 import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
 
 export class MattermostBridge {
@@ -29,6 +30,8 @@ export class MattermostBridge {
   readonly approvals?: ApprovalManager;
   /** S2: Outbox action draft approvals. Present when outboxApprovals is enabled. */
   readonly outboxApprovals?: DraftApprovalManager;
+  /** S2b: Outbox action draft announcer. Present when announceChannelId is configured. */
+  readonly announcer?: DraftAnnouncer;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
   /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
@@ -140,6 +143,21 @@ export class MattermostBridge {
         botUserId: config.botUserId,
         audit: this.audit,
       });
+
+      if (config.outboxApprovals.announceChannelId) {
+        const defaultDb = path.join(process.env.HOME ?? '', '.local', 'share', 'app.ikenga', 'ikenga.db');
+        const dbPath = config.outboxApprovals.draftDbPath ?? defaultDb;
+        const storePath = config.outboxApprovals.announcementsPath ?? path.join(config.dataDir ?? defaultDataDir(), `announcements-${config.name ?? 'bot'}.json`);
+        this.announcer = new DraftAnnouncer({
+          client: this.client,
+          approvalManager: this.outboxApprovals,
+          channelId: config.outboxApprovals.announceChannelId,
+          draftReader: new SqliteDraftReader(dbPath),
+          store: new AnnouncementStore(storePath),
+          batchLimit: config.outboxApprovals.batchLimit ?? 10,
+          audit: this.audit,
+        });
+      }
     }
   }
 
@@ -320,6 +338,9 @@ export class MattermostBridge {
       this.stop();
       throw err;
     }
+    if (this.announcer) {
+      this.announcer.start(this.config.outboxApprovals?.pollIntervalMs ?? 10_000);
+    }
     this.running = true;
   }
 
@@ -329,11 +350,18 @@ export class MattermostBridge {
     this.router?.stop();
     this.approvals?.stop();
     this.scheduler?.stop();
+    this.announcer?.stop();
     this.client.close();
   }
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** S2b: Run one draft announcement poll on demand. */
+  async pollDraftAnnouncements(): Promise<{ announced: number; updated: number; skipped: number }> {
+    if (!this.announcer) return { announced: 0, updated: 0, skipped: 0 };
+    return this.announcer.pollOnce();
   }
 
   /** Register a draft post with the bridge for reaction approval tracking (S2). */

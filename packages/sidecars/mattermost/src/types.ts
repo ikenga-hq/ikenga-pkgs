@@ -69,6 +69,16 @@ export interface OutboxApprovalsConfig {
   socketPath?: string;
   /** Bridge Unix user ID for SO_PEERCRED check. */
   bridgeUid?: number;
+  /** S2b: Channel ID where new action drafts are announced for human approval. */
+  announceChannelId?: string;
+  /** S2b: Path to ikenga.db to read drafts from. */
+  draftDbPath?: string;
+  /** S2b: Polling interval in ms for announcing new drafts. Default 10_000 (10s). */
+  pollIntervalMs?: number;
+  /** S2b: Max drafts announced per poll cycle (rate limit / burst protection). Default 10. */
+  batchLimit?: number;
+  /** S2b: Path to announcements state file. Default `<dataDir>/announcements-<name>.json`. */
+  announcementsPath?: string;
 }
 
 /**

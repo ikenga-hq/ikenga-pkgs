@@ -140,6 +140,11 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
           approvers: (outboxCfg.approvers ?? []).map((a: string) => a.trim()).filter(Boolean),
           socketPath: outboxCfg.socketPath,
           bridgeUid: outboxCfg.bridgeUid,
+          announceChannelId: outboxCfg.announceChannelId,
+          draftDbPath: outboxCfg.draftDbPath,
+          pollIntervalMs: outboxCfg.pollIntervalMs,
+          batchLimit: outboxCfg.batchLimit,
+          announcementsPath: outboxCfg.announcementsPath,
         };
       })(),
     };

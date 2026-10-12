@@ -8,7 +8,9 @@
       "buay4kf99bbk7cjtbeupd5rxow",
       "f3w99k5x6fgomdprh8axosmmsc"
     ],
-    "socketPath": "/run/ikenga-sender/approvals.sock"
+    "socketPath": "/run/ikenga-sender/approvals.sock",
+    "announceChannelId": "channel-sales-approvals",
+    "draftDbPath": "/var/lib/ikenga/principals/ruby/data/ikenga.db"
   },
   "bots": {
     "rex": {
