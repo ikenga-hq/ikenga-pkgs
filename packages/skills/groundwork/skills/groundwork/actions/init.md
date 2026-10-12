@@ -6,7 +6,7 @@
 
 **Spine-version**: produces (and `--migrate` upgrades to) `spine_version: "1"`. **Owns** the `--migrate` path described in [`../lib/state.md` §"Per-version transform table"](../lib/state.md#per-version-transform-table-deferred-until-v2) — bare `init` against an existing older anchor declines and points the user at `init --migrate`; `init --migrate` walks the transform table forward. At v1=current the migrate path is a no-op.
 
-**Idempotent**: re-running `init` on an already-initialized folder is a no-op (per hash-diff semantics in `lib/state.md`). Use `--force` to overwrite hand-edited files (rare; ask the user first).
+**Idempotent**: re-running `init` on an already-initialized folder is a no-op (per hash-diff semantics in `lib/state.md`). Re-running with `--force` only re-renders the *inside of fences* in existing spine files (hand-written prose outside fences and all anchor state are kept; fences that look hand-edited are skipped and reported). A destructive full reset exists as the separate `--reset-all` flag (ask the user first; never suggest it to restore one file).
 
 ---
 
@@ -129,7 +129,8 @@ If the profile is `general`, omit the `design` line from the printed guidance.
 
 - **Folder exists and contains files but no `.groundwork.json`** — refuse, surface the contents, ask the user to confirm before scaffolding (existing files would gain a `.groundwork.json` sibling — they're treated as hand-authored and never touched).
 - **Folder is already a groundwork plan** — refuse with "this folder is already groundwork; use other actions or `--force` to re-scaffold."
-- **`--force`** — re-runs the scaffolder, overwriting *only inside fences* per `lib/state.md` rules. Hand-edited prose outside fences is preserved. Reuses any IDs already in `.groundwork.json`.
+- **`--force`** — re-runs the scaffolder, re-rendering *only fence interiors* of spine files that already exist, per `lib/state.md` rules. Hand-edited prose outside fences is preserved byte-for-byte, and `.groundwork.json` is kept as-is (IDs, designs, sub-plans, research stamps); the anchor is recreated only if it is corrupt. A fence whose on-disk content differs from what was last written (a hand edit) is skipped and listed in `skipped_dirty_regions`. Missing files are always (re)created, with or without `--force`. The output lists `refreshed_regions`, `skipped_dirty_regions` and `missing_fences`.
+- **`--reset-all`** — DESTRUCTIVE and separate from `--force`: overwrites every spine file with its blank template and replaces the anchor (all prose, IDs, designs, sub-plans and research stamps are lost). Only on the user's explicit request; never offered as a way to restore a missing file.
 - **Workspace-root invocation without target dir** — refuse, ask for a target. Don't scaffold into the cwd by accident.
 
 ---

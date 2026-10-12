@@ -1212,7 +1212,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
       src: srcFor(node.path),
       title: node.name,
       loading: "lazy",
-      sandbox: "allow-scripts allow-same-origin"
+      sandbox: "allow-scripts"
     }) : React.createElement("div", {
       className: "gthumb-ph"
     }, (node.name.split('.').pop() || 'file').toUpperCase()));

@@ -40,6 +40,21 @@ def _result(r):
         return None
 
 
+def _scaffold_copy(tpl, dest):
+    """Copy the template to dest ATOMICALLY. os.replace swaps the directory
+    entry itself, so a symlink (live or dangling) at dest is replaced by a
+    regular file and is never written through to its target."""
+    d = os.path.dirname(os.path.abspath(dest)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".gw-tmp-")
+    os.close(fd)
+    try:
+        shutil.copyfile(tpl, tmp)
+        os.replace(tmp, dest)
+    finally:
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+
+
 def _title(plan, anchor):
     p01 = os.path.join(plan, "01-plan.md")
     if os.path.exists(p01):
@@ -69,11 +84,15 @@ def generate(plan, force_rescaffold=False):
     tpl = cand if os.path.exists(cand) else os.path.join(PROFILES, "_shared", "explorer", "index.html")
 
     art = os.path.join(plan, "artifact")
+    if os.path.islink(art):
+        return {"plan": os.path.basename(plan),
+                "error": "refusing: artifact/ is a symlink (would write outside the plan folder)"}
     os.makedirs(art, exist_ok=True)
     dest = os.path.join(art, "explorer.html")
-    scaffolded = force_rescaffold or not os.path.exists(dest)
+    # A symlink at dest (live or dangling) is replaced, never written through.
+    scaffolded = force_rescaffold or os.path.islink(dest) or not os.path.exists(dest)
     if scaffolded:
-        shutil.copyfile(tpl, dest)
+        _scaffold_copy(tpl, dest)
 
     md = _run("explorer-data", "--plan", plan)
     if md.returncode != 0:

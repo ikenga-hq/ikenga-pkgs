@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 
@@ -61,7 +62,7 @@ def _html_script_escape(s: str) -> str:
     to mock) and inject live HTML (XSS). Each replacement is a valid JSON \\u escape,
     so JSON.parse round-trips it back to the original character in the app."""
     return (s.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
-             .replace(chr(0x2028), "\u2028").replace(chr(0x2029), "\u2029"))
+             .replace(chr(0x2028), "\\u2028").replace(chr(0x2029), "\\u2029"))
 
 
 def sha256_text(s: str) -> str:
@@ -94,6 +95,58 @@ def atomic_write(path: str, data: str) -> None:
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+# --------------------------------------------------------------------------- #
+# safe reads (confinement to the plan folder, regular files only, capped)
+# --------------------------------------------------------------------------- #
+
+_DOC_READ_CAP = 8 * 1024 * 1024  # anchor-listed docs: generous, but never unbounded
+
+
+def _under_root(root_real: str, path_real: str) -> bool:
+    try:
+        return os.path.commonpath([root_real, path_real]) == root_real
+    except ValueError:  # different drives / mix of abs+rel
+        return False
+
+
+def resolve_in_plan(plan: str, rel: str):
+    """Resolve `rel` (a path taken from the anchor or a directory walk) against
+    the plan folder. Returns the realpath, or None when it escapes
+    realpath(plan) (absolute key, `..`, or a symlink pointing outside)."""
+    if not isinstance(rel, str) or not rel or "\0" in rel:
+        return None
+    root = os.path.realpath(plan)
+    real = os.path.realpath(os.path.join(root, rel))
+    return real if _under_root(root, real) else None
+
+
+def read_regular_capped(path: str, cap: int):
+    """Read at most cap+1 bytes from a regular file, never following a symlink
+    at the final component and never blocking on a FIFO/device. Returns the raw
+    bytes (len == cap+1 means 'over the cap'), or None if `path` is not a
+    readable regular file. Never trusts stat().st_size."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks, total = [], 0
+        while total <= cap:
+            b = os.read(fd, min(1 << 20, cap + 1 - total))
+            if not b:
+                break
+            chunks.append(b)
+            total += len(b)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
 
 # --------------------------------------------------------------------------- #
@@ -416,7 +469,8 @@ def cmd_read_anchor(args):
 # command: scaffold
 # --------------------------------------------------------------------------- #
 
-def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str):
+def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str,
+                keep_prior_ids=()):
     """Record a doc's whole-file hash + region hashes. Preserves the existing
     region entry (including its last_written stamp) when the content hash is
     unchanged, so re-recording an untouched doc produces no diff — the basis of
@@ -430,6 +484,12 @@ def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str):
         if h is None:
             continue
         old = prior.get(fid)
+        if fid in keep_prior_ids:
+            # hand-edited region we deliberately did not touch: keep the last
+            # *written* hash so the edit stays detectable as dirty.
+            if old:
+                regions.append(old)
+            continue
         if old and old.get("hash") == h:
             regions.append(old)  # unchanged — keep the original stamp
         else:
@@ -440,10 +500,65 @@ def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str):
     }
 
 
+def _load_anchor_or_none(plan: str):
+    """Like load_anchor but returns None when the anchor is missing, unreadable
+    or not a JSON object (so --force can recreate only a *corrupt* anchor)."""
+    p = anchor_path(plan)
+    if not os.path.exists(p):
+        return None
+    try:
+        a = json.loads(read_file(p))
+    except (ValueError, OSError):
+        return None
+    return a if isinstance(a, dict) else None
+
+
+def _rerender_fences(plan: str, relpath: str, rendered: str, fence_ids, anchor: dict):
+    """Re-render only the fence interiors of an existing file from the rendered
+    template, leaving every byte outside the fences alone. A region is skipped
+    when it was last written by an action other than init (generated content),
+    or when it looks hand-edited (on-disk hash differs from what we last wrote, or
+    there is no record and it differs from the fresh render) - same dirty
+    semantics as write-region, minus the per-call --force override.
+    Returns (refreshed_ids, dirty_ids, missing_ids)."""
+    full = os.path.join(plan, relpath)
+    text = read_file(full)
+    prior = {r["id"]: r for r in anchor.get("docs", {}).get(relpath, {}).get("generated_regions", [])}
+    refreshed, dirty, missing = [], [], []
+    for fid in fence_ids:
+        cur = find_region(text, fid)
+        new = find_region(rendered, fid)
+        if cur is None or new is None:
+            missing.append(fid)
+            continue
+        (_, cs1), (ce0, _), cinner = cur
+        _, _, ninner = new
+        on_disk = sha256_text(_strip_meta(cinner))
+        fresh = sha256_text(_strip_meta(ninner))
+        rec = prior.get(fid)
+        if on_disk == fresh:
+            continue  # already identical - nothing to do
+        if (rec and on_disk != rec.get("hash")) or (not rec):
+            dirty.append(fid)
+            continue
+        if rec.get("last_action") != "init":
+            # last written by another action (research, orchestrate, ...): that
+            # is generated content, not a blank template. Never reset it.
+            dirty.append(fid)
+            continue
+        text = text[:cs1] + ninner + text[ce0:]
+        refreshed.append(fid)
+    if refreshed:
+        atomic_write(full, text)
+    return refreshed, dirty, missing
+
+
 def cmd_scaffold(args):
     plan = args.plan
     root = args.profiles_root
     plan_slug = os.path.basename(os.path.normpath(plan))
+    reset_all = getattr(args, "reset_all", False)
+    force = args.force or reset_all
 
     # conformance gate before touching disk (rules 1-9 hard)
     v = validate_profile(root, args.profile)
@@ -454,8 +569,16 @@ def cmd_scaffold(args):
     subs = build_subs(profile, args.goal, plan_slug)
 
     existing_anchor = os.path.exists(anchor_path(plan))
-    if existing_anchor and not args.force:
-        anchor = load_anchor(plan)
+    if reset_all:
+        anchor = _new_anchor(args.profile, args.goal)  # destroys ids/designs/subplans/research
+    elif existing_anchor:
+        # --force keeps the anchor's ids/designs/subplans/research; only a corrupt
+        # (or non-object) anchor is recreated, and only when --force was passed.
+        anchor = _load_anchor_or_none(plan)
+        if anchor is None:
+            if not force:
+                load_anchor(plan)  # dies with the standard corrupt-JSON message
+            anchor = _new_anchor(args.profile, args.goal)
     else:
         anchor = _new_anchor(args.profile, args.goal)
     # snapshot for true-no-op detection (everything except the volatile `updated`)
@@ -463,15 +586,33 @@ def cmd_scaffold(args):
 
     os.makedirs(plan, exist_ok=True)
     written, skipped = [], []
+    refreshed_regions, dirty_regions, missing_regions = [], [], []
+
+    def _place(relpath, tpl, dest):
+        """Write a missing file; with --reset-all overwrite; with --force on an
+        existing file re-render fence interiors only. Returns dirty ids to keep."""
+        if not os.path.exists(dest) or reset_all:
+            atomic_write(dest, render_template(read_file(tpl), subs))
+            written.append(relpath)
+            return ()
+        skipped.append(relpath)
+        if not args.force:
+            return ()
+        ids = SCAFFOLD_REGIONS.get(relpath, [])
+        if not ids:
+            return ()
+        rendered = render_template(read_file(tpl), subs)
+        ref, dirty, miss = _rerender_fences(plan, relpath, rendered, ids, anchor)
+        refreshed_regions.extend(f"{relpath}#{i}" for i in ref)
+        dirty_regions.extend(f"{relpath}#{i}" for i in dirty)
+        missing_regions.extend(f"{relpath}#{i}" for i in miss)
+        return tuple(dirty)
+
     for fname in profile["spine"]:
         dest = os.path.join(plan, fname)
-        if os.path.exists(dest) and not args.force:
-            skipped.append(fname)
-        else:
-            tpl = template_path(root, profile, fname)
-            atomic_write(dest, render_template(read_file(tpl), subs))
-            written.append(fname)
-        _record_doc(anchor, plan, fname, SCAFFOLD_REGIONS.get(fname, []), "init")
+        tpl = template_path(root, profile, fname)
+        keep = _place(fname, tpl, dest)
+        _record_doc(anchor, plan, fname, SCAFFOLD_REGIONS.get(fname, []), "init", keep)
 
     # designs/ + drafts/ (cheap dirs)
     os.makedirs(os.path.join(plan, "designs"), exist_ok=True)
@@ -485,9 +626,9 @@ def cmd_scaffold(args):
         atomic_write(drafts_dest, render_template(read_file(drafts_tpl), subs))
         written.append("drafts/README.md")
 
-    # artifact/ — living-spec index.html + ikenga manifest. Written only if absent
-    # (hand-edited overlays are preserved); the spec-state fence inside index.html
-    # starts as an empty scaffold and is regenerated by `refresh-living-spec`.
+    # artifact/ - living-spec index.html + ikenga manifest. Written only if absent
+    # (hand-edited overlays are preserved); with --force only the spec-state fence
+    # interior is re-rendered. The fence is regenerated by `refresh-living-spec`.
     artifact_dir = os.path.join(plan, "artifact")
     os.makedirs(artifact_dir, exist_ok=True)
     for relpath in SCAFFOLD_ARTIFACT_FILES:
@@ -495,24 +636,25 @@ def cmd_scaffold(args):
         dest = os.path.join(plan, relpath)
         if not os.path.exists(tpl):
             continue
-        if os.path.exists(dest) and not args.force:
-            skipped.append(relpath)
-        else:
-            atomic_write(dest, render_template(read_file(tpl), subs))
-            written.append(relpath)
+        keep = _place(relpath, tpl, dest)
         # Only record region hashes for files we know carry a fence.
         regions = SCAFFOLD_REGIONS.get(relpath, [])
         if regions:
-            _record_doc(anchor, plan, relpath, regions, "init")
+            _record_doc(anchor, plan, relpath, regions, "init", keep)
 
     after = json.dumps({k: v for k, v in anchor.items() if k != "updated"}, sort_keys=True)
     changed = (not existing_anchor) or (before != after) or bool(written)
     if changed:
         save_anchor(plan, anchor)  # bumps `updated`
-    # else: true no-op — leave the anchor (and its `updated`) untouched
-    emit({"result": "scaffolded" if not existing_anchor else ("reconciled" if changed else "unchanged"),
-          "plan": plan, "profile": args.profile, "spine_version": CURRENT_SPINE_VERSION,
-          "written": written, "skipped_existing": skipped})
+    # else: true no-op - leave the anchor (and its `updated`) untouched
+    out = {"result": "scaffolded" if not existing_anchor else ("reconciled" if changed else "unchanged"),
+           "plan": plan, "profile": args.profile, "spine_version": CURRENT_SPINE_VERSION,
+           "written": written, "skipped_existing": skipped}
+    if force:
+        out["refreshed_regions"] = refreshed_regions
+        out["skipped_dirty_regions"] = dirty_regions
+        out["missing_fences"] = missing_regions
+    emit(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -535,7 +677,21 @@ def cmd_write_region(args):
     action = args.action
     new_content = args.content if args.content is not None else read_file(args.content_file)
     new_content = new_content.strip("\n")
-    if getattr(args, "html_script_safe", False):
+    wrap_id = getattr(args, "wrap_script", None)
+    if wrap_id:
+        # The fence owns the whole <script> element (living spec: spec-state).
+        # The caller supplies bare JSON; we validate it, escape it and add the tags,
+        # so plan text containing `</script>` can never close the element early.
+        wtype = getattr(args, "wrap_script_type", None) or "application/groundwork+json"
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", wrap_id) or not re.fullmatch(r"[A-Za-z0-9_.+/-]+", wtype):
+            die("--wrap-script / --wrap-script-type contain unsafe characters", 1)
+        try:
+            json.loads(new_content)
+        except ValueError as e:
+            die(f"--wrap-script content must be bare JSON ({e})", 1)
+        new_content = (f'<script type="{wtype}" id="{wrap_id}">'
+                       f'{_html_script_escape(new_content)}</script>')
+    elif getattr(args, "html_script_safe", False):
         new_content = _html_script_escape(new_content)
     new_hash = sha256_text(new_content.strip())
 
@@ -1410,11 +1566,20 @@ def cmd_status_data(args):
     docs = anchor.get("docs", {})
     doc_report = []
     for relpath, meta in docs.items():
-        full = os.path.join(plan, relpath)
+        full = resolve_in_plan(plan, relpath)
+        if full is None:
+            doc_report.append({"file": relpath, "state": "rejected",
+                               "reason": "path escapes the plan folder"})
+            continue
         if not os.path.exists(full):
             doc_report.append({"file": relpath, "state": "missing"})
             continue
-        text = read_file(full)
+        raw = read_regular_capped(full, _DOC_READ_CAP)
+        if raw is None or len(raw) > _DOC_READ_CAP:
+            doc_report.append({"file": relpath, "state": "rejected",
+                               "reason": "not a regular file, or larger than the read cap"})
+            continue
+        text = raw.decode("utf-8", errors="replace")
         whole_ok = sha256_text(text) == meta.get("hash")
         dirty = []
         for reg in meta.get("generated_regions", []):
@@ -1548,7 +1713,26 @@ def _explorer_walk(plan: str, rel: str, anchor: dict, budget: dict) -> dict | No
     name = os.path.basename(rel) if rel else os.path.basename(os.path.normpath(plan))
     relposix = rel.replace(os.sep, "/")
 
-    if os.path.isdir(full):
+    # Confinement: never leave the plan folder. Skip symlinks outright (file or
+    # dir), anything whose realpath is not under realpath(plan), and anything
+    # that is neither a regular file nor a directory (devices, FIFOs, sockets).
+    if rel:
+        try:
+            st = os.lstat(full)
+        except OSError:
+            return None
+        if stat.S_ISLNK(st.st_mode):
+            return None
+        root_real = budget.get("root_real") or os.path.realpath(plan)
+        if not _under_root(root_real, os.path.realpath(full)):
+            return None
+        is_dir, is_reg = stat.S_ISDIR(st.st_mode), stat.S_ISREG(st.st_mode)
+        if not (is_dir or is_reg):
+            return None
+    else:
+        is_dir, is_reg = True, False
+
+    if is_dir:
         # Skip noise dirs — but only for descendants, never the plan root itself
         # (a plan legitimately named `build`/`dist`/… must still render).
         if rel and name in _EXPLORER_SKIP_DIRS:
@@ -1585,10 +1769,7 @@ def _explorer_walk(plan: str, rel: str, anchor: dict, budget: dict) -> dict | No
         return None
     ntype = _explorer_node_type(name, relposix)
     kind = _explorer_node_kind(relposix, name, anchor)
-    try:
-        size = os.path.getsize(full)
-    except OSError:
-        size = 0
+    size = st.st_size  # advisory only; the embed pass re-measures what it reads
     registered = (relposix in anchor.get("docs", {}) or relposix in anchor.get("subplans", {})
                   or relposix in anchor.get("designs", {}) or relposix == ".groundwork.json")
     badges = _explorer_badges(relposix, ntype, kind, anchor)
@@ -1622,12 +1803,17 @@ def _explorer_embed_pass(anchor: dict, budget: dict):
         if size > _EXPLORER_PER_FILE_CAP or budget["spent"] + size > _EXPLORER_TOTAL_BUDGET:
             budget["truncated"].append(relposix)
             continue
-        try:
-            with open(full, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
+        # Bounded read: stat size is advisory (it is 0 for devices and can lie),
+        # so read cap+1 bytes from a verified regular file and re-check.
+        raw = read_regular_capped(full, _EXPLORER_PER_FILE_CAP)
+        if raw is None or len(raw) > _EXPLORER_PER_FILE_CAP:
             budget["truncated"].append(relposix)
             continue
+        size = len(raw)
+        if budget["spent"] + size > _EXPLORER_TOTAL_BUDGET:
+            budget["truncated"].append(relposix)
+            continue
+        text = raw.decode("utf-8", errors="replace")
         node["content"] = text
         node["embedded"] = True
         budget["spent"] += size
@@ -1651,7 +1837,8 @@ def cmd_explorer_data(args):
     plan = args.plan
     anchor = load_anchor(plan)
     budget = {"spent": 0, "files": 0, "dirs": 0, "embedded": 0,
-              "referenced": 0, "truncated": [], "embeddable": [], "seen_dirs": set()}
+              "referenced": 0, "truncated": [], "embeddable": [], "seen_dirs": set(),
+              "root_real": os.path.realpath(plan)}
     root = _explorer_walk(plan, "", anchor, budget)
     _explorer_embed_pass(anchor, budget)
     tree = root["children"] if root else []
@@ -1705,8 +1892,10 @@ def _plan_rollup(plan_dir: str, name: str) -> dict | None:
     # drift: any tracked doc whose on-disk hash diverged (or vanished)
     drift = False
     for rel, meta in anchor.get("docs", {}).items():
-        f = os.path.join(plan_dir, rel)
-        if not os.path.exists(f) or sha256_text(read_file(f)) != meta.get("hash"):
+        f = resolve_in_plan(plan_dir, rel)
+        raw = read_regular_capped(f, _DOC_READ_CAP) if f and os.path.exists(f) else None
+        if raw is None or len(raw) > _DOC_READ_CAP or \
+                sha256_text(raw.decode("utf-8", errors="replace")) != meta.get("hash"):
             drift = True; break
     return {
         "slug": name, "path": name, "title": _plan_title(plan_dir, anchor),
@@ -1785,11 +1974,11 @@ def cmd_write_region_plain(args):
 # --------------------------------------------------------------------------- #
 
 # `## Phase N — <title>` heading in 05-tracking.md (or `## Phase N: <title>`).
-_PHASE_HEAD_RE = re.compile(r"^##\s+Phase\s+(\d+(?:\.\d+)?)\s*[—:\-]\s*(.+?)\s*$", re.M)
+_PHASE_HEAD_RE = re.compile(r"^##\s+Phase\s+(\d+(?:\.\d+)?)\s*[—:\-]\s*(\S(?:.*\S)?)[ \t]*$", re.M)
 # `### WP-<id> — <title>` heading underneath a phase.
-_WP_HEAD_RE = re.compile(r"^###\s+WP-([A-Za-z0-9]+)\s*[—:\-]\s*(.+?)\s*$", re.M)
+_WP_HEAD_RE = re.compile(r"^###\s+WP-([A-Za-z0-9]+)\s*[—:\-]\s*(\S(?:.*\S)?)[ \t]*$", re.M)
 # `## Round N — <title> (<date>)` heading in 04-discussion.md.
-_ROUND_HEAD_RE = re.compile(r"^##\s+Round\s+(\d+)\s*[—:\-]\s*(.+?)\s*$", re.M)
+_ROUND_HEAD_RE = re.compile(r"^##\s+Round\s+(\d+)\s*[—:\-]\s*(\S(?:.*\S)?)[ \t]*$", re.M)
 # Date inside parentheses at the end of a round heading: `… (2026-05-27)`.
 _PAREN_DATE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})\)\s*$")
 # `## Risks` section heading variants in 01-plan.md.
@@ -2087,7 +2276,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--profiles-root", required=True)
     g.add_argument("--profile", required=True)
     g.add_argument("--goal", required=True)
-    g.add_argument("--force", action="store_true")
+    g.add_argument("--force", action="store_true",
+                   help="re-render fence interiors of existing spine files only; keeps prose "
+                        "outside fences and all anchor state (ids/designs/subplans/research)")
+    g.add_argument("--reset-all", action="store_true", dest="reset_all",
+                   help="DESTRUCTIVE: overwrite every spine file with its blank template and "
+                        "replace the anchor (loses hand-written prose, IDs, designs, subplans)")
     g.set_defaults(func=cmd_scaffold)
 
     g = sub.add_parser("read-region", help="print a fence region's inner content")
@@ -2105,6 +2299,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--force", action="store_true")
     g.add_argument("--html-script-safe", action="store_true",
                    help="escape </script>-breaking chars (<>&) — for JSON written into an HTML <script> fence")
+    g.add_argument("--wrap-script", metavar="ID",
+                   help="content is bare JSON: validate it, escape it and wrap it in "
+                        "<script type=... id=ID>...</script> (for fences that own the whole script element)")
+    g.add_argument("--wrap-script-type", default=None,
+                   help="script type for --wrap-script (default application/groundwork+json)")
     g.set_defaults(func=cmd_write_region)
 
     g = sub.add_parser("next-id", help="compute the next free ID of a kind")

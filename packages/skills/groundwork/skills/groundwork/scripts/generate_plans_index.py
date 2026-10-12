@@ -35,6 +35,21 @@ def _result(r):
         return None
 
 
+def _scaffold_copy(tpl, dest):
+    """Copy the template to dest ATOMICALLY. os.replace swaps the directory
+    entry itself, so a symlink (live or dangling) at dest is replaced by a
+    regular file and is never written through to its target."""
+    d = os.path.dirname(os.path.abspath(dest)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".gw-tmp-")
+    os.close(fd)
+    try:
+        shutil.copyfile(tpl, tmp)
+        os.replace(tmp, dest)
+    finally:
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+
+
 def generate(plans_dir, title=None):
     plans_dir = os.path.normpath(plans_dir)
     md = _run("plans-index-data", "--plans-dir", plans_dir)
@@ -44,9 +59,10 @@ def generate(plans_dir, title=None):
     stats = json.loads(model).get("stats", {})
 
     dest = os.path.join(plans_dir, "_index.html")
-    scaffolded = not os.path.exists(dest)
+    # A symlink at dest (live or dangling) is replaced, never written through.
+    scaffolded = os.path.islink(dest) or not os.path.exists(dest)
     if scaffolded:
-        shutil.copyfile(TEMPLATE, dest)
+        _scaffold_copy(TEMPLATE, dest)
 
     meta = {"title": title or (os.path.basename(plans_dir) + " · plans"),
             "root_rel": ".", "refreshed": datetime.date.today().isoformat()}

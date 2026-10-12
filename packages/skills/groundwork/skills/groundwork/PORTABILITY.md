@@ -29,6 +29,10 @@ Files carrying these references:
 - `profiles/_shared/templates/drafts/README.md` — `plans/studio`
 - `profiles/_shared/board/index.html` — both (see runtime fallback below)
 
+## 1b. Commands the skill runs
+
+Every action shells out to `python3 <skill>/scripts/groundwork_state.py <subcommand>`; see "Commands this skill runs" in `skills/groundwork/README.md` for the full list (also `generate_explorer.py`, `generate_plans_index.py`, `watch.py`, and `gh` / `glab` in `issue-sync`).
+
 ## 2. Runtime fallback in the standalone board (`profiles/_shared/board/index.html`)
 
 The board template ships with a hardcoded `'plans/groundwork'` **fallback**
