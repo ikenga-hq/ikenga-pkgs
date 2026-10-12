@@ -1,6 +1,15 @@
 {
   "mattermostUrl": "https://mm.example.com",
   "dataDir": "/var/lib/ikenga/mattermost",
+  "outboxApprovals": {
+    "enabled": true,
+    "approvers": [
+      "9s65in45np8h98qeatgx7anuoa",
+      "buay4kf99bbk7cjtbeupd5rxow",
+      "f3w99k5x6fgomdprh8axosmmsc"
+    ],
+    "socketPath": "/run/ikenga-sender/approvals.sock"
+  },
   "bots": {
     "rex": {
       "mattermostToken": { "env": "MM_REX_TOKEN" },

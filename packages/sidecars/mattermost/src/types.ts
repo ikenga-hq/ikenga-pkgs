@@ -57,6 +57,21 @@ export interface BotApprovalsConfig {
 }
 
 /**
+ * Outbox action draft approval routing (S2 / D-B13).
+ * Approvers are matched strictly by Mattermost user ID only (never by username).
+ * CODE default is empty [] (fail closed).
+ */
+export interface OutboxApprovalsConfig {
+  enabled?: boolean;
+  /** Mattermost user IDs allowed to approve outbox drafts. Default []. */
+  approvers?: string[];
+  /** Sender Unix domain socket path. Default '/run/ikenga-sender/approvals.sock'. */
+  socketPath?: string;
+  /** Bridge Unix user ID for SO_PEERCRED check. */
+  bridgeUid?: number;
+}
+
+/**
  * B4: a scheduled post. At each due time (cron, 5 fields, UTC) the bot starts a Chi run of `task` in the
  * daemon's read-only `plan` mode and posts the result to `channel` as a new root post. There is no `mode`
  * field on purpose: a scheduled run is always read-only and never goes through approvals (D-B7).
@@ -150,6 +165,8 @@ export interface MattermostBridgeConfig {
   audit?: AuditConfig;
   /** Scheduler state file. Default `<dataDir>/schedules-<name>.json`. */
   schedulesPath?: string;
+  /** Outbox action draft approvals (S2). */
+  outboxApprovals?: OutboxApprovalsConfig;
 }
 
 export interface MattermostPost {

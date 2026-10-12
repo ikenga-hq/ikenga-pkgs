@@ -13,6 +13,8 @@ import { ScheduleRunner, ScheduleStore, resolveSchedules } from './schedules.js'
 import type { RunOutcome } from './schedules.js';
 import { ThreadRouter } from './sessions.js';
 import { ThreadStore } from './store.js';
+import { DraftApprovalManager } from './outbox-approvals.js';
+import type { ApproveDraftResult, CanonicalDraftPayload } from './outbox-approvals.js';
 import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
 
 export class MattermostBridge {
@@ -25,6 +27,8 @@ export class MattermostBridge {
   readonly daemon?: DaemonClient;
   /** Present when the bot has an `approvals` block (B3). */
   readonly approvals?: ApprovalManager;
+  /** S2: Outbox action draft approvals. Present when outboxApprovals is enabled. */
+  readonly outboxApprovals?: DraftApprovalManager;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
   /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
@@ -126,6 +130,17 @@ export class MattermostBridge {
     } else if (config.schedules?.length) {
       throw new Error(`bot '${config.name ?? 'bot'}': schedules needs daemon and chi (B2) to be configured`);
     }
+
+    if (config.outboxApprovals && config.outboxApprovals.enabled !== false) {
+      this.outboxApprovals = new DraftApprovalManager({
+        approvers: config.outboxApprovals.approvers ?? [],
+        socketPath: config.outboxApprovals.socketPath ?? '/run/ikenga-sender/approvals.sock',
+        bridgeUid: config.outboxApprovals.bridgeUid ?? (typeof process.getuid === 'function' ? process.getuid() : 0),
+        client: this.client,
+        botUserId: config.botUserId,
+        audit: this.audit,
+      });
+    }
   }
 
   /**
@@ -148,6 +163,7 @@ export class MattermostBridge {
       if (me?.id) {
         this.gate.setBotUserId(me.id);
         this.approvals?.setBotUserId(me.id);
+        this.outboxApprovals?.setBotUserId(me.id);
       }
       if (me?.username) this.router?.setBotUsername(me.username);
     } catch (err) {
@@ -155,6 +171,7 @@ export class MattermostBridge {
       if (this.config.botUserId) {
         this.gate.setBotUserId(this.config.botUserId);
         this.approvals?.setBotUserId(this.config.botUserId);
+        this.outboxApprovals?.setBotUserId(this.config.botUserId);
       }
     }
 
@@ -275,12 +292,20 @@ export class MattermostBridge {
 
     // Reactions are not post events, so the post gate does not see them: the approver
     // list inside the manager is their gate (separate from `allowedUsers`).
-    if (this.approvals) {
+    if (this.approvals || this.outboxApprovals) {
       const approvals = this.approvals;
+      const outbox = this.outboxApprovals;
       this.client.on('reaction', (reaction: MattermostReaction) => {
-        approvals.handleReaction(reaction).catch((err) => {
-          console.error('Failed to handle reaction:', err instanceof Error ? err.message : err);
-        });
+        if (approvals) {
+          approvals.handleReaction(reaction).catch((err) => {
+            console.error('Failed to handle reaction:', err instanceof Error ? err.message : err);
+          });
+        }
+        if (outbox) {
+          outbox.handleReaction(reaction).catch((err) => {
+            console.error('Failed to handle outbox reaction:', err instanceof Error ? err.message : err);
+          });
+        }
       });
     }
 
@@ -309,6 +334,23 @@ export class MattermostBridge {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** Register a draft post with the bridge for reaction approval tracking (S2). */
+  registerOutboxDraft(postId: string, draftId: string, payload: CanonicalDraftPayload, channelId?: string): void {
+    this.outboxApprovals?.registerDraftPost(postId, draftId, payload, channelId);
+  }
+
+  /** Handle an interactive button action for an action draft (S2). */
+  async handleOutboxButtonAction(action: {
+    user_id: string;
+    post_id?: string;
+    context?: { draftId?: string; payload?: CanonicalDraftPayload };
+  }): Promise<ApproveDraftResult> {
+    if (!this.outboxApprovals) {
+      return { ok: false, error: 'outbox_approvals_disabled' };
+    }
+    return this.outboxApprovals.handleButtonAction(action);
   }
 }
 

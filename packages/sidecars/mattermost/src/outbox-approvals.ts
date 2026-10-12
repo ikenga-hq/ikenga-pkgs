@@ -24,11 +24,20 @@ export interface CanonicalDraftPayload {
   scheduled_at: string | null;
 }
 
+export interface TrackedDraftPost {
+  draftId: string;
+  payload: CanonicalDraftPayload;
+  channelId?: string;
+  postId: string;
+  createdAt: number;
+}
+
 export interface DraftApprovalManagerOptions {
   approvers: string[];
   socketPath: string;
   bridgeUid: number;
   client: MattermostClient;
+  botUserId?: string;
   audit?: AuditLog;
 }
 
@@ -106,13 +115,114 @@ export async function sendApprovalToSenderSocket(opts: {
   });
 }
 
+function isApprovalEmoji(emoji: string): boolean {
+  const name = emoji.split('::', 1)[0];
+  return name === '+1' || name === 'thumbsup';
+}
+
 export class DraftApprovalManager {
-  private readonly approverSet: Set<string>;
+  private readonly approverIdSet: Set<string>;
+  private readonly trackedDrafts = new Map<string, TrackedDraftPost>();
 
   constructor(private readonly opts: DraftApprovalManagerOptions) {
-    this.approverSet = new Set(
-      opts.approvers.map((a) => a.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
+    // Matched strictly by user ID only: never by username
+    this.approverIdSet = new Set(
+      opts.approvers.map((a) => a.trim().toLowerCase()).filter(Boolean),
     );
+  }
+
+  setBotUserId(id: string): void {
+    this.opts.botUserId = id;
+  }
+
+  /**
+   * Register a post as representing a pending outbox action draft.
+   */
+  registerDraftPost(postId: string, draftId: string, payload: CanonicalDraftPayload, channelId?: string): void {
+    this.trackedDrafts.set(postId, {
+      postId,
+      draftId,
+      payload,
+      channelId,
+      createdAt: Date.now(),
+    });
+  }
+
+  getTrackedDraft(postId: string): TrackedDraftPost | undefined {
+    return this.trackedDrafts.get(postId);
+  }
+
+  /**
+   * Handle a reaction event (+1 / thumbsup) on a potential draft post.
+   */
+  async handleReaction(reaction: { user_id: string; post_id: string; emoji_name: string }): Promise<ApproveDraftResult | null> {
+    if (!isApprovalEmoji(reaction.emoji_name ?? '')) {
+      return null;
+    }
+
+    const tracked = this.trackedDrafts.get(reaction.post_id);
+    if (!tracked) {
+      return null;
+    }
+
+    const result = await this.approveDraft({
+      draftId: tracked.draftId,
+      payload: tracked.payload,
+      clickerUserId: reaction.user_id,
+    });
+
+    if (result.ok) {
+      this.trackedDrafts.delete(reaction.post_id);
+      if (tracked.channelId) {
+        try {
+          await this.opts.client.reply(
+            tracked.channelId,
+            `Draft \`${tracked.draftId}\` approved by @${result.approver} and sent to outbox ledger.`,
+            reaction.post_id,
+          );
+        } catch {
+          // Reply error is non-fatal; ledger is already committed
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Handle an interactive button action for an action draft.
+   */
+  async handleButtonAction(action: {
+    user_id: string;
+    post_id?: string;
+    context?: { draftId?: string; payload?: CanonicalDraftPayload };
+  }): Promise<ApproveDraftResult> {
+    let draftId = action.context?.draftId;
+    let payload = action.context?.payload;
+
+    if ((!draftId || !payload) && action.post_id) {
+      const tracked = this.trackedDrafts.get(action.post_id);
+      if (tracked) {
+        draftId = tracked.draftId;
+        payload = tracked.payload;
+      }
+    }
+
+    if (!draftId || !payload) {
+      return { ok: false, error: 'missing_draft_context' };
+    }
+
+    const result = await this.approveDraft({
+      draftId,
+      payload,
+      clickerUserId: action.user_id,
+    });
+
+    if (result.ok && action.post_id) {
+      this.trackedDrafts.delete(action.post_id);
+    }
+
+    return result;
   }
 
   /**
@@ -126,6 +236,7 @@ export class DraftApprovalManager {
     // Server-side identity check via Mattermost API: never trust post text or payload
     let username: string;
     let userId: string;
+    let isBot = false;
     try {
       const user = await this.opts.client.getUser(req.clickerUserId);
       if (!user || !user.id) {
@@ -133,12 +244,32 @@ export class DraftApprovalManager {
       }
       userId = user.id.toLowerCase();
       username = (user.username ?? '').toLowerCase();
+      isBot = Boolean((user as any).is_bot);
     } catch {
       return { ok: false, error: 'unverifiable_user' };
     }
 
-    // Verify clicker against approvers allowlist
-    const isAllowed = this.approverSet.has(userId) || this.approverSet.has(username);
+    // Bots (ik-ruby, ik-rex, or any bot account) are NEVER approvers
+    if (
+      isBot ||
+      username === 'ik-ruby' ||
+      username === 'ik-rex' ||
+      username.startsWith('ik-') ||
+      (this.opts.botUserId && userId === this.opts.botUserId.toLowerCase())
+    ) {
+      if (this.opts.audit) {
+        this.opts.audit.record('draft.approval_rejected', {
+          draft_id: req.draftId,
+          user_id: userId,
+          username,
+          reason: 'bot_cannot_approve',
+        });
+      }
+      return { ok: false, error: 'bot_cannot_approve' };
+    }
+
+    // Match strictly by user ID only: usernames are never matched
+    const isAllowed = this.approverIdSet.has(userId);
     if (!isAllowed) {
       if (this.opts.audit) {
         this.opts.audit.record('draft.approval_rejected', {

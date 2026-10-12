@@ -7,7 +7,7 @@ import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
 import { resolveBranchPrefix, resolveModeRails } from './rails.js';
-import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
+import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, OutboxApprovalsConfig, ProgressConfig, ScheduleConfig } from './types.js';
 
 /**
  * On-disk bridge config (`MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`).
@@ -44,11 +44,15 @@ export interface BotFileConfig {
   branchPrefix?: string;
   /** B5: audit options (the log itself is always on). */
   audit?: AuditConfig;
+  /** Outbox action draft approvals (S2). */
+  outboxApprovals?: OutboxApprovalsConfig;
 }
 
 export interface BridgeFileConfig {
   mattermostUrl?: string;
   dataDir?: string;
+  /** Global outbox action draft approvals (S2). */
+  outboxApprovals?: OutboxApprovalsConfig;
   bots: Record<string, BotFileConfig>;
 }
 
@@ -128,6 +132,16 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       maxMode: bot.maxMode,
       branchPrefix: bot.branchPrefix,
       audit: bot.audit,
+      outboxApprovals: (() => {
+        const outboxCfg = bot.outboxApprovals ?? cfg.outboxApprovals;
+        if (!outboxCfg) return undefined;
+        return {
+          enabled: outboxCfg.enabled ?? true,
+          approvers: (outboxCfg.approvers ?? []).map((a: string) => a.trim()).filter(Boolean),
+          socketPath: outboxCfg.socketPath,
+          bridgeUid: outboxCfg.bridgeUid,
+        };
+      })(),
     };
   });
 }
