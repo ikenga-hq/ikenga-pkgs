@@ -4,9 +4,8 @@
   "outboxApprovals": {
     "enabled": true,
     "approvers": [
-      "9s65in45np8h98qeatgx7anuoa",
-      "buay4kf99bbk7cjtbeupd5rxow",
-      "f3w99k5x6fgomdprh8axosmmsc"
+      "user-id-approver-1",
+      "user-id-approver-2"
     ],
     "socketPath": "/run/ikenga-sender/approvals.sock"
   },

@@ -195,30 +195,24 @@ export class DraftApprovalManager {
   async handleButtonAction(action: {
     user_id: string;
     post_id?: string;
-    context?: { draftId?: string; payload?: CanonicalDraftPayload };
+    context?: unknown;
   }): Promise<ApproveDraftResult> {
-    let draftId = action.context?.draftId;
-    let payload = action.context?.payload;
-
-    if ((!draftId || !payload) && action.post_id) {
-      const tracked = this.trackedDrafts.get(action.post_id);
-      if (tracked) {
-        draftId = tracked.draftId;
-        payload = tracked.payload;
-      }
+    if (!action.post_id) {
+      return { ok: false, error: 'missing_post_id' };
     }
 
-    if (!draftId || !payload) {
-      return { ok: false, error: 'missing_draft_context' };
+    const tracked = this.trackedDrafts.get(action.post_id);
+    if (!tracked) {
+      return { ok: false, error: 'untracked_or_unannounced_post' };
     }
 
     const result = await this.approveDraft({
-      draftId,
-      payload,
+      draftId: tracked.draftId,
+      payload: tracked.payload,
       clickerUserId: action.user_id,
     });
 
-    if (result.ok && action.post_id) {
+    if (result.ok) {
       this.trackedDrafts.delete(action.post_id);
     }
 
