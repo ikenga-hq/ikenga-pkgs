@@ -1044,6 +1044,33 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   function srcFor(path) {
     return ROOT_REL + '/' + path;
   }
+  try {
+    fetch(srcFor('.groundwork.json')).then(r => r.ok ? r.json() : null).then(anchor => {
+      if (!anchor) return;
+      const checkPath = (p, defaultKind) => {
+        if (!p || byPath[p] || p === 'artifact/explorer.html') return;
+        const name = p.split('/').pop();
+        const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+        let type = 'code';
+        if (ext === 'md') type = 'markdown';else if (ext === 'html') type = p.startsWith('designs/') ? 'design' : 'html-artifact';else if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) type = 'image';else if (ext === 'pdf') type = 'pdf';else if (ext === 'svg') type = 'svg';
+        const node = {
+          name: name,
+          path: p,
+          type: type,
+          kind: defaultKind || (p.startsWith('designs/') ? 'design' : p.startsWith('0') ? 'subplan' : 'doc'),
+          registered: true,
+          embedded: false,
+          autoDiscovered: true
+        };
+        ALL.push(node);
+        byPath[p] = node;
+        DATA.tree.push(node);
+      };
+      if (anchor.docs) Object.keys(anchor.docs).forEach(p => checkPath(p, 'doc'));
+      if (anchor.subplans) Object.keys(anchor.subplans).forEach(p => checkPath(p, 'subplan'));
+      if (anchor.designs) Object.keys(anchor.designs).forEach(p => checkPath(p, 'design'));
+    }).catch(() => {});
+  } catch (e) {}
   const KIND_GROUPS = [['spine', 'Spine'], ['subplan', 'Sub-plans'], ['artifact', 'Artifact'], ['design', 'Designs'], ['draft', 'Drafts'], ['parts', 'Parts'], ['asset', 'Assets'], ['anchor', 'State'], ['other', 'Other']];
   const PKEY = 'gw-explorer:' + (DATA.plan && DATA.plan.slug || META.plan_slug || 'plan');
   function loadState() {
@@ -1268,18 +1295,34 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
       className: "gname"
     }, n.name)))));
   }
+  function useLiveNodeContent(node) {
+    const [liveText, setLiveText] = useState(node ? node.content : null);
+    useEffect(() => {
+      setLiveText(node ? node.content : null);
+      if (!node || !node.path || node.type === 'dir') return;
+      let alive = true;
+      fetch(srcFor(node.path)).then(r => r.ok ? r.text() : null).then(t => {
+        if (alive && t != null) setLiveText(t);
+      }).catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [node ? node.path : null]);
+    return liveText;
+  }
   function MarkdownView({
     node,
     sub
   }) {
-    if (!node.embedded || node.content == null) return React.createElement(ReferencedCard, {
+    const content = useLiveNodeContent(node);
+    if (content == null) return React.createElement(ReferencedCard, {
       node: node,
-      reason: "Markdown body wasn't embedded (over the size budget). Open it from the plan folder."
+      reason: "Markdown body wasn't embedded or readable directly. Open it from the plan folder."
     });
     if (sub === 'raw') return React.createElement("pre", {
       className: "code"
-    }, node.content);
-    const segs = renderMarkdownSegments(node.content);
+    }, content);
+    const segs = renderMarkdownSegments(content);
     return React.createElement("div", {
       className: "viewer-pad md-body"
     }, segs.map((s, i) => s.auto ? React.createElement("div", {
@@ -1301,14 +1344,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   function CodeView({
     node
   }) {
-    if (!node.embedded || node.content == null) return React.createElement(ReferencedCard, {
+    const content = useLiveNodeContent(node);
+    if (content == null) return React.createElement(ReferencedCard, {
       node: node,
-      reason: "File content wasn't embedded. Open it from the plan folder."
+      reason: "File content wasn't embedded or readable directly. Open it from the plan folder."
     });
-    let body = node.content;
+    let body = content;
     if (node.type === 'json') {
       try {
-        body = JSON.stringify(JSON.parse(node.content), null, 2);
+        body = JSON.stringify(JSON.parse(content), null, 2);
       } catch (e) {}
     }
     return React.createElement("pre", {

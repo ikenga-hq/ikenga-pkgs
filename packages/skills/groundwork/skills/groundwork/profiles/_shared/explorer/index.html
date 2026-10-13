@@ -1038,46 +1038,36 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   ALL.forEach(n => {
     byPath[n.path] = n;
   });
-
-  // Live auto-discovery: check .groundwork.json for newly registered files/subplans/designs
-  try {
-    fetch(srcFor('.groundwork.json'))
-      .then(r => r.ok ? r.json() : null)
-      .then(anchor => {
-        if (!anchor) return;
-        const checkPath = (p, defaultKind) => {
-          if (!p || byPath[p] || p === 'artifact/explorer.html') return;
-          const name = p.split('/').pop();
-          const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-          let type = 'code';
-          if (ext === 'md') type = 'markdown';
-          else if (ext === 'html') type = p.startsWith('designs/') ? 'design' : 'html-artifact';
-          else if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) type = 'image';
-          else if (ext === 'pdf') type = 'pdf';
-          else if (ext === 'svg') type = 'svg';
-
-          const node = {
-            name: name,
-            path: p,
-            type: type,
-            kind: defaultKind || (p.startsWith('designs/') ? 'design' : (p.startsWith('0') ? 'subplan' : 'doc')),
-            registered: true,
-            embedded: false,
-            autoDiscovered: true
-          };
-          ALL.push(node);
-          byPath[p] = node;
-          DATA.tree.push(node);
-        };
-        if (anchor.docs) Object.keys(anchor.docs).forEach(p => checkPath(p, 'doc'));
-        if (anchor.subplans) Object.keys(anchor.subplans).forEach(p => checkPath(p, 'subplan'));
-        if (anchor.designs) Object.keys(anchor.designs).forEach(p => checkPath(p, 'design'));
-      })
-      .catch(() => {});
-  } catch (e) {}
   function srcFor(path) {
     return ROOT_REL + '/' + path;
   }
+  try {
+    fetch(srcFor('.groundwork.json')).then(r => r.ok ? r.json() : null).then(anchor => {
+      if (!anchor) return;
+      const checkPath = (p, defaultKind) => {
+        if (!p || byPath[p] || p === 'artifact/explorer.html') return;
+        const name = p.split('/').pop();
+        const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+        let type = 'code';
+        if (ext === 'md') type = 'markdown';else if (ext === 'html') type = p.startsWith('designs/') ? 'design' : 'html-artifact';else if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) type = 'image';else if (ext === 'pdf') type = 'pdf';else if (ext === 'svg') type = 'svg';
+        const node = {
+          name: name,
+          path: p,
+          type: type,
+          kind: defaultKind || (p.startsWith('designs/') ? 'design' : p.startsWith('0') ? 'subplan' : 'doc'),
+          registered: true,
+          embedded: false,
+          autoDiscovered: true
+        };
+        ALL.push(node);
+        byPath[p] = node;
+        DATA.tree.push(node);
+      };
+      if (anchor.docs) Object.keys(anchor.docs).forEach(p => checkPath(p, 'doc'));
+      if (anchor.subplans) Object.keys(anchor.subplans).forEach(p => checkPath(p, 'subplan'));
+      if (anchor.designs) Object.keys(anchor.designs).forEach(p => checkPath(p, 'design'));
+    }).catch(() => {});
+  } catch (e) {}
   const KIND_GROUPS = [['spine', 'Spine'], ['subplan', 'Sub-plans'], ['artifact', 'Artifact'], ['design', 'Designs'], ['draft', 'Drafts'], ['parts', 'Parts'], ['asset', 'Assets'], ['anchor', 'State'], ['other', 'Other']];
   const PKEY = 'gw-explorer:' + (DATA.plan && DATA.plan.slug || META.plan_slug || 'plan');
   function loadState() {
@@ -1308,19 +1298,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
       setLiveText(node ? node.content : null);
       if (!node || !node.path || node.type === 'dir') return;
       let alive = true;
-      fetch(srcFor(node.path))
-        .then(r => r.ok ? r.text() : null)
-        .then(t => {
-          if (alive && t != null) {
-            setLiveText(t);
-          }
-        })
-        .catch(() => {});
-      return () => { alive = false; };
+      fetch(srcFor(node.path)).then(r => r.ok ? r.text() : null).then(t => {
+        if (alive && t != null) setLiveText(t);
+      }).catch(() => {});
+      return () => {
+        alive = false;
+      };
     }, [node ? node.path : null]);
     return liveText;
   }
-
   function MarkdownView({
     node,
     sub
