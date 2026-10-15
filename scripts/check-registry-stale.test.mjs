@@ -4,7 +4,7 @@ import { checkRegistryHealth, computeDrift } from './check-registry-stale.mjs';
 
 describe('checkRegistryHealth', () => {
   it('runs cleanly against live or raw registry index', async () => {
-    const result = await checkRegistryHealth();
+    const result = await checkRegistryHealth({ attempts: 1 });
     assert.equal(typeof result.ok, 'boolean');
   });
 });

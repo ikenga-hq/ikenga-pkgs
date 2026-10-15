@@ -91,17 +91,32 @@ export function computeDrift(monorepoPkgs, registryPkgs, retiredNames = new Set(
   return drift;
 }
 
-export async function checkRegistryHealth() {
-  const index = await fetchRegistryIndex();
-  if (!index) {
-    console.warn('⚠ Could not fetch live or raw registry index; skipping frozen index check.');
-    return { ok: true, warning: 'registry_unreachable' };
-  }
-
+/**
+ * The release job runs this seconds after update-registry-index.mjs pushes,
+ * but the live index is a GitHub Pages deploy of that push and the raw URL is
+ * CDN-cached, so both still serve the previous index for a minute or more. A
+ * pkg published for the first time is "missing" from that copy, and on
+ * 2026-10-15 the check failed the release that first published
+ * @ikenga/pkg-mattermost while the pushed index already listed it. So drift
+ * is re-checked until the deploy lands, and only drift that outlasts it fails.
+ */
+export async function checkRegistryHealth({ attempts = 12, delayMs = 20_000 } = {}) {
   const monorepoPkgs = findMonorepoPackages();
-  const registryPkgs = new Map((index.pkgs || []).map((p) => [p.name, p.latest]));
-
-  const drift = computeDrift(monorepoPkgs, registryPkgs, RETIRED_PKGS);
+  let index;
+  let registryPkgs;
+  let drift;
+  for (let attempt = 1; ; attempt++) {
+    index = await fetchRegistryIndex();
+    if (!index) {
+      console.warn('⚠ Could not fetch live or raw registry index; skipping frozen index check.');
+      return { ok: true, warning: 'registry_unreachable' };
+    }
+    registryPkgs = new Map((index.pkgs || []).map((p) => [p.name, p.latest]));
+    drift = computeDrift(monorepoPkgs, registryPkgs, RETIRED_PKGS);
+    if (drift.length === 0 || attempt >= attempts) break;
+    console.log(`… ${drift.map((d) => d.name).join(', ')} not in the served index yet (attempt ${attempt}/${attempts}); waiting ${delayMs / 1000}s for the Pages deploy`);
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
 
   let ageDays = null;
   if (index.updatedAt) {
