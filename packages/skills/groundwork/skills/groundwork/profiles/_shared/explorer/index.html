@@ -1041,9 +1041,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
   function srcFor(path) {
     return ROOT_REL + '/' + path;
   }
+  const discoveryListeners = new Set();
+  function onDiscovery(fn) {
+    discoveryListeners.add(fn);
+    return () => discoveryListeners.delete(fn);
+  }
   try {
     fetch(srcFor('.groundwork.json')).then(r => r.ok ? r.json() : null).then(anchor => {
       if (!anchor) return;
+      let added = 0;
       const checkPath = (p, defaultKind) => {
         if (!p || byPath[p] || p === 'artifact/explorer.html') return;
         const name = p.split('/').pop();
@@ -1054,7 +1060,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
           name: name,
           path: p,
           type: type,
-          kind: defaultKind || (p.startsWith('designs/') ? 'design' : p.startsWith('0') ? 'subplan' : 'doc'),
+          kind: p.startsWith('designs/') ? 'design' : defaultKind === 'subplan' ? 'subplan' : p.includes('/') ? 'other' : 'spine',
           registered: true,
           embedded: false,
           autoDiscovered: true
@@ -1062,10 +1068,16 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
         ALL.push(node);
         byPath[p] = node;
         DATA.tree.push(node);
+        added++;
       };
       if (anchor.docs) Object.keys(anchor.docs).forEach(p => checkPath(p, 'doc'));
       if (anchor.subplans) Object.keys(anchor.subplans).forEach(p => checkPath(p, 'subplan'));
       if (anchor.designs) Object.keys(anchor.designs).forEach(p => checkPath(p, 'design'));
+      if (added) discoveryListeners.forEach(fn => {
+        try {
+          fn();
+        } catch (e) {}
+      });
     }).catch(() => {});
   } catch (e) {}
   const KIND_GROUPS = [['spine', 'Spine'], ['subplan', 'Sub-plans'], ['artifact', 'Artifact'], ['design', 'Designs'], ['draft', 'Drafts'], ['parts', 'Parts'], ['asset', 'Assets'], ['anchor', 'State'], ['other', 'Other']];
@@ -1801,6 +1813,14 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     art
   }) {
     const persisted = loadState();
+    const [discoveryTick, setDiscoveryTick] = useState(0);
+    useEffect(() => {
+      const bump = () => setDiscoveryTick(t => t + 1);
+      bump();
+      return onDiscovery(bump);
+    }, []);
+    const liveDesignNodes = useMemo(() => ALL.filter(n => n.type === 'design'), [discoveryTick]);
+    const liveMediaNodes = useMemo(() => ALL.filter(n => n.type === 'image' || n.type === 'pdf' || n.type === 'svg'), [discoveryTick]);
     const [theme, setTheme] = useState(() => ({
       theme: document.documentElement.getAttribute('data-theme') || 'A',
       mode: document.documentElement.getAttribute('data-mode') || 'dark',
@@ -1902,15 +1922,15 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     const subs = subtabsFor(activeNode);
     const sub = activeNode ? subBy[active] || subs[0] && subs[0][0] : null;
     const modes = [['tree', 'Tree', I.tree]];
-    if (designNodes.length) modes.push(['gallery', 'Gallery', I.grid]);
-    if (mediaNodes.length) modes.push(['media', 'Media', I.media]);
+    if (liveDesignNodes.length) modes.push(['gallery', 'Gallery', I.grid]);
+    if (liveMediaNodes.length) modes.push(['media', 'Media', I.media]);
     const grouped = useMemo(() => {
       const groups = {};
       DATA.tree.forEach(n => {
         (groups[n.kind === 'dir' ? dirGroup(n) : n.kind] = groups[n.kind === 'dir' ? dirGroup(n) : n.kind] || []).push(n);
       });
       return groups;
-    }, []);
+    }, [discoveryTick]);
     function dirGroup(n) {
       const map = {
         artifact: 'artifact',
@@ -2016,11 +2036,11 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
       activePath: active,
       onOpen: openNode
     }))) : null), leftMode === 'gallery' && React.createElement(Gallery, {
-      nodes: designNodes,
+      nodes: liveDesignNodes,
       activePath: active,
       onOpen: openNode
     }), leftMode === 'media' && React.createElement(MediaGrid, {
-      nodes: mediaNodes,
+      nodes: liveMediaNodes,
       activePath: active,
       onOpen: openNode
     })))), React.createElement("div", {

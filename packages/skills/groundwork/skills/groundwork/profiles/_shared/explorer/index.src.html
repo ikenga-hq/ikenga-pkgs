@@ -655,12 +655,16 @@
     const byPath = {}; ALL.forEach((n) => { byPath[n.path] = n; });
     function srcFor(path) { return ROOT_REL + '/' + path; }
 
-    // Live auto-discovery: check .groundwork.json for newly registered files/subplans/designs
+    // Live auto-discovery: check .groundwork.json for newly registered files/subplans/designs.
+    // Discovery lands after first render, so App subscribes to re-render when nodes are added.
+    const discoveryListeners = new Set();
+    function onDiscovery(fn) { discoveryListeners.add(fn); return () => discoveryListeners.delete(fn); }
     try {
       fetch(srcFor('.groundwork.json'))
         .then((r) => r.ok ? r.json() : null)
         .then((anchor) => {
           if (!anchor) return;
+          let added = 0;
           const checkPath = (p, defaultKind) => {
             if (!p || byPath[p] || p === 'artifact/explorer.html') return;
             const name = p.split('/').pop();
@@ -673,14 +677,15 @@
             else if (ext === 'svg') type = 'svg';
             const node = {
               name: name, path: p, type: type,
-              kind: defaultKind || (p.startsWith('designs/') ? 'design' : (p.startsWith('0') ? 'subplan' : 'doc')),
+              kind: p.startsWith('designs/') ? 'design' : (defaultKind === 'subplan' ? 'subplan' : (p.includes('/') ? 'other' : 'spine')), // must be a KIND_GROUPS key or the node never renders
               registered: true, embedded: false, autoDiscovered: true,
             };
-            ALL.push(node); byPath[p] = node; DATA.tree.push(node);
+            ALL.push(node); byPath[p] = node; DATA.tree.push(node); added++;
           };
           if (anchor.docs) Object.keys(anchor.docs).forEach((p) => checkPath(p, 'doc'));
           if (anchor.subplans) Object.keys(anchor.subplans).forEach((p) => checkPath(p, 'subplan'));
           if (anchor.designs) Object.keys(anchor.designs).forEach((p) => checkPath(p, 'design'));
+          if (added) discoveryListeners.forEach((fn) => { try { fn(); } catch (e) {} });
         })
         .catch(() => {});
     } catch (e) {}
@@ -1040,6 +1045,14 @@
 
     function App({ art }) {
       const persisted = loadState();
+      const [discoveryTick, setDiscoveryTick] = useState(0);
+      useEffect(() => {
+        const bump = () => setDiscoveryTick((t) => t + 1);
+        bump(); // discovery may have finished before this subscription
+        return onDiscovery(bump);
+      }, []);
+      const liveDesignNodes = useMemo(() => ALL.filter((n) => n.type === 'design'), [discoveryTick]);
+      const liveMediaNodes = useMemo(() => ALL.filter((n) => n.type === 'image' || n.type === 'pdf' || n.type === 'svg'), [discoveryTick]);
       const [theme, setTheme] = useState(() => ({
         theme: document.documentElement.getAttribute('data-theme') || 'A',
         mode: document.documentElement.getAttribute('data-mode') || 'dark',
@@ -1103,14 +1116,14 @@
       const sub = activeNode ? (subBy[active] || (subs[0] && subs[0][0])) : null;
 
       const modes = [['tree', 'Tree', I.tree]];
-      if (designNodes.length) modes.push(['gallery', 'Gallery', I.grid]);
-      if (mediaNodes.length) modes.push(['media', 'Media', I.media]);
+      if (liveDesignNodes.length) modes.push(['gallery', 'Gallery', I.grid]);
+      if (liveMediaNodes.length) modes.push(['media', 'Media', I.media]);
 
       // grouped tree top level
       const grouped = useMemo(() => {
         const groups = {}; DATA.tree.forEach((n) => { (groups[n.kind === 'dir' ? dirGroup(n) : n.kind] = groups[n.kind === 'dir' ? dirGroup(n) : n.kind] || []).push(n); });
         return groups;
-      }, []);
+      }, [discoveryTick]);
       function dirGroup(n) { const map = { artifact: 'artifact', designs: 'design', drafts: 'draft', parts: 'parts', foundations: 'parts' }; return map[n.name] || 'other'; }
 
       return (
@@ -1159,8 +1172,8 @@
                         {grouped[k].map((n) => <TreeNode key={n.path} node={n} depth={0} open={openDirs} toggle={toggleDir} activePath={active} onOpen={openNode} />)}
                       </Fragment>
                     ) : null)}
-                    {leftMode === 'gallery' && <Gallery nodes={designNodes} activePath={active} onOpen={openNode} />}
-                    {leftMode === 'media' && <MediaGrid nodes={mediaNodes} activePath={active} onOpen={openNode} />}
+                    {leftMode === 'gallery' && <Gallery nodes={liveDesignNodes} activePath={active} onOpen={openNode} />}
+                    {leftMode === 'media' && <MediaGrid nodes={liveMediaNodes} activePath={active} onOpen={openNode} />}
                   </Fragment>
                 )}
               </div>
