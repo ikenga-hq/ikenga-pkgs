@@ -79,6 +79,10 @@ jobs:
       # to @ikenga/contract schemas (ManifestSchema / ArtifactManifestSchema).
       - run: pnpm validate:manifests
 
+      # Release publishes with provenance; npm rejects a package whose
+      # repository.url doesn't match this repo, and only on main (E422).
+      - run: pnpm check:package-meta
+
       # PRs: only packages changed since the base, plus their dependents.
       # Nightly / dispatch: every package.
       - name: Tests (affected on PRs, all otherwise)
