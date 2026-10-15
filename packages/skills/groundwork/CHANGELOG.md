@@ -1,5 +1,15 @@
 # @ikenga/skill-groundwork
 
+## 0.8.2
+
+### Patch Changes
+
+- [#144](https://github.com/ikenga-hq/ikenga-pkgs/pull/144) [`a9127c2`](https://github.com/ikenga-hq/ikenga-pkgs/commit/a9127c2ff70fe9ff191e72feea8f917a23a2b2ec) Thanks [@nedjamez](https://github.com/nedjamez)! - Fix the explorer's auto-discovery of files registered after generation: discovered docs were given a `kind` outside the tree's groups and never re-rendered, so they never appeared. They now land in the tree (and the Gallery/Media lists) as soon as discovery completes.
+
+- [#143](https://github.com/ikenga-hq/ikenga-pkgs/pull/143) [`b40c34d`](https://github.com/ikenga-hq/ikenga-pkgs/commit/b40c34d24d6cfedff1d00cd2c4f0585054bca871) Thanks [@nedjamez](https://github.com/nedjamez)! - Port the explorer's live file reads (v0.7.5) and auto-discovery of newly registered files (v0.7.6) into `index.src.html`, which had only ever been hand-edited in the built files, and rebuild. The content and design-system explorers now include both features; a future rebuild no longer deletes them.
+
+- [#141](https://github.com/ikenga-hq/ikenga-pkgs/pull/141) [`0a5563a`](https://github.com/ikenga-hq/ikenga-pkgs/commit/0a5563aec4104f97a659278a3140d3185a69b979) Thanks [@nedjamez](https://github.com/nedjamez)! - Security and docs review fixes. `scaffold --force` no longer destroys hand-written prose, registered IDs or generated fences (full wipe is now the explicit `--reset-all`). The explorer walk and status/plans-index reads no longer follow symlinks out of the plan folder or read non-regular files; scaffold no longer writes through a symlink; board/spec-state data is escaped for `<script>` (`--html-script-safe`, new `write-region --wrap-script`). issue-sync now asks before writing to a repo, uses a per-run temp file, and the README documents the commands the skill runs, security notes and a comparison.
+
 ## 0.8.1
 
 ### Patch Changes
