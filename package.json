@@ -7,6 +7,7 @@
 		"test": "pnpm -r test --if-present",
 		"test:scripts": "node --test \"scripts/*.test.mjs\"",
 		"validate:manifests": "node scripts/validate-manifests.mjs",
+		"check:package-meta": "node scripts/check-package-meta.mjs",
 		"sign:manifests": "node scripts/sign-manifests.mjs",
 		"sign:manifests:check": "node scripts/sign-manifests.mjs --check",
 		"lift:requires": "node scripts/lift-requires.mjs",

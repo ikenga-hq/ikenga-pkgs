@@ -3,6 +3,11 @@
   "version": "0.3.0",
   "description": "Mattermost bridge sidecar for Ikenga remote agents (B5: threads mapped onto Chi runs, plan-then-approve, scheduled posts, mode ceiling and audit log)",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/sidecars/mattermost"
+  },
   "type": "module",
   "main": "dist/bridge.js",
   "types": "dist/bridge.d.ts",
@@ -22,5 +27,8 @@
     "@types/node": "^20.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.4.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
