@@ -19,13 +19,15 @@ import {
   TransportBar,
   TimeRuler,
   ScrubberPlayhead,
+  Playhead,
   PlayheadEcho,
+  spokenClock,
   PreviewSurface,
   PreviewStatus,
   type PreviewAspect,
 } from '../media-controls';
 import { createMockPlayer, type PlayerHandle } from '../lib/player';
-import { DEFAULT_FPS, framesToMs, msToFrames, snapMsToFrame } from '../lib/time';
+import { DEFAULT_FPS, fmtClock, framesToMs, msToFrames, snapMsToFrame } from '../lib/time';
 import {
   COMPOSITION_META,
   COMPOSITION_NARRATION,
@@ -64,7 +66,6 @@ import { ExportCard, type ExportUiState } from './composition/ExportCard';
 import { ExportPreflightDialog } from './composition/ExportPreflightDialog';
 import { RecordsPanel } from './composition/RecordsPanel';
 import {
-  fmtClock,
   fmtSeconds,
   fidelityLabel,
   engineLabel,
@@ -75,6 +76,48 @@ import {
 
 const FPS = DEFAULT_FPS;
 const SEED_MS = 8_400; // mock design-fixture snapshot — c02 problem active
+
+/** Render status as words for a clip's accessible name (DS D-06). */
+function statusWords(st: string | undefined): string {
+  switch (st) {
+    case 'running':
+      return 'rendering';
+    case 'queued':
+      return 'queued';
+    case 'done':
+      return 'done';
+    case 'failed':
+      return 'render failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return 'not rendered yet';
+  }
+}
+
+/** The 10×8 seam glyph that names a transition on the rail (DS D-08). */
+function TransitionGlyph({ kind }: { kind: string }) {
+  if (kind === 'fade') {
+    return (
+      <svg viewBox="0 0 10 8" aria-hidden="true">
+        <path d="M0 0L10 8V0L0 8z" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (kind === 'smash-cut') {
+    return (
+      <svg viewBox="0 0 10 8" aria-hidden="true">
+        <path d="M3.5 0h3v8h-3z" fill="currentColor" />
+      </svg>
+    );
+  }
+  const d = kind === 'j-cut' ? 'M6.5 0V4.5H2.5V8' : 'M3.5 0V4.5H7.5V8';
+  return (
+    <svg viewBox="0 0 10 8" aria-hidden="true">
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
 
 const MOCK_MODEL: TimelineModel = {
   clips: COMPOSITION_TIMELINE,
@@ -229,13 +272,6 @@ export function CompositionView() {
     if (!p) return;
     p.seekTo(msToFrames(snapMsToFrame(ms, FPS), FPS));
   };
-  const onSelectMs = (ms: number) => {
-    const clip = clipAt(clips, ms);
-    if (clip) setCellUid(clip.uid);
-  };
-  const onHoverMs = (ms: number | null) => {
-    setHoverBeat(ms !== null ? (clipAt(clips, ms)?.uid ?? null) : null);
-  };
   const playToggle = () => {
     const p = playerRef.current;
     if (!p) return;
@@ -250,9 +286,34 @@ export function CompositionView() {
     setLoop(next);
     playerRef.current?.setLoop(next);
   };
-  const onClipClick = (clip: TimelineClip) => {
+  // DS D-05: a clip is a toolbar button — activating it selects the cell and
+  // seeks a beat into it (start + 200ms, the frozen composition.html rule) so
+  // the playhead never lands on the cut itself. Seeking anywhere else is the
+  // ruler band's job.
+  const onClipActivate = (clip: TimelineClip) => {
     setCellUid(clip.uid);
-    seekMs(clip.start_ms);
+    setFocusUid(clip.uid);
+    seekMs(Math.min(clip.start_ms + 200, clip.start_ms + clip.duration_ms));
+  };
+  const railRef = useRef<HTMLDivElement>(null);
+  const [focusUid, setFocusUid] = useState<string | null>(null);
+  const rovingUid = focusUid && clips.some((c) => c.uid === focusUid) ? focusUid : clips[0]?.uid;
+  const onClipKey = (e: React.KeyboardEvent<HTMLDivElement>, i: number) => {
+    let j: number | null = null;
+    if (e.key === 'ArrowRight') j = Math.min(clips.length - 1, i + 1);
+    else if (e.key === 'ArrowLeft') j = Math.max(0, i - 1);
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = clips.length - 1;
+    else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClipActivate(clips[i]);
+      return;
+    }
+    if (j === null) return;
+    e.preventDefault();
+    const uid = clips[j].uid;
+    setFocusUid(uid);
+    railRef.current?.querySelector<HTMLElement>(`[data-uid="${uid}"]`)?.focus();
   };
 
   // ── Render / retry over MCP ──────────────────────────────────────────────
@@ -395,6 +456,11 @@ export function CompositionView() {
   const failedRenderCount = bannerCounts.failed;
   const fullyRendered = clips.length > 0 && renderedCount === clips.length;
   const playheadPct = Math.min(100, Math.max(0, (playheadMs / totalMs) * 100));
+  // Accessible names that carry the position are held while playing (no 30 Hz
+  // churn in the accessibility tree) and refresh when the playhead settles.
+  const settledRef = useRef(playheadMs);
+  if (!playing) settledRef.current = playheadMs;
+  const settledMs = settledRef.current;
   const clipIndex = activeClip ? clips.findIndex((c) => c.uid === activeClip.uid) : -1;
 
   // Silent warning: preset expects a bed but none is on disk (NOT the intentional
@@ -417,7 +483,7 @@ export function CompositionView() {
     if (st === 'running') return '◐';
     if (st === 'queued' || st === undefined) return '○';
     if (st === 'done') return '✓';
-    if (st === 'failed') return '⚠';
+    if (st === 'failed') return '⚠\uFE0E'; // text presentation, never emoji
     if (st === 'cancelled') return '✕';
     return null;
   };
@@ -841,81 +907,98 @@ export function CompositionView() {
           </aside>
         </div>
 
-        {/* Timeline section — ruler + filmstrip + scrubber */}
+        {/* Timeline section — DS D-03..D-09 (locked Rounds 5–6):
+            lane header · ruler with the 24px seek band · clip toolbar · seams · waveform */}
         <div className="timeline-section">
-          <TimeRuler totalMs={totalMs} fps={FPS} />
+          <div className="track-lane__head">
+            <span className="track-lane__label" id="comp-lane-label">{meta.rung}</span>
+            <span className="track-lane__meta">{`${clips.length} cells · ${fmtClock(totalMs)}`}</span>
+          </div>
           <div
-            className={`timeline-rail${playing ? ' is-playing' : ''}`}
-            style={{ ['--total-ms' as string]: String(totalMs) }}
-            role="presentation"
+            className={`tl-seek${playing ? ' is-playing' : ''}`}
+            style={{ ['--ph' as string]: String(playheadPct / 100) }}
           >
-            {clips.map((c, i) => {
-              const flexBasis = `${(c.duration_ms / totalMs) * 100}%`;
-              const prev = i > 0 ? clips[i - 1] : null;
-              const showMarker = c.transition && c.transition !== 'cut' && prev;
-              const selected = c.uid === cellUid || c.uid === activeClip?.uid ? ' is-selected' : '';
-              const hoverLinked = hoverBeat === c.uid ? ' is-hover-link' : '';
-              const glyph = clipGlyph(c);
-              const st = recByUid[c.uid]?.status ?? c.status;
-              return (
-                <div
-                  key={c.uid}
-                  className={`clip-segment${clipStateClass(c)}${selected}${hoverLinked}`}
-                  data-accent={c.accent}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${c.beat} cell, ${st ?? 'pending'}, ${Math.round(c.duration_ms / 1000)} seconds`}
-                  style={{ flexBasis }}
-                  onClick={() => onClipClick(c)}
-                  onFocus={() => setHoverBeat(c.uid)}
-                  onBlur={() => setHoverBeat(null)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onClipClick(c);
-                    }
-                  }}
-                >
-                  {showMarker && (
+            <TimeRuler totalMs={totalMs} fps={FPS} />
+            <div className="track-lane" role="group" aria-labelledby="comp-lane-label">
+              <div
+                ref={railRef}
+                className="timeline-rail"
+                style={{ ['--total-ms' as string]: String(totalMs) }}
+                role="toolbar"
+                aria-label={`Clips on ${meta.rung}`}
+                aria-orientation="horizontal"
+              >
+                {clips.map((c, i) => {
+                  const prev = i > 0 ? clips[i - 1] : null;
+                  const trans = c.transition && c.transition !== 'cut' && prev ? c.transition : null;
+                  const selected = c.uid === cellUid || c.uid === activeClip?.uid ? ' is-selected' : '';
+                  const hoverLinked = hoverBeat === c.uid ? ' is-hover-link' : '';
+                  const glyph = clipGlyph(c);
+                  const st = recByUid[c.uid]?.status ?? c.status;
+                  const rid = st === 'done' ? recByUid[c.uid]?.id : undefined;
+                  const name =
+                    `${c.beat} cell, ${statusWords(st)}, ${Math.round(c.duration_ms / 1000)} seconds` +
+                    (trans ? `, ${trans.replace('-', ' ')} in` : '');
+                  return (
                     <div
+                      key={c.uid}
+                      data-uid={c.uid}
+                      className={`clip-segment${clipStateClass(c)}${selected}${hoverLinked}${rid ? ' has-poster' : ''}`}
+                      data-accent={c.accent}
+                      role="button"
+                      tabIndex={c.uid === rovingUid ? 0 : -1}
+                      aria-label={name}
+                      style={{ flexBasis: `${(c.duration_ms / totalMs) * 100}%` }}
+                      onClick={() => onClipActivate(c)}
+                      onPointerEnter={() => setHoverBeat(c.uid)}
+                      onPointerLeave={() => setHoverBeat(null)}
+                      onFocus={() => {
+                        setFocusUid(c.uid);
+                        setHoverBeat(c.uid);
+                      }}
+                      onBlur={() => setHoverBeat(null)}
+                      onKeyDown={(e) => onClipKey(e, i)}
+                    >
+                      {rid && <CellPoster recordId={rid} alt={c.beat} className="clip-segment__poster" />}
+                      <span className="clip-segment__label">{c.beat}</span>
+                      {glyph && <span className="clip-segment__glyph" aria-hidden="true">{glyph}</span>}
+                    </div>
+                  );
+                })}
+                {clips.map((c, i) =>
+                  i > 0 && c.transition && c.transition !== 'cut' ? (
+                    <div
+                      key={`tm-${c.uid}`}
                       className="transition-marker"
                       data-transition={c.transition}
-                      style={{ background: `linear-gradient(to right, var(--beat-accent-${prev!.accent}-soft) 0%, transparent 70%)` }}
+                      style={{ left: `${(c.start_ms / totalMs) * 100}%` }}
                       aria-hidden="true"
-                    />
-                  )}
-                  {st === 'done' && (() => {
-                    const rid = recByUid[c.uid]?.id;
-                    return rid ? (
-                      <CellPoster
-                        recordId={rid}
-                        alt={c.beat}
-                        className="clip-segment__poster"
-                      />
-                    ) : null;
-                  })()}
-                  <span className="clip-segment__label">{c.beat}</span>
-                  {glyph && <span className="clip-segment__glyph" aria-hidden="true">{glyph}</span>}
-                </div>
-              );
-            })}
+                    >
+                      <TransitionGlyph kind={c.transition} />
+                    </div>
+                  ) : null,
+                )}
+              </div>
+            </div>
             <ScrubberPlayhead
+              variant="band"
               currentMs={playheadMs}
               totalMs={totalMs}
               fps={FPS}
               onSeekMs={seekMs}
-              onSelectMs={onSelectMs}
-              onHoverMs={onHoverMs}
+              cutsMs={clips.map((c) => c.start_ms)}
+              ariaValueText={activeClip ? `${fmtClock(playheadMs)}, ${activeClip.beat} cell` : undefined}
             />
+            <Playhead leftPct={playheadPct} />
           </div>
 
-          {/* Narration waveform / empty treatment */}
+          {/* Narration waveform / empty treatment (DS D-09) */}
           {narration ? (
             <>
               <div
                 className={`waveform-strip${playing ? ' is-playing' : ''}`}
                 role="img"
-                aria-label={`Narration waveform — ${narration.audio.uri}`}
+                aria-label={`Narration waveform, ${spokenClock(settledMs)} of ${spokenClock(totalMs)} played`}
                 style={{ ['--bar-count' as string]: String(WAVEFORM_BAR_COUNT) }}
               >
                 <span className="waveform-strip__label" aria-hidden="true">{narration.audio.uri}</span>
@@ -954,9 +1037,9 @@ export function CompositionView() {
             <div
               className="waveform-strip is-empty"
               role="img"
-              aria-label="No narration yet — waveform appears after narration is generated"
+              aria-label="No narration yet. The waveform appears once narration is generated."
             >
-              <span className="waveform-empty-note">no narration · generate it to see the waveform</span>
+              <span className="waveform-empty-note">No narration yet · generate it to see the waveform</span>
               <PlayheadEcho leftPct={playheadPct} />
             </div>
           )}

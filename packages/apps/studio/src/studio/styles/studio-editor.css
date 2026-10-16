@@ -9,17 +9,20 @@
  * is where the DS earns its keep.
  *
  * Contract: plans/studio/13-wp07-resume-contract.md §2 + §5.
- * Design bar: plans/studio-design-system/designs/composition-broadcast-dense.html
- * (Variant A · broadcast-dense) + plans/studio/designs/composition.html.
+ * Design bar: the locked DS parts (plans/studio-design-system, Rounds 5–6):
+ * D-03 timecode-display-inline · D-04 time-ruler-graduated · D-05
+ * timeline-rail-split · D-06 clip-segment-tint · D-07 track-lane-header ·
+ * D-08 transition-marker-seam · D-09 waveform-strip-bars (designs/*.html;
+ * composite: designs/timeline-locked-composite.html).
  *
  * TOKENS, NOT HEX (§5). Every colour resolves to an @ikenga/tokens role:
- *   beat accents  → --achievement / --danger / --live / --info / --agent
+ *   playhead hue  → --playhead (alias of --achievement; light mode re-derived)
+ *   beat accents  → --achievement / --danger / --systemic / --info / --agent (F2)
  *   rendering-status (◐ glyph, is-running dot, queued) → --info  (G-02)
  *   preview-surface bg → --bg-sunken   (was #1a1a2e)
- *   waveform bars → --beat-accent-amber / --fg-faint / --bg-raised
- *                   (was #fbbf24 / #525252 / #404040)
- * sky + fuchsia are studio-local cool/warm exceptions (G-02 option c) — sky
- * re-bases onto --info; fuchsia is a documented studio-local token.
+ *   waveform bars → --fg-faint / --fg-muted / --playhead
+ *                   (un-played / played / active)
+ * fuchsia is the one studio-local value (F2, P2 music video).
  */
 
 /* ─── 00-editor-base — the F1/F2 var set ────────────────────────────────────
@@ -35,48 +38,53 @@
 
   /* layout geometry (broadcast-dense — tighter than the default variant) */
   --timeline-rail-h: 2rem;
-  --ruler-height: 18px;
+  --ruler-height: 20px;
   --waveform-h: 1.75rem;
   --transport-h: 36px;
   --preview-h: 220px;
   --transport-btn-size: 28px;
   --bar-count: 80;
 
-  /* beat accents (F2 draft — pending G-02 freeze). Mapped onto @ikenga/tokens
-   * roles so they track the active theme. soft/border derived via color-mix so
-   * they hold up even where a role ships no -soft companion. */
-  --beat-accent-amber:        var(--achievement);
-  --beat-accent-amber-soft:   color-mix(in srgb, var(--achievement) 14%, transparent);
-  --beat-accent-amber-border: color-mix(in srgb, var(--achievement) 34%, var(--border));
+  /* playhead hue (DS Round 5): one name for the line, cap, echo, active bar and
+   * current readout. Aliased to the amber achievement role; --live is GREEN in
+   * Dusk Wood, so it is never the playhead. Light mode re-derives below. */
+  --playhead:      var(--achievement, var(--warning));
+  --playhead-soft: var(--achievement-soft, color-mix(in srgb, var(--warning) 18%, transparent));
 
-  --beat-accent-rose:         var(--danger);
-  --beat-accent-rose-soft:    color-mix(in srgb, var(--danger) 14%, transparent);
-  --beat-accent-rose-border:  color-mix(in srgb, var(--danger) 34%, var(--border));
+  /* beat accents (F2 LOCKED R4): base -> the named role, -soft -> that role's own
+   * -soft (color-mix fallback where a theme ships none), -border -> mixed with
+   * --border. The color-mix fallbacks only fire under a theme with no -soft. */
+  --beat-accent-amber:          var(--achievement);
+  --beat-accent-amber-soft:     var(--achievement-soft, color-mix(in srgb, var(--achievement) 16%, transparent));
+  --beat-accent-amber-border:   color-mix(in srgb, var(--achievement) 40%, var(--border));
+  --beat-accent-rose:           var(--danger);
+  --beat-accent-rose-soft:      var(--danger-soft, color-mix(in srgb, var(--danger) 16%, transparent));
+  --beat-accent-rose-border:    color-mix(in srgb, var(--danger) 40%, var(--border));
+  --beat-accent-emerald:        var(--systemic, var(--success));
+  --beat-accent-emerald-soft:   var(--systemic-soft, color-mix(in srgb, var(--systemic, var(--success)) 16%, transparent));
+  --beat-accent-emerald-border: color-mix(in srgb, var(--systemic, var(--success)) 40%, var(--border));
+  --beat-accent-sky:            var(--info);
+  --beat-accent-sky-soft:       var(--info-soft, color-mix(in srgb, var(--info) 16%, transparent));
+  --beat-accent-sky-border:     color-mix(in srgb, var(--info) 40%, var(--border));
+  --beat-accent-violet:         var(--agent);
+  --beat-accent-violet-soft:    var(--agent-soft, color-mix(in srgb, var(--agent) 16%, transparent));
+  --beat-accent-violet-border:  color-mix(in srgb, var(--agent) 40%, var(--border));
+  /* fuchsia: studio-local warm magenta (F2, P2 music video) */
+  --beat-accent-fuchsia:        hsl(322 54% 62%);
+  --beat-accent-fuchsia-soft:   color-mix(in srgb, hsl(322 54% 62%) 16%, var(--bg-surface));
+  --beat-accent-fuchsia-border: color-mix(in srgb, hsl(322 54% 62%) 40%, var(--border));
 
-  --beat-accent-emerald:        var(--live);
-  --beat-accent-emerald-soft:   color-mix(in srgb, var(--live) 14%, transparent);
-  --beat-accent-emerald-border: color-mix(in srgb, var(--live) 34%, var(--border));
-
-  /* sky — studio-local cool token; re-bases onto --info (rendering-status, G-02) */
-  --beat-accent-sky:        var(--info);
-  --beat-accent-sky-soft:   color-mix(in srgb, var(--info) 14%, transparent);
-  --beat-accent-sky-border: color-mix(in srgb, var(--info) 34%, var(--border));
-
-  --beat-accent-violet:        var(--agent);
-  --beat-accent-violet-soft:   color-mix(in srgb, var(--agent) 14%, transparent);
-  --beat-accent-violet-border: color-mix(in srgb, var(--agent) 34%, var(--border));
-
-  /* fuchsia — studio-local warm magenta (no parent role; G-02 exception) */
-  --beat-accent-fuchsia:        hsl(320 52% 64%);
-  --beat-accent-fuchsia-soft:   color-mix(in srgb, hsl(320 52% 64%) 14%, transparent);
-  --beat-accent-fuchsia-border: color-mix(in srgb, hsl(320 52% 64%) 34%, var(--border));
-
-  /* lanes (F2) — multi-track colour roles. Composition P1 uses a single rail;
-   * these are declared for the base set + P2 multi-lane timeline. */
-  --lane-video:   var(--info);
-  --lane-audio:   var(--achievement);
-  --lane-caption: var(--live);
-  --lane-sfx:     var(--agent);
+  /* lanes (F2 LOCKED map, P2 beta). Known finding: audio (verdigris) and
+   * caption (systemic) sit at dE 6.2 in Dusk Wood -- re-map caption before
+   * Pattern D locks (DS Round 6). */
+  --lane-video:        var(--primary);
+  --lane-video-soft:   var(--primary-soft, color-mix(in srgb, var(--primary) 16%, transparent));
+  --lane-audio:        var(--verdigris, var(--systemic));
+  --lane-audio-soft:   color-mix(in srgb, var(--verdigris, var(--systemic)) 16%, var(--bg-surface));
+  --lane-caption:      var(--systemic, var(--success));
+  --lane-caption-soft: var(--systemic-soft, color-mix(in srgb, var(--systemic, var(--success)) 16%, transparent));
+  --lane-sfx:          var(--agent);
+  --lane-sfx-soft:     var(--agent-soft, color-mix(in srgb, var(--agent) 16%, transparent));
 
   /* aspect-safe-area (F4 draft — plans/studio-design-system/parts/
    * foundations/aspect-safe-area.md). --safe-zone-band derivation: 90px top
@@ -86,6 +94,12 @@
   --aspect-9-16:     9 / 16;
   --aspect-1-1:      1 / 1;
   --safe-zone-band:  4.6875%;
+}
+
+/* Light mode: --achievement drops to ~2.9:1 on light surfaces; pull the playhead
+ * toward --fg until it clears 4.5:1 (measured 4.8-5.4:1). */
+:root[data-mode="light"] {
+  --playhead: color-mix(in srgb, var(--achievement, var(--warning)) 60%, var(--fg));
 }
 
 /* ═══ media-controls · 40 transport-bar ═══════════════════════════════════ */
@@ -154,56 +168,55 @@
   letter-spacing: .02em;
 }
 
-/* ═══ media-controls · 42 timecode-display ════════════════════════════════ */
+/* ═══ media-controls · 42 timecode-display (DS D-03 · inline split) ═══════ */
 .timecode {
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
+  gap: .4em;
   font-family: var(--font-mono);
   font-size: var(--text-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums;   /* digits never reflow at 30 Hz */
   line-height: 1;
+  white-space: nowrap;
 }
-.timecode-current { color: var(--beat-accent-amber); }
-.timecode-sep     { color: var(--border-strong); margin: 0 1px; }
-.timecode-total   { color: var(--fg-faint); }
+.timecode-current { color: var(--playhead); font-weight: 500; }
+.timecode-lead    { color: var(--fg-muted); font-weight: 400; }   /* SMPTE leading zeros */
+.timecode-sep     { color: var(--fg-faint); }                     /* decorative, aria-hidden */
+.timecode-total   { color: var(--fg-muted); }                     /* --fg-faint fails 1.4.3 */
+.timecode[data-size="sm"] { font-size: var(--text-micro); gap: .3em; }
+.timecode[data-size="sm"] .timecode-current { font-weight: 400; }
 
-/* ═══ media-controls · 42 time-ruler ══════════════════════════════════════ */
+/* ═══ media-controls · 42 time-ruler (DS D-04 · graduated) ═══════════════ */
 .time-ruler {
   position: relative;
   height: var(--ruler-height);
   width: 100%;
   flex-shrink: 0;
+  border-bottom: 1px solid var(--border);   /* the baseline the ticks stand on */
 }
 .time-ruler-tick {
   position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  top: 0;
   bottom: 0;
-  transform: translateX(-50%);
-}
-.time-ruler-tick.is-first { transform: none; }
-.time-ruler-tick.is-last  { transform: translateX(-100%); }
-.time-ruler-tick::before {
-  content: '';
-  display: block;
   width: 1px;
-  height: 6px;
-  background: var(--border);
-  flex-shrink: 0;
+  transform: translateX(-0.5px);
+  background: var(--fg-faint);
 }
-.time-ruler-tick.is-major::before { height: 10px; }
+.time-ruler-tick.is-major { top: 0; }
+.time-ruler-tick.is-mid   { height: 8px; }
+.time-ruler-tick.is-minor { height: 4px; background: color-mix(in srgb, var(--fg-faint) 55%, var(--border)); }
+.time-ruler-tick.is-last  { transform: translateX(-1px); }
 .time-ruler-label {
+  position: absolute;
+  top: 1px;
+  left: 4px;                                /* right of its tick (NLE convention) */
   font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--fg-faint);
-  font-variant-numeric: tabular-nums;
-  margin-top: 1px;
-  white-space: nowrap;
+  font-size: var(--text-micro);
   line-height: 1;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+.time-ruler-tick.is-last .time-ruler-label { left: auto; right: 4px; }
 
 /* ═══ media-controls · 43 preview-surface + media-thumb ═══════════════════ */
 .preview-surface {
@@ -345,14 +358,39 @@
   letter-spacing: .04em;
 }
 
-/* ═══ studio-editor · timeline section + rail ═════════════════════════════ */
+/* ═══ studio-editor · timeline section · lane header (DS D-07) ═══════════ */
 .timeline-section {
   background: var(--bg-base);
   padding: var(--space-2) var(--space-4) var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
+/* D-07 full-bleed lane: no gutter; the rung's name + meta sit above the ruler */
+.track-lane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+.track-lane__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 20px;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  letter-spacing: .04em;
+}
+.track-lane__label { color: var(--fg); font-weight: 500; }
+.track-lane__meta { color: var(--fg-muted); }
+
+/* the seek zone: ruler + rail share one positioned box so the playhead line
+ * spans both; the 24px seek band (D-05) overlays the ruler only. */
+.tl-seek {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding-top: 4px;
+}
+
+/* ═══ studio-editor · timeline-rail (DS D-05 · split) ════════════════════ */
 .timeline-rail {
   position: relative;
   height: var(--timeline-rail-h);
@@ -361,42 +399,65 @@
   border: 1px solid var(--border-soft);
   overflow: hidden;
   display: flex;
-  cursor: col-resize;
   flex-shrink: 0;
 }
+.timeline-rail[data-variant="mini"] { height: 1.5rem; }
+.timeline-rail[role="toolbar"] .clip-segment { cursor: pointer; }
+.timeline-rail[role="toolbar"] .clip-segment:hover { box-shadow: inset 0 0 0 1px var(--fg-faint); }
 
-/* ═══ studio-editor · clip-segment ════════════════════════════════════════ */
+/* ═══ studio-editor · clip-segment (DS D-06 · tinted body) ═══════════════ */
 .clip-segment {
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  gap: 6px;
   padding: 0 var(--space-2);
-  cursor: pointer;
   border-right: 1px solid var(--bg-base);
   overflow: hidden;
   flex-shrink: 0;
   min-width: 1.5rem;
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+.clip-segment:last-of-type { border-right: 0; }
+.clip-segment[data-accent="amber"]   { --seg-accent: var(--beat-accent-amber);   background: var(--beat-accent-amber-soft); }
+.clip-segment[data-accent="rose"]    { --seg-accent: var(--beat-accent-rose);    background: var(--beat-accent-rose-soft); }
+.clip-segment[data-accent="emerald"] { --seg-accent: var(--beat-accent-emerald); background: var(--beat-accent-emerald-soft); }
+.clip-segment[data-accent="sky"]     { --seg-accent: var(--beat-accent-sky);     background: var(--beat-accent-sky-soft); }
+.clip-segment[data-accent="violet"]  { --seg-accent: var(--beat-accent-violet);  background: var(--beat-accent-violet-soft); }
+.clip-segment[data-accent="fuchsia"] { --seg-accent: var(--beat-accent-fuchsia); background: var(--beat-accent-fuchsia-soft); }
+/* beat identity rule (the label is --fg on every fill: accent labels fail on rose/emerald) */
+.clip-segment::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--seg-accent, transparent);
+  z-index: 2;
 }
 .clip-segment__label {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-micro);
   font-weight: 500;
   letter-spacing: .04em;
   text-transform: uppercase;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  position: relative;
-  z-index: 2;
+  color: var(--fg);
 }
 .clip-segment__glyph {
-  position: absolute;
-  top: 3px;
-  right: 4px;
-  font-size: 9px;
+  position: relative;
+  z-index: 2;
+  margin-inline-start: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
   line-height: 1;
-  z-index: 3;
+  color: var(--fg-muted);
 }
 .clip-segment__poster {
   position: absolute;
@@ -407,141 +468,153 @@
   z-index: 1;
   opacity: 0.85;
 }
-.clip-segment[data-accent="amber"]   { background: var(--beat-accent-amber-soft); }
-.clip-segment[data-accent="amber"]   .clip-segment__label { color: var(--beat-accent-amber); }
-.clip-segment[data-accent="rose"]    { background: var(--beat-accent-rose-soft); }
-.clip-segment[data-accent="rose"]    .clip-segment__label { color: var(--beat-accent-rose); }
-.clip-segment[data-accent="emerald"] { background: var(--beat-accent-emerald-soft); }
-.clip-segment[data-accent="emerald"] .clip-segment__label { color: var(--beat-accent-emerald); }
-.clip-segment[data-accent="sky"]     { background: var(--beat-accent-sky-soft); }
-.clip-segment[data-accent="sky"]     .clip-segment__label { color: var(--beat-accent-sky); }
-.clip-segment[data-accent="violet"]  { background: var(--beat-accent-violet-soft); }
-.clip-segment[data-accent="violet"]  .clip-segment__label { color: var(--beat-accent-violet); }
-.clip-segment[data-accent="fuchsia"] { background: var(--beat-accent-fuchsia-soft); }
-.clip-segment[data-accent="fuchsia"] .clip-segment__label { color: var(--beat-accent-fuchsia); }
+/* a poster is unknown imagery: give the label + glyph a scrim so they keep ≥4.5:1 */
+.clip-segment.has-poster .clip-segment__label,
+.clip-segment.has-poster .clip-segment__glyph {
+  background: color-mix(in srgb, var(--bg-sunken) 82%, transparent);
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+}
 
+/* render status (frozen 6-state set: schema 5 + UI-local pending) */
+.clip-segment.is-queued .clip-segment__glyph    { color: var(--fg); }
 .clip-segment.is-rendering .clip-segment__glyph { color: var(--info); }
-.clip-segment.is-queued    .clip-segment__glyph { color: var(--fg-faint); }
-.clip-segment.is-pending {
-  opacity: 0.6;
-  background: var(--bg-sunken) !important;
+@media (prefers-reduced-motion: no-preference) {
+  .clip-segment.is-rendering {
+    background-image: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--info) 22%, transparent) 50%, transparent 70%);
+    background-size: 60% 100%;
+    background-repeat: no-repeat;
+    animation: studio-shimmer 1.4s ease-in-out infinite;
+  }
 }
-.clip-segment.is-pending .clip-segment__label,
-.clip-segment.is-pending .clip-segment__glyph { color: var(--fg-faint); }
-
-/* RenderStatus 'done' (contract §6, the frozen 6-status enum) — a subtle
-   affirmative glyph, no re-tint (the beat-accent colour already reads as
-   "final"). */
-.clip-segment.is-done .clip-segment__glyph { color: var(--beat-accent-emerald); }
-
-/* RenderStatus 'failed' — error tint overrides the beat-accent background so
-   a failed clip reads as broken regardless of which beat it belongs to. */
-.clip-segment.is-failed {
-  background: var(--beat-accent-rose-soft) !important;
-  box-shadow: inset 0 0 0 1px var(--beat-accent-rose-border);
-}
-.clip-segment.is-failed .clip-segment__label,
-.clip-segment.is-failed .clip-segment__glyph { color: var(--beat-accent-rose); }
-
-/* RenderStatus 'cancelled' — dimmed + struck, distinct from the UI-local
-   'pending' (no render record at all) dim treatment above. */
-.clip-segment.is-cancelled {
-  opacity: 0.5;
-  background: var(--bg-sunken) !important;
-}
+@keyframes studio-shimmer { from { background-position: -120% 0; } to { background-position: 220% 0; } }
+.clip-segment.is-pending { background: var(--bg-sunken); }
+.clip-segment.is-pending::after { opacity: .35; }
+.clip-segment.is-pending .clip-segment__label { color: var(--fg-muted); }
+.clip-segment.is-failed { background: var(--beat-accent-rose-soft); box-shadow: inset 0 0 0 1px var(--danger); }
+.clip-segment.is-failed .clip-segment__glyph { color: var(--fg); }
+.clip-segment.is-cancelled { background: var(--bg-sunken); }
+.clip-segment.is-cancelled::after { opacity: .35; }
 .clip-segment.is-cancelled .clip-segment__label {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   text-decoration: line-through;
-  text-decoration-color: var(--border-soft);
+  text-decoration-color: var(--fg-faint);
 }
-.clip-segment.is-cancelled .clip-segment__glyph { color: var(--fg-faint); }
 
-.clip-segment.is-selected { box-shadow: inset 0 0 0 2px var(--beat-accent-amber); }
-
-/* Keyboard-only focus ring (a11y-keyboard.html §"Focus rings" — info/sky
-   token, never shown on mouse click since :focus-visible only matches
-   keyboard-driven focus). Contract §8 commit-15. */
+/* selection (store.cellUid) vs cross-link (store.hoverBeat) — two distinct marks */
+.clip-segment.is-selected { box-shadow: inset 0 0 0 2px var(--playhead); }
+.clip-segment.is-hover-link { outline: 1.5px solid var(--fg); outline-offset: -4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .clip-segment.is-hover-link { animation: clip-hover-pulse 1.2s var(--ease-calm) infinite; }
+  @keyframes clip-hover-pulse { 50% { outline-color: color-mix(in srgb, var(--fg) 30%, transparent); } }
+}
 .clip-segment:focus-visible {
   outline: 2px solid var(--info);
   outline-offset: -2px;
   z-index: 4;
 }
+.clip-segment[data-variant="mini"] { padding: 0 4px; }
+.clip-segment[data-variant="mini"] .clip-segment__glyph { display: none; }
 
-@media (prefers-reduced-motion: no-preference) {
-  .clip-segment.is-hover-link { animation: clip-hover-pulse 1s var(--ease-calm) infinite; }
-  @keyframes clip-hover-pulse {
-    0%, 100% { box-shadow: inset 0 0 0 1.5px var(--beat-accent-amber); }
-    50%      { box-shadow: inset 0 0 0 2.5px var(--beat-accent-amber); }
-  }
-}
-
-/* ═══ studio-editor · transition-marker ═══════════════════════════════════ */
+/* ═══ studio-editor · transition-marker (DS D-08 · seam glyph) ═══════════ */
+/* A rail child centred ON the cut (left set inline); names its type with a
+ * 10×8 glyph. Type is also spoken in the incoming clip's accessible name. */
 .transition-marker {
   position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0;
-  width: 2rem;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  transform: translateX(-50%);
+  z-index: 3;
   pointer-events: none;
-  z-index: 1;
-  /* gradient background set inline from the previous clip's accent-soft var */
+  display: flex;
+  justify-content: center;
+  color: var(--fg);
 }
+.transition-marker::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--fg-muted);
+}
+.transition-marker[data-transition="smash-cut"]::before { width: 2px; background: var(--fg); }
+.transition-marker svg {
+  position: relative;
+  width: 10px;
+  height: 8px;
+  margin-top: 3px;
+  padding: 1px;
+  box-sizing: content-box;
+  background: var(--bg-sunken);
+  border-radius: 2px;
+}
+.timeline-rail[data-variant="mini"] .transition-marker svg { display: none; }
 
 /* ═══ media-controls · 41 scrubber-playhead ═══════════════════════════════ */
+/* 'overlay' (legacy, e.g. the Cell mini-scrubber) fills its positioned parent;
+ * 'band' (DS D-05) is the 24px seek strip over the ruler — never over clips. */
 .scrubber {
   position: absolute;
   inset: 0;
   z-index: 10;
   cursor: col-resize;
+  touch-action: none;
 }
+.scrubber--band { bottom: auto; height: 24px; border-radius: var(--radius-sm); z-index: 6; }
+.scrubber--band:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .scrubber:focus-visible {
   outline: 2px solid var(--info);
   outline-offset: -2px;
 }
+.scrubber--band:focus-visible { outline-offset: 2px; }
 .playhead {
   position: absolute;
   top: 0;
-  bottom: 0;
+  bottom: -1px;
   width: 1px;
-  background: var(--beat-accent-amber);
+  background: var(--playhead);
   pointer-events: none;
-  z-index: 10;
+  z-index: 7;
+  transform: translateX(-0.5px);
 }
+/* the cap is the drag handle: a pentagon riding the ruler */
 .playhead-cap {
   position: absolute;
-  top: -4px;
+  top: 0;
   left: 50%;
+  width: 11px;
+  height: 11px;
   transform: translateX(-50%);
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--beat-accent-amber);
+  background: var(--playhead);
+  clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%);
 }
 .playhead--echo {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--beat-accent-amber);
+  background: var(--playhead);
   opacity: 0.6;
   pointer-events: none;
   z-index: 5;
 }
 
-/* Playhead glide on discrete seeks — smooth under normal motion, SNAPS under
- * reduced-motion (editor-motion F3, contract §8 commit-15). While playing the
- * frameupdate cadence moves it every frame, so the rail/waveform carry
- * `is-playing` to suppress the transition and stay frame-accurate; only paused
- * seeks glide, and reduced-motion (this block never matching) makes them jump. */
+/* Playhead glide on discrete seeks — smooth under normal motion, JUMPS under
+ * reduced motion (editor-motion rule). While playing the frameupdate cadence
+ * moves it every frame, so .is-playing suppresses the transition and the line
+ * stays frame-accurate. */
 @media (prefers-reduced-motion: no-preference) {
-  .timeline-rail:not(.is-playing) .playhead {
-    transition: left var(--motion-fast) var(--ease-calm);
-  }
+  .tl-seek:not(.is-playing) .playhead,
   .waveform-strip:not(.is-playing) .playhead--echo {
     transition: left var(--motion-fast) var(--ease-calm);
   }
 }
 
-/* ═══ studio-editor · waveform-strip ══════════════════════════════════════ */
+/* ═══ studio-editor · waveform-strip (DS D-09 · bar meter) ════════════════ */
 .waveform-strip {
   position: relative;
   display: flex;
@@ -558,41 +631,47 @@
 .waveform-strip__label {
   position: absolute;
   top: 3px;
-  left: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  color: var(--fg-faint);
-  pointer-events: none;
+  left: 6px;
   z-index: 4;
-  letter-spacing: .04em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  line-height: 1;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--bg-sunken) 88%, transparent);
+  pointer-events: none;
 }
 .waveform-bar {
-  flex: 0 0 calc(100% / var(--bar-count, 80));
+  flex: 1 1 0;
+  min-width: 0;
   border-radius: 1px 1px 0 0;
   height: var(--bar-h, 30%);
-  background: var(--bg-raised);          /* was #404040 (§5) */
-  align-self: flex-end;
+  background: var(--fg-faint);           /* un-played: 3.05:1 (was --bg-raised, 1.19:1) */
 }
-.waveform-bar.is-played { background: var(--fg-faint); }   /* was #525252 (§5) */
+.waveform-bar.is-played { background: var(--fg-muted); }
 .waveform-bar.is-active {
-  background: var(--beat-accent-amber);  /* was #fbbf24 (§5) */
+  background: var(--playhead);
   height: 90%;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .waveform-bar { transition: background var(--motion-fast) var(--ease-calm); }
+  .waveform-bar { transition: background-color var(--motion-fast) var(--ease-calm); }
 }
-/* No-narration / empty treatment (states-empty parity): a real project with no
- * narration block renders this in place of the bars — never mock waveform. */
+/* No-narration treatment: a real project with no narration block renders this
+ * in place of the bars — never a mock waveform. */
 .waveform-strip.is-empty {
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
 }
 .waveform-empty-note {
   font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: .04em;
-  color: var(--fg-faint);
+  font-size: var(--text-micro);
+  color: var(--fg-muted);
+  padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* ═══ Composition chrome · engine tabs + word strip ═══════════════════════ */
@@ -650,20 +729,20 @@
 @media (prefers-reduced-motion: reduce) { .seg button { transition: none; } }
 .word-strip {
   display: flex;
-  gap: 6px;
+  gap: 10px;
   flex-wrap: nowrap;
   overflow: hidden;
-  padding: 2px 0;
+  padding: 2px 2px 0;
 }
 .word-strip-word {
   font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--fg-faint);
+  font-size: var(--text-micro);
+  color: var(--fg);                     /* future words (was --fg-faint, fails 1.4.3) */
   letter-spacing: .03em;
   white-space: nowrap;
 }
 .word-strip-word.is-past   { color: var(--fg-muted); }
-.word-strip-word.is-active { color: var(--beat-accent-amber); font-weight: 600; }
+.word-strip-word.is-active { color: var(--playhead); font-weight: 600; }
 
 .composition-frame {
   border: 1px solid var(--border-soft);

@@ -25,7 +25,7 @@
     "@fal-ai/client": "^1.6.2",
     "@ikenga/contract": "^0.13.0",
     "@ikenga/studio-schema": "workspace:*",
-    "@ikenga/tokens": "^0.3.0",
+    "@ikenga/tokens": "^0.5.1",
     "@ikenga/ui-lib": "workspace:*",
     "@modelcontextprotocol/ext-apps": "^1.7.1",
     "@modelcontextprotocol/sdk": "^1.29.0",

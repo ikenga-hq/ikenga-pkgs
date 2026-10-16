@@ -7,8 +7,11 @@
 // §4). The consumer snaps to frame and drives the engine's seekTo; this
 // component never mutates the playhead position itself.
 //
-// Class API (studio-editor layer): .scrubber (role="slider") · .playhead /
-// .playhead-cap · .playhead--echo
+// Locked design: DS D-05 (timeline-rail-split, Round 6) — the seek surface is
+// a 24px band over the ruler (`variant="band"`), never an overlay on the clips.
+//
+// Class API (studio-editor layer): .scrubber (role="slider") · .scrubber--band ·
+// .playhead / .playhead-cap · .playhead--echo
 
 import { useRef } from 'react';
 
@@ -58,6 +61,12 @@ export interface ScrubberPlayheadProps {
    *  position instead. */
   onHoverMs?: (ms: number | null) => void;
   fps?: number;
+  /** 'overlay' (legacy: fills its positioned parent) · 'band' (DS D-05: a
+   *  24px strip over the ruler; the consumer draws the playhead line). */
+  variant?: 'overlay' | 'band';
+  /** Cut positions (ms) for [ ] / PageUp / PageDown navigation. Plain
+   *  numbers — no domain types cross this boundary. */
+  cutsMs?: number[];
   /** Overrides the default fmtClock(currentMs) announcement. */
   ariaValueText?: string;
   ariaLabel?: string;
@@ -73,6 +82,8 @@ export function ScrubberPlayhead({
   onSelectMs,
   onHoverMs,
   fps = DEFAULT_FPS,
+  variant = 'overlay',
+  cutsMs,
   ariaValueText,
   ariaLabel = 'Playhead position',
 }: ScrubberPlayheadProps) {
@@ -93,6 +104,9 @@ export function ScrubberPlayhead({
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    // preventDefault also blocks the browser's focus-on-press; a slider that
+    // was clicked must own the keyboard next (arrow / [ ] seeks), so focus it.
+    e.currentTarget.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     downXRef.current = e.clientX;
     draggedRef.current = false;
@@ -137,23 +151,37 @@ export function ScrubberPlayhead({
     draggedRef.current = false;
   };
 
-  // Basic frame-stepping — full keyboard map is commit 15; this covers the
-  // role="slider" minimum so the scrubber is operable without a pointer.
+  // Slider keys (DS D-05): ←/→ ±1 frame · Shift ±1s · [ ] or PageUp/PageDown
+  // previous/next cut · Home/End.
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const frame = msToFrames(currentMs, fps);
+    const oneFrame = framesToMs(1, fps);
+    const cuts = cutsMs ? [...cutsMs, totalMs].sort((a, b) => a - b) : null;
     let next: number | null = null;
     switch (e.key) {
       case 'ArrowLeft':
-        next = framesToMs(frame - 1, fps);
+      case 'ArrowDown':
+        next = e.shiftKey ? currentMs - 1000 : framesToMs(frame - 1, fps);
         break;
       case 'ArrowRight':
-        next = framesToMs(frame + 1, fps);
+      case 'ArrowUp':
+        next = e.shiftKey ? currentMs + 1000 : framesToMs(frame + 1, fps);
         break;
       case 'Home':
         next = 0;
         break;
       case 'End':
         next = totalMs;
+        break;
+      case 'PageDown':
+      case ']':
+        if (!cuts) return;
+        next = cuts.find((c) => c > currentMs + oneFrame) ?? totalMs;
+        break;
+      case 'PageUp':
+      case '[':
+        if (!cuts) return;
+        next = [...cuts].reverse().find((c) => c < currentMs - oneFrame) ?? 0;
         break;
       default:
         return;
@@ -165,7 +193,7 @@ export function ScrubberPlayhead({
   return (
     <div
       ref={ref}
-      className="scrubber"
+      className={variant === 'band' ? 'scrubber scrubber--band' : 'scrubber'}
       role="slider"
       tabIndex={0}
       aria-valuemin={0}
@@ -179,7 +207,7 @@ export function ScrubberPlayhead({
       onPointerLeave={onPointerLeave}
       onKeyDown={onKeyDown}
     >
-      <Playhead leftPct={leftPct} />
+      {variant === 'overlay' && <Playhead leftPct={leftPct} />}
     </div>
   );
 }

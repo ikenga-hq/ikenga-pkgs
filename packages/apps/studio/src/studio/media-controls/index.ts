@@ -11,8 +11,8 @@
 export { TransportBar } from './transport-bar';
 export type { TransportBarProps } from './transport-bar';
 
-export { TimecodeDisplay, TimeRuler } from './timecode-display';
-export type { TimecodeDisplayProps, TimeRulerProps } from './timecode-display';
+export { TimecodeDisplay, TimeRuler, spokenClock, spokenTimecode } from './timecode-display';
+export type { TimecodeDisplayProps, TimeRulerProps, TimecodeFormat } from './timecode-display';
 
 export { ScrubberPlayhead, Playhead, PlayheadEcho } from './scrubber-playhead';
 export type { ScrubberPlayheadProps, PlayheadProps } from './scrubber-playhead';
