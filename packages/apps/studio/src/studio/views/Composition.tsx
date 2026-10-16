@@ -27,10 +27,7 @@ import {
   type PreviewAspect,
 } from '../media-controls';
 import { createMockPlayer, type PlayerHandle } from '../lib/player';
-// clockMs is the FROZEN G-TIME-MODEL formatter (floors tenths). format.ts's
-// fmtClock rounds (8450 → "0:08.5") — a known duplicate, kept for the panels
-// that already use it; the timeline + transport read the frozen one.
-import { DEFAULT_FPS, fmtClock as clockMs, framesToMs, msToFrames, snapMsToFrame } from '../lib/time';
+import { DEFAULT_FPS, fmtClock, framesToMs, msToFrames, snapMsToFrame } from '../lib/time';
 import {
   COMPOSITION_META,
   COMPOSITION_NARRATION,
@@ -69,7 +66,6 @@ import { ExportCard, type ExportUiState } from './composition/ExportCard';
 import { ExportPreflightDialog } from './composition/ExportPreflightDialog';
 import { RecordsPanel } from './composition/RecordsPanel';
 import {
-  fmtClock,
   fmtSeconds,
   fidelityLabel,
   engineLabel,
@@ -916,7 +912,7 @@ export function CompositionView() {
         <div className="timeline-section">
           <div className="track-lane__head">
             <span className="track-lane__label" id="comp-lane-label">{meta.rung}</span>
-            <span className="track-lane__meta">{`${clips.length} cells · ${clockMs(totalMs)}`}</span>
+            <span className="track-lane__meta">{`${clips.length} cells · ${fmtClock(totalMs)}`}</span>
           </div>
           <div
             className={`tl-seek${playing ? ' is-playing' : ''}`}
@@ -991,7 +987,7 @@ export function CompositionView() {
               fps={FPS}
               onSeekMs={seekMs}
               cutsMs={clips.map((c) => c.start_ms)}
-              ariaValueText={activeClip ? `${clockMs(playheadMs)}, ${activeClip.beat} cell` : undefined}
+              ariaValueText={activeClip ? `${fmtClock(playheadMs)}, ${activeClip.beat} cell` : undefined}
             />
             <Playhead leftPct={playheadPct} />
           </div>

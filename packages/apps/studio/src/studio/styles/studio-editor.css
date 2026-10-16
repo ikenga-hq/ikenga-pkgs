@@ -53,7 +53,7 @@
 
   /* beat accents (F2 LOCKED R4): base -> the named role, -soft -> that role's own
    * -soft (color-mix fallback where a theme ships none), -border -> mixed with
-   * --border. --info-soft is not in @ikenga/tokens 0.3.0, hence its fallback. */
+   * --border. The color-mix fallbacks only fire under a theme with no -soft. */
   --beat-accent-amber:          var(--achievement);
   --beat-accent-amber-soft:     var(--achievement-soft, color-mix(in srgb, var(--achievement) 16%, transparent));
   --beat-accent-amber-border:   color-mix(in srgb, var(--achievement) 40%, var(--border));

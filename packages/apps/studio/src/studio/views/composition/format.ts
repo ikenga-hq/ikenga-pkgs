@@ -7,13 +7,10 @@
 
 import type { RenderRecord, RenderStatus, Rung } from '../../mcp-types';
 
-/** ms → "M:SS.d" (matches the transport timecode + C-A concept). */
-export function fmtClock(ms: number): string {
-  const totalS = Math.max(0, ms) / 1000;
-  const m = Math.floor(totalS / 60);
-  const s = totalS - m * 60;
-  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
-}
+/** ms → "M:SS.t". Re-exported from the FROZEN time foundation (G-TIME-MODEL)
+ *  — this module used to carry its own rounding copy (8450 → "0:08.5" where
+ *  the transport read "0:08.4"); one formatter, one answer. */
+export { fmtClock } from '../../lib/time';
 
 /** ms → "5.00s" seconds label. */
 export function fmtSeconds(ms: number): string {
