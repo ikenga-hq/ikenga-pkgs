@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.3.3
+
+### Patch Changes
+
+- [#151](https://github.com/ikenga-hq/ikenga-pkgs/pull/151) [`6537cbd`](https://github.com/ikenga-hq/ikenga-pkgs/commit/6537cbd4a8574d933567b058900c17bd6afc7aca) Thanks [@nedjamez](https://github.com/nedjamez)! - Post the answer first, with an italic "Done in Ns." footer, then delete the "Working…" progress post, so the summary no longer sits above the answer in the thread. If the delete fails the progress post is edited to the summary as before.
+
 ## 0.3.2
 
 ### Patch Changes
