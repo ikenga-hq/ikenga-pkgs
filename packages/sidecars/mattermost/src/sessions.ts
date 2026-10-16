@@ -731,8 +731,21 @@ export class ThreadRouter {
     try {
       await this.opts.store.update(turn.rootId, { active: undefined }).catch(() => undefined);
       const secs = secondsSince(turn.startedAt, this.now());
-      if (turn.progressPostId) await this.edit(turn.progressPostId, `Cancelled after ${secs}s.`);
-      await this.say(turn.channelId, turn.rootId, 'Run cancelled.');
+      const summary = `Cancelled after ${secs}s.`;
+      // Same order as `finish`: the acknowledgement first (notifies), then the progress post goes.
+      const posted = await this.say(turn.channelId, turn.rootId, `Run cancelled.\n\n_${summary}_`);
+      if (turn.progressPostId) {
+        if (!posted) {
+          await this.edit(turn.progressPostId, summary);
+        } else {
+          try {
+            await this.opts.client.deletePost(turn.progressPostId);
+          } catch (err) {
+            this.log(`could not delete progress post ${turn.progressPostId}: ${this.errText(err)}`);
+            await this.edit(turn.progressPostId, summary);
+          }
+        }
+      }
     } finally {
       this.turns.delete(turn.rootId);
     }
