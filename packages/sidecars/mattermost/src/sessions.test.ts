@@ -448,8 +448,9 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.say('reply-6', 'stop', { root: 'root-6' });
     await waitFor(() => rig.daemon.rpcCalls('chi_cancel').length === 1, 'chi_cancel');
     assert.deepEqual(rig.daemon.rpcCalls('chi_cancel')[0]!.args, { runId: 'run-1' });
-    await waitFor(() => rig.mm.thread('root-6').includes('Run cancelled.'), 'cancel ack');
-    assert.match(rig.mm.thread('root-6')[0]!, /^Cancelled after \d+s\.$/);
+    await waitFor(() => rig.mm.thread('root-6').some((m) => m.startsWith('Run cancelled.')), 'cancel ack');
+    await waitFor(() => rig.mm.thread('root-6').length === 1, 'progress post deleted');
+    assert.match(rig.mm.thread('root-6')[0]!, /^Run cancelled\.\n\n_Cancelled after \d+s\._$/);
     assert.equal(rig.daemon.rpcCalls('chi_resume').length, 0, 'stop is not sent to the agent as a prompt');
 
     // Nothing running now: stop says so, and does not call the daemon again.
