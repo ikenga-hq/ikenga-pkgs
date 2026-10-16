@@ -104,6 +104,9 @@ export function ScrubberPlayhead({
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    // preventDefault also blocks the browser's focus-on-press; a slider that
+    // was clicked must own the keyboard next (arrow / [ ] seeks), so focus it.
+    e.currentTarget.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     downXRef.current = e.clientX;
     draggedRef.current = false;
