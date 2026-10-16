@@ -4,6 +4,7 @@ import { runAuditCli } from './audit-cli.js';
 import type { ResolvedAuditConfig } from './audit.js';
 import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js';
 import { ChannelLookupError, MattermostClient } from './client.js';
+import type { MattermostClientTiming } from './client.js';
 import { loadBridgeConfigs, defaultDataDir } from './config.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
@@ -35,11 +36,11 @@ export class MattermostBridge {
   private auditMirror?: AuditMirror;
   private running = false;
 
-  constructor(config: MattermostBridgeConfig) {
+  constructor(config: MattermostBridgeConfig, clientTiming?: MattermostClientTiming) {
     this.config = config;
     this.echoPrefix = config.echoPrefix ?? 'echo: ';
     this.gate = new MattermostGate(config);
-    this.client = new MattermostClient(config);
+    this.client = new MattermostClient(config, clientTiming);
 
     const botName = config.name ?? 'bot';
     const botWhere = `bot '${botName}'`;
@@ -158,7 +159,13 @@ export class MattermostBridge {
       }
     }
 
-    // Connect WebSocket
+    // Websocket health goes in the log: a bot that silently stops hearing Mattermost is the worst failure mode. The
+    // client reconnects by itself; these lines are only the record of it. Attached before the first connect so a
+    // failed first connect rejects `connect()` instead of throwing an unhandled 'error' event.
+    this.attachConnectionLogging();
+
+    // Connect WebSocket. REST calls (replies, schedules, approvals) never go through it, so they keep working while it
+    // is down and being re-established.
     await this.client.connect();
 
     // B5: optional off-box copy of the audit trail. A channel Mattermost does not know refuses the start (a mirror that
@@ -298,6 +305,24 @@ export class MattermostBridge {
     this.running = true;
   }
 
+  private loggingAttached = false;
+
+  private attachConnectionLogging(): void {
+    if (this.loggingAttached) return;
+    this.loggingAttached = true;
+    const tag = `[mattermost:${this.config.name ?? 'bot'}]`;
+    this.client.on('error', (err) => console.error(`${tag} websocket error: ${err.message}`));
+    this.client.on('close', (code, reason, expected) => {
+      if (!expected) console.error(`${tag} websocket closed unexpectedly (code ${code}, reason ${reason ? JSON.stringify(reason) : 'none'}); reconnecting`);
+    });
+    this.client.on('reconnecting', (attempt, delayMs) => {
+      console.error(`${tag} websocket reconnect attempt ${attempt} in ${delayMs} ms`);
+    });
+    this.client.on('reconnected', (attempt) => {
+      console.log(`${tag} websocket reconnected (attempt ${attempt})`);
+    });
+  }
+
   stop(): void {
     this.running = false;
     this.audit.setSink(undefined);
@@ -378,6 +403,19 @@ async function runOperatorCommand(bridges: MattermostBridge[], cli: CliArgs): Pr
   }
 }
 
+/**
+ * Never exit 0 silently while the bridge should be running. The websocket client reconnects forever and holds a timer
+ * while it does, so an empty event loop means something is badly wrong (this is how the 2026-10-16 incident ended: the
+ * bots had gone deaf, nothing held the loop, node exited 0 and `Restart=on-failure` did not restart it). `beforeExit`
+ * fires exactly when the loop has drained; a deliberate shutdown calls `process.exit()` and never gets here.
+ */
+export function installExitGuard(proc: Pick<NodeJS.Process, 'on' | 'exitCode'>, log: (line: string) => void = console.error): void {
+  proc.on('beforeExit', () => {
+    log('Mattermost bridge: nothing left to wait on but it should still be running (all bots gave up?); exiting non-zero so the supervisor restarts it');
+    proc.exitCode = 1;
+  });
+}
+
 // Sidecar CLI entry point when run directly
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
   const bridges: MattermostBridge[] = [];
@@ -426,6 +464,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
         console.error('Bridge failed to start:', err instanceof Error ? err.message : err);
         process.exit(1);
       });
+
+    installExitGuard(process);
 
     const shutdown = () => {
       for (const b of bridges) b.stop();
