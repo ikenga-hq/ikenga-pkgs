@@ -206,7 +206,7 @@ describe('plan, then approve', () => {
     const first = rig.daemon.rpcCalls('chi_run')[0]!.args.opts as { mode?: string; prompt: string };
     assert.equal(first.mode, 'plan', 'daemon-enforced read-only mode');
     assert.ok(first.prompt.endsWith(PLAN_NOTE));
-    assert.ok(rig.mm.thread('root-1').includes(PLAN), 'the plan itself is posted first');
+    assert.ok(rig.mm.thread('root-1').some((m) => m.startsWith(PLAN)), 'the plan itself is posted first');
     const text = rig.current(post);
     assert.match(text, /^\*\*Approval needed\*\*/);
     assert.match(text, /@alice, @bob/);
@@ -215,7 +215,7 @@ describe('plan, then approve', () => {
     assert.equal(rig.daemon.runs.size, 1, 'nothing acts before a decision');
     // order: plan text before the approval request
     const order = [...rig.mm.posts.values()].filter((p) => p.root_id === 'root-1').map((p) => p.message);
-    assert.ok(order.indexOf(PLAN) < order.findIndex((m) => m.startsWith('**Approval needed**')));
+    assert.ok(order.findIndex((m) => m.startsWith(PLAN)) < order.findIndex((m) => m.startsWith('**Approval needed**')));
   });
 
   it('persists the pending approval atomically with mode 600 and every field', async () => {
@@ -250,7 +250,7 @@ describe('plan, then approve', () => {
     assert.match(rig.current(post), /^\*\*Approved\*\* by @bob at \d\d:\d\d UTC\. .*`auto` permissions/);
 
     rig.daemon.settle('run-2', 'done', { output: 'edited a.ts, added a test' });
-    await waitFor(() => rig.mm.thread('root-3').includes('edited a.ts, added a test'), 'act result');
+    await waitFor(() => rig.mm.thread('root-3').some((m) => m.startsWith('edited a.ts, added a test')), 'act result');
     assert.equal(rig.daemon.runs.size, 2);
     assert.equal(rig.bridges[0]!.approvals!.pendingCount(), 0, 'the approval is consumed');
   });
@@ -261,7 +261,7 @@ describe('plan, then approve', () => {
     rig.react(post, 'alice');
     await waitFor(() => rig.daemon.runs.size === 2, 'acting run');
     rig.daemon.settle('run-2', 'done', { output: 'all edits made' });
-    await waitFor(() => rig.mm.thread('root-4').includes('all edits made'), 'act result');
+    await waitFor(() => rig.mm.thread('root-4').some((m) => m.startsWith('all edits made')), 'act result');
     await rig.bridges[0]!.router!.whenIdle();
 
     rig.say('reply-4', 'now also update the docs', { root: 'root-4' });
@@ -329,7 +329,7 @@ describe('who may decide', () => {
   it('ignores the bot itself, non-approvers, unknown posts, other emoji, and users it cannot look up', async () => {
     await rig.boot();
     const post = await rig.planned('root-10');
-    const other = rig.mm.receivedPosts.find((p) => p.root_id === 'root-10' && p.message === PLAN)!.id!;
+    const other = rig.mm.receivedPosts.find((p) => p.root_id === 'root-10' && p.message.startsWith(PLAN))!.id!;
 
     rig.react(post, rig.mm.botId); // the bot's own 👍
     rig.react(post, 'mallory'); // a channel member who is not an approver

@@ -120,6 +120,18 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as MattermostPost;
   }
 
+  /** Delete a post (`DELETE /posts/{id}`). */
+  async deletePost(postId: string): Promise<void> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Mattermost deletePost failed: HTTP ${res.status} ${res.statusText}`);
+    }
+  }
+
   /** Edit a post's message in place (`PUT /posts/{id}/patch`). Edits do not notify. */
   async updatePost(postId: string, message: string): Promise<MattermostPost> {
     const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}/patch`, {

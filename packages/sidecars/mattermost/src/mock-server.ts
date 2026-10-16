@@ -96,6 +96,12 @@ export class MockMattermostServer {
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
   /** Every `PUT /posts/{id}/patch` the bridge made, in order. */
   readonly patches: Array<{ id: string; message: string }> = [];
+  /** Every `DELETE /posts/{id}` the bridge made, in order. */
+  readonly deletes: string[] = [];
+  /** Answer every `DELETE /posts/{id}` with a 500 (the post stays). */
+  failDeletes = false;
+  /** Answer a `POST /posts` whose message matches with a 500 (nothing is created). */
+  failPostsMatching?: RegExp;
   /** Reactions by post id, as `GET /posts/{id}/reactions` returns them. */
   readonly reactions = new Map<string, MattermostReaction[]>();
   /** `user_id -> username`, for `GET /users/{id}`. A missing id is a 404. */
@@ -139,6 +145,11 @@ export class MockMattermostServer {
         req.on('end', () => {
           try {
             const data = JSON.parse(body);
+            if (this.failPostsMatching && typeof data.message === 'string' && this.failPostsMatching.test(data.message)) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'boom' }));
+              return;
+            }
             const id = `bot-post-${this.nextPostId++}`;
             this.receivedPosts.push({ ...data, id });
             this.posts.set(id, { id, ...data });
@@ -198,6 +209,21 @@ export class MockMattermostServer {
         const status = this.failChannelLookups ? 500 : name ? 200 : 404;
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status === 200 ? { id, name } : { error: 'no such channel' }));
+        return;
+      }
+
+      const del = /^\/api\/v4\/posts\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'DELETE' && del) {
+        if (this.failDeletes) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'boom' }));
+          return;
+        }
+        const id = decodeURIComponent(del[1] as string);
+        const existed = this.posts.delete(id);
+        if (existed) this.deletes.push(id);
+        res.writeHead(existed ? 200 : 404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(existed ? { status: 'OK' } : { error: 'no such post' }));
         return;
       }
 
