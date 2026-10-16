@@ -2,6 +2,7 @@ import { describe, it, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import net from 'node:net';
 import { sweepTmp, tmpDir } from './test-tmp.js';
 import { MockMattermostServer } from './mock-server.js';
 import { MattermostBridge, installExitGuard } from './bridge.js';
@@ -225,6 +226,43 @@ describe('MattermostClient websocket resilience', () => {
     server = undefined;
     client = new MattermostClient(cfg(url), FAST); // deliberately no .on('error')
     await assert.rejects(client.connect());
+  });
+
+  it('a handshake that never completes times out: the first connect rejects, a reconnect retries', { timeout: 10_000 }, async () => {
+    // A peer that accepts TCP and then says nothing (no HTTP upgrade response). Without the connect timeout an attempt
+    // like this sits for undici's 300s header timeout.
+    const silent = net.createServer((sock) => {
+      held.push(sock);
+      sock.on('error', () => {});
+    });
+    const held: net.Socket[] = [];
+    await new Promise<void>((r) => silent.listen(0, '127.0.0.1', () => r()));
+    const port = (silent.address() as net.AddressInfo).port;
+    try {
+      const c1 = new MattermostClient(cfg(`http://127.0.0.1:${port}`), { ...FAST, connectTimeoutMs: 100 });
+      const t0 = Date.now();
+      await assert.rejects(c1.connect(), /timed out/);
+      assert.ok(Date.now() - t0 < 2_000);
+      c1.close();
+
+      // Reconnect path: the server drops us, then hangs every handshake for a while, then answers again.
+      const { url } = await start({ ...FAST, connectTimeoutMs: 100 });
+      let reconnected = 0;
+      const errors: string[] = [];
+      client!.on('error', (e) => errors.push(e.message));
+      client!.on('reconnected', () => reconnected++);
+      await client!.connect();
+      await until(() => server!.clientCount === 1, 'connection');
+      // Point the client at the silent peer for the next attempts (config is read on every attempt).
+      (client as unknown as { config: MattermostBridgeConfig }).config.mattermostUrl = `http://127.0.0.1:${port}`;
+      server!.dropClients();
+      await until(() => errors.filter((m) => /timed out/.test(m)).length >= 2, 'two timed-out attempts');
+      (client as unknown as { config: MattermostBridgeConfig }).config.mattermostUrl = url;
+      await until(() => reconnected === 1, 'reconnect once the handshake answers again');
+    } finally {
+      for (const s of held) s.destroy();
+      await new Promise<void>((r) => silent.close(() => r()));
+    }
   });
 
   it('REST keeps working while the websocket is down', async () => {

@@ -24,6 +24,12 @@ export interface MattermostClientTiming {
   healthyMs?: number;
   /** Liveness ping period. `0` turns the check off. Default 30s. */
   pingIntervalMs?: number;
+  /**
+   * Give up on one connection attempt whose websocket handshake has not completed in this long. `0` turns it off.
+   * Default 30s. Without it a peer that accepts TCP but never answers the upgrade holds the attempt for undici's own
+   * 300s header timeout, the bot deaf all that time, whatever the backoff cap says.
+   */
+  connectTimeoutMs?: number;
   /** Jitter source in [0, 1). Default `Math.random`; tests pin it. */
   random?: () => number;
 }
@@ -69,6 +75,7 @@ export class MattermostClient extends EventEmitter {
       backoffMaxMs: timing.backoffMaxMs ?? 60_000,
       healthyMs: timing.healthyMs ?? 60_000,
       pingIntervalMs: timing.pingIntervalMs ?? 30_000,
+      connectTimeoutMs: timing.connectTimeoutMs ?? 30_000,
       random: timing.random ?? Math.random,
     };
   }
@@ -226,9 +233,33 @@ export class MattermostClient extends EventEmitter {
       this.ws = ws;
       let opened = false;
       const authSeq = this.seq;
+      const timeoutMs = this.timing.connectTimeoutMs;
+      let connectTimer: NodeJS.Timeout | null = null;
+      const clearConnectTimer = () => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = null;
+      };
+      if (timeoutMs > 0) {
+        connectTimer = setTimeout(() => {
+          connectTimer = null;
+          if (opened) return;
+          // The handshake never completed: abandon this attempt (no events from it any more) and let the caller retry.
+          ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+          if (this.ws === ws) this.ws = null;
+          try {
+            ws.close();
+          } catch {
+            // already closing
+          }
+          const err = new Error(`WebSocket handshake timed out after ${timeoutMs} ms`);
+          this.emitError(err);
+          reject(err);
+        }, timeoutMs);
+      }
 
       ws.onopen = () => {
         opened = true;
+        clearConnectTimer();
         // Send authentication challenge on connection (every connection, so also every reconnect)
         const challenge = {
           seq: this.seq++,
@@ -270,11 +301,15 @@ export class MattermostClient extends EventEmitter {
         const err = new Error('WebSocket connection error');
         this.emitError(err);
         // Before the socket has opened an error means this attempt failed (a close event follows, too).
-        if (!opened) reject(err);
+        if (!opened) {
+          clearConnectTimer();
+          reject(err);
+        }
       };
 
       ws.onclose = (event: CloseEvent) => {
         if (!opened) {
+          clearConnectTimer();
           reject(new Error(`WebSocket closed before it opened (code ${event.code}${event.reason ? `: ${event.reason}` : ''})`));
           if (this.ws === ws) this.ws = null;
           return;
