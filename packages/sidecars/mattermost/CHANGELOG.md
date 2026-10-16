@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.3.4
+
+### Patch Changes
+
+- [#153](https://github.com/ikenga-hq/ikenga-pkgs/pull/153) [`58ff6bf`](https://github.com/ikenga-hq/ikenga-pkgs/commit/58ff6bfc3e8b4e0ec5134592a7b33cd753e2b046) Thanks [@nedjamez](https://github.com/nedjamez)! - A `stop` reply now posts "Run cancelled." with an italic "Cancelled after Ns." footer and then deletes the progress post, matching finished runs, instead of leaving "Cancelled after Ns." above the acknowledgement.
+
 ## 0.3.3
 
 ### Patch Changes
