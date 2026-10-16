@@ -1,7 +1,7 @@
 {
   "id": "com.ikenga.mattermost",
   "name": "Mattermost Bridge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "ikenga_api": "3",
   "kind": "embedded",
   "author": {

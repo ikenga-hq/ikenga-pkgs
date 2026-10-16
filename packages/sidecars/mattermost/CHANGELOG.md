@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.3.2
+
+### Patch Changes
+
+- [#149](https://github.com/ikenga-hq/ikenga-pkgs/pull/149) [`4678a60`](https://github.com/ikenga-hq/ikenga-pkgs/commit/4678a60a316a0646deb59aed79068d05c9483fb1) Thanks [@nedjamez](https://github.com/nedjamez)! - Gate: match `allowedUsers` against Mattermost's `@`-prefixed `sender_name`. A username listed with or without the `@` was never matched, so every post from that user was refused as `user_not_allowed`.
+
 ## 0.3.1
 
 ### Patch Changes
