@@ -25,6 +25,9 @@ function encodeFrame(text: string): Buffer {
   return Buffer.concat([header, payload]);
 }
 
+/** `decodeFrames` yields this in place of the payload of a close frame (opcode 8). */
+const CLOSE_FRAME = '\u0000close';
+
 function decodeFrames(buf: Buffer): string[] {
   const messages: string[] = [];
   let offset = 0;
@@ -52,6 +55,11 @@ function decodeFrames(buf: Buffer): string[] {
     }
 
     const payload = buf.subarray(dataOffset, dataOffset + payloadLength);
+    if ((buf[offset]! & 0x0f) === 0x08) {
+      messages.push(CLOSE_FRAME);
+      offset = dataOffset + payloadLength;
+      continue;
+    }
     if (isMasked) {
       const mask = buf.subarray(maskOffset, maskOffset + 4);
       const unmasked = Buffer.alloc(payloadLength);
@@ -77,6 +85,12 @@ export class MockMattermostServer {
   get clientCount(): number {
     return this.wsClients.size;
   }
+  /** Websocket upgrades accepted so far (a reconnect is a new one). */
+  connectionCount = 0;
+  /** `ping` actions received on websockets. */
+  pingCount = 0;
+  /** Answer websocket `ping`s (as Mattermost does). Set false to play a half-open peer that goes silent. */
+  answerPings = true;
   readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string }> = [];
   /** Every post the bridge created, by id, with its CURRENT message (patches applied). */
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
@@ -230,12 +244,19 @@ export class MockMattermostServer {
       );
 
       this.wsClients.add(socket as Socket);
+      this.connectionCount++;
 
       let buffer = Buffer.alloc(0);
       socket.on('data', (chunk) => {
         buffer = Buffer.concat([buffer, chunk]);
         const messages = decodeFrames(buffer);
         for (const msg of messages) {
+          // A close frame from the client: answer it and hang up, as a real server does.
+          if (msg === CLOSE_FRAME) {
+            socket.write(Buffer.from([0x88, 0x00]));
+            socket.end();
+            continue;
+          }
           try {
             const parsed = JSON.parse(msg);
             if (parsed.action === 'authentication_challenge') {
@@ -244,6 +265,11 @@ export class MockMattermostServer {
                 seq_reply: parsed.seq,
               };
               socket.write(encodeFrame(JSON.stringify(resp)));
+            } else if (parsed.action === 'ping') {
+              this.pingCount++;
+              if (this.answerPings) {
+                socket.write(encodeFrame(JSON.stringify({ status: 'OK', seq_reply: parsed.seq, data: { text: 'pong' } })));
+              }
             }
           } catch {
             // ignore non-json
@@ -309,6 +335,22 @@ export class MockMattermostServer {
     const frame = encodeFrame(JSON.stringify(event));
     for (const client of this.wsClients) {
       client.write(frame);
+    }
+  }
+
+  /** The server drops every websocket abruptly (no close frame): what a restart or a network drop looks like (code 1006). */
+  dropClients(): void {
+    for (const client of this.wsClients) client.destroy();
+    this.wsClients.clear();
+  }
+
+  /** The server closes every websocket properly, with a close frame. */
+  closeClients(code = 1001, reason = 'going away'): void {
+    const body = Buffer.concat([Buffer.from([code >> 8, code & 0xff]), Buffer.from(reason, 'utf8')]);
+    const frame = Buffer.concat([Buffer.from([0x88, body.length]), body]);
+    for (const client of this.wsClients) {
+      client.write(frame);
+      client.end();
     }
   }
 
