@@ -123,7 +123,7 @@ export function TransportBar({
 
         <div className="transport-divider" aria-hidden="true" />
 
-        <TimecodeDisplay currentMs={currentMs} totalMs={totalMs} fps={fps} />
+        <TimecodeDisplay currentMs={currentMs} totalMs={totalMs} fps={fps} playing={playing} announce />
 
         {counterLabel && (
           <>
