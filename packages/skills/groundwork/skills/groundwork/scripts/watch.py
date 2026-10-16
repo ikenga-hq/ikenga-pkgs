@@ -61,43 +61,57 @@ def _wait_stable(root):
         prev = cur
 
 
+def _safe(fn, *args):
+    """Run a generator; one bad plan is logged and skipped, never fatal to the watcher."""
+    try:
+        return fn(*args)
+    except Exception as e:  # noqa: BLE001 - the watcher must outlive any single plan
+        print(f"  ! {args[0]}: {type(e).__name__}: {e}", file=sys.stderr)
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 def watch_plan(plan):
     print(f"watching plan {plan}  (Ctrl-C to stop)")
-    r = generate_explorer.generate(plan)
+    r = _safe(generate_explorer.generate, plan)
     print(f"  · initial: {r.get('data')}/{r.get('meta')}  ({r.get('stats', {}).get('files', '?')} files)")
     snap = _snapshot(plan)
     while True:
         time.sleep(POLL)
         cur = _snapshot(plan)
         if cur != snap:
-            _wait_stable(plan)
-            r = generate_explorer.generate(plan)
+            # Baseline = what the tree looked like once it settled, taken BEFORE we
+            # regenerate: an edit that lands while generate() runs differs from it and
+            # triggers another cycle instead of being swallowed by a post-regen re-snapshot.
+            snap = _wait_stable(plan)
+            r = _safe(generate_explorer.generate, plan)
             stamp = time.strftime("%H:%M:%S")
             print(f"  · {stamp} regenerated explorer: data={r.get('data')} meta={r.get('meta')}")
-            snap = _snapshot(plan)
 
 
 def watch_plans_dir(plans_dir):
     print(f"watching plans dir {plans_dir}  (Ctrl-C to stop)")
-    r = generate_plans_index.generate(plans_dir)
+    r = _safe(generate_plans_index.generate, plans_dir)
     print(f"  · initial index: {r.get('data')}/{r.get('meta')}  ({r.get('stats', {}).get('count', '?')} plans)")
     snap = _snapshot(plans_dir)
     while True:
         time.sleep(POLL)
         cur = _snapshot(plans_dir)
         if cur != snap:
-            _wait_stable(plans_dir)
-            # which top-level plan dirs changed? refresh their explorers too (if they have one)
-            changed = {rel.split(os.sep, 1)[0] for rel in set(cur) ^ set(snap)}
-            changed |= {rel.split(os.sep, 1)[0] for rel in cur if rel in snap and cur[rel] != snap[rel]}
+            stable = _wait_stable(plans_dir)
+            # which top-level plan dirs changed? Diff the SETTLED tree (not the pre-debounce
+            # `cur`): a file edited in another plan during the debounce window belongs to
+            # this cycle, and snap is advanced before generating so nothing is lost.
+            changed = {rel.split(os.sep, 1)[0] for rel in set(stable) ^ set(snap)}
+            changed |= {rel.split(os.sep, 1)[0] for rel in stable if rel in snap and stable[rel] != snap[rel]}
+            snap = stable
+            # refresh their explorers too (if they have one)
             for slug in sorted(changed):
                 pdir = os.path.join(plans_dir, slug)
                 if os.path.isdir(pdir) and os.path.exists(os.path.join(pdir, "artifact", "explorer.html")):
-                    generate_explorer.generate(pdir)
-            ir = generate_plans_index.generate(plans_dir)
+                    _safe(generate_explorer.generate, pdir)
+            ir = _safe(generate_plans_index.generate, plans_dir)
             stamp = time.strftime("%H:%M:%S")
             print(f"  · {stamp} regenerated index: data={ir.get('data')} meta={ir.get('meta')}  (touched: {', '.join(sorted(changed)) or '—'})")
-            snap = _snapshot(plans_dir)
 
 
 def main(argv=None):

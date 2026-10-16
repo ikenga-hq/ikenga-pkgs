@@ -222,6 +222,12 @@ So the generated `09` always carries the kickoff Task-mirror instruction in its 
 
 ---
 
+## Merge confirmation (required)
+
+`orchestrate` itself only writes `09`, but the execution protocol it hands to the orchestrator ends in merges and a `pnpm install` - both outward or hard to undo (`pnpm install` runs dependency lifecycle scripts). So the generated `09` and the orchestrator brief carry this gate, and the calling session must honour it too: **before the first merge or install of a run, stop and confirm with the user** (`AskUserQuestion`) - name the target repo and branch, list the PRs / branches that will be merged in order, say that the install executes package scripts, and proceed only on an explicit yes. This is the same shape as the `issues` action's "Write confirmation". Reconciling `05`, Tasks and meta-repo commits needs no confirmation.
+
+---
+
 ## Emitting a runnable Workflow (`--emit-workflow`)
 
 **Opt-in.** Without the flag, orchestrate behaves exactly as today — prose `09` only. With `--emit-workflow`, after `09-orchestration.md` is written, also generate its **executable twin**: `artifact/orchestrate.workflow.js`, a Workflow script that fans out the build wave-by-wave instead of leaving execution to an improvising orchestrator agent.
@@ -232,11 +238,14 @@ This is worth it because the wave plan orchestrate already computes maps almost 
 
 1. Read the model with `python3 <skill>/scripts/groundwork_state.py board-data --plan <plan> --with-briefs` — emits each `WP-NN` with `id / title / wave / deps / gate / tier` **plus** its `brief` (parsed from the `09` §WP-NN section just written).
 2. Group WPs by `wave`, attach each wave's owning `gate` (from the freeze-gates table), in wave order → the `WAVES` array.
-3. Fill the template `profiles/_shared/templates/artifact/orchestrate.workflow.js`:
-   - `{{plan_title}}`, `{{slug}}` → string literals.
-   - `{{meta_phases}}` → one phase per wave, e.g. `[{title:'Wave 0 · G-CONTRACT'},{title:'Wave 1'}]` (must stay a **pure literal** — `meta` allows no variables).
-   - `{{waves_json}}` → the `WAVES` array as a JSON literal (`[{title, gate|null, wps:[{id,title,tier,brief}]}]`).
-4. Write `artifact/orchestrate.workflow.js`; register it in `.groundwork.json.docs` (whole-file hash; regenerated, never hand-edited).
+3. Render the template with the deterministic emitter - **never fill it by hand**:
+
+   ```bash
+   python3 <skill>/scripts/groundwork_state.py emit-workflow --plan <plan>
+   ```
+
+   It does steps 1-2 itself (reads the anchor + the `09` briefs, groups WPs by `wave`, attaches each wave's owning freeze gate), then fills `profiles/_shared/templates/artifact/orchestrate.workflow.js`. Every placeholder is an **unquoted JSON literal** produced by `json.dumps`: `{{name_js}}` / `{{description_js}}` (the workflow name and the description naming the plan title), `{{meta_phases}}` (one phase per wave, e.g. `[{"title":"Wave 0 · G-CONTRACT"},{"title":"Wave 1"}]` - a **pure literal**, `meta` allows no variables), `{{waves_json}}` (`[{title, gate|null, wps:[{id,title,tier,brief}]}]`). A plan title, slug, gate name or brief can therefore never leave its string and add code to the script; do not substitute any of them yourself.
+4. The command writes `artifact/orchestrate.workflow.js` atomically and registers it in `.groundwork.json.docs` (whole-file hash; regenerated, never hand-edited). It prints `WRITTEN` / `UNCHANGED`, so re-running is idempotent. It **refuses** (exit 1, nothing written) on a WP id that is not `WP-NN[a]`, a `tier` outside `opus` / `sonnet` / `haiku` (a missing tier becomes an explicit `sonnet`), a WP with no integer `wave`, a WP with no `### WP-NN` brief in `09`, or a malformed fence / duplicate `### WP-NN` header in `09`. Each agent call gets an explicit `model` and `effort` per tier (`opus` high · `sonnet` medium · `haiku` low); the gate verifier is `opus` / high.
 
 ### The no-filesystem invariant (why the script returns instead of writes)
 

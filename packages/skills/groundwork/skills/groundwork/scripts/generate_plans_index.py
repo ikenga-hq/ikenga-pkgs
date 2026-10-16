@@ -19,6 +19,9 @@ import tempfile
 import datetime
 import subprocess
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import groundwork_state as gws  # noqa: E402
+
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE = os.path.join(SKILL, "scripts", "groundwork_state.py")
 TEMPLATE = os.path.join(SKILL, "profiles", "_shared", "plans-index", "index.html")
@@ -44,6 +47,7 @@ def _scaffold_copy(tpl, dest):
     os.close(fd)
     try:
         shutil.copyfile(tpl, tmp)
+        os.chmod(tmp, gws.dest_mode(dest))  # mkstemp's 0600 must not leak onto the target
         os.replace(tmp, dest)
     finally:
         if os.path.lexists(tmp):
@@ -52,7 +56,7 @@ def _scaffold_copy(tpl, dest):
 
 def generate(plans_dir, title=None):
     plans_dir = os.path.normpath(plans_dir)
-    md = _run("plans-index-data", "--plans-dir", plans_dir)
+    md = _run("plans-index-data", f"--plans-dir={plans_dir}")
     if md.returncode != 0:
         return {"plans_dir": plans_dir, "error": "plans-index-data failed: " + md.stderr[:200]}
     model = md.stdout
@@ -64,18 +68,19 @@ def generate(plans_dir, title=None):
     if scaffolded:
         _scaffold_copy(TEMPLATE, dest)
 
-    meta = {"title": title or (os.path.basename(plans_dir) + " · plans"),
+    meta = {"title": gws.clip(title or (os.path.basename(plans_dir) + " · plans")),
             "root_rel": ".", "refreshed": datetime.date.today().isoformat()}
-    mf = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-    mf.write(model); mf.close()
-    xf = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
-    json.dump(meta, xf); xf.close()
     # --html-script-safe: the fences live inside <script type="application/json">.
-    r1 = _run("write-region-plain", "--file", dest, "--id", "plans-index-data",
-              "--content-file", mf.name, "--html-script-safe")
-    r2 = _run("write-region-plain", "--file", dest, "--id", "plans-index-meta",
-              "--content-file", xf.name, "--html-script-safe")
-    os.unlink(mf.name); os.unlink(xf.name)
+    with tempfile.TemporaryDirectory(prefix="gw-index-") as td:
+        mf, xf = os.path.join(td, "model.json"), os.path.join(td, "meta.json")
+        with open(mf, "w", encoding="utf-8") as fh:
+            fh.write(model)
+        with open(xf, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+        r1 = _run("write-region-plain", f"--file={dest}", "--id", "plans-index-data",
+                  "--content-file", mf, "--html-script-safe")
+        r2 = _run("write-region-plain", f"--file={dest}", "--id", "plans-index-meta",
+                  "--content-file", xf, "--html-script-safe")
     return {"plans_dir": plans_dir, "scaffolded": scaffolded,
             "data": _result(r1), "meta": _result(r2), "stats": stats}
 

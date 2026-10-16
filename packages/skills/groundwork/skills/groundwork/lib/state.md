@@ -34,7 +34,8 @@ python3 <skill>/scripts/groundwork_state.py <subcommand> [args]
                        # prints WRITTEN | UNCHANGED | SKIPPED_DIRTY
   next-id          --plan DIR --kind gap|wp|gate|design [--name NAME]
   register-id      --plan DIR --id ID --doc DOC [--field k=v ...]
-  board-data       --plan DIR
+  board-data       --plan DIR [--with-briefs]
+  emit-workflow    --plan DIR [--profiles-root DIR]          # render artifact/orchestrate.workflow.js (JSON-literal placeholders; WRITTEN | UNCHANGED)
   status-data      --plan DIR [--profiles-root DIR]
   explorer-data    --plan DIR                                # typed file-tree model for artifact/explorer.html
   plans-index-data --plans-dir DIR                           # cross-plan rollup of every plan under a plans/ dir
@@ -311,6 +312,11 @@ Inside HTML, JSON, or any non-markdown file, use the same `<!-- … -->` form wh
 3. **Unrecognized fences are left untouched** — even by the action that "owns" the file. A user can introduce their own fences with IDs like `notes-<anything>` and groundwork won't fight them.
 4. **A fenced block missing from `.groundwork.json`** is a new fence; on first action run, it's recorded.
 5. **A fence present in `.groundwork.json` but not in the file** is treated as a hand-removal — `status` reports it; the next action run does not re-create it.
+6. **Markers inside a fenced code block are not fences (markdown files).** A ``` / ~~~ block that quotes the syntax can't masquerade as a region.
+7. **Malformed fences are refused, never guessed at.** A duplicate start, a nested or overlapping region, an unterminated start or an orphan end makes every read / write on that file exit 1 with the reason (`scaffold --force` skips it and lists it under `malformed_fences`); `status-data` reports the doc as `state: "malformed"`.
+8. **Written content may not itself contain a marker line** (`<!-- | // | # groundwork:auto:start|end …`), and may not leave the file's fences malformed (e.g. an unbalanced ``` block): `write-region` / `write-region-plain` refuse it (exit 1) instead of letting it truncate or capture a region.
+9. **`init` only moves the baseline of regions it wrote.** Re-running `init` over an existing file never re-records a region it did not rewrite, so a hand edit inside a fence stays detectable (`SKIPPED_DIRTY`) afterwards.
+10. **Line endings are preserved.** A CRLF file is rewritten with CRLF; the region hash is newline-agnostic and splits on `\n` only.
 
 ### Reserved fence IDs (by action)
 

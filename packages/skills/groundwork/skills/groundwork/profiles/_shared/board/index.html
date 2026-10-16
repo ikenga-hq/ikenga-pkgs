@@ -1170,6 +1170,7 @@ EXECUTION PROTOCOL
    - Schema / interface / contract changes go through you — they're frozen gates. A subagent never invents a contract change.
 
 5. MERGE ORDER
+   - **Merge confirmation (required)** - before the first merge or \`pnpm install\` of a run, stop and ask the user (\`AskUserQuestion\`): name the target branch / repo and the PRs or branches to be merged, and say that \`pnpm install\` runs dependency lifecycle scripts. Proceed only on an explicit yes.
    - Per repo / owner, follow the wave plan.
    - For {profile} = software: contract/lib changes merge first; \`pnpm install\` at workspace root; then consumer changes in dep order.
    - For {profile} = general: decision-lock deliverables land before dependent deliverables; coordinate ownership.

@@ -14,7 +14,7 @@
 python3 <skill>/scripts/groundwork_state.py status-data --plan <plan> --profiles-root <skill>/profiles
 ```
 
-It returns per-doc sync/drift + dirty-region lists (real sha256 diff), ID counts, sub-plan/design/research state, and the conformance verdict for **every** profile on disk. Render the report below from that JSON; the freshness ("X days old") and the suggested-actions ranking are the action's to compute from the returned stamps.
+It returns per-doc sync/drift + dirty-region lists (real sha256 diff; a doc whose fence markers are duplicated, nested, overlapping or unterminated comes back `state: "malformed"` with a `reason` - report it as `✗ malformed fence` and tell the user to fix the markers by hand, since every write to that file is refused until then), ID counts, sub-plan/design/research state, and the conformance verdict for **every** profile on disk. Render the report below from that JSON; the freshness ("X days old") and the suggested-actions ranking are the action's to compute from the returned stamps.
 
 ---
 

@@ -85,12 +85,37 @@ def read_file(path: str) -> str:
         return f.read()
 
 
+def read_file_raw(path: str) -> str:
+    """Like read_file but keeps CRLF / lone-CR bytes as they are on disk. Used by
+    every path that rewrites a doc, so line endings outside the edit survive."""
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def _new_file_mode() -> int:
+    m = os.umask(0)
+    os.umask(m)
+    return 0o666 & ~m
+
+
+def dest_mode(path: str) -> int:
+    """Mode a freshly replaced file should end up with: the existing regular file's
+    mode, else 0o666 & ~umask. mkstemp creates 0600, which os.replace would carry
+    onto the target (breaking files served to another user, or a shared group)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return _new_file_mode()
+    return stat.S_IMODE(st.st_mode) if stat.S_ISREG(st.st_mode) else _new_file_mode()
+
+
 def atomic_write(path: str, data: str) -> None:
     d = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".gw-tmp-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(data)
+        os.chmod(tmp, dest_mode(path))
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -157,14 +182,51 @@ def anchor_path(plan: str) -> str:
     return os.path.join(plan, ANCHOR)
 
 
+# Real anchors are tens of KB. The cap keeps a hostile / runaway anchor from being
+# slurped whole (and then embedded whole) by every generator run.
+_ANCHOR_READ_CAP = 4 * 1024 * 1024
+_ANCHOR_OBJECT_KEYS = ("docs", "ids", "designs", "subplans", "research", "milestones")
+
+
+def anchor_shape_error(a):
+    """Why `a` can't be used as an anchor (None when it can). Valid JSON that is not
+    an object, or whose container keys are not objects, would otherwise surface as
+    an AttributeError deep inside a command."""
+    if not isinstance(a, dict):
+        return "top level is not a JSON object"
+    for k in _ANCHOR_OBJECT_KEYS:
+        if k in a and not isinstance(a[k], dict):
+            return f'"{k}" is not an object'
+    if "profile" in a and not isinstance(a["profile"], str):
+        return '"profile" is not a string'
+    return None
+
+
+def parse_anchor(path: str):
+    """Capped, shape-checked read of an anchor file -> (anchor, error)."""
+    raw = read_regular_capped(path, _ANCHOR_READ_CAP)
+    if raw is None:
+        return None, f"{ANCHOR} is not a readable regular file"
+    if len(raw) > _ANCHOR_READ_CAP:
+        return None, f"{ANCHOR} is larger than {_ANCHOR_READ_CAP // (1024 * 1024)} MB"
+    try:
+        a = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        return None, f"{ANCHOR} is corrupt JSON ({e}); restore from git."
+    bad = anchor_shape_error(a)
+    if bad:
+        return None, f"{ANCHOR} is malformed ({bad}); restore from git."
+    return a, None
+
+
 def load_anchor(plan: str) -> dict:
     p = anchor_path(plan)
     if not os.path.exists(p):
         die(f"not a groundwork plan folder (no {ANCHOR}); run `groundwork init` first.", 2)
-    try:
-        return json.loads(read_file(p))
-    except json.JSONDecodeError as e:
-        die(f"{ANCHOR} is corrupt JSON ({e}); restore from git.", 2)
+    a, err = parse_anchor(p)
+    if err:
+        die(err, 2)
+    return a
 
 
 def save_anchor(plan: str, anchor: dict) -> None:
@@ -176,18 +238,79 @@ def save_anchor(plan: str, anchor: dict) -> None:
 # fence parsing
 # --------------------------------------------------------------------------- #
 
-# Recognize markdown (<!-- -->), // and # line-comment fence variants.
-def _fence_patterns(fence_id: str):
-    esc = re.escape(fence_id)
-    start = re.compile(
-        rf"^[ \t]*(?:<!--|//|#)[ \t]*groundwork:auto:start[ \t]+{esc}[ \t]*(?:-->)?[ \t]*$",
-        re.M,
-    )
-    end = re.compile(
-        rf"^[ \t]*(?:<!--|//|#)[ \t]*groundwork:auto:end[ \t]+{esc}[ \t]*(?:-->)?[ \t]*$",
-        re.M,
-    )
-    return start, end
+class FenceError(ValueError):
+    """The fence markers in a file are malformed (duplicate, nested, overlapping,
+    unterminated or orphaned). Callers refuse / report instead of guessing."""
+
+
+# Recognize markdown (<!-- -->), // and # line-comment fence variants. A trailing
+# \r is tolerated so CRLF files parse; spans never include it.
+_MARKER_RE = re.compile(
+    r"^[ \t]*(?:<!--|//|#)[ \t]*groundwork:auto:(start|end)[ \t]+(\S+?)[ \t]*(?:-->)?[ \t\r]*$"
+)
+# Any line that *looks* like a fence marker, whatever its id: write paths refuse these.
+_ANY_MARKER_RE = re.compile(r"^[ \t]*(?:<!--|//|#)[ \t]*groundwork:auto:(?:start|end)\b")
+_CODE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_MD_EXTS = (".md", ".markdown", ".mdx")
+
+
+def is_md(path: str) -> bool:
+    return str(path).lower().endswith(_MD_EXTS)
+
+
+def scan_fences(text: str, md: bool = False):
+    """Walk `text` once and return ({id: (start_span, end_span, inner)}, [errors]).
+
+    For markdown (`md=True`) lines inside a ``` / ~~~ code block are not markers, so a
+    note that quotes the fence syntax can't masquerade as a region. Each id must have
+    exactly one start and one matching end, and regions must not nest or overlap."""
+    regions, errors, seen = {}, [], set()
+    open_ = None  # (id, start_span)
+    code = None   # (char, length) of the open code block
+    swallowed = []  # fence-looking lines seen inside the open code block
+    for m in re.finditer(r"[^\n]*\n|[^\n]+", text):
+        raw = m.group(0)
+        line = raw[:-1] if raw.endswith("\n") else raw
+        body = line.rstrip("\r")
+        if md:
+            if code:
+                if re.match(r"^ {0,3}" + re.escape(code[0]) + "{" + str(code[1]) + r",}[ \t]*$", body):
+                    code, swallowed = None, []
+                elif _ANY_MARKER_RE.match(body):
+                    swallowed.append(body.strip())
+                continue
+            co = _CODE_OPEN_RE.match(body)
+            if co:
+                code = (co.group(1)[0], len(co.group(1)))
+                continue
+        mm = _MARKER_RE.match(line)
+        if not mm:
+            continue
+        kind, fid = mm.group(1), mm.group(2)
+        span = (m.start(), m.start() + len(body))
+        if kind == "start":
+            if fid in seen:
+                errors.append(f"duplicate start fence for '{fid}'")
+            elif open_ is not None:
+                errors.append(f"fence '{fid}' starts inside the still-open fence '{open_[0]}' (nested or overlapping)")
+            else:
+                open_ = (fid, span)
+            seen.add(fid)
+        else:
+            if open_ is None:
+                errors.append(f"end fence '{fid}' has no start")
+            elif open_[0] != fid:
+                errors.append(f"end fence '{fid}' closes inside the open fence '{open_[0]}' (overlapping)")
+                open_ = None
+            else:
+                regions[fid] = (open_[1], span, text[open_[1][1]:span[0]])
+                open_ = None
+    if open_ is not None:
+        errors.append(f"unterminated start fence '{open_[0]}'")
+    if code and swallowed:
+        # an unclosed code block would hide these markers (and so their regions)
+        errors.append(f"unclosed code block hides {len(swallowed)} fence marker line(s), e.g. '{swallowed[0]}'")
+    return regions, errors
 
 
 _META_RE = re.compile(
@@ -196,8 +319,10 @@ _META_RE = re.compile(
 
 
 def _strip_meta(body: str) -> str:
-    """Drop a single leading `last_action:` metadata line, then trim."""
-    lines = body.splitlines()
+    """Drop a single leading `last_action:` metadata line, then trim. Splits on \n
+    only (str.splitlines also breaks on U+2028, \x0c, \x85 ... and the re-join would
+    silently rewrite them) and ignores CR, so a CRLF file hashes like its LF twin."""
+    lines = body.replace("\r\n", "\n").split("\n")
     # skip leading blank lines
     i = 0
     while i < len(lines) and lines[i].strip() == "":
@@ -207,26 +332,65 @@ def _strip_meta(body: str) -> str:
     return "\n".join(lines[i:]).strip("\n").strip()
 
 
-def find_region(text: str, fence_id: str):
+def body_hash(content: str) -> str:
+    """Hash of `content` exactly as a read-back of the region will hash it, i.e. the
+    same normalization the on-disk side goes through (meta line dropped, trimmed)."""
+    return sha256_text(_strip_meta("<!-- last_action: x -->\n" + content))
+
+
+def find_region(text: str, fence_id: str, md: bool = False):
     """Return (start_span, end_span, inner_body) or None. inner_body is the raw text
-    between the fence comment lines (newline-delimited, fences excluded)."""
-    s_re, e_re = _fence_patterns(fence_id)
-    sm = s_re.search(text)
-    if not sm:
-        return None
-    em = e_re.search(text, sm.end())
-    if not em:
-        return None
-    inner = text[sm.end():em.start()]
-    return (sm.start(), sm.end()), (em.start(), em.end()), inner
+    between the fence comment lines (newline-delimited, fences excluded). Raises
+    FenceError when the file's fences are malformed."""
+    regions, errors = scan_fences(text, md)
+    if errors:
+        raise FenceError("; ".join(errors))
+    return regions.get(fence_id)
 
 
-def region_content_hash(text: str, fence_id: str):
-    r = find_region(text, fence_id)
+def region_content_hash(text: str, fence_id: str, md: bool = False):
+    r = find_region(text, fence_id, md)
     if r is None:
         return None
     _, _, inner = r
     return sha256_text(_strip_meta(inner))
+
+
+def _file_nl(text: str) -> str:
+    """The newline a file uses (CRLF when it does so more than LF-only)."""
+    crlf = text.count("\r\n")
+    return "\r\n" if crlf and crlf * 2 > text.count("\n") else "\n"
+
+
+def _with_nl(s: str, nl: str) -> str:
+    s = s.replace("\r\n", "\n")
+    return s.replace("\n", nl) if nl != "\n" else s
+
+
+def _refuse_marker_lines(content: str, what: str) -> None:
+    """Content spliced into a region must not itself contain a fence marker: an end
+    marker truncates the region, a start marker captures the next one."""
+    for n, line in enumerate(re.split(r"\r\n|\r|\n", content), 1):
+        if _ANY_MARKER_RE.match(line):
+            die(f"{what}: content line {n} is a groundwork:auto fence marker; refusing to write it "
+                f"into a region (it would corrupt the fence structure). Reword or remove that line.", 1)
+
+
+def _region_or_die(text: str, fid: str, md: bool, label: str):
+    try:
+        r = find_region(text, fid, md)
+    except FenceError as e:
+        die(f"{label}: malformed fences ({e}); fix the markers by hand first.", 1)
+    if r is None:
+        die(f"fence '{fid}' not found in {label}", 1)
+    return r
+
+
+def _check_fences_after(new_text: str, md: bool, label: str) -> None:
+    _, errors = scan_fences(new_text, md)
+    if errors:
+        die(f"{label}: refusing the write, it would leave the fences malformed ({'; '.join(errors)}) "
+            f"- e.g. content with an unbalanced ``` code block.", 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -470,30 +634,34 @@ def cmd_read_anchor(args):
 # --------------------------------------------------------------------------- #
 
 def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str,
-                keep_prior_ids=()):
-    """Record a doc's whole-file hash + region hashes. Preserves the existing
-    region entry (including its last_written stamp) when the content hash is
-    unchanged, so re-recording an untouched doc produces no diff — the basis of
-    scaffold idempotency."""
+                rewritten=()):
+    """Record a doc's whole-file hash + region hashes. A region this run did not
+    write (`rewritten`) keeps its prior entry verbatim, stamp and all: only a write
+    moves a region's baseline, so re-running `init` over a hand-edited fence can't
+    quietly bless the edit as clean. An unrecorded region is baselined from disk."""
     full = os.path.join(plan, relpath)
-    text = read_file(full)
+    text = read_file_raw(full)
     prior = {r["id"]: r for r in anchor.get("docs", {}).get(relpath, {}).get("generated_regions", [])}
     regions = []
-    for fid in fence_ids:
-        h = region_content_hash(text, fid)
-        if h is None:
-            continue
-        old = prior.get(fid)
-        if fid in keep_prior_ids:
-            # hand-edited region we deliberately did not touch: keep the last
-            # *written* hash so the edit stays detectable as dirty.
-            if old:
-                regions.append(old)
-            continue
-        if old and old.get("hash") == h:
-            regions.append(old)  # unchanged — keep the original stamp
-        else:
-            regions.append({"id": fid, "hash": h, "last_action": action, "last_written": _now()})
+    scanned, errs = scan_fences(text, is_md(relpath))
+    if errs:
+        # can't tell what is on disk; keep every prior record so status can say so
+        regions = [prior[f] for f in fence_ids if f in prior]
+    else:
+        for fid in fence_ids:
+            r = scanned.get(fid)
+            if r is None:
+                if fid in prior:
+                    regions.append(prior[fid])  # not visible on disk - never drop its baseline
+                continue
+            h = sha256_text(_strip_meta(r[2]))
+            old = prior.get(fid)
+            if old and fid not in rewritten:
+                regions.append(old)  # not written by this run - the baseline stays
+            elif old and old.get("hash") == h:
+                regions.append(old)  # unchanged - keep the original stamp
+            else:
+                regions.append({"id": fid, "hash": h, "last_action": action, "last_written": _now()})
     anchor.setdefault("docs", {})[relpath] = {
         "hash": sha256_text(text),
         "generated_regions": regions,
@@ -501,16 +669,14 @@ def _record_doc(anchor: dict, plan: str, relpath: str, fence_ids, action: str,
 
 
 def _load_anchor_or_none(plan: str):
-    """Like load_anchor but returns None when the anchor is missing, unreadable
-    or not a JSON object (so --force can recreate only a *corrupt* anchor)."""
+    """Like load_anchor but returns None when the anchor is missing, unreadable,
+    oversized or not a usable JSON object (so --force can recreate only a *corrupt*
+    anchor)."""
     p = anchor_path(plan)
     if not os.path.exists(p):
         return None
-    try:
-        a = json.loads(read_file(p))
-    except (ValueError, OSError):
-        return None
-    return a if isinstance(a, dict) else None
+    a, _err = parse_anchor(p)
+    return a
 
 
 def _rerender_fences(plan: str, relpath: str, rendered: str, fence_ids, anchor: dict):
@@ -519,15 +685,21 @@ def _rerender_fences(plan: str, relpath: str, rendered: str, fence_ids, anchor: 
     when it was last written by an action other than init (generated content),
     or when it looks hand-edited (on-disk hash differs from what we last wrote, or
     there is no record and it differs from the fresh render) - same dirty
-    semantics as write-region, minus the per-call --force override.
-    Returns (refreshed_ids, dirty_ids, missing_ids)."""
+    semantics as write-region, minus the per-call --force override. A file whose
+    fences are malformed is left untouched and every region reported dirty.
+    Returns (refreshed_ids, dirty_ids, missing_ids, malformed_error_or_None)."""
     full = os.path.join(plan, relpath)
-    text = read_file(full)
+    text = read_file_raw(full)
+    md = is_md(relpath)
+    nl = _file_nl(text)
     prior = {r["id"]: r for r in anchor.get("docs", {}).get(relpath, {}).get("generated_regions", [])}
     refreshed, dirty, missing = [], [], []
+    errs = scan_fences(text, md)[1] or scan_fences(rendered, md)[1]
+    if errs:
+        return [], list(fence_ids), [], "; ".join(errs)
     for fid in fence_ids:
-        cur = find_region(text, fid)
-        new = find_region(rendered, fid)
+        cur = find_region(text, fid, md)
+        new = find_region(rendered, fid, md)
         if cur is None or new is None:
             missing.append(fid)
             continue
@@ -546,11 +718,11 @@ def _rerender_fences(plan: str, relpath: str, rendered: str, fence_ids, anchor: 
             # is generated content, not a blank template. Never reset it.
             dirty.append(fid)
             continue
-        text = text[:cs1] + ninner + text[ce0:]
+        text = text[:cs1] + _with_nl(ninner, nl) + text[ce0:]
         refreshed.append(fid)
     if refreshed:
         atomic_write(full, text)
-    return refreshed, dirty, missing
+    return refreshed, dirty, missing, None
 
 
 def cmd_scaffold(args):
@@ -586,15 +758,16 @@ def cmd_scaffold(args):
 
     os.makedirs(plan, exist_ok=True)
     written, skipped = [], []
-    refreshed_regions, dirty_regions, missing_regions = [], [], []
+    refreshed_regions, dirty_regions, missing_regions, malformed_fences = [], [], [], []
 
     def _place(relpath, tpl, dest):
         """Write a missing file; with --reset-all overwrite; with --force on an
-        existing file re-render fence interiors only. Returns dirty ids to keep."""
+        existing file re-render fence interiors only. Returns the region ids this
+        run rewrote - only those get a new baseline in the anchor."""
         if not os.path.exists(dest) or reset_all:
             atomic_write(dest, render_template(read_file(tpl), subs))
             written.append(relpath)
-            return ()
+            return tuple(SCAFFOLD_REGIONS.get(relpath, []))
         skipped.append(relpath)
         if not args.force:
             return ()
@@ -602,17 +775,19 @@ def cmd_scaffold(args):
         if not ids:
             return ()
         rendered = render_template(read_file(tpl), subs)
-        ref, dirty, miss = _rerender_fences(plan, relpath, rendered, ids, anchor)
+        ref, dirty, miss, bad = _rerender_fences(plan, relpath, rendered, ids, anchor)
         refreshed_regions.extend(f"{relpath}#{i}" for i in ref)
         dirty_regions.extend(f"{relpath}#{i}" for i in dirty)
         missing_regions.extend(f"{relpath}#{i}" for i in miss)
-        return tuple(dirty)
+        if bad:
+            malformed_fences.append({"file": relpath, "error": bad})
+        return tuple(ref)
 
     for fname in profile["spine"]:
         dest = os.path.join(plan, fname)
         tpl = template_path(root, profile, fname)
-        keep = _place(fname, tpl, dest)
-        _record_doc(anchor, plan, fname, SCAFFOLD_REGIONS.get(fname, []), "init", keep)
+        rewrote = _place(fname, tpl, dest)
+        _record_doc(anchor, plan, fname, SCAFFOLD_REGIONS.get(fname, []), "init", rewrote)
 
     # designs/ + drafts/ (cheap dirs)
     os.makedirs(os.path.join(plan, "designs"), exist_ok=True)
@@ -636,11 +811,11 @@ def cmd_scaffold(args):
         dest = os.path.join(plan, relpath)
         if not os.path.exists(tpl):
             continue
-        keep = _place(relpath, tpl, dest)
+        rewrote = _place(relpath, tpl, dest)
         # Only record region hashes for files we know carry a fence.
         regions = SCAFFOLD_REGIONS.get(relpath, [])
         if regions:
-            _record_doc(anchor, plan, relpath, regions, "init", keep)
+            _record_doc(anchor, plan, relpath, regions, "init", rewrote)
 
     after = json.dumps({k: v for k, v in anchor.items() if k != "updated"}, sort_keys=True)
     changed = (not existing_anchor) or (before != after) or bool(written)
@@ -654,6 +829,7 @@ def cmd_scaffold(args):
         out["refreshed_regions"] = refreshed_regions
         out["skipped_dirty_regions"] = dirty_regions
         out["missing_fences"] = missing_regions
+        out["malformed_fences"] = malformed_fences
     emit(out)
 
 
@@ -662,9 +838,7 @@ def cmd_scaffold(args):
 # --------------------------------------------------------------------------- #
 
 def cmd_read_region(args):
-    r = find_region(read_file(args.file), args.id)
-    if r is None:
-        die(f"fence '{args.id}' not found in {args.file}", 1)
+    r = _region_or_die(read_file(args.file), args.id, is_md(args.file), args.file)
     _, _, inner = r
     sys.stdout.write(_strip_meta(inner) + "\n")
 
@@ -693,12 +867,12 @@ def cmd_write_region(args):
                        f'{_html_script_escape(new_content)}</script>')
     elif getattr(args, "html_script_safe", False):
         new_content = _html_script_escape(new_content)
-    new_hash = sha256_text(new_content.strip())
+    _refuse_marker_lines(new_content, relpath)
+    new_hash = body_hash(new_content)
 
-    text = read_file(full)
-    r = find_region(text, fid)
-    if r is None:
-        die(f"fence '{fid}' not found in {relpath}", 1)
+    text = read_file_raw(full)
+    md = is_md(relpath)
+    r = _region_or_die(text, fid, md, relpath)
     (s0, s1), (e0, e1), inner = r
 
     anchor = load_anchor(plan)
@@ -725,8 +899,10 @@ def cmd_write_region(args):
     else:
         meta = f"<!-- last_action: {action} · {_now()} -->"
 
-    new_inner = f"\n{meta}\n{new_content}\n"
+    nl = _file_nl(text)
+    new_inner = f"{nl}{meta}{nl}{_with_nl(new_content, nl)}{nl}"
     new_text = text[:s1] + new_inner + text[e0:]
+    _check_fences_after(new_text, md, relpath)
     atomic_write(full, new_text)
 
     # update anchor
@@ -789,6 +965,9 @@ def cmd_register_subplan(args):
           "entry": anchor["subplans"][args.file]})
 
 
+TIERS = ("opus", "sonnet", "haiku")  # lib/schemas.md §"Model tiers"
+
+
 def cmd_register_id(args):
     anchor = load_anchor(args.plan)
     ids = anchor.setdefault("ids", {})
@@ -805,6 +984,8 @@ def cmd_register_id(args):
             s = v.strip()
             if len(s) >= 2 and s[0] == "[" and s[-1] == "]":
                 v = [x.strip().strip("\"'") for x in s[1:-1].split(",") if x.strip().strip("\"'")]
+        if k == "tier" and v not in TIERS:
+            die(f"--field tier must be one of {', '.join(TIERS)} (got {v!r})", 1)
         entry[k] = v
     ids[args.id] = entry
     save_anchor(args.plan, anchor)
@@ -1484,6 +1665,14 @@ def cmd_design_data(args):
 # command: board-data / status-data
 # --------------------------------------------------------------------------- #
 
+_META_TEXT_CAP = 2048
+
+
+def clip(v, n: int = _META_TEXT_CAP):
+    """Bound a free-text field (goal / title) that gets copied into a generated page."""
+    return v[:n] if isinstance(v, str) else v
+
+
 def _plan_title(plan: str, anchor: dict) -> str:
     f = os.path.join(plan, "01-plan.md")
     if os.path.exists(f):
@@ -1497,22 +1686,51 @@ def _extract_wp_briefs(plan: str) -> dict:
     """Parse 09-orchestration.md for `### WP-NN — title` sections; return {WP-NN: brief-body}.
 
     A brief runs from its `### WP-` header to the next `### `/`## ` header or a `---` rule.
-    Returns {} if 09 is absent. Used by `board-data --with-briefs` so the workflow
-    generator can inline each self-contained brief as a string constant at emit time.
+    Headers and rules inside a ``` / ~~~ code block are brief text, not structure, so a
+    quoted `### WP-01` can't replace another WP's brief. When 09 has an `orchestration`
+    fence only its interior is read (the last brief stops at the end marker, hand prose
+    after the fence never becomes part of a sub-agent prompt). A WP header that appears
+    twice is refused (exit 1) rather than letting the last one win.
+    Returns {} if 09 is absent. Used by `board-data --with-briefs` and `emit-workflow` so
+    the workflow generator can inline each self-contained brief as a string constant.
     """
     f = os.path.join(plan, "09-orchestration.md")
     if not os.path.exists(f):
         return {}
-    briefs, cur, buf = {}, None, []
+    text = read_file(f)
+    try:
+        region = find_region(text, "orchestration", True)
+    except FenceError as e:
+        die(f"09-orchestration.md: malformed fences ({e}); fix the markers by hand first.", 1)
+    if region is not None:
+        text = region[2]
+    briefs, seen, cur, buf, code = {}, set(), None, [], None
     hdr = re.compile(r"^### (WP-\d+[a-z]?)(?![\w])")  # letter slices (WP-18a) — \b fails between digit+letter
-    for line in read_file(f).splitlines():
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if code:
+            if re.match(r"^ {0,3}" + re.escape(code[0]) + "{" + str(code[1]) + r",}[ \t]*$", line):
+                code = None
+            if cur is not None:
+                buf.append(line)
+            continue
+        co = _CODE_OPEN_RE.match(line)
+        if co:
+            code = (co.group(1)[0], len(co.group(1)))
+            if cur is not None:
+                buf.append(line)
+            continue
         m = hdr.match(line)
         if m:
             if cur:
                 briefs[cur] = "\n".join(buf).strip()
+            if m.group(1) in seen:
+                die(f"09-orchestration.md: work package {m.group(1)} has more than one `### {m.group(1)}` "
+                    f"section; remove the duplicate.", 1)
+            seen.add(m.group(1))
             cur, buf = m.group(1), [line]
         elif cur is not None:
-            if line.startswith("## ") or re.match(r"^---\s*$", line) or hdr.match(line):
+            if line.startswith("## ") or re.match(r"^---\s*$", line):
                 briefs[cur] = "\n".join(buf).strip()
                 cur, buf = None, []
             else:
@@ -1527,12 +1745,16 @@ def cmd_board_data(args):
     anchor = load_anchor(plan)
     ids = anchor.get("ids", {})
     briefs = _extract_wp_briefs(plan) if getattr(args, "with_briefs", False) else {}
-    wps, gates = [], []
+    wps, gates, warnings = [], [], []
     for k, v in ids.items():
         if k.startswith("WP-"):
+            tier = v.get("tier")
+            if tier is not None and tier not in TIERS:
+                warnings.append(f"{k}: invalid tier {tier!r} (expected {', '.join(TIERS)}); reported as null")
+                tier = None
             wp = {"id": k, "title": v.get("title", ""), "wave": v.get("wave"),
                   "deps": _as_id_list(v.get("depends_on")), "status": v.get("status", "queued"),
-                  "gate": v.get("gate"), "tier": v.get("tier")}
+                  "gate": v.get("gate"), "tier": tier}
             if v.get("issue"):
                 wp["issue"] = v.get("issue")
             if v.get("implements"):
@@ -1557,7 +1779,108 @@ def cmd_board_data(args):
         "design_lifecycle": lifecycle["designs"], "design_unlinked": lifecycle["unlinked"],
         "coverage": lifecycle["coverage"],
         "research": {k: v.get("stamped") for k, v in anchor.get("research", {}).items()},
+        "warnings": warnings,
     })
+
+
+# --------------------------------------------------------------------------- #
+# command: emit-workflow — the deterministic renderer for orchestrate --emit-workflow
+# --------------------------------------------------------------------------- #
+
+_WP_ID_RE = re.compile(r"^WP-\d+[a-z]?$")
+WORKFLOW_REL = "artifact/orchestrate.workflow.js"
+_WORKFLOW_PLACEHOLDER_RE = re.compile(r"\{\{(name_js|description_js|meta_phases|waves_json)\}\}")
+
+
+def _workflow_waves(plan: str, anchor: dict) -> list:
+    """The WAVES array for the emitted script: validated, grouped by wave number in
+    order, each wave carrying the freeze gate(s) its WPs own. Refuses (exit 1) on
+    anything the script could not run safely: a malformed id, an unknown tier, a WP
+    with no wave or no brief."""
+    ids = anchor.get("ids", {})
+    briefs = _extract_wp_briefs(plan)
+    wps = sorted(((k, v) for k, v in ids.items() if k.startswith("WP-") and isinstance(v, dict)),
+                 key=lambda kv: _id_sort_key(kv[0]))
+    if not wps:
+        die("no work packages defined; register WP-NN IDs first (see `orchestrate`).", 1)
+    by_wave, problems = {}, []
+    for k, v in wps:
+        if not _WP_ID_RE.match(k):
+            problems.append(f"{k}: not a valid work-package id (expected WP-NN)")
+            continue
+        tier = v.get("tier")
+        tier = "sonnet" if tier is None else tier
+        if tier not in TIERS:
+            problems.append(f"{k}: invalid tier {tier!r} (expected {', '.join(TIERS)})")
+        wave = v.get("wave")
+        if isinstance(wave, bool) or not isinstance(wave, int):
+            problems.append(f"{k}: no integer `wave` in the anchor")
+            continue
+        brief = briefs.get(k)
+        if not brief:
+            problems.append(f"{k}: no `### {k}` brief in 09-orchestration.md")
+            continue
+        by_wave.setdefault(wave, []).append(
+            {"id": k, "title": str(v.get("title", "")), "tier": tier, "brief": brief})
+    if problems:
+        die("cannot emit the workflow:\n  " + "\n  ".join(problems), 1)
+    waves = []
+    for n in sorted(by_wave):
+        members = {w["id"] for w in by_wave[n]}
+        gates = {str(ids[w["id"]]["gate"]) for w in by_wave[n] if ids[w["id"]].get("gate")}
+        gates |= {g for g, e in ids.items() if g.startswith("G-") and isinstance(e, dict)
+                  and e.get("kind") == "freeze_gate" and e.get("wp") in members}
+        gate = ", ".join(sorted(gates)) or None
+        waves.append({"title": f"Wave {n}" + (f" \u00b7 {gate}" if gate else ""), "gate": gate,
+                      "wps": by_wave[n]})
+    return waves
+
+
+def render_workflow(template: str, plan_title: str, slug: str, waves: list) -> str:
+    """Fill the workflow template. Every value goes in as a JSON literal
+    (json.dumps, ASCII-only) so no title, slug, gate or brief can leave its string,
+    and the single-pass substitution never re-scans inserted text for placeholders."""
+    safe_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", slug).strip("-") or "plan"
+    subs = {
+        "name_js": json.dumps("groundwork-orchestrate-" + safe_slug),
+        "description_js": json.dumps(
+            f"Run the {plan_title} build wave-by-wave: fan out work packages in each wave, "
+            f"adversarially verify every freeze gate before crossing it."),
+        "meta_phases": json.dumps([{"title": w["title"]} for w in waves]),
+        "waves_json": json.dumps(waves, indent=2),
+    }
+    return _WORKFLOW_PLACEHOLDER_RE.sub(lambda m: subs[m.group(1)], template)
+
+
+def cmd_emit_workflow(args):
+    plan = args.plan
+    anchor = load_anchor(plan)
+    waves = _workflow_waves(plan, anchor)
+    tpl = os.path.join(args.profiles_root, "_shared", "templates", "artifact", "orchestrate.workflow.js")
+    out = render_workflow(read_file(tpl), clip(_plan_title(plan, anchor), 200),
+                          os.path.basename(os.path.normpath(plan)), waves)
+    art = os.path.join(plan, "artifact")
+    if os.path.islink(art):
+        die("refusing: artifact/ is a symlink (would write outside the plan folder)", 1)
+    dest = os.path.join(plan, WORKFLOW_REL)
+    old = None
+    if os.path.isfile(dest) and not os.path.islink(dest):
+        try:
+            old = read_file_raw(dest)
+        except (OSError, UnicodeDecodeError):
+            old = None
+    rec = anchor.get("docs", {}).get(WORKFLOW_REL)
+    h = sha256_text(out)
+    result = "UNCHANGED"
+    if old != out:
+        os.makedirs(art, exist_ok=True)
+        atomic_write(dest, out)
+        result = "WRITTEN"
+    if result == "WRITTEN" or not rec or rec.get("hash") != h:
+        anchor.setdefault("docs", {})[WORKFLOW_REL] = {"hash": h, "generated_regions": []}
+        save_anchor(plan, anchor)
+    emit({"result": result, "file": WORKFLOW_REL, "waves": len(waves),
+          "wps": sum(len(w["wps"]) for w in waves)})
 
 
 def cmd_status_data(args):
@@ -1582,10 +1905,15 @@ def cmd_status_data(args):
         text = raw.decode("utf-8", errors="replace")
         whole_ok = sha256_text(text) == meta.get("hash")
         dirty = []
-        for reg in meta.get("generated_regions", []):
-            cur = region_content_hash(text, reg["id"])
-            if cur is not None and cur != reg["hash"]:
-                dirty.append(reg["id"])
+        try:
+            for reg in meta.get("generated_regions", []):
+                cur = region_content_hash(text, reg["id"], is_md(relpath))
+                if cur is not None and cur != reg["hash"]:
+                    dirty.append(reg["id"])
+        except FenceError as e:
+            doc_report.append({"file": relpath, "state": "malformed", "reason": f"malformed fence: {e}",
+                               "whole_file_match": whole_ok, "dirty_regions": []})
+            continue
         doc_report.append({"file": relpath,
                            "state": "in-sync" if (whole_ok and not dirty) else "drift",
                            "whole_file_match": whole_ok, "dirty_regions": dirty})
@@ -1823,8 +2151,13 @@ def _explorer_embed_pass(anchor: dict, budget: dict):
         if doc:
             badges = node.setdefault("badges", {})
             whole_ok = sha256_text(text) == doc.get("hash")
-            dirty = [reg["id"] for reg in doc.get("generated_regions", [])
-                     if (region_content_hash(text, reg["id"]) or reg["hash"]) != reg["hash"]]
+            try:
+                dirty = [reg["id"] for reg in doc.get("generated_regions", [])
+                         if (region_content_hash(text, reg["id"], is_md(relposix)) or reg["hash"]) != reg["hash"]]
+            except FenceError as e:
+                dirty = []
+                whole_ok = False
+                badges["malformed_fence"] = str(e)
             badges["drift"] = "in-sync" if (whole_ok and not dirty) else "drift"
             if dirty:
                 badges["dirty_regions"] = dirty
@@ -1843,8 +2176,8 @@ def cmd_explorer_data(args):
     _explorer_embed_pass(anchor, budget)
     tree = root["children"] if root else []
     emit({
-        "plan": {"title": _plan_title(plan, anchor), "profile": anchor.get("profile"),
-                 "goal": anchor.get("goal"),
+        "plan": {"title": clip(_plan_title(plan, anchor)), "profile": anchor.get("profile"),
+                 "goal": clip(anchor.get("goal")),
                  "slug": os.path.basename(os.path.normpath(plan))},
         "tree": tree,
         "ids": anchor.get("ids", {}),
@@ -1867,9 +2200,8 @@ def _plan_rollup(plan_dir: str, name: str) -> dict | None:
     ap = os.path.join(plan_dir, ANCHOR)
     if not os.path.exists(ap):
         return None
-    try:
-        anchor = json.loads(read_file(ap))
-    except Exception:
+    anchor, err = parse_anchor(ap)
+    if err:
         return None
     ids = anchor.get("ids", {})
     wp = {}
@@ -1898,8 +2230,8 @@ def _plan_rollup(plan_dir: str, name: str) -> dict | None:
                 sha256_text(raw.decode("utf-8", errors="replace")) != meta.get("hash"):
             drift = True; break
     return {
-        "slug": name, "path": name, "title": _plan_title(plan_dir, anchor),
-        "profile": anchor.get("profile"), "goal": anchor.get("goal"),
+        "slug": name, "path": name, "title": clip(_plan_title(plan_dir, anchor)),
+        "profile": anchor.get("profile"), "goal": clip(anchor.get("goal")),
         "updated": (anchor.get("updated") or "")[:10],
         "wps": {"total": sum(wp.values()), **wp},
         "gates": {"total": len(gates), **gate},
@@ -1924,7 +2256,11 @@ def cmd_plans_index_data(args):
         d = os.path.join(root, name)
         if not os.path.isdir(d):
             continue
-        r = _plan_rollup(d, name)
+        try:
+            r = _plan_rollup(d, name)
+        except Exception as e:  # one malformed plan must not take the whole index down
+            sys.stderr.write(f"plans-index-data: skipping {name}: {type(e).__name__}: {e}\n")
+            r = None
         if r is not None:
             plans.append(r)
     by_profile = {}
@@ -1950,12 +2286,12 @@ def cmd_write_region_plain(args):
     new_content = (args.content if args.content is not None else read_file(args.content_file)).strip("\n")
     if getattr(args, "html_script_safe", False):
         new_content = _html_script_escape(new_content)
-    text = read_file(full)
-    r = find_region(text, fid)
-    if r is None:
-        die(f"fence '{fid}' not found in {full}", 1)
+    _refuse_marker_lines(new_content, full)
+    text = read_file_raw(full)
+    md = is_md(full)
+    r = _region_or_die(text, fid, md, full)
     (s0, s1), (e0, e1), inner = r
-    if _strip_meta(inner).strip() == new_content.strip():
+    if sha256_text(_strip_meta(inner)) == body_hash(new_content):
         emit({"result": "UNCHANGED", "file": full, "id": fid}); return
     start_line = text[s0:s1]
     if start_line.lstrip().startswith("//"):
@@ -1964,7 +2300,9 @@ def cmd_write_region_plain(args):
         meta = f"# last_action: plans-index · {_now()}"
     else:
         meta = f"<!-- last_action: plans-index · {_now()} -->"
-    new_text = text[:s1] + f"\n{meta}\n{new_content}\n" + text[e0:]
+    nl = _file_nl(text)
+    new_text = text[:s1] + f"{nl}{meta}{nl}{_with_nl(new_content, nl)}{nl}" + text[e0:]
+    _check_fences_after(new_text, md, full)
     atomic_write(full, new_text)
     emit({"result": "WRITTEN", "file": full, "id": fid})
 
@@ -2155,7 +2493,10 @@ def cmd_living_spec_data(args):
     discussion = _read_optional(plan, "04-discussion.md")
     if discussion:
         # Prefer the rounds-index fence (canonical).
-        r = find_region(discussion, "rounds-index")
+        try:
+            r = find_region(discussion, "rounds-index", True)
+        except FenceError:
+            r = None  # malformed 04: fall back to the heading scan; `status` reports the fence
         if r is not None:
             _, _, inner = r
             rounds = _rounds_from_index(_strip_meta(inner))
@@ -2339,6 +2680,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="include per-WP brief (parsed from 09-orchestration.md) + tier; "
                         "feeds the orchestrate --emit-workflow generator")
     g.set_defaults(func=cmd_board_data)
+
+    g = sub.add_parser("emit-workflow",
+                       help="render artifact/orchestrate.workflow.js from the anchor + 09 briefs "
+                            "(every value inserted as a JSON literal; refuses invalid tiers / missing briefs)")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--profiles-root", default=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles"))
+    g.set_defaults(func=cmd_emit_workflow)
 
     g = sub.add_parser("status-data", help="emit the computed status model")
     g.add_argument("--plan", required=True)
