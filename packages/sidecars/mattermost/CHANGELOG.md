@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.3.1
+
+### Patch Changes
+
+- [#147](https://github.com/ikenga-hq/ikenga-pkgs/pull/147) [`a9006f8`](https://github.com/ikenga-hq/ikenga-pkgs/commit/a9006f8b4113612326e4703582a8b4571f8e433a) Thanks [@nedjamez](https://github.com/nedjamez)! - The Mattermost bridge now recovers when its websocket connection to Mattermost drops. Before, a server restart, idle timeout or network blip left each bot deaf (it stopped hearing messages and reactions) and, once nothing else kept the process busy, the bridge exited with status 0, which a `Restart=on-failure` service does not restart. Now an unexpected close logs one line per bot (code and reason) and reconnects with capped exponential backoff and jitter (1s doubling to 60s, forever; the backoff starts over after a connection has been healthy for a minute), re-authenticating each time. A liveness ping every 30s catches connections that die silently without a close, and the bridge exits non-zero if it ever runs out of things to wait on. Shutting down (SIGINT/SIGTERM) still exits cleanly and never reconnects. A failed first connection now rejects properly instead of hanging, and every connection attempt (first or reconnect) gives up after 30s if the server never completes the websocket handshake. Replies, approvals and schedules use the REST API and keep working while the websocket is down.
+
 ## 0.3.0
 
 ### Minor Changes
