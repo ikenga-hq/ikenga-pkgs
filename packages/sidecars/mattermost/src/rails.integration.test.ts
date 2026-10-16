@@ -136,12 +136,14 @@ describe('audit: thread runs', () => {
     say('p1', `${TEXT} one`);
     await waitFor(() => daemon.runs.size === 1, 'run-1');
     daemon.settle('run-1', 'done', { output: 'SECRET-OUTPUT' });
-    await waitFor(() => mm.thread('p1').includes('SECRET-OUTPUT'), 'first result posted');
+    await waitFor(() => mm.thread('p1').some((m) => m.startsWith('SECRET-OUTPUT\n')), 'first result posted');
+    await waitFor(() => mm.deletes.length === 1, 'turn closed');
 
     say('p2', `${TEXT} two`, { root: 'p1' });
     await waitFor(() => daemon.rpcCalls('chi_resume').length === 1, 'resume');
     daemon.settle('run-1', 'done', { output: 'SECRET-OUTPUT-2' });
-    await waitFor(() => mm.thread('p1').includes('SECRET-OUTPUT-2'), 'second result posted');
+    await waitFor(() => mm.thread('p1').some((m) => m.startsWith('SECRET-OUTPUT-2\n')), 'second result posted');
+    await waitFor(() => mm.deletes.length === 2, 'second turn closed');
 
     say('p3', `${TEXT} three`, { root: 'p1' });
     await waitFor(() => daemon.rpcCalls('chi_resume').length === 2, 'second resume');
@@ -438,7 +440,8 @@ describe('audit unavailable refuses the action', () => {
     say('p1', 'hello');
     await waitFor(() => daemon.runs.size === 1, 'run');
     daemon.settle('run-1', 'done', { output: 'ok' });
-    await waitFor(() => mm.thread('p1').includes('ok'), 'result posted');
+    await waitFor(() => mm.thread('p1').some((m) => m.startsWith('ok\n')), 'result posted');
+    await waitFor(() => mm.deletes.length === 1, 'turn closed');
     breakAudit();
     say('p2', 'more', { root: 'p1' });
     await waitFor(() => mm.thread('p1').some((m) => /audit log cannot be written/.test(m)), 'refusal posted');
@@ -483,6 +486,10 @@ describe('maxMode is asserted at every call site, not only at config load', () =
         const p = posts.find((x) => x.id === id);
         if (p) p.text = message;
         return { id, user_id: 'bot', channel_id: 'c1', message };
+      },
+      async deletePost(id: string): Promise<void> {
+        const i = posts.findIndex((x) => x.id === id);
+        if (i >= 0) posts.splice(i, 1);
       },
     };
     const store = new ThreadStore(path.join(dir, 'threads-direct.json'), 'rex');
@@ -578,6 +585,10 @@ describe('B1 engine vs maxMode at the call sites', () => {
         const p = posts.find((x) => x.id === id);
         if (p) p.text = message;
         return { id, user_id: 'bot', channel_id: 'c1', message };
+      },
+      async deletePost(id: string): Promise<void> {
+        const i = posts.findIndex((x) => x.id === id);
+        if (i >= 0) posts.splice(i, 1);
       },
     };
     const store = new ThreadStore(path.join(dir, 'threads-direct.json'), 'rex');
@@ -699,6 +710,7 @@ describe('recover() records the mode the run started with', () => {
     const client = {
       async reply(_c: string, m: string): Promise<MattermostPost> { posts.push(m); return { id: `n${posts.length}`, user_id: 'bot', channel_id: 'c1', message: m }; },
       async updatePost(id: string, m: string): Promise<MattermostPost> { posts.push(m); return { id, user_id: 'bot', channel_id: 'c1', message: m }; },
+      async deletePost(): Promise<void> {},
     };
     const router = new ThreadRouter({
       bot: 'rex',

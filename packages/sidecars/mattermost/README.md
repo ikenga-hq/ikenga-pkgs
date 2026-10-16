@@ -13,7 +13,7 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 
 | Mattermost event (after the gate) | Daemon call | Result in the thread |
 |---|---|---|
-| New root post | `chi_run` with the bot's `engine`, `cwd`, `model`, `mode`; `systemPrompt` is prepended to the first prompt only | "Working…" reply, edited in place while polling `chi_status`; on `done` it becomes "Done in Ns." and the result is posted as a new reply (a new post notifies, an edit does not) |
+| New root post | `chi_run` with the bot's `engine`, `cwd`, `model`, `mode`; `systemPrompt` is prepended to the first prompt only | "Working…" reply, edited in place while polling `chi_status`; on completion the result is posted as a new reply ending in an italic "_Done in Ns._" footer (a new post notifies, an edit does not), then the "Working…" post is deleted so the footer never sits above its own answer; if the delete fails, or the run produced no text, the progress post is edited to "Done in Ns." instead |
 | Reply in a thread the bridge knows | `chi_resume(runId, prompt)` on the stored run | same progress / result flow |
 | Reply in a thread with no stored run | fresh `chi_run`, and the thread is told "no earlier run" | same |
 | Reply while a turn is still running | none | "Still working… reply `stop`". It is never resumed on top of a live turn |

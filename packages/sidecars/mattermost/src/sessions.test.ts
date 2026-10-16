@@ -283,11 +283,74 @@ describe('thread routing (bridge + fake daemon)', () => {
     assert.ok(rig.mm.patches.length >= 1);
 
     rig.daemon.settle('run-1', 'done', { output: 'Build is green.' });
-    await waitFor(() => rig.mm.thread('root-1').includes('Build is green.'), 'final result');
+    await waitFor(() => rig.mm.deletes.length === 1, 'progress post deleted');
     const thread = rig.mm.thread('root-1');
-    assert.match(thread[0]!, /^Done in \d+s\.$/);
-    assert.equal(thread[1], 'Build is green.');
+    assert.equal(thread.length, 1, 'the progress post is gone; only the answer remains');
+    assert.match(thread[0]!, /^Build is green\.\n\n_Done in \d+s\._$/);
     assert.equal(rig.mm.receivedPosts.every((p) => p.root_id === 'root-1'), true);
+  });
+
+  it('puts the answer first with an italic Done footer and removes the progress post', async () => {
+    await rig.boot();
+    rig.say('root-20', 'go');
+    await waitFor(() => rig.mm.thread('root-20').some((m) => /Working…/.test(m)), 'progress post');
+    const progressId = [...rig.mm.posts.values()].find((p) => p.root_id === 'root-20')!.id;
+    await waitFor(() => rig.daemon.runs.size === 1, 'run');
+    rig.daemon.settle('run-1', 'done', { output: 'The answer.' });
+    await waitFor(() => rig.mm.deletes.includes(progressId), 'progress deleted');
+    const thread = rig.mm.thread('root-20');
+    assert.equal(thread.length, 1);
+    assert.match(thread[0]!, /^The answer\.\n\n_Done in \d+s\._$/);
+    assert.ok(!thread.some((m) => /Working…/.test(m)));
+  });
+
+  it('keeps a notice at the top of the answer post', async () => {
+    await rig.boot();
+    rig.say('reply-21', 'hello?', { root: 'orphan-root' });
+    await waitFor(() => rig.daemon.runs.size === 1, 'run');
+    rig.daemon.settle('run-1', 'done', { output: 'hi' });
+    await waitFor(() => rig.mm.deletes.length === 1, 'progress deleted');
+    const thread = rig.mm.thread('orphan-root');
+    assert.equal(thread.length, 1);
+    assert.match(thread[0]!, /^[^]*no earlier run[^]*\n\nhi\n\n_Done in \d+s\._$/);
+  });
+
+  it('falls back to editing the progress post when the delete fails', async () => {
+    await rig.boot();
+    rig.mm.failDeletes = true;
+    rig.say('root-22', 'go');
+    await waitFor(() => rig.mm.thread('root-22').some((m) => /Working…/.test(m)), 'progress post');
+    await waitFor(() => rig.daemon.runs.size === 1, 'run');
+    rig.daemon.settle('run-1', 'done', { output: 'Result text.' });
+    await waitFor(() => rig.mm.thread('root-22').some((m) => /^Done in \d+s\.$/.test(m)), 'progress edited to summary');
+    const thread = rig.mm.thread('root-22');
+    assert.equal(thread.length, 2);
+    assert.ok(thread.some((m) => /^Result text\.\n\n_Done in/.test(m)));
+    assert.ok(!thread.some((m) => /Working…/.test(m)));
+  });
+
+  it('keeps the progress post, edited to the summary, when posting the answer fails', async () => {
+    await rig.boot();
+    rig.mm.failPostsMatching = /^Lost answer/;
+    rig.say('root-24', 'go');
+    await waitFor(() => rig.daemon.runs.size === 1, 'run');
+    await waitFor(() => rig.mm.thread('root-24').length === 1, 'progress post');
+    rig.daemon.settle('run-1', 'done', { output: 'Lost answer.' });
+    await waitFor(() => rig.mm.thread('root-24').some((m) => /^Done in \d+s\.$/.test(m)), 'progress edited to summary');
+    await rig.bridges[0]!.router!.whenIdle();
+    assert.equal(rig.mm.thread('root-24').length, 1, 'the progress post stays; no answer was created');
+    assert.equal(rig.mm.deletes.length, 0, 'the progress post is not deleted when the answer failed');
+  });
+
+  it('with no body, finish still edits the progress post in place', async () => {
+    await rig.boot();
+    rig.say('root-23', 'go');
+    await waitFor(() => rig.daemon.runs.size === 1, 'run');
+    await waitFor(() => rig.mm.thread('root-23').length === 1, 'progress post');
+    rig.daemon.forget('run-1'); // the daemon no longer knows the run: finish() has no body
+    await waitFor(() => rig.mm.thread('root-23').some((m) => /no longer on the daemon/.test(m)), 'edited in place');
+    assert.equal(rig.mm.thread('root-23').length, 1);
+    assert.equal(rig.mm.deletes.length, 0);
   });
 
   it('a reply in the thread resumes the same run via chi_resume (no second chi_run)', async () => {
@@ -295,7 +358,8 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.say('root-2', 'first');
     await waitFor(() => rig.daemon.runs.size === 1, 'run');
     rig.daemon.settle('run-1', 'done', { output: 'one' });
-    await waitFor(() => rig.mm.thread('root-2').includes('one'), 'first result');
+    await waitFor(() => rig.mm.thread('root-2').some((m) => m.startsWith('one\n')), 'first result');
+    await waitFor(() => rig.mm.deletes.length === 1, 'turn closed');
 
     rig.say('reply-2', 'and now the second thing', { root: 'root-2' });
     await waitFor(() => rig.daemon.rpcCalls('chi_resume').length === 1, 'chi_resume');
@@ -304,7 +368,7 @@ describe('thread routing (bridge + fake daemon)', () => {
     assert.equal(rig.daemon.rpcCalls('chi_run').length, 1);
 
     rig.daemon.settle('run-1', 'done', { output: 'two' });
-    await waitFor(() => rig.mm.thread('root-2').includes('two'), 'second result');
+    await waitFor(() => rig.mm.thread('root-2').some((m) => m.startsWith('two\n')), 'second result');
   });
 
   it('persists root_id -> run_id so a bridge restart keeps threading', async () => {
@@ -312,7 +376,7 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.say('root-3', 'before restart');
     await waitFor(() => rig.daemon.runs.size === 1, 'run');
     rig.daemon.settle('run-1', 'done', { output: 'ok1' });
-    await waitFor(() => rig.mm.thread('root-3').includes('ok1'), 'result');
+    await waitFor(() => rig.mm.thread('root-3').some((m) => m.startsWith('ok1\n')), 'result');
     await b1.router!.whenIdle();
     b1.stop();
 
@@ -341,7 +405,8 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.say('root-4', 'first');
     await waitFor(() => rig.daemon.runs.size === 1, 'run');
     rig.daemon.settle('run-1', 'done', { output: 'a' });
-    await waitFor(() => rig.mm.thread('root-4').includes('a'), 'first result');
+    await waitFor(() => rig.mm.thread('root-4').some((m) => m.startsWith('a\n')), 'first result');
+    await waitFor(() => rig.mm.deletes.length === 1, 'turn closed');
 
     rig.daemon.forget('run-1'); // TTL cleanup / data reset
 
@@ -352,12 +417,9 @@ describe('thread routing (bridge + fake daemon)', () => {
 
     await waitFor(() => rig.mm.thread('root-4').some((m) => /started a fresh one/.test(m)), 'notice');
     rig.daemon.settle('run-2', 'done', { output: 'b' });
-    await waitFor(() => rig.mm.thread('root-4').includes('b'), 'fresh result');
-    // The notice must survive completion, not be edited away by "Done in Ns.".
-    await waitFor(
-      () => rig.mm.thread('root-4').some((m) => /started a fresh one/.test(m) && /Done in/.test(m)),
-      'notice kept in final summary',
-    );
+    await waitFor(() => rig.mm.thread('root-4').some((m) => /^started a fresh one[\s\S]*\n\nb\n\n_Done in/.test(m) || (/started a fresh one/.test(m) && /\bb\b/.test(m) && /_Done in/.test(m))), 'fresh result');
+    // The notice must survive completion, at the top of the answer post.
+    assert.ok(rig.mm.thread('root-4').some((m) => /started a fresh one/.test(m) && /_Done in/.test(m)));
 
     // The mapping now points at the new run.
     const saved = JSON.parse(readFileSync(path.join(rig.dir, 'threads-rex.json'), 'utf8'));
@@ -371,10 +433,9 @@ describe('thread routing (bridge + fake daemon)', () => {
     assert.equal(rig.daemon.rpcCalls('chi_resume').length, 0);
     await waitFor(() => rig.mm.thread('someone-elses-root').some((m) => /no earlier run/.test(m)), 'notice');
     rig.daemon.settle('run-1', 'done', { output: 'hi' });
-    await waitFor(() => rig.mm.thread('someone-elses-root').includes('hi'), 'result');
     await waitFor(
-      () => rig.mm.thread('someone-elses-root').some((m) => /no earlier run/.test(m) && /Done in/.test(m)),
-      'notice kept in final summary',
+      () => rig.mm.thread('someone-elses-root').some((m) => /no earlier run/.test(m) && /\n\nhi\n\n_Done in/.test(m)),
+      'notice kept at the top of the answer post',
     );
   });
 
@@ -430,7 +491,8 @@ describe('thread routing (bridge + fake daemon)', () => {
     await waitFor(() => rig.daemon.runs.size === 1, 'run 1');
     rig.daemon.settle('run-1', 'failed', { error: 'engine exited with code 2' });
     await waitFor(() => rig.mm.thread('root-8').some((m) => /The run failed: engine exited with code 2/.test(m)), 'failure');
-    assert.match(rig.mm.thread('root-8')[0]!, /^Failed after \d+s\.$/);
+    await waitFor(() => rig.mm.deletes.length === 1, 'progress deleted');
+    assert.match(rig.mm.thread('root-8')[0]!, /_Failed after \d+s\._$/);
 
     // The daemon reports `output = brief` (the prompt) for a run that wrote nothing.
     rig.say('root-9', 'silent');
@@ -447,7 +509,7 @@ describe('thread routing (bridge + fake daemon)', () => {
     rig.daemon.expireSessions();
     await new Promise((r) => setTimeout(r, 60));
     rig.daemon.settle('run-1', 'done', { output: 'still got it' });
-    await waitFor(() => rig.mm.thread('root-10').includes('still got it'), 'result after re-login');
+    await waitFor(() => rig.mm.thread('root-10').some((m) => m.startsWith('still got it\n')), 'result after re-login');
     assert.equal(rig.daemon.loginCount, 2);
   });
 
@@ -470,9 +532,10 @@ describe('thread routing (bridge + fake daemon)', () => {
 
     await rig.boot();
     rig.daemon.settle('run-1', 'done', { output: 'finished while you were away' });
-    await waitFor(() => rig.mm.thread('root-11').includes('finished while you were away'), 'result after recovery');
+    await waitFor(() => rig.mm.thread('root-11').some((m) => m.startsWith('finished while you were away')), 'result after recovery');
     assert.equal(rig.daemon.rpcCalls('chi_run').length, 1);
-    assert.match(rig.mm.thread('root-11')[0]!, /^Done in \d+s\.$/);
+    await waitFor(() => rig.mm.deletes.length === 1, 'progress post deleted');
+    assert.match(rig.mm.thread('root-11')[0]!, /^finished while you were away\n\n_Done in \d+s\._$/);
   });
 
   it('strips a leading @mention of the bot from the prompt', async () => {

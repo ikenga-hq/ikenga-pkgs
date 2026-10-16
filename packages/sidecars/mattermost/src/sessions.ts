@@ -11,6 +11,7 @@ import type { BotChiConfig, MattermostPost, ProgressConfig } from './types.js';
 export interface PostApi {
   reply(channelId: string, message: string, rootId?: string): Promise<MattermostPost>;
   updatePost(postId: string, message: string): Promise<MattermostPost>;
+  deletePost(postId: string): Promise<void>;
 }
 
 /** The Mattermost user a turn is for. */
@@ -612,8 +613,9 @@ export class ThreadRouter {
   }
 
   /**
-   * Close out a turn: summarise in the progress post (edits do not notify),
-   * then post the body as a new reply so people are notified. `clearActive`
+   * Close out a turn: post the body (plus the summary as an italic footer) as a
+   * new reply so people are notified, then delete the progress post. With no body, when the run may still be
+   * going (`clearActive` false), or if posting or deleting fails, the progress post is edited to the summary instead. `clearActive`
    * is false when the run may still be going and a restart should keep
    * watching.
    */
@@ -638,8 +640,27 @@ export class ThreadRouter {
     });
     try {
       if (clearActive) await this.opts.store.update(turn.rootId, { active: undefined }).catch(() => undefined);
-      await this.edit(progressId, turn.notice ? `${turn.notice}\n\n${summary}` : summary);
-      if (body) await this.say(turn.channelId, turn.rootId, body);
+      const summaryText = turn.notice ? `${turn.notice}\n\n${summary}` : summary;
+      if (!body || !clearActive) {
+        // No answer, or the run may still be going: a restart re-attaches to the progress post, so keep it.
+        await this.edit(progressId, summaryText);
+        if (body) await this.say(turn.channelId, turn.rootId, body);
+      } else {
+        // The answer goes first, as a new post (notifies), then the progress post is removed, so the
+        // thread never reads "Done" above its own answer.
+        const answer = `${turn.notice ? `${turn.notice}\n\n` : ''}${body}\n\n_${summary}_`;
+        const posted = await this.say(turn.channelId, turn.rootId, answer);
+        if (!posted) {
+          await this.edit(progressId, summaryText);
+        } else {
+          try {
+            await this.opts.client.deletePost(progressId);
+          } catch (err) {
+            this.log(`could not delete progress post ${progressId}: ${this.errText(err)}`);
+            await this.edit(progressId, summaryText);
+          }
+        }
+      }
     } finally {
       this.turns.delete(turn.rootId);
     }
@@ -766,15 +787,17 @@ export class ThreadRouter {
     }
   }
 
-  private async say(channelId: string, rootId: string, text: string): Promise<void> {
+  /** Post `text` as reply(s). Resolves true only if every chunk was posted. */
+  private async say(channelId: string, rootId: string, text: string): Promise<boolean> {
     for (const chunk of chunkText(text, MAX_POST_CHARS)) {
       try {
         await this.opts.client.reply(channelId, chunk, rootId);
       } catch (err) {
         this.log(`could not post reply in ${rootId}: ${this.errText(err)}`);
-        return;
+        return false;
       }
     }
+    return true;
   }
 }
 
