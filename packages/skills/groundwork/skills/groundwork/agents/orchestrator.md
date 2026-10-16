@@ -57,6 +57,7 @@ EXECUTION PROTOCOL
    - This is the structural mitigation for the "WP-22 added a guard beyond the diff plan" / "WP-25R landed directly on main" class of fault: invisible at write time, expensive at read time without a discoverable trail.
 
 5. MERGE ORDER
+   - **Merge confirmation (required)** - before the first merge or `pnpm install` of a run, stop and ask the user (`AskUserQuestion`): name the target branch / repo and the PRs or branches to be merged, and say that `pnpm install` runs dependency lifecycle scripts. Proceed only on an explicit yes.
    - Per repo / owner, follow the wave plan.
    - For {profile} = software: contract/lib changes merge first; `pnpm install` at workspace root; then consumer changes in dep order.
    - For {profile} = general: decision-lock deliverables land before dependent deliverables; coordinate ownership.
@@ -96,6 +97,18 @@ When you spawn subagents yourself (the improvised path), set each one's `model` 
 
 ---
 
+## Merge confirmation (required)
+
+Merging PRs into shared branches and running `pnpm install` (which executes the dependency lifecycle scripts of whatever the merged code now pulls in) are outward, hard-to-undo actions taken with the user's own credentials. **Before the first merge or install of any run - on the improvised path and after a Workflow run alike - stop and confirm with the user** (`AskUserQuestion`):
+
+- name the target repo and branch (from `git remote -v` / the current branch) and the **PRs or branches** that will be merged, in the order they will land;
+- say that `pnpm install` (or the profile's install step) will run package scripts;
+- proceed only on an explicit yes. Reads, commits to the meta-repo and Task / `05` updates need no confirmation.
+
+A "yes" covers that list for this run; a PR that is added to it later needs a fresh confirmation. Same rule as the `issues` action's "Write confirmation".
+
+---
+
 ## Workflow execution path (when `artifact/orchestrate.workflow.js` exists)
 
 If `orchestrate` was run with `--emit-workflow`, you do **not** improvise the fan-out — you run the emitted script and reconcile its results. This is the preferred path; the improvised "spawn a subagent per WP by hand" protocol above is the fallback when no script exists or Workflow is unavailable.
@@ -103,7 +116,7 @@ If `orchestrate` was run with `--emit-workflow`, you do **not** improvise the fa
 1. **KICKOFF** — same as below: `groundwork status` + `clarify`, then `TaskCreate` per `WP-NN`.
 2. **RUN** — invoke `Workflow({ scriptPath: "{plan_folder}/artifact/orchestrate.workflow.js" })`. It fans out each wave (WPs in `parallel`, each in its own worktree), adversarially verifies every freeze gate, and **returns** `{ results }` (or `{ halted, failed, results, verdicts }` if a gate failed sign-off). It writes no files — that's yours.
 3. **RECONCILE** (from the returned `results[]`, each a `WP_REPORT_SCHEMA` object) — for every WP reported `done` and gate-verified: set its Task `completed`, tick its `05-tracking.md` checkbox, record `designs_implemented` with `register-design-impl --wp WP-NN --designs <list or none>` (plus `--pr` once its PR exists), and commit `chore({plan_slug}): WP-NN done`. For `blocked` / `needs-decision`: leave the checkbox, surface to the user. Record any non-null `drift` per the DRIFT LOG step.
-4. **MERGE** — in wave order, per the matrix (contract/lib first, `pnpm install`, then consumers).
+4. **MERGE** — only after the **Merge confirmation (required)** gate below, in wave order, per the matrix (contract/lib first, `pnpm install`, then consumers).
 5. **HALTED GATE** — if the run returned `{ halted }`, the freeze gate failed sign-off: do **not** proceed. Review the `verdicts`, fix or re-scope the failing WP(s), and re-run the workflow (cached unchanged WPs return instantly via Workflow resume) or finish those WPs by hand.
 
 The invariant is unchanged: **only you write `05`/Tasks/commits/merges.** The workflow just replaces the manual per-WP spawn-and-collect loop with a deterministic, gate-verified fan-out.

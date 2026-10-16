@@ -131,8 +131,8 @@ BROKEN_WRITERS = {
         "gs.atomic_write = lambda p, d: _aw(p, '\\n'.join(l.rstrip() for l in d.split('\\n')))\n"),
     "off-by-one end-fence span": BROKEN_PRELUDE + (
         "_fr = gs.find_region\n"
-        "def fr(text, fid):\n"
-        "    r = _fr(text, fid)\n"
+        "def fr(text, fid, md=False):\n"
+        "    r = _fr(text, fid, md)\n"
         "    if r is None: return r\n"
         "    (s0, s1), (e0, e1), inner = r\n"
         "    nl = text.find('\\n', e1)\n"
@@ -217,9 +217,13 @@ try:
                             "write-region", "--plan", bp, "--file", "05-tracking.md",
                             "--id", "wave-plan", "--action", "test", "--content", "Wave 1: WP-01 + WP-02"],
                            capture_output=True, text=True)
-        check(f"broken writer ({name}) ran", r.returncode == 0 and result(r) == "WRITTEN", result(r))
+        # The writer re-scans the fences it is about to leave behind and refuses a write
+        # that would corrupt them (exit 1, file untouched) - defense in depth in front of
+        # the comparator. A defect that slips past that check must still be caught by it.
+        refused = r.returncode == 1 and rb(target) == before
+        check(f"broken writer ({name}) ran", refused or (r.returncode == 0 and result(r) == "WRITTEN"), result(r))
         check(f"broken writer ({name}) -> caught by the prose comparator",
-              not prose_identical(before, rb(target)))
+              refused or not prose_identical(before, rb(target)))
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
