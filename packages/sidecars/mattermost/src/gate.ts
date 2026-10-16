@@ -34,8 +34,9 @@ export class MattermostGate {
     // 4. Check user: match by user_id or the server-set sender_name. Never
     //    read `post.props`: any client can put arbitrary keys there, so
     //    `props.username` would let an unlisted channel member impersonate an
-    //    allowed user.
-    const username = event.data?.sender_name || '';
+    //    allowed user. Mattermost sends `sender_name` as `@name`; the list may
+    //    hold either spelling, so compare without the `@`.
+    const username = (event.data?.sender_name || '').replace(/^@/, '');
     const userAllowed =
       this.allowedUsersSet.has(post.user_id) ||
       (username && this.allowedUsersSet.has(username)) ||
