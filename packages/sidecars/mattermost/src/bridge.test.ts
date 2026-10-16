@@ -146,6 +146,24 @@ describe('MattermostGate (Unit Tests)', () => {
     assert.match(res.reason!, /not in allowed_users/);
   });
 
+  it('allows a listed user by the @-prefixed sender_name Mattermost sends', () => {
+    for (const listed of ['alice', '@alice']) {
+      const gate = new MattermostGate({
+        mattermostUrl: 'http://localhost',
+        mattermostToken: 'token',
+        allowedUsers: [listed],
+        allowedChannels: ['general'],
+      });
+      const post: MattermostPost = { id: 'p1', user_id: 'u-alice', channel_id: 'c1', message: 'hi' };
+      const event: MattermostPostEvent = {
+        event: 'posted',
+        data: { channel_name: 'general', sender_name: '@alice', post: JSON.stringify(post) },
+        seq: 1,
+      };
+      assert.equal(gate.check(event, post).allowed, true, `allowedUsers ${listed}`);
+    }
+  });
+
   it('denies unlisted channel', () => {
     const gate = new MattermostGate({
       mattermostUrl: 'http://localhost',
