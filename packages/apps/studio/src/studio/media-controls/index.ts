@@ -17,11 +17,21 @@ export type { TimecodeDisplayProps, TimeRulerProps, TimecodeFormat } from './tim
 export { ScrubberPlayhead, Playhead, PlayheadEcho } from './scrubber-playhead';
 export type { ScrubberPlayheadProps, PlayheadProps } from './scrubber-playhead';
 
-export { PreviewSurface, PreviewStatus, MediaThumb, SafeZoneBands } from './preview-surface';
+export {
+  PreviewSurface,
+  PreviewStatus,
+  MediaThumb,
+  SafeZones,
+  SafeZoneBands,
+  SafeZoneLegend,
+  SafeZoneToggle,
+  useRememberedToggle,
+} from './preview-surface';
 export type {
   PreviewSurfaceProps,
   PreviewStatusProps,
   PreviewStatusKind,
   PreviewAspect,
   MediaThumbProps,
+  SafeZoneToggleProps,
 } from './preview-surface';
