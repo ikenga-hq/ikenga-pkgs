@@ -1,5 +1,32 @@
 # @ikenga/pkg-studio
 
+## 0.9.0
+
+### Minor Changes
+
+- [#155](https://github.com/ikenga-hq/ikenga-pkgs/pull/155) [`b035eb6`](https://github.com/ikenga-hq/ikenga-pkgs/commit/b035eb611b87b86ab480ac4f203720a6650a2c36) Thanks [@nedjamez](https://github.com/nedjamez)! - Port the locked Studio timeline design system (studio-design-system D-03..D-09) into the Composition view.
+
+  - **Seeking and selecting are split:** the playhead seeks from a 24px band over the ruler, and clips are a keyboard-navigable toolbar (arrow keys between clips; Enter selects and seeks a beat into the clip). Previously a full-rail overlay swallowed every clip click.
+  - **Timecode is accessible:** a `role="timer"` readout with a spoken-form name, announcing on pause and on seek instead of at frame rate. The total moves to a passing contrast colour.
+  - **Graduated ruler:** whole-second ticks drawn from the frozen step set, thinning automatically in narrow panes.
+  - **Legible clips:** `--fg` labels on every beat colour, a beat accent rule, distinct selection and cross-link marks, and a typed seam glyph for each transition (smash cuts no longer vanish between same-colour beats).
+  - **Re-tokened waveform and word strip:** un-played bars are visible, and every state passes contrast.
+  - **One playhead colour:** a new `--playhead` alias (amber, re-derived for light mode). Beat accents follow the locked F2 map.
+  - **Single clock formatter:** the Composition clock now uses the frozen `fmtClock` everywhere (the rounding duplicate is gone).
+  - **Tokens bump:** `@ikenga/tokens` goes to ^0.5.1 for the Dusk Wood `--info` / `--info-soft` role.
+
+- [#158](https://github.com/ikenga-hq/ikenga-pkgs/pull/158) [`63b36cd`](https://github.com/ikenga-hq/ikenga-pkgs/commit/63b36cd6ef65f4af6f4d5e3f8e697f291fb2572d) Thanks [@nedjamez](https://github.com/nedjamez)! - Port the locked transport-bar (D-10) and scrubber-playhead (D-11) designs.
+
+  - **Transport is a real toolbar:** one tab stop, with ←/→/Home/End across its buttons (including the mute and re-render controls).
+  - **Truthful state:** play state lives in the Play/Pause label alone (no `aria-pressed`). Loop and mute are true toggles: a stable label plus `aria-pressed`.
+  - **Mute toggle repaired:** SVG speaker glyphs replace the emoji, and the inverted `aria-pressed` is fixed.
+  - **Playhead colour:** play uses the `--playhead` colour; on-states use `--info`; the focus ring is `--info`.
+  - **Edges:** step buttons disable at the start and end.
+  - **Narrow panes:** the strip yields under 520px (counter first, then text buttons). Adds a compact `size="sm"` instance.
+  - **Frame-step keys:** `,` / `.` now actually step a frame, as the tooltips always claimed.
+  - **No double-fired keys:** Space on a focused clip no longer also toggles playback.
+  - **Scrubber:** D-01's round playhead cap, held still; a 2px line while dragging; a hover ghost line showing where a click would land.
+
 ## 0.8.0
 
 ### Minor Changes
