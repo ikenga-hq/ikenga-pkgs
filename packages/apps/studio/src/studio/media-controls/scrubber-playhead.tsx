@@ -64,6 +64,9 @@ export interface ScrubberPlayheadProps {
   /** 'overlay' (legacy: fills its positioned parent) · 'band' (DS D-05: a
    *  24px strip over the ruler; the consumer draws the playhead line). */
   variant?: 'overlay' | 'band';
+  /** True while a pointer drag is in progress, false when it ends — lets the
+   *  consumer mark the seek zone (.is-dragging: the 2px line, DS D-11). */
+  onDragChange?: (dragging: boolean) => void;
   /** Cut positions (ms) for [ ] / PageUp / PageDown navigation. Plain
    *  numbers — no domain types cross this boundary. */
   cutsMs?: number[];
@@ -84,6 +87,7 @@ export function ScrubberPlayhead({
   fps = DEFAULT_FPS,
   variant = 'overlay',
   cutsMs,
+  onDragChange,
   ariaValueText,
   ariaLabel = 'Playhead position',
 }: ScrubberPlayheadProps) {
@@ -108,6 +112,7 @@ export function ScrubberPlayhead({
     // was clicked must own the keyboard next (arrow / [ ] seeks), so focus it.
     e.currentTarget.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
+    onDragChange?.(true);
     downXRef.current = e.clientX;
     draggedRef.current = false;
     const ms = msFromClientX(e.clientX);
@@ -142,6 +147,7 @@ export function ScrubberPlayhead({
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    onDragChange?.(false);
     // A press with no meaningful travel = a click → also focus the clip.
     if (!draggedRef.current) {
       const ms = msFromClientX(e.clientX);
@@ -166,6 +172,12 @@ export function ScrubberPlayhead({
       case 'ArrowRight':
       case 'ArrowUp':
         next = e.shiftKey ? currentMs + 1000 : framesToMs(frame + 1, fps);
+        break;
+      case ',': // the transport's advertised frame-step keys work here too
+        next = framesToMs(frame - 1, fps);
+        break;
+      case '.':
+        next = framesToMs(frame + 1, fps);
         break;
       case 'Home':
         next = 0;

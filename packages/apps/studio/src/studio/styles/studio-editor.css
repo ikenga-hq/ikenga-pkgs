@@ -40,7 +40,7 @@
   --timeline-rail-h: 2rem;
   --ruler-height: 20px;
   --waveform-h: 1.75rem;
-  --transport-h: 36px;
+  --transport-h: 40px;
   --preview-h: 220px;
   --transport-btn-size: 28px;
   --bar-count: 80;
@@ -102,7 +102,11 @@
   --playhead: color-mix(in srgb, var(--achievement, var(--warning)) 60%, var(--fg));
 }
 
-/* ═══ media-controls · 40 transport-bar ═══════════════════════════════════ */
+/* ═══ media-controls · 40 transport-bar (DS D-10 · hairline strip) ═══════ */
+.comp-viewer { container-type: inline-size; }
+/* One row beneath the picture. Its pane sets `container-type: inline-size`
+ * so the strip can yield in narrow (3-pane) layouts: counter first, then the
+ * right slot's text buttons. */
 .transport {
   display: flex;
   align-items: center;
@@ -112,6 +116,7 @@
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg-sunken);
   flex-shrink: 0;
+  min-width: 0;
 }
 .transport-left {
   display: flex;
@@ -120,6 +125,8 @@
   flex: 1;
   min-width: 0;
 }
+.transport-cluster { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.transport-readout { display: flex; align-items: center; gap: var(--space-3); min-width: 0; overflow: hidden; }
 .transport-right {
   display: flex;
   align-items: center;
@@ -131,41 +138,58 @@
   place-items: center;
   width: var(--transport-btn-size);
   height: var(--transport-btn-size);
+  padding: 0;
   border-radius: 50%;
   border: 1px solid transparent;
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition:
-    background var(--motion-fast) var(--ease-calm),
-    color      var(--motion-fast) var(--ease-calm);
 }
-.transport-btn:hover { background: var(--bg-raised); color: var(--fg); }
-.transport-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.transport-btn:hover:not(:disabled) { background: var(--bg-raised); color: var(--fg); }
+.transport-btn:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 .transport-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.transport-btn.is-on { color: var(--beat-accent-sky); }
+/* a true toggle (loop, mute): fill + colour AND aria-pressed — never colour alone */
+.transport-btn.is-on { color: var(--info); background: var(--info-soft, color-mix(in srgb, var(--info) 16%, transparent)); }
 .transport-btn--play {
-  background: var(--beat-accent-amber-soft);
-  border-color: var(--beat-accent-amber-border);
-  color: var(--beat-accent-amber);
+  background: var(--playhead-soft);
+  border-color: color-mix(in srgb, var(--playhead) 40%, var(--border));
+  color: var(--playhead);
 }
-.transport-btn--play:hover {
-  background: color-mix(in srgb, var(--beat-accent-amber) 22%, transparent);
-  color: var(--beat-accent-amber);
+.transport-btn--play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--playhead) 24%, transparent);
+  color: var(--playhead);
 }
 .transport-divider {
   width: 1px;
-  height: 14px;
-  background: var(--border-soft);
+  height: 16px;
+  background: var(--border);
   flex-shrink: 0;
 }
 .transport-counter {
   font-family: var(--font-mono);
   font-size: var(--text-micro);
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
   letter-spacing: .02em;
+}
+/* compact — the Cell mini-preview instance */
+.transport[data-size="sm"] { height: 32px; gap: var(--space-2); padding: 0 var(--space-2); }
+.transport[data-size="sm"] .transport-btn { width: 24px; height: 24px; }
+@media (prefers-reduced-motion: no-preference) {
+  .transport-btn {
+    transition:
+      background var(--motion-fast) var(--ease-calm),
+      color      var(--motion-fast) var(--ease-calm);
+  }
+}
+@container (max-width: 520px) {
+  .transport-counter,
+  .transport-readout .transport-divider,
+  .transport-right .btn { display: none; }
 }
 
 /* ═══ media-controls · 42 timecode-display (DS D-03 · inline split) ═══════ */
@@ -581,7 +605,7 @@
   z-index: 7;
   transform: translateX(-0.5px);
 }
-/* the cap is the drag handle: a pentagon riding the ruler */
+/* the cap: D-01's round 11px cap riding the ruler, still in every state (DS D-11) */
 .playhead-cap {
   position: absolute;
   top: 0;
@@ -590,8 +614,24 @@
   height: 11px;
   transform: translateX(-50%);
   background: var(--playhead);
-  clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%);
+  border-radius: 50%;
 }
+.tl-seek.is-dragging .playhead { width: 2px; transform: translateX(-1px); }
+/* hover ghost: where a click on the band would land (ghost line only, DS R7) */
+.tl-ghost {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  left: calc(var(--ghost, 0) * 100%);
+  background: var(--fg-muted);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.tl-seek.is-hovering .tl-ghost { opacity: .7; }
+.tl-seek.is-hovering .scrubber--band,
+.tl-seek.is-dragging .scrubber--band { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .playhead--echo {
   position: absolute;
   top: 0;

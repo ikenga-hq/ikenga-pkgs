@@ -20,6 +20,8 @@ import {
   TimeRuler,
   ScrubberPlayhead,
   Playhead,
+  IconSpeaker,
+  IconSpeakerMuted,
   PlayheadEcho,
   spokenClock,
   PreviewSurface,
@@ -296,6 +298,19 @@ export function CompositionView() {
     seekMs(Math.min(clip.start_ms + 200, clip.start_ms + clip.duration_ms));
   };
   const railRef = useRef<HTMLDivElement>(null);
+  // Hover ghost on the seek band (DS D-11): DOM-direct, so a mousemove never
+  // re-renders the whole view.
+  const seekRef = useRef<HTMLDivElement>(null);
+  const onBandHover = (ms: number | null) => {
+    const el = seekRef.current;
+    if (!el) return;
+    if (ms === null) {
+      el.classList.remove('is-hovering');
+      return;
+    }
+    el.classList.add('is-hovering');
+    el.style.setProperty('--ghost', String(ms / Math.max(1, totalMs)));
+  };
   const [focusUid, setFocusUid] = useState<string | null>(null);
   const rovingUid = focusUid && clips.some((c) => c.uid === focusUid) ? focusUid : clips[0]?.uid;
   const onClipKey = (e: React.KeyboardEvent<HTMLDivElement>, i: number) => {
@@ -500,12 +515,13 @@ export function CompositionView() {
     <>
       <button
         type="button"
-        className={`transport-btn${muted ? '' : ' is-on'}`}
-        aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-        aria-pressed={!muted}
+        className={`transport-btn${muted ? ' is-on' : ''}`}
+        aria-label="Mute audio"
+        aria-pressed={muted}
+        title="Mute audio"
         onClick={() => setMuted((m) => !m)}
       >
-        {muted ? '🔇' : '🔊'}
+        {muted ? <IconSpeakerMuted /> : <IconSpeaker />}
       </button>
       <button
         type="button"
@@ -541,7 +557,15 @@ export function CompositionView() {
   const onViewKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)) return;
-    if (target.closest('.scrubber')) return;
+    // Widgets with their own keys (the seek slider, the clip + transport
+    // toolbars) handle them — don't double-fire (Space would select a clip
+    // AND toggle play; arrows would move focus AND seek).
+    if (target.closest('.scrubber, [role="toolbar"]')) return;
+    if (e.key === ',' || e.key === '.') {
+      e.preventDefault();
+      stepFrames(e.key === ',' ? -1 : 1);
+      return;
+    }
     if (e.key === ' ') {
       e.preventDefault();
       playToggle();
@@ -915,6 +939,7 @@ export function CompositionView() {
             <span className="track-lane__meta">{`${clips.length} cells · ${fmtClock(totalMs)}`}</span>
           </div>
           <div
+            ref={seekRef}
             className={`tl-seek${playing ? ' is-playing' : ''}`}
             style={{ ['--ph' as string]: String(playheadPct / 100) }}
           >
@@ -987,8 +1012,11 @@ export function CompositionView() {
               fps={FPS}
               onSeekMs={seekMs}
               cutsMs={clips.map((c) => c.start_ms)}
+              onDragChange={(d) => seekRef.current?.classList.toggle('is-dragging', d)}
+              onHoverMs={onBandHover}
               ariaValueText={activeClip ? `${fmtClock(playheadMs)}, ${activeClip.beat} cell` : undefined}
             />
+            <div className="tl-ghost" aria-hidden="true" />
             <Playhead leftPct={playheadPct} />
           </div>
 
