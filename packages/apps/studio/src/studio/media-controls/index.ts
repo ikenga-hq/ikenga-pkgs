@@ -8,7 +8,7 @@
 //
 // Class API + props/events freeze under G-EDITOR-API (contract §2).
 
-export { TransportBar } from './transport-bar';
+export { TransportBar, IconSpeaker, IconSpeakerMuted } from './transport-bar';
 export type { TransportBarProps } from './transport-bar';
 
 export { TimecodeDisplay, TimeRuler, spokenClock, spokenTimecode } from './timecode-display';
