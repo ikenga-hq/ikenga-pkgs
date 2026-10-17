@@ -66,7 +66,7 @@ import type { CellVideoAvailability } from './composition/CellVideo';
 import { DEFAULT_RESOLUTION } from '../mcp-types';
 import type { Rung, AspectRatio, RenderStatus, EngineCapability, PromptPackage, RenderRecord } from '../mcp-types';
 import { EmptyState } from '../components/EmptyState';
-import { SafeZoneBands } from '../media-controls';
+import { SafeZones, useRememberedToggle } from '../media-controls';
 
 // ─── palette (warm Dusk-Wood role tokens; no hex fallbacks — canvas theme fix) ─
 
@@ -1140,6 +1140,8 @@ export function CellView() {
   // fact's clothes.
   const aspect: AspectRatio = project?.aspect_ratio ?? '16:9';
   const isPortrait = aspect === '9:16';
+  // D-13: the same per-project overlay switch the Composition viewer toggles.
+  const [safeZonesOn] = useRememberedToggle(pid ? `com.ikenga.studio:safe-zones:${pid}` : null, true);
 
   // The frame the DRAFT is laid out in. The draft draws this buffer, so the
   // buffer's own data-width/data-height is the authority — and it is the one the
@@ -1807,7 +1809,7 @@ export function CellView() {
                       safe zone, so they must sit over whatever is previewing.
                       With no z-index of their own they rely on paint order,
                       and the draft's iframe host is positioned too. */}
-                  {isPortrait && <SafeZoneBands />}
+                  {isPortrait && safeZonesOn && <SafeZones />}
                 </div>
               </div>
 

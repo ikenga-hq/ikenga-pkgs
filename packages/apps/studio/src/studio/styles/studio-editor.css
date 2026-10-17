@@ -86,14 +86,26 @@
   --lane-sfx:          var(--agent);
   --lane-sfx-soft:     var(--agent-soft, color-mix(in srgb, var(--agent) 16%, transparent));
 
-  /* aspect-safe-area (F4 draft — plans/studio-design-system/parts/
-   * foundations/aspect-safe-area.md). --safe-zone-band derivation: 90px top
-   * + 90px bottom kept clear of a 1920px full source height per edge →
-   * 90 / 1920 = 4.6875%. */
-  --aspect-16-9:     16 / 9;
-  --aspect-9-16:     9 / 16;
-  --aspect-1-1:      1 / 1;
-  --safe-zone-band:  4.6875%;
+  /* aspect-safe-area (F4 · D-13, Round 8 — plans/studio-design-system/parts/
+   * foundations/aspect-safe-area.md). The frozen aspect-9-16 model, in % of
+   * the PICTURE box: SMPTE RP 218 action-safe 5% / title-safe 10% insets, plus
+   * the TikTok/Reels status (top 8%), caption/CTA (bottom 22%) and action
+   * rail (right 14%, from 15% down to the caption band). Supersedes the draft's
+   * --safe-zone-band 4.6875%. */
+  --aspect-16-9:        16 / 9;
+  --aspect-9-16:        9 / 16;
+  --aspect-1-1:         1 / 1;
+  --safe-action-inset:  5%;
+  --safe-title-inset:   10%;
+  --safe-status-band:   8%;
+  --safe-caption-band:  22%;
+  --safe-rail-width:    14%;
+  --safe-rail-top:      15%;
+  --zone-action:        var(--info);
+  --zone-title:         var(--agent);
+  --zone-status:        var(--systemic, var(--success));
+  --zone-caption:       var(--ember, var(--danger));
+  --zone-rail:          hsl(322 54% 62%);
 }
 
 /* Light mode: --achievement drops to ~2.9:1 on light surfaces; pull the playhead
@@ -246,11 +258,8 @@
 .preview-surface {
   position: relative;
   width: 100%;
-  height: var(--preview-h);
+  height: var(--preview-h);              /* D-12: a fixed band, any aspect */
   background: var(--bg-sunken);          /* was #1a1a2e (§5) */
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
   overflow: hidden;
@@ -258,53 +267,105 @@
 .preview-surface-content {
   width: 100%;
   height: 100%;
+  display: grid;
+  place-items: center;
+}
+/* The picture: the engine's aspect box, fitted inside the band. 16:9
+   pillarboxes in a wide pane; 9:16 / 1:1 are narrower boxes. */
+.preview-picture {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  aspect-ratio: var(--aspect-16-9);
   display: flex;
   align-items: center;
   justify-content: center;
+  background: var(--bg-base);
+  overflow: hidden;
 }
+.preview-surface[data-aspect="9-16"] .preview-picture { aspect-ratio: var(--aspect-9-16); }
+.preview-surface[data-aspect="1-1"]  .preview-picture { aspect-ratio: var(--aspect-1-1); }
 
-/* Aspect + 9:16 safe-zone (F4 aspect-safe-area, contract §8 commit-14).
-   16:9/1:1 keep the existing fixed-height frame unchanged; 9:16 derives a
-   portrait width from --preview-h via aspect-ratio so it doesn't disturb the
-   default layout. */
-.preview-surface[data-aspect="9-16"] {
-  aspect-ratio: var(--aspect-9-16);
-  width: auto;
-  height: var(--preview-h);
-  margin-inline: auto;
-}
-.preview-surface[data-aspect="1-1"] {
-  aspect-ratio: var(--aspect-1-1);
-  width: auto;
-  height: var(--preview-h);
-  margin-inline: auto;
-}
-
-/* Safe-zone bands — the shared F4 overlay (media-controls SafeZoneBands),
-   reused by the composition preview, the Canvas cell thumbnails, and the Cell
-   editor preview. Informational only (pointer-events: none — never obscures
-   the transport nor captures focus, 2.4.11); each band pairs its --info tint
-   with a "Safe zone" label so the affordance never relies on colour alone
-   (1.4.1). Positioned against the nearest positioned 9:16 frame. */
-.safe-zone-bands__band {
+/* Safe zones — the shared F4 overlay (media-controls SafeZones, D-13), reused
+   by the composition preview and the Cell editor preview. Positioned against
+   the nearest positioned 9:16 picture. aria-hidden + pointer-events: none
+   (never obscures the transport nor captures focus, 2.4.11); every zone pairs
+   its hue with a tag and the legend outside the frame (1.4.1). */
+.safe-zones { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.safe-zone { position: absolute; pointer-events: none; }
+.safe-zone--action  { inset: var(--safe-action-inset); border: 1.5px solid color-mix(in srgb, var(--zone-action) 70%, transparent); border-radius: 3px; }
+.safe-zone--title   { inset: var(--safe-title-inset);  border: 1.5px solid color-mix(in srgb, var(--zone-title) 75%, transparent); border-radius: 2px; }
+.safe-zone--status  { top: 0; left: 0; right: 0; height: var(--safe-status-band); background: color-mix(in srgb, var(--zone-status) 22%, transparent); border-bottom: 1px dashed var(--zone-status); }
+.safe-zone--caption { bottom: 0; left: 0; right: 0; height: var(--safe-caption-band); background: color-mix(in srgb, var(--zone-caption) 18%, transparent); border-top: 1px dashed var(--zone-caption); }
+.safe-zone--rail    { top: var(--safe-rail-top); bottom: var(--safe-caption-band); right: 0; width: var(--safe-rail-width); background: color-mix(in srgb, var(--zone-rail) 16%, transparent); border-left: 1px dashed var(--zone-rail); }
+.safe-zone__tag {
   position: absolute;
-  left: 0;
-  right: 0;
-  height: var(--safe-zone-band);
-  background: var(--beat-accent-sky-soft);
-  color: var(--fg-faint);
+  left: 4px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: .04em;
-  text-transform: uppercase;
+  font-size: var(--text-micro);
+  line-height: 1.2;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-sunken) 82%, transparent);
+}
+.safe-zone--status  .safe-zone__tag { top: 2px; }
+.safe-zone--caption .safe-zone__tag { bottom: 4px; }
+.safe-zone--rail    .safe-zone__tag { top: 4px; left: auto; right: 2px; writing-mode: vertical-rl; padding: 4px 1px; }
+
+/* The readable key (outside the frame) + the overlay toggle. */
+.safe-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--fg);
+}
+.safe-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.safe-legend small { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-micro); }
+.safe-legend i { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.safe-legend .k-action  { border: 1.5px solid var(--zone-action); }
+.safe-legend .k-title   { border: 1.5px solid var(--zone-title); }
+.safe-legend .k-status  { background: color-mix(in srgb, var(--zone-status) 30%, transparent); border: 1px dashed var(--zone-status); }
+.safe-legend .k-caption { background: color-mix(in srgb, var(--zone-caption) 26%, transparent); border: 1px dashed var(--zone-caption); }
+.safe-legend .k-rail    { background: color-mix(in srgb, var(--zone-rail) 24%, transparent); border: 1px dashed var(--zone-rail); }
+.preview-toolbar {
   display: flex;
   align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 4;
+  gap: var(--space-2);
+  min-height: 28px;
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  color: var(--fg-muted);
 }
-.safe-zone-bands__band--top    { top: 0; }
-.safe-zone-bands__band--bottom { bottom: 0; }
+.preview-toolbar__aspect { color: var(--fg); font-weight: 500; }
+.preview-toolbar__spacer { flex: 1; }
+.preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  cursor: pointer;
+  font: 500 var(--text-micro)/1 var(--font-mono);
+  letter-spacing: .04em;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.preview-toggle svg { width: 12px; height: 12px; }
+.preview-toggle:hover { color: var(--fg); border-color: var(--fg-faint); }
+.preview-toggle:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+.preview-toggle[aria-pressed="true"] {
+  color: var(--info);
+  background: var(--info-soft, color-mix(in srgb, var(--info) 16%, transparent));
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+}
 .preview-cell-label {
   font-family: var(--font-mono);
   font-size: var(--text-micro);
@@ -347,7 +408,7 @@
   font-size: var(--text-micro);
   letter-spacing: .06em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);                /* D-12: --fg-faint fails as text */
 }
 .preview-status-action { margin-top: var(--space-1); }
 
@@ -355,7 +416,7 @@
    §8 commit-13 — states-cell.html parity). */
 .preview-surface.is-failed { background: var(--beat-accent-rose-soft); }
 .preview-surface.is-failed .preview-status-glyph { color: var(--beat-accent-rose); }
-.preview-surface.is-cancelled .preview-status-glyph { color: var(--fg-faint); }
+.preview-surface.is-cancelled .preview-status-glyph { color: var(--fg-muted); }
 .preview-engine-note {
   margin-top: var(--space-4);
   font-family: var(--font-mono);
