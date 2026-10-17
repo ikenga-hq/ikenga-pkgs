@@ -404,7 +404,7 @@ function DraftPreview({ html, ready, aspect }: { html: string; ready: boolean; a
         )}
       </div>
       <span
-        className="pointer-events-none absolute left-2 top-2 z-10 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider"
+        className="cell-draft-badge pointer-events-none absolute left-2 top-2 z-10 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider"
         style={{
           background: 'color-mix(in oklab, var(--bg-sunken) 82%, transparent)',
           color: 'var(--fg-muted)',

@@ -1037,6 +1037,9 @@
 .comp-clip-badge__dot { width: 7px; height: 7px; border-radius: 50%; }
 /* With the 9:16 safe zones on, sit below the status zone so its tag stays legible. */
 .preview-picture:has(.safe-zones) .comp-clip-badge { top: calc(var(--safe-status-band) + var(--space-2)); }
+/* Same for the Cell editor's Draft-preview badge (a sibling of the overlay in
+   the 9:16 frame). */
+:has(> .safe-zones) > .cell-draft-badge { top: calc(var(--safe-status-band) + var(--space-2)); }
 .comp-play-overlay {
   position: absolute;
   inset: 0;
