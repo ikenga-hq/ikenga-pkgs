@@ -25,6 +25,9 @@ import {
   PlayheadEcho,
   spokenClock,
   PreviewSurface,
+  SafeZoneLegend,
+  SafeZoneToggle,
+  useRememberedToggle,
   PreviewStatus,
   type PreviewAspect,
 } from '../media-controls';
@@ -154,6 +157,12 @@ export function CompositionView() {
   const setEngineMode = useSharedStore((s) => s.setEngineMode);
 
   const project = useProjectStore(selectOpenProject);
+  // D-13: the 9:16 safe-zone overlay is on by default and remembered per
+  // project; the Cell editor preview reads the same key.
+  const [safeZonesOn, setSafeZonesOn] = useRememberedToggle(
+    project?.project_id ? `com.ikenga.studio:safe-zones:${project.project_id}` : null,
+    true,
+  );
   const hasRealCells = useStoryboardStore(selectHasRealCells);
   const hydratedCells = useStoryboardStore(selectHydratedCells);
   const projectDoc = useStoryboardStore(selectHydratedProject);
@@ -682,10 +691,23 @@ export function CompositionView() {
             narrow pane widths — see .comp-stage in studio-editor.css. */}
         <div className="comp-stage">
           <section className="comp-viewer" aria-label="Video preview">
+            {/* Viewer toolbar — the safe-zone switch lives outside the frame
+                (D-12/D-13), and only where the overlay applies. */}
+            {/* Rendered for every aspect so switching one never moves the
+                transport or timeline below (D-12). */}
+            <div className="preview-toolbar">
+              <span className="preview-toolbar__aspect">{meta.aspect}</span>
+              <span className="preview-toolbar__spacer" />
+              {aspectAttr(meta.aspect) === '9-16' && (
+                <SafeZoneToggle pressed={safeZonesOn} onPressedChange={setSafeZonesOn} />
+              )}
+            </div>
+
             {/* Preview surface */}
             <PreviewSurface
               aspect={aspectAttr(meta.aspect)}
-              safeZoneOn
+              safeZoneOn={safeZonesOn}
+              aside={aspectAttr(meta.aspect) === '9-16' && safeZonesOn ? <SafeZoneLegend /> : undefined}
               status={
                 composedMode
                   ? 'ready'
