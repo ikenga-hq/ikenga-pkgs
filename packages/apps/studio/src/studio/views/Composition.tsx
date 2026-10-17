@@ -693,18 +693,21 @@ export function CompositionView() {
           <section className="comp-viewer" aria-label="Video preview">
             {/* Viewer toolbar — the safe-zone switch lives outside the frame
                 (D-12/D-13), and only where the overlay applies. */}
-            {aspectAttr(meta.aspect) === '9-16' && (
-              <div className="preview-toolbar">
-                <span className="preview-toolbar__aspect">9:16</span>
-                <span className="preview-toolbar__spacer" />
+            {/* Rendered for every aspect so switching one never moves the
+                transport or timeline below (D-12). */}
+            <div className="preview-toolbar">
+              <span className="preview-toolbar__aspect">{meta.aspect}</span>
+              <span className="preview-toolbar__spacer" />
+              {aspectAttr(meta.aspect) === '9-16' && (
                 <SafeZoneToggle pressed={safeZonesOn} onPressedChange={setSafeZonesOn} />
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Preview surface */}
             <PreviewSurface
               aspect={aspectAttr(meta.aspect)}
               safeZoneOn={safeZonesOn}
+              aside={aspectAttr(meta.aspect) === '9-16' && safeZonesOn ? <SafeZoneLegend /> : undefined}
               status={
                 composedMode
                   ? 'ready'
@@ -839,7 +842,6 @@ export function CompositionView() {
                 </div>
               )}
             </PreviewSurface>
-            {aspectAttr(meta.aspect) === '9-16' && safeZonesOn && <SafeZoneLegend />}
 
             {/* Transport — beneath the picture it drives (C-A) */}
             <TransportBar

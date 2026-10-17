@@ -10,7 +10,8 @@
 // .preview-surface-content · .preview-picture · .preview-status /
 // .preview-status-glyph / .preview-status-text / .preview-status-action ·
 // .safe-zones / .safe-zone--{action,title,status,caption,rail} /
-// .safe-zone__tag · .safe-legend · .preview-toggle · .media-thumb
+// .safe-zone__tag · .safe-legend · .preview-aside · .preview-toggle ·
+// .media-thumb
 //
 // D-12 (plans/studio-design-system, Round 8 → designs/preview-surface-band.html):
 // the surface is a fixed `--preview-h` band (D-01) that never changes height;
@@ -51,6 +52,10 @@ export interface PreviewSurfaceProps {
   /** Show the 9:16 safe-zone overlay. Only renders when `aspect === '9-16'`
    *  regardless of this flag (no-op on 16:9/1:1). */
   safeZoneOn?: boolean;
+  /** Rendered inside the band but beside the picture (e.g. `SafeZoneLegend`),
+   *  so it never changes the band's height. Hidden when the pane is too narrow
+   *  to leave room beside a 9:16 picture. */
+  aside?: ReactNode;
   ariaLabel?: string;
   children?: ReactNode;
 }
@@ -59,6 +64,7 @@ export function PreviewSurface({
   status = 'ready',
   aspect = '16-9',
   safeZoneOn = false,
+  aside,
   ariaLabel,
   children,
 }: PreviewSurfaceProps) {
@@ -77,6 +83,7 @@ export function PreviewSurface({
           {showSafeZone && <SafeZones />}
         </div>
       </div>
+      {aside && <div className="preview-aside">{aside}</div>}
     </div>
   );
 }
@@ -113,7 +120,7 @@ export function SafeZoneLegend({ className }: { className?: string }) {
   return (
     <ul className={`safe-legend${className ? ` ${className}` : ''}`} aria-label="Safe-zone key">
       <li><i className="k-action" aria-hidden="true" /><span>Action-safe <small>5% inset</small></span></li>
-      <li><i className="k-title" aria-hidden="true" /><span>Title-safe <small>10% inset · keep text inside</small></span></li>
+      <li><i className="k-title" aria-hidden="true" /><span>Title-safe <small>10% · text inside</small></span></li>
       <li><i className="k-status" aria-hidden="true" /><span>Status · clock <small>top 8%</small></span></li>
       <li><i className="k-caption" aria-hidden="true" /><span>Caption · CTA <small>bottom 22%</small></span></li>
       <li><i className="k-rail" aria-hidden="true" /><span>Action rail <small>right 14%</small></span></li>

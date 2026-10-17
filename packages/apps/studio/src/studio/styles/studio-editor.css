@@ -263,6 +263,7 @@
   border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
   overflow: hidden;
+  container-type: inline-size;
 }
 .preview-surface-content {
   width: 100%;
@@ -270,21 +271,23 @@
   display: grid;
   place-items: center;
 }
-/* The picture: the engine's aspect box, fitted inside the band. 16:9
-   pillarboxes in a wide pane; 9:16 / 1:1 are narrower boxes. */
+/* The picture: the engine's aspect box, fitted inside the band ("contain").
+   16:9 pillarboxes in a wide pane; 9:16 / 1:1 are narrower boxes. Width is
+   derived from the band height and clamped to the pane, and height follows
+   aspect-ratio, so a narrow pane shrinks the picture without distorting it. */
+.preview-surface { --preview-pic-ratio: var(--aspect-16-9); }
+.preview-surface[data-aspect="9-16"] { --preview-pic-ratio: var(--aspect-9-16); }
+.preview-surface[data-aspect="1-1"]  { --preview-pic-ratio: var(--aspect-1-1); }
 .preview-picture {
   position: relative;
-  height: 100%;
-  max-width: 100%;
-  aspect-ratio: var(--aspect-16-9);
+  width: min(100%, calc((var(--preview-h) - 2px) * var(--preview-pic-ratio)));
+  aspect-ratio: var(--preview-pic-ratio);
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-base);
   overflow: hidden;
 }
-.preview-surface[data-aspect="9-16"] .preview-picture { aspect-ratio: var(--aspect-9-16); }
-.preview-surface[data-aspect="1-1"]  .preview-picture { aspect-ratio: var(--aspect-1-1); }
 
 /* Safe zones — the shared F4 overlay (media-controls SafeZones, D-13), reused
    by the composition preview and the Cell editor preview. Positioned against
@@ -333,6 +336,20 @@
 .safe-legend .k-status  { background: color-mix(in srgb, var(--zone-status) 30%, transparent); border: 1px dashed var(--zone-status); }
 .safe-legend .k-caption { background: color-mix(in srgb, var(--zone-caption) 26%, transparent); border: 1px dashed var(--zone-caption); }
 .safe-legend .k-rail    { background: color-mix(in srgb, var(--zone-rail) 24%, transparent); border: 1px dashed var(--zone-rail); }
+/* Beside the picture, inside the band: the pillar left of a 9:16 picture
+   (~124px wide at 220px) holds the legend without touching the band height. */
+.preview-aside {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  max-width: calc(50cqi - 62px - var(--space-4));
+  z-index: 5;
+}
+.preview-aside .safe-legend { flex-direction: column; flex-wrap: nowrap; gap: 6px; }
+.preview-aside .safe-legend li { align-items: flex-start; }
+.preview-aside .safe-legend li > span { display: grid; line-height: 1.25; }
+@container (max-width: 380px) { .preview-aside { display: none; } }
 .preview-toolbar {
   display: flex;
   align-items: center;
@@ -1018,6 +1035,8 @@
   color: var(--fg-muted);
 }
 .comp-clip-badge__dot { width: 7px; height: 7px; border-radius: 50%; }
+/* With the 9:16 safe zones on, sit below the status zone so its tag stays legible. */
+.preview-picture:has(.safe-zones) .comp-clip-badge { top: calc(var(--safe-status-band) + var(--space-2)); }
 .comp-play-overlay {
   position: absolute;
   inset: 0;
