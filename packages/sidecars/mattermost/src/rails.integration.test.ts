@@ -17,6 +17,7 @@ import { DaemonClient } from './daemon.js';
 import { MockDaemon } from './mock-daemon.js';
 import { MockMattermostServer } from './mock-server.js';
 import { Rails } from './rails.js';
+import { RunGate } from './run-gate.js';
 import type { WireMode } from './rails.js';
 import { ThreadRouter } from './sessions.js';
 import { ThreadStore } from './store.js';
@@ -501,6 +502,7 @@ describe('maxMode is asserted at every call site, not only at config load', () =
       chi: { ...chi, cwd: '~/w' },
       rails: new Rails({ bot: 'rex', audit: log, ...rails }),
       progress: FAST,
+      runGate: new RunGate({ max: 4, log: () => undefined }),
       // the approval manager is only used to withdraw; a stub is enough for the act-site test
       approvals: rails.actingMode ? { manager: { withdraw: async () => 0 } as never, actingMode: rails.actingMode } : undefined,
       log: () => undefined,
@@ -600,6 +602,7 @@ describe('B1 engine vs maxMode at the call sites', () => {
       chi: { engine, cwd: '~/w' },
       rails: new Rails({ bot: 'rex', audit: log, ...rails }),
       progress: FAST,
+      runGate: new RunGate({ max: 4, log: () => undefined }),
       approvals: rails.actingMode ? { manager: { withdraw: async () => 0 } as never, actingMode: rails.actingMode } : undefined,
       log: () => undefined,
     });
@@ -721,6 +724,7 @@ describe('recover() records the mode the run started with', () => {
       // today's config: plan only, no approvals, so no acting mode at all
       rails: new Rails({ bot: 'rex', maxMode: 'plan', threadMode: 'plan', audit: new AuditLog({ file, bot: 'rex', log: () => undefined }) }),
       progress: FAST,
+      runGate: new RunGate({ max: 4, log: () => undefined }),
       log: () => undefined,
     });
     router.recover();

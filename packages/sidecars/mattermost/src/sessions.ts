@@ -3,6 +3,8 @@ import { effectiveMode, modeRank } from './rails.js';
 import type { Rails } from './rails.js';
 import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
+import { RunGateClosedError, RunWaitAbortedError, isGateStop } from './run-gate.js';
+import type { RunGate, RunSlot } from './run-gate.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
 import type { ThreadRecord, ThreadStore } from './store.js';
 import type { BotChiConfig, MattermostPost, ProgressConfig } from './types.js';
@@ -73,6 +75,12 @@ interface Turn {
   /** Kept through to the final summary so it isn't edited away. */
   notice?: string;
   done?: Promise<void>;
+  /** The bridge-wide concurrency slot this turn holds. Released when the run ends, fails to start, is cancelled or the bridge stops. */
+  slot?: RunSlot;
+  /** Aborted by `stop`/`cancel` while the turn still waits for a slot. */
+  queueAbort: AbortController;
+  /** The turn had to wait for a slot, and for how long (seconds), for the audit record. */
+  queueWaitS?: number;
 }
 
 export interface RouterOptions {
@@ -83,6 +91,8 @@ export interface RouterOptions {
   chi: BotChiConfig;
   /** B5: the mode ceiling, the audit log and the branch note. Every `chi_run` / `chi_resume` below goes through it first. */
   rails: Rails;
+  /** The bridge-wide cap on runs in flight, shared by every bot. Every `chi_run` / `chi_resume` below takes a slot first. */
+  runGate: RunGate;
   progress?: ProgressConfig;
   /**
    * B3. When set, thread turns run in plan mode and an approved plan runs once, in
@@ -135,8 +145,19 @@ export class ThreadRouter {
     }
   }
 
+  /** Give back slots reserved for runs that were never re-attached (a failed start, a stop). */
+  releaseReserved(): void {
+    for (const slot of this.reserved.values()) slot.release();
+    this.reserved.clear();
+  }
+
   stop(): void {
-    for (const t of this.turns.values()) t.abort.abort();
+    this.releaseReserved();
+    for (const t of this.turns.values()) {
+      t.abort.abort();
+      t.queueAbort.abort();
+      t.slot?.release();
+    }
   }
 
   async handle(post: MattermostPost, who?: Who): Promise<void> {
@@ -173,6 +194,7 @@ export class ThreadRouter {
       by,
       finished: false,
       abort: new AbortController(),
+      queueAbort: new AbortController(),
     };
     this.turns.set(rootId, turn);
 
@@ -186,8 +208,37 @@ export class ThreadRouter {
     }
   }
 
+  /**
+   * Slots taken for runs a restart found still active, keyed by thread root. Taken synchronously (see
+   * `reserveRecovered`) so every bot in the process counts its survivors before ANY bot can start new work;
+   * `recover()` hands each to the turn that re-attaches to that run.
+   */
+  private readonly reserved = new Map<string, RunSlot>();
+
+  /**
+   * Take a slot for every thread run that was still active when the bridge last stopped. Synchronous and idempotent.
+   * The bridge calls it for ALL bots before any of them awaits anything, so a bot that finishes starting early cannot
+   * find an empty gate while another bot's survivors have not been counted yet.
+   */
+  reserveRecovered(): void {
+    for (const rec of this.opts.store.activeThreads()) {
+      if (!rec.active || this.turns.has(rec.root_id) || this.reserved.has(rec.root_id)) continue;
+      this.reserved.set(rec.root_id, this.opts.runGate.adopt({ bot: this.opts.bot, kind: 'recovered' }));
+    }
+  }
+
   /** Re-attach to turns that were in flight when the bridge last stopped. */
   recover(): void {
+    this.reserveRecovered();
+    try {
+      this.reattach();
+    } finally {
+      // A slot reserved for a thread that did not re-attach (nothing to follow) must not stay held.
+      this.releaseReserved();
+    }
+  }
+
+  private reattach(): void {
     for (const rec of this.opts.store.activeThreads()) {
       const active = rec.active;
       if (!active || this.turns.has(rec.root_id)) continue;
@@ -207,7 +258,11 @@ export class ThreadRouter {
         engine: active.engine ?? (active.kind === 'act' ? undefined : rec.engine),
         finished: false,
         abort: new AbortController(),
+        queueAbort: new AbortController(),
+        // The run is already going on the daemon: it counts against the cap, so a restart cannot start N more on top.
+        slot: this.reserved.get(rec.root_id) ?? this.opts.runGate.adopt({ bot: this.opts.bot, kind: 'recovered' }),
       };
+      this.reserved.delete(rec.root_id);
       this.turns.set(rec.root_id, turn);
       this.log(`re-attached to run ${active.run_id} for thread ${rec.root_id}`);
       turn.done = this.track(turn, active.brief ? { ...rec, brief: active.brief } : rec, active.notice);
@@ -239,6 +294,7 @@ export class ThreadRouter {
       mode: gate.actingMode,
       finished: false,
       abort: new AbortController(),
+      queueAbort: new AbortController(),
     };
     this.turns.set(rootId, turn);
     try {
@@ -267,6 +323,7 @@ export class ThreadRouter {
       turn.requestId = auth.requestId;
       turn.mode = auth.mode;
       turn.engine = auth.engine;
+      await this.takeSlot(turn, 'act');
       const result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
@@ -277,6 +334,7 @@ export class ThreadRouter {
         persistent: chi.persistent ?? true,
         parentId: a.plan_run_id,
       });
+      requireRunId(result);
       turn.runId = result.run_id;
       rails.audit.record('run.started', {
         request_id: turn.requestId,
@@ -284,6 +342,7 @@ export class ThreadRouter {
         kind: 'act',
         engine: auth.engine,
         mode: auth.mode,
+        queue_wait_s: turn.queueWaitS,
         thread_root: rootId,
         channel_id: a.channel_id,
         parent_run_id: a.plan_run_id,
@@ -367,12 +426,14 @@ export class ThreadRouter {
         turn.requestId = auth.requestId;
         turn.mode = auth.mode;
         turn.engine = auth.engine;
+        await this.takeSlot(turn, 'resume');
         const carry = rec.carry ? `[What happened since your last turn: an approved run carried out your plan. Its report follows.]\n${rec.carry}\n\n---\n\n` : '';
         result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE + rails.branchNote() : ''}`);
         if (rec.carry) await store.update(rootId, { carry: '' });
         record = rec;
-        rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', engine: turn.engine, mode: turn.mode });
+        rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', engine: turn.engine, mode: turn.mode, queue_wait_s: turn.queueWaitS });
       } catch (err) {
+        if (err instanceof RunWaitAbortedError || err instanceof RunGateClosedError) throw err; // not a daemon answer
         if (err instanceof DaemonError && err.runGone) {
           notice =
             'I could not continue the earlier run for this thread (it has expired or was removed), so I started a fresh one. It will not remember the earlier messages.';
@@ -382,7 +443,7 @@ export class ThreadRouter {
           notice = 'The previous message in this thread is still being worked on; I am following that run.';
           result = { run_id: rec.run_id, status: 'running' };
           record = rec;
-          rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', engine: turn.engine, mode: turn.mode, attached: true });
+          rails.audit.record('run.resumed', { ...base, request_id: turn.requestId, run_id: rec.run_id, kind: 'resume', engine: turn.engine, mode: turn.mode, attached: true, queue_wait_s: turn.queueWaitS });
         } else {
           throw err;
         }
@@ -400,6 +461,8 @@ export class ThreadRouter {
       turn.requestId = auth.requestId;
       turn.mode = auth.mode;
       turn.engine = auth.engine;
+      // After the fallback from a resume that found its run gone the turn already holds its slot (that call started nothing).
+      await this.takeSlot(turn, 'thread');
       result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
@@ -409,7 +472,8 @@ export class ThreadRouter {
         timeoutSeconds: chi.timeoutSeconds,
         persistent: chi.persistent ?? true,
       });
-      rails.audit.record('run.started', { ...base, request_id: turn.requestId, run_id: result.run_id, kind: 'thread', engine: auth.engine, mode: auth.mode });
+      requireRunId(result);
+      rails.audit.record('run.started', { ...base, request_id: turn.requestId, run_id: result.run_id, kind: 'thread', engine: auth.engine, mode: auth.mode, queue_wait_s: turn.queueWaitS });
       const t = this.now();
       record = {
         root_id: rootId,
@@ -450,6 +514,7 @@ export class ThreadRouter {
   }
 
   private async failStart(turn: Turn, err: unknown): Promise<void> {
+    const cancelledInQueue = err instanceof RunWaitAbortedError && turn.cancelRequested;
     const msg = this.errText(err);
     this.log(`start failed for thread ${turn.rootId}: ${msg}`);
     if (turn.requestId) {
@@ -464,12 +529,12 @@ export class ThreadRouter {
         mode: turn.mode,
         run_id: turn.runId,
         run_unjoined: turn.runId === undefined,
-        error_kind: err instanceof DaemonError ? err.kind : 'error',
+        error_kind: err instanceof DaemonError ? err.kind : cancelledInQueue ? 'cancelled_in_queue' : isGateStop(err) ? 'gate_stopped' : 'error',
       });
     }
-    this.turns.delete(turn.rootId);
+    this.endTurn(turn);
     turn.finished = true;
-    const text = `I could not start the run: ${msg}`;
+    const text = cancelledInQueue ? 'Cancelled while queued. Nothing was run.' : `I could not start the run: ${msg}`;
     if (turn.progressPostId) {
       await this.edit(turn.progressPostId, text);
     } else {
@@ -506,12 +571,14 @@ export class ThreadRouter {
           failures = 0;
         } catch (err) {
           if (err instanceof DaemonError && err.runGone) {
+            this.releaseSlot(turn);
             await this.finish(turn, progressId, 'The run is no longer on the daemon (it expired or was removed).', undefined, true, 'run_gone');
             return;
           }
           failures += 1;
           this.log(`status poll for ${runId} failed (${failures}/${p.maxPollFailures}): ${this.errText(err)}`);
           if (failures >= p.maxPollFailures) {
+            this.releaseSlot(turn);
             await this.finish(
               turn,
               progressId,
@@ -527,12 +594,15 @@ export class ThreadRouter {
         }
 
         if (TERMINAL_STATUSES.has(st.status)) {
+          // The run is over: free its slot before the (possibly slow) posts, not after.
+          this.releaseSlot(turn);
           await this.finishWithStatus(turn, progressId, st, rec);
           return;
         }
 
         const elapsed = this.now() - turn.startedAt;
         if (elapsed > p.maxWaitMs) {
+          this.releaseSlot(turn);
           await this.finish(
             turn,
             progressId,
@@ -557,8 +627,8 @@ export class ThreadRouter {
       this.log(`watcher for ${runId} crashed: ${this.errText(err)}`);
       if (!turn.finished) {
         turn.finished = true;
-        this.turns.delete(turn.rootId);
       }
+      this.endTurn(turn);
     }
   }
 
@@ -662,7 +732,7 @@ export class ThreadRouter {
         }
       }
     } finally {
-      this.turns.delete(turn.rootId);
+      this.endTurn(turn);
     }
   }
 
@@ -695,6 +765,7 @@ export class ThreadRouter {
     }
     turn.cancelRequested = true;
     turn.cancelledBy = by;
+    turn.queueAbort.abort(); // leaves the queue if it is waiting there; a no-op otherwise
     if (!turn.runId) return; // still starting; `start` cancels once it has a run id
     await this.cancelRun(turn);
   }
@@ -747,8 +818,61 @@ export class ThreadRouter {
         }
       }
     } finally {
-      this.turns.delete(turn.rootId);
+      this.endTurn(turn);
     }
+  }
+
+  // ── concurrency slots ────────────────────────────────────────────────────
+
+  /**
+   * Take the bridge-wide slot for this turn before it calls `chi_run` / `chi_resume`. Idempotent: a turn that already
+   * holds one (a resume that found its run gone and falls back to a fresh run) keeps it. When the bridge is full the
+   * progress post says so (once) and the turn waits its turn, FIFO; it goes back to "Working…" when it starts.
+   */
+  private async takeSlot(turn: Turn, kind: 'thread' | 'resume' | 'act'): Promise<void> {
+    if (turn.slot) return;
+    let notice: Promise<void> | undefined;
+    let slot: RunSlot;
+    try {
+      slot = await this.opts.runGate.acquire(
+        { bot: this.opts.bot, kind },
+        {
+          signal: turn.queueAbort.signal,
+          onQueued: ({ ahead, max }) => {
+            const place = ahead === 0 ? 'This one is next.' : `${ahead} queued ahead of this one.`;
+            const text = `Queued: ${max} run${max === 1 ? ' is' : 's are'} already going on this bridge. ${place} I will start it as soon as one finishes. Reply \`stop\` to cancel.`;
+            notice = turn.progressPostId ? this.edit(turn.progressPostId, text) : this.say(turn.channelId, turn.rootId, text).then(() => undefined);
+          },
+        },
+      );
+    } catch (err) {
+      // Let the "Queued" edit land first, or it can overwrite the cancellation text that follows.
+      await notice;
+      throw err;
+    }
+    turn.slot = slot;
+    await notice;
+    if (turn.abort.signal.aborted) {
+      // The bridge stopped while the grant was in flight.
+      this.releaseSlot(turn);
+      throw new RunGateClosedError();
+    }
+    if (notice) {
+      const waitedS = Math.round(slot.waitedMs / 1000);
+      turn.queueWaitS = waitedS;
+      turn.startedAt = this.now(); // the wait is not the run's time (maxWaitMs, "Done in Ns")
+      if (turn.progressPostId) await this.edit(turn.progressPostId, 'Working…');
+    }
+  }
+
+  private releaseSlot(turn: Turn): void {
+    turn.slot?.release();
+  }
+
+  /** The one place a turn leaves `turns`: it also gives back its slot, so no exit path can forget to. */
+  private endTurn(turn: Turn): void {
+    if (this.turns.get(turn.rootId) === turn) this.turns.delete(turn.rootId);
+    turn.slot?.release();
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -812,6 +936,11 @@ export class ThreadRouter {
     }
     return true;
   }
+}
+
+/** `chi_run` is supposed to answer with a run id. Without one there is nothing to follow: fail the start (and free the slot). */
+function requireRunId(result: ChiRunResult | undefined): void {
+  if (!result || typeof result.run_id !== 'string' || !result.run_id) throw new Error('the daemon answered without a run id');
 }
 
 export function chunkText(text: string, max: number): string[] {

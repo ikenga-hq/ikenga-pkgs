@@ -18,6 +18,7 @@ import { MockMattermostServer } from './mock-server.js';
 import { AuditLog } from './audit.js';
 import { Rails } from './rails.js';
 import type { WireMode } from './rails.js';
+import { RunGate } from './run-gate.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules, SCHEDULE_NOTE, QUIET_NOTE } from './schedules.js';
 import type { ScheduleApi, ScheduleChiApi } from './schedules.js';
 import type { MattermostPost, ScheduleConfig } from './types.js';
@@ -136,6 +137,7 @@ function unit(): Unit {
         threadMode: 'plan',
         audit: new AuditLog({ file: path.join(dir, 'audit-rex.jsonl'), bot: 'rex', now: () => clock.t }),
       }),
+      runGate: new RunGate({ max: 4, log: () => undefined }),
       progress: FAST,
       scheduler: { tickMs: 60_000, lateGraceMs: over.lateGraceMs },
       now: () => clock.t,

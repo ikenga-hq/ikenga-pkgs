@@ -248,6 +248,14 @@ export class ApprovalManager {
     return this.opts.store.all().some((r) => r.root_id === rootId);
   }
 
+  /** Approved runs started from `recover()` that are still starting (tests, graceful shutdown). */
+  private readonly detached = new Set<Promise<void>>();
+
+  /** Resolves once every approved run started by `recover()` has got going (or failed to). */
+  async whenRecoveredRunsStarted(): Promise<void> {
+    while (this.detached.size > 0) await Promise.allSettled([...this.detached]);
+  }
+
   /** Cancel timers (shutdown). Pending records stay on disk for the next start. */
   stop(): void {
     for (const t of this.timers.values()) clearTimeout(t);
@@ -288,7 +296,7 @@ export class ApprovalManager {
   }
 
   /** A `reaction_added` event. Everything that is not a decision on a pending approval is ignored. */
-  async handleReaction(r: MattermostReaction): Promise<void> {
+  async handleReaction(r: MattermostReaction, opts: { detach?: boolean } = {}): Promise<void> {
     if (this.botUserId && r.user_id === this.botUserId) return;
     const verdict = verdictOf(r.emoji_name ?? '');
     if (!verdict) return;
@@ -343,7 +351,26 @@ export class ApprovalManager {
       `**Approved** by @${who} at ${hhmm(this.now())}. Carrying out the plan with \`${this.opts.approvals.actingMode}\` permissions.`,
     );
     this.log(`approval ${taken.request_id} approved by ${who}`);
-    await this.opts.onApproved(taken, { id: r.user_id, name: who });
+    const started = this.opts.onApproved(taken, { id: r.user_id, name: who });
+    if (!opts.detach) {
+      await started;
+      return;
+    }
+    // Startup recovery: the approved run may have to queue for a slot, and a slot can depend on a later startup step
+    // (following runs a restart left going). Never wait for it here; it still reports its own failures to the thread.
+    const tracked: Promise<void> = started
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log(`approved run for approval ${taken.request_id} failed to start after recovery: ${message}`);
+        this.opts.audit.record('approval.run_failed', {
+          request_id: taken.request_id,
+          thread_root: taken.root_id,
+          plan_hash: planHash(taken.plan),
+          reason: message.slice(0, 200),
+        });
+      })
+      .finally(() => this.detached.delete(tracked));
+    this.detached.add(tracked);
   }
 
   /** Withdraw every pending approval of a thread (the conversation moved on, or someone said `stop`). */
@@ -388,7 +415,7 @@ export class ApprovalManager {
       reactions.sort((a, b) => (a.create_at ?? 0) - (b.create_at ?? 0));
       for (const r of reactions) {
         if (!this.opts.store.get(rec.post_id)) break; // decided
-        await this.handleReaction({ ...r, post_id: rec.post_id });
+        await this.handleReaction({ ...r, post_id: rec.post_id }, { detach: true });
       }
     }
   }

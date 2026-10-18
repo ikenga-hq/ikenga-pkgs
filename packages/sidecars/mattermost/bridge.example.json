@@ -1,6 +1,7 @@
 {
   "mattermostUrl": "https://mm.example.com",
   "dataDir": "/var/lib/ikenga/mattermost",
+  "limits": { "maxConcurrentRuns": 4 },
   "bots": {
     "rex": {
       "mattermostToken": { "env": "MM_REX_TOKEN" },
