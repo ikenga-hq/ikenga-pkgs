@@ -5,11 +5,12 @@ import type { ResolvedAuditConfig } from './audit.js';
 import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js';
 import { ChannelLookupError, MattermostClient } from './client.js';
 import type { MattermostClientTiming } from './client.js';
-import { loadBridgeConfigs, defaultDataDir } from './config.js';
+import { loadBridgeSetup, defaultDataDir } from './config.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
 import { Rails, effectiveMode, resolveBranchPrefix, resolveModeRails } from './rails.js';
 import { Redactor } from './secrets.js';
+import { RunGate, resolveLimits } from './run-gate.js';
 import { ScheduleRunner, ScheduleStore, resolveSchedules } from './schedules.js';
 import type { RunOutcome } from './schedules.js';
 import { ThreadRouter } from './sessions.js';
@@ -32,12 +33,22 @@ export class MattermostBridge {
   readonly audit: AuditLog;
   /** B5: mode ceiling + audit choke point for every Chi run. Present when the bot runs Chi (B2+). */
   readonly rails?: Rails;
+  /** The bridge-wide cap on Chi runs in flight. One per process, handed to every bot; a bot built alone gets its own. */
+  readonly runGate: RunGate;
   private readonly auditCfg: ResolvedAuditConfig;
   private auditMirror?: AuditMirror;
   private running = false;
+  /** Bumped by `stop()`: a `start()` that was already in progress notices it and winds down instead of finishing. */
+  private epoch = 0;
 
-  constructor(config: MattermostBridgeConfig, clientTiming?: MattermostClientTiming) {
+  /**
+   * `opts.reserveRecovered` (default true) takes slots for runs a restart found still going while the bridge is being
+   * built, i.e. for every bot before any of them starts, so the cap holds however the starts interleave. The
+   * one-shot operator commands (`--run-schedule`) are a separate process from the running bridge and pass `false`.
+   */
+  constructor(config: MattermostBridgeConfig, clientTiming?: MattermostClientTiming, runGate?: RunGate, opts: { reserveRecovered?: boolean } = {}) {
     this.config = config;
+    this.runGate = runGate ?? new RunGate({ max: resolveLimits(undefined).maxConcurrentRuns });
     this.echoPrefix = config.echoPrefix ?? 'echo: ';
     this.gate = new MattermostGate(config);
     this.client = new MattermostClient(config, clientTiming);
@@ -103,6 +114,7 @@ export class MattermostBridge {
         store,
         chi: config.chi,
         rails: this.rails,
+        runGate: this.runGate,
         progress: config.progress,
         approvals: gate,
       });
@@ -118,6 +130,7 @@ export class MattermostBridge {
           ),
           chi: config.chi,
           rails: this.rails,
+          runGate: this.runGate,
           progress: config.progress,
           scheduler: config.scheduler,
         });
@@ -127,6 +140,17 @@ export class MattermostBridge {
     } else if (config.schedules?.length) {
       throw new Error(`bot '${config.name ?? 'bot'}': schedules needs daemon and chi (B2) to be configured`);
     }
+    if (opts.reserveRecovered !== false) this.reserveRecovered();
+  }
+
+  /**
+   * Count, against the bridge-wide cap, every run a restart found still going (thread runs and schedule runs). Sync and
+   * idempotent. Without this a bot that finishes starting first would find an empty gate and start new runs on top of
+   * the ones another bot has not re-attached yet.
+   */
+  reserveRecovered(): void {
+    this.router?.reserveRecovered();
+    this.scheduler?.reserveRecovered();
   }
 
   /**
@@ -142,6 +166,23 @@ export class MattermostBridge {
 
   async start(): Promise<void> {
     if (this.running) return;
+    this.reserveRecovered(); // sync, before the first await (a no-op when the constructor already did it)
+    // Follow schedule survivors from the very first moment, on their own: their slots must come back when those runs end
+    // whatever the other startup steps (a reaction decided while down, an audit-channel lookup) are waiting for.
+    void this.scheduler?.followRecovered();
+    try {
+      await this.startInner(this.epoch);
+    } catch (err) {
+      // A bot that failed to start follows nothing: its reserved slots must not keep other bots' work queued.
+      this.router?.releaseReserved();
+      this.scheduler?.releaseReserved();
+      throw err;
+    }
+  }
+
+  private async startInner(epoch: number): Promise<void> {
+    // `stop()` ran while this start was still awaiting something: it has already closed everything it could reach.
+    const stopped = () => this.epoch !== epoch;
 
     // Fetch bot profile to ignore own messages
     try {
@@ -159,6 +200,8 @@ export class MattermostBridge {
       }
     }
 
+    if (stopped()) return;
+
     // Websocket health goes in the log: a bot that silently stops hearing Mattermost is the worst failure mode. The
     // client reconnects by itself; these lines are only the record of it. Attached before the first connect so a
     // failed first connect rejects `connect()` instead of throwing an unhandled 'error' event.
@@ -167,6 +210,7 @@ export class MattermostBridge {
     // Connect WebSocket. REST calls (replies, schedules, approvals) never go through it, so they keep working while it
     // is down and being re-established.
     await this.client.connect();
+    if (stopped()) return;
 
     // B5: optional off-box copy of the audit trail. A channel Mattermost does not know refuses the start (a mirror that
     // silently goes nowhere is worse than none); a transient error only logs and the lines retry on the next record.
@@ -207,6 +251,7 @@ export class MattermostBridge {
         }
         console.error(`[mattermost:${this.config.name ?? 'bot'}] audit channel lookup failed (${(err as Error).message}); will retry`);
       }
+      if (stopped()) return;
       this.auditMirror = new AuditMirror(async (text) => {
         await this.client.reply(await resolve(), text);
       });
@@ -291,10 +336,17 @@ export class MattermostBridge {
       });
     }
 
+    if (stopped()) {
+      this.client.close();
+      return;
+    }
     this.router?.recover();
+    // A decision made while the bridge was down starts its approved run in the background (it may have to queue for a
+    // slot), so this never waits on the gate.
     await this.approvals?.recover().catch((err) => {
       console.error('Failed to recover approvals:', err instanceof Error ? err.message : err);
     });
+    if (stopped()) return; // no scheduler.start(), no timers
     // B4: refuses to start on an unknown schedule channel; catches up at most one missed occurrence per schedule.
     try {
       await this.scheduler?.start();
@@ -302,6 +354,7 @@ export class MattermostBridge {
       this.stop();
       throw err;
     }
+    if (stopped()) return;
     this.running = true;
   }
 
@@ -324,6 +377,7 @@ export class MattermostBridge {
   }
 
   stop(): void {
+    this.epoch += 1;
     this.running = false;
     this.audit.setSink(undefined);
     this.router?.stop();
@@ -419,6 +473,7 @@ export function installExitGuard(proc: Pick<NodeJS.Process, 'on' | 'exitCode'>, 
 // Sidecar CLI entry point when run directly
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
   const bridges: MattermostBridge[] = [];
+  let runGate: RunGate | undefined;
   const configFile = process.env.MATTERMOST_BRIDGE_CONFIG;
   const cli = parseCli(process.argv.slice(2));
   const operator = Boolean(cli.runSchedule) || cli.listSchedules;
@@ -430,7 +485,10 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
 
   try {
     if (configFile) {
-      for (const cfg of loadBridgeConfigs(configFile)) bridges.push(new MattermostBridge(cfg));
+      // One gate for the whole process: every bot's runs count against the same cap.
+      const setup = loadBridgeSetup(configFile);
+      runGate = new RunGate({ max: setup.limits.maxConcurrentRuns });
+      for (const cfg of setup.bots) bridges.push(new MattermostBridge(cfg, undefined, runGate, { reserveRecovered: !operator }));
     } else if (operator) {
       console.error('error: --run-schedule and --list-schedules need MATTERMOST_BRIDGE_CONFIG');
       process.exit(2);
@@ -468,6 +526,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
     installExitGuard(process);
 
     const shutdown = () => {
+      runGate?.close();
       for (const b of bridges) b.stop();
       process.exit(0);
     };

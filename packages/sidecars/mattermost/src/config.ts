@@ -6,6 +6,8 @@ import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
+import { resolveLimits } from './run-gate.js';
+import type { RunLimits } from './run-gate.js';
 import { resolveBranchPrefix, resolveModeRails } from './rails.js';
 import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
 
@@ -49,6 +51,8 @@ export interface BotFileConfig {
 export interface BridgeFileConfig {
   mattermostUrl?: string;
   dataDir?: string;
+  /** Bridge-wide limits, shared by every bot in the process. */
+  limits?: { maxConcurrentRuns?: number };
   bots: Record<string, BotFileConfig>;
 }
 
@@ -56,18 +60,27 @@ export function defaultDataDir(): string {
   return process.env.IKENGA_MATTERMOST_DATA_DIR || path.join(os.homedir(), '.ikenga', 'mattermost');
 }
 
-export function loadBridgeConfigs(file: string): MattermostBridgeConfig[] {
-  let parsed: BridgeFileConfig;
+function readBridgeFile(file: string): BridgeFileConfig {
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8')) as BridgeFileConfig;
+    return JSON.parse(readFileSync(file, 'utf8')) as BridgeFileConfig;
   } catch (err) {
     throw new Error(`bridge config ${file}: ${(err as Error).message}`);
   }
-  return resolveBridgeConfigs(parsed);
+}
+
+export function loadBridgeConfigs(file: string): MattermostBridgeConfig[] {
+  return resolveBridgeConfigs(readBridgeFile(file));
+}
+
+/** The per-bot configs and the bridge-wide limits of one config file, read once. */
+export function loadBridgeSetup(file: string): { bots: MattermostBridgeConfig[]; limits: RunLimits } {
+  const parsed = readBridgeFile(file);
+  return { bots: resolveBridgeConfigs(parsed), limits: resolveLimits(parsed.limits) };
 }
 
 export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeConfig[] {
   if (Object.keys(cfg.bots ?? {}).length === 0) throw new Error('bridge config: "bots" must name at least one bot');
+  resolveLimits(cfg.limits); // refuse a bad limits block at load, whichever way the config arrives
   const dataDir = cfg.dataDir ?? defaultDataDir();
 
   return Object.entries(cfg.bots).map(([name, bot]) => {

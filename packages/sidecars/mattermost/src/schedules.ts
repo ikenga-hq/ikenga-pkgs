@@ -7,6 +7,8 @@ import type { CronSpec } from './cron.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
 import type { Rails } from './rails.js';
+import { RunGateClosedError, isGateStop } from './run-gate.js';
+import type { RunGate, RunSlot } from './run-gate.js';
 import { MAX_POST_CHARS, PROGRESS_DEFAULTS, chunkText, sleep } from './sessions.js';
 import type { ResolvedProgress } from './sessions.js';
 import type { BotChiConfig, MattermostPost, ProgressConfig, ScheduleConfig, SchedulerOptions } from './types.js';
@@ -283,6 +285,8 @@ export interface ScheduleRunnerOptions {
   chi: BotChiConfig;
   /** B5: audit log and mode ceiling. A scheduled run is `schedule.requested` (must be recorded first) ... `schedule.finished`. */
   rails: Rails;
+  /** The bridge-wide cap on runs in flight, shared by every bot. A scheduled run takes a slot before `chi_run`, and waits for one. */
+  runGate: RunGate;
   progress?: ProgressConfig;
   scheduler?: SchedulerOptions;
   now?: () => number;
@@ -305,6 +309,8 @@ interface RunTrace {
   engine?: string;
   mode?: string;
   runId?: string;
+  /** Seconds the run waited for a free slot; absent when it did not wait. */
+  queueWaitS?: number;
   stage: 'channel' | 'start' | 'run' | 'aborted';
 }
 
@@ -312,6 +318,8 @@ export class ScheduleRunner {
   private readonly byName = new Map<string, ResolvedSchedule>();
   private readonly active = new Set<string>();
   private readonly pending = new Set<Promise<unknown>>();
+  /** Followers of runs a restart cut short: they only hold a slot until the run ends. Not awaited by `whenIdle`. */
+  private readonly holders = new Set<Promise<unknown>>();
   private readonly channelIds = new Map<string, string>();
   private readonly progress: ResolvedProgress;
   private readonly tickMs: number;
@@ -351,6 +359,10 @@ export class ScheduleRunner {
     if (this.started) return;
     this.started = true;
     const { store } = this.opts;
+    this.reserveRecovered(); // before the first await: nothing new may start on top of a run a restart left going
+    // Survivors are followed on their own, not as a step of this start: their slots must come back when the runs end
+    // even if something else in the bridge's start is waiting for a slot first. (The bridge already called this.)
+    void this.followRecovered();
 
     for (const s of this.opts.schedules) {
       if (!s.enabled) continue;
@@ -365,6 +377,7 @@ export class ScheduleRunner {
     }
 
     // A removed or disabled schedule loses its state, so turning it back on later starts fresh instead of catching up.
+    // (A run it left going is already being followed, and still counts, until it ends.)
     for (const name of store.names()) {
       const s = this.byName.get(name);
       if (!s || !s.enabled) {
@@ -378,14 +391,26 @@ export class ScheduleRunner {
       if (st?.in_flight) await this.reportInterrupted(s, st.in_flight);
     }
 
+    // stop() ran during one of the awaits above: it has cleared everything it knew about, so do not start ticking.
+    if (this.abort.signal.aborted) return;
     await this.tick();
+    if (this.abort.signal.aborted) return;
     this.timer = setInterval(() => {
       void this.tick();
     }, this.tickMs);
     this.timer.unref?.();
   }
 
+  /** Give back slots reserved for runs that were never followed (a failed start, a stop). */
+  releaseReserved(): void {
+    for (const { slot } of this.reserved.values()) slot.release();
+    this.reserved.clear();
+  }
+
   stop(): void {
+    this.releaseReserved();
+    for (const slot of this.followed) slot.release();
+    this.followed.clear();
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.abort.abort();
@@ -402,7 +427,7 @@ export class ScheduleRunner {
    * and then the run starts, or is skipped when it is late and the schedule says `onMissed: skip`.
    */
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking || this.abort.signal.aborted) return;
     this.ticking = true;
     try {
       const now = this.now();
@@ -463,6 +488,7 @@ export class ScheduleRunner {
         run_id: outcome && 'runId' in outcome ? (outcome.runId ?? trace.runId) : trace.runId,
         engine: trace.engine,
         mode: trace.mode,
+        queue_wait_s: trace.queueWaitS,
         outcome: outcome ? outcome.kind : 'error',
         stage: outcome?.kind === 'failed' ? trace.stage : undefined,
         manual: o.manual,
@@ -483,6 +509,8 @@ export class ScheduleRunner {
     const startedAt = this.now();
     let channelId: string | undefined;
     let runId: string | undefined;
+    let slot: RunSlot | undefined;
+    let watchFrom: number | undefined;
     const track = !o.manual;
     try {
       try {
@@ -510,6 +538,27 @@ export class ScheduleRunner {
         });
         trace.requestId = auth.requestId;
         trace.mode = auth.mode;
+        // The slot comes after the rails (a refused run never queues) and before the call. While it waits, `active`
+        // is held, so a later tick finds this schedule busy and skips instead of queueing it twice.
+        const queuedAt = this.now();
+        let queued = false;
+        slot = await this.opts.runGate.acquire(
+          { bot: this.opts.bot, kind: 'schedule' },
+          {
+            signal: this.abort.signal,
+            onQueued: ({ ahead }) => {
+              queued = true;
+              this.log(`schedule '${s.name}': waiting for a free run slot (${ahead} queued ahead)`);
+            },
+          },
+        );
+        // stop() may have aborted in the same tick the gate granted this slot (the grant wins the race against the abort
+        // listener). Nothing may start during shutdown: give the slot back and leave `in_flight` for the next start.
+        if (this.abort.signal.aborted) throw new RunGateClosedError();
+        if (queued) {
+          trace.queueWaitS = Math.round((this.now() - queuedAt) / 1000);
+          watchFrom = this.now();
+        }
         result = await daemon.chiRun({
           engineId: engine,
           prompt,
@@ -520,7 +569,14 @@ export class ScheduleRunner {
           timeoutSeconds: s.timeoutSeconds ?? chi.timeoutSeconds,
           persistent: chi.persistent ?? true,
         });
+        if (typeof result?.run_id !== 'string' || !result.run_id) throw new Error('the daemon answered without a run id');
       } catch (err) {
+        slot?.release();
+        if (isGateStop(err)) {
+          // The bridge is stopping while this waited: like any run cut short, `in_flight` stays and the next start reports it.
+          trace.stage = 'aborted';
+          return { kind: 'failed', reason: 'the bridge was stopping' };
+        }
         return await this.fail(s, o, channelId, undefined, `could not start: ${this.errText(err)}`, track);
       }
       runId = result.run_id;
@@ -528,7 +584,8 @@ export class ScheduleRunner {
       trace.stage = 'run';
       if (track) await store.patch(s.name, { in_flight: { run_id: runId, slot: o.slot as number, started_at: startedAt } });
 
-      const final = await this.watch(runId, startedAt);
+      const final = await this.watch(runId, watchFrom ?? startedAt);
+      slot.release(); // the run is over (or no longer followed): free the slot before posting
       if (final === 'aborted') trace.stage = 'aborted';
       if (final === 'aborted') return { kind: 'failed', runId, reason: 'the bridge was stopping' }; // in_flight stays: reported on next start
       if (final.kind === 'lost') return await this.fail(s, o, channelId, runId, final.reason, track);
@@ -547,6 +604,7 @@ export class ScheduleRunner {
       const what = st.status === 'cancelled' ? 'was cancelled' : st.status === 'timed_out' ? `timed out after ${secs}s` : `failed after ${secs}s`;
       return await this.fail(s, o, channelId, runId, `${what}${error ? `: ${error}` : ''}`, track);
     } finally {
+      slot?.release(); // idempotent; covers every return and throw above
       this.active.delete(s.name);
     }
   }
@@ -619,6 +677,76 @@ export class ScheduleRunner {
       this.log(`schedule '${s.name}': could not report an interrupted run: ${this.errText(err)}`);
     }
     await this.opts.store.patch(s.name, { last_status: 'interrupted', in_flight: null });
+  }
+
+  /**
+   * Slots taken for schedule runs a restart left going (an `in_flight` with a run id), keyed by schedule name, with the
+   * run to follow. They are held until `followRecovered` hands each to a follower that releases it when the run ends.
+   */
+  private readonly reserved = new Map<string, { slot: RunSlot; runId: string }>();
+  /** The persisted state is scanned once per runner: a later call must not mistake this process's own runs for survivors. */
+  private scannedRecovered = false;
+  /** Slots held by followers of survivors; `stop()` gives them back. */
+  private readonly followed = new Set<RunSlot>();
+
+  /**
+   * Take a slot for every persisted `in_flight` run id, whether or not that schedule is still configured or enabled: a
+   * run of a schedule that was removed or disabled across the restart is still going on the daemon and still counts.
+   * Synchronous and idempotent: the bridge calls it for all bots before any of them awaits, and `start()` calls it
+   * again as a no-op safety net. A run that turns out to be over (or unknown to the daemon) gives its slot straight
+   * back in `followRecovered`.
+   */
+  reserveRecovered(): void {
+    if (this.scannedRecovered) return;
+    this.scannedRecovered = true;
+    for (const name of this.opts.store.names()) {
+      const runId = this.opts.store.get(name)?.in_flight?.run_id;
+      if (!runId) continue;
+      this.reserved.set(name, { slot: this.opts.runGate.adopt({ bot: this.opts.bot, kind: 'recovered' }), runId });
+    }
+  }
+
+  /**
+   * Start following every reserved survivor, each on its own: nothing here waits for the rest of the bot's start, and
+   * nothing in that start may be needed for a slot to come back. Idempotent. The returned promise settles once every
+   * first status check is in (it never rejects); callers that must not wait just ignore it.
+   */
+  followRecovered(): Promise<void> {
+    const probes: Promise<void>[] = [];
+    for (const [name, { slot, runId }] of [...this.reserved]) {
+      this.reserved.delete(name);
+      this.followed.add(slot);
+      probes.push(this.holdInterrupted(runId, slot));
+    }
+    return Promise.all(probes).then(() => undefined);
+  }
+
+  /**
+   * After a restart: follow the run a schedule left behind only until it ends, holding its reserved slot meanwhile.
+   * Nothing is posted; the run was already reported as interrupted. Gone, unreachable or already finished: the slot
+   * goes straight back.
+   */
+  private async holdInterrupted(runId: string, slot: RunSlot): Promise<void> {
+    const give = () => {
+      slot.release();
+      this.followed.delete(slot);
+    };
+    let st: ChiRunResult;
+    try {
+      st = await this.opts.daemon.chiStatus(runId);
+    } catch {
+      give(); // gone or unreachable: nothing to count
+      return;
+    }
+    if (TERMINAL_STATUSES.has(st.status) || this.abort.signal.aborted) {
+      give();
+      return;
+    }
+    const p = this.watch(runId, this.now())
+      .catch(() => undefined)
+      .finally(give);
+    this.holders.add(p);
+    void p.finally(() => this.holders.delete(p));
   }
 
   // ── helpers ─────────────────────────────────────────────────────────────────

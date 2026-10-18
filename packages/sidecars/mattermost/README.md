@@ -246,6 +246,7 @@ Every record has `v`, `ts` (ISO, UTC), `bot`, `event`, event fields, and `prev`:
 | `audit.recovered` | the first append after a crash that left a half-written last line | `torn_sha` (SHA-256 of the half line, which stays in the file as evidence), `torn_bytes`. `--verify` then reports `recovered after crash at <file>:<line>` instead of a broken chain |
 | `approval.requested` | the plan was posted for approval | `request_id`, `thread_root`, `plan_run_id`, `plan_hash` (SHA-256 of the plan exactly as shown), `requester_*`, `acting_mode`, `expires_at` |
 | `approval.decided` | a 👍 or 👎 from an approver | `decision` (`approved`, `denied`), `approver_id`, `approver_name`, `plan_hash`, `request_id` |
+| `approval.run_failed` | an approved run found at start-up could not be started | `request_id`, `plan_hash`, `reason` |
 | `approval.expired` / `approval.withdrawn` | timeout; a newer message (`superseded`) or `stop` (`cancelled`) | `request_id`, `plan_hash`, `reason` |
 | `approval.rejected` | a 👍/👎 from someone who may not decide, or who could not be looked up | `user_id`, `user_name`, `verdict`, `reason` (`not_approver`, `unverifiable_user`) |
 | `schedule.requested` | before a scheduled (or manual) run | `schedule`, `engine`, `mode` (effective), `requested_mode`, `mode_enforced`, `slot`, `late`, `manual`, `request_id` |
@@ -344,6 +345,44 @@ Related, and true today: Ruby's "read-only" at the data layer is whatever her da
 - A reaction made while the bot has no websocket is not seen until the next start (unchanged from B3), so it is not in the audit log either.
 - The prompt-hash option hashes the message the bot received (after stripping `@bot`), not what the model finally saw.
 
+## Concurrency cap
+
+One bridge process serves every bot (on the box, `@rex` and `@ruby`), and each Chi run is a `claude` process on a small
+machine. The top-level `limits.maxConcurrentRuns` (integer 1 to 32, default **4**, anything else is refused at load) is
+one gate shared by all bots: no more than that many runs are in flight at once, whoever asked for them.
+
+- **What counts as in flight.** A run holds a slot from just before its `chi_run` / `chi_resume` call until the bridge
+  sees a terminal status for it. `chi_run` returns at once and the run continues detached, so counting only the call
+  would count nothing. The slot also comes back if the call fails or answers without a run id, if the thread says
+  `stop`, if the bridge gives up following the run (lost contact with the daemon, `progress.maxWaitMs`, the run is gone
+  from the daemon) and when the bridge stops. Giving it back is idempotent, so a path that releases twice is harmless.
+- **Every start goes through it.** Thread runs (new, resume, and the fresh run a failed resume falls back to, which
+  keeps the slot it already has), approved runs after a 👍, and scheduled runs. The mode ceiling and the audit
+  `*.requested` record come first, as before; the wait is between them and the daemon call, so a refused run never queues.
+- **When full, requests wait in FIFO order.** Across bots: the oldest waiter starts first. A thread that has to wait has
+  its "Working…" post edited to "Queued: N runs are already going on this bridge. K queued ahead of this one." (once; it
+  goes back to "Working…" when it starts). A run that starts at once says nothing. `stop` in a queued thread takes it out
+  of the queue. A schedule waits too; while one of its runs is queued or in flight a later occurrence is skipped and
+  logged ("previous run is still going"), exactly as before, so a schedule never queues twice.
+- **Restarts.** Every thread run still marked active, and every scheduled run that was cut short, takes a slot while the
+  bridges are being built, synchronously and for all bots, before any bot connects, looks anything up or handles a
+  message. So however the bots' starts interleave (one bot is quicker, or has an audit channel to look up), none can
+  start new work while another bot's survivors are still uncounted. A thread's slot is handed to the turn that
+  re-attaches to its run. A schedule's survivor is counted whether or not that schedule is still configured or enabled
+  (its run is still going on the daemon); it is not re-posted, and it is followed on its own from the first moment of
+  start-up, independently of every other start-up step, so its slot goes back as soon as the daemon shows it ended (or no
+  longer knows it). An approval that was decided while the bridge was down starts its run in the background, so start-up
+  never waits for a free slot (a wait that nothing else in start-up could end). A bot that fails to start gives its
+  reservations back, and a `stop` during start-up leaves no timers or scheduler behind. If more than N survivors are
+  found, the count sits above the cap until enough of them end.
+- **Observability.** The log has one line when a run queues and one when it starts after waiting, naming the bot, the
+  kind (`thread`, `resume`, `act`, `schedule`), the queue depth and `inFlight/max`; never message text. A run that waited
+  carries `queue_wait_s` in its `run.started` / `run.resumed` / `schedule.finished` audit record; the hash chain is unchanged.
+- **Limits of the cap.** It counts runs this process started or re-attached to. Runs started by other clients of the
+  same daemon account (the Ikenga app, `chi_run` from elsewhere) are not counted. `--run-schedule` is a separate operator
+  process with its own gate: it is not counted against the live bridge's cap (nor the other way round), so running it while the
+  bridge is busy can put up to N+1 runs on the daemon. A run whose follower gave up (see above) frees its slot while the run may still be going.
+
 ## Configuration
 
 Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: each is `{"env":"NAME"}` or `{"file":"/path"}`.
@@ -352,6 +391,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 {
   "mattermostUrl": "https://mm.example.com",
   "dataDir": "/var/lib/ikenga/mattermost",
+  "limits": { "maxConcurrentRuns": 4 },
   "bots": {
     "rex": {
       "mattermostToken": { "env": "MM_REX_TOKEN" },
@@ -376,6 +416,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 
 - `daemon.auth.kind: "session"` is **T1** (production): `POST /auth/login`, `ikenga_session` cookie, one re-login on a 401.
   `"bearer"` is **T0** (local testing): `Authorization: Bearer`. Under T1 the daemon refuses bearer tokens.
+- `limits.maxConcurrentRuns` (top level, shared by every bot; integer 1 to 32, default 4) caps Chi runs in flight at once; see "Concurrency cap".
 - `schedules` is optional; see "Scheduled posts (B4)". Needs the same `daemon` and `chi` as thread runs.
 - `approvals` is optional. Without it the bot behaves as in B2 (`chi.mode`, no gate). With it, see "Approvals (B3)".
   Do not set `chi.mode` together with it.
@@ -418,7 +459,7 @@ The result text is `chi_status.output` once the status is `done`.
   `one_hour_from_now_iso`); I did not verify what deletes expired rows or whether a resume refreshes the stamp. If a row
   is gone, the reply starts a fresh run with no memory of the thread (the bridge says so). Threads idle for hours may
   therefore always restart.
-- **No resume while a turn is live**; a second message is refused with a notice, not queued.
+- **No resume while a turn is live**; a second message in the same thread is refused with a notice, not queued. (Runs from different threads do queue when the bridge is at `limits.maxConcurrentRuns`.)
 - **Replies in a thread the bridge never saw** (e.g. a human thread in an allowed channel) start a fresh run.
 - `awaiting_auth` (the engine needs a human to sign in on the host) is reported but the bridge cannot fix it.
 - Daemon login is throttled server-side; a wrong password is retried only once per request.
