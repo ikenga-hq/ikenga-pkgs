@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.5.0
+
+### Minor Changes
+
+- [#161](https://github.com/ikenga-hq/ikenga-pkgs/pull/161) [`03e347f`](https://github.com/ikenga-hq/ikenga-pkgs/commit/03e347ff7f24e4ae76dfdbd302f4f5a3deec5176) Thanks [@nedjamez](https://github.com/nedjamez)! - Add outbox approvals: an optional per-bot `outboxApprovals` block that talks to the box sender's approvals socket (approvals contract v1). The bot polls `pull_announcements`, posts one card per draft and hash to a configured channel (recipient, subject, channel, every field the approval covers, the body cut with a note, and a pointer to the Ikenga Outbox), and acks it. An approver's 👍 (or an optional signed Approve button) sends the contract `approve` message (`source: mattermost`, the Mattermost user id) after re-checking the draft with `get_draft`, and the card shows "Approved by @x — sending" or the sender's refusal code; 👎 / Reject marks the card rejected and leaves the draft in the Outbox. Approvers are matched by Mattermost user id (looked up with `GET /users/{id}`; usernames are never trusted; bots, `ik-*` accounts and the bot itself are refused). Cards are idempotent per draft and hash, an edited draft gets a new card and supersedes the old one, state survives restarts (`outbox-approvals-<bot>.json`, 0600), reactions made while the bridge was down are applied, the config is validated at load, and decisions go to the audit log (`outbox.*` events, no draft content). The contract's canonical hash is implemented and checked against its nine shared test vectors.
+
 ## 0.4.0
 
 ### Minor Changes
