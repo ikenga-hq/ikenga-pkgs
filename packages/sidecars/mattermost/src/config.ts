@@ -25,7 +25,8 @@ export interface BotFileConfig {
   botUserId?: string;
   allowedUsers: string[];
   allowedChannels: string[];
-  daemon: {
+  /** Needed with `chi` for any bot that runs Chi. Omit both for an approvals-only bot (just `outboxApprovals`). */
+  daemon?: {
     url: string;
     origin?: string;
     requestTimeoutMs?: number;
@@ -33,7 +34,7 @@ export interface BotFileConfig {
       | { kind: 'session'; username: string; password: SecretSource }
       | { kind: 'bearer'; token: SecretSource };
   };
-  chi: BotChiConfig;
+  chi?: BotChiConfig;
   storePath?: string;
   retentionMs?: number;
   progress?: ProgressConfig;
@@ -92,27 +93,35 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
     const where = `bot '${name}'`;
     const mattermostUrl = bot.mattermostUrl ?? cfg.mattermostUrl;
     if (!mattermostUrl) throw new Error(`${where}: mattermostUrl is required`);
-    if (!bot.daemon?.url) throw new Error(`${where}: daemon.url is required`);
-    if (!bot.chi?.engine) throw new Error(`${where}: chi.engine is required`);
-
-    const a = bot.daemon.auth;
-    if (!a) throw new Error(`${where}: daemon.auth is required`);
-    const auth =
-      a.kind === 'session'
-        ? {
-            kind: 'session' as const,
-            username: a.username,
-            password: resolveSecret(a.password, `${where} daemon password`),
-          }
-        : a.kind === 'bearer'
-          ? { kind: 'bearer' as const, token: resolveSecret(a.token, `${where} daemon token`) }
-          : (() => {
-              throw new Error(`${where}: daemon.auth.kind must be 'session' (T1) or 'bearer' (T0)`);
-            })();
-    if (auth.kind === 'session' && !auth.username) throw new Error(`${where}: daemon.auth.username is required`);
+    // An approvals-only bot (a dedicated account that posts and reads the Outbox cards and runs nothing else) has neither
+    // `daemon` nor `chi`. Any other bot needs both.
+    const approvalsOnly = bot.outboxApprovals !== undefined && bot.daemon === undefined && bot.chi === undefined;
+    let daemon: MattermostBridgeConfig['daemon'];
+    if (!approvalsOnly) {
+      if (!bot.daemon?.url) throw new Error(`${where}: daemon.url is required`);
+      if (!bot.chi?.engine) throw new Error(`${where}: chi.engine is required`);
+      const a = bot.daemon.auth;
+      if (!a) throw new Error(`${where}: daemon.auth is required`);
+      const auth =
+        a.kind === 'session'
+          ? {
+              kind: 'session' as const,
+              username: a.username,
+              password: resolveSecret(a.password, `${where} daemon password`),
+            }
+          : a.kind === 'bearer'
+            ? { kind: 'bearer' as const, token: resolveSecret(a.token, `${where} daemon token`) }
+            : (() => {
+                throw new Error(`${where}: daemon.auth.kind must be 'session' (T1) or 'bearer' (T0)`);
+              })();
+      if (auth.kind === 'session' && !auth.username) throw new Error(`${where}: daemon.auth.username is required`);
+      daemon = { url: bot.daemon.url, auth, origin: bot.daemon.origin, requestTimeoutMs: bot.daemon.requestTimeoutMs };
+    } else if (bot.approvals || bot.schedules?.length) {
+      throw new Error(`${where}: approvals and schedules need daemon and chi; a bot with only outboxApprovals runs neither`);
+    }
     if (bot.approvals) {
       resolveApprovals(bot.approvals, where); // fail at load, naming the bot
-      if (bot.chi.mode) throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
+      if (bot.chi?.mode) throw new Error(`${where}: chi.mode is ignored under approvals; set approvals.actingMode instead`);
     }
 
     // B5: the ceiling. Refuses chi.mode / approvals.actingMode above maxMode (default plan) rather than downgrading.
@@ -142,12 +151,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       botUserId: bot.botUserId,
       allowedUsers: bot.allowedUsers ?? [],
       allowedChannels: bot.allowedChannels ?? [],
-      daemon: {
-        url: bot.daemon.url,
-        auth,
-        origin: bot.daemon.origin,
-        requestTimeoutMs: bot.daemon.requestTimeoutMs,
-      },
+      daemon,
       chi: bot.chi,
       dataDir,
       storePath: bot.storePath,

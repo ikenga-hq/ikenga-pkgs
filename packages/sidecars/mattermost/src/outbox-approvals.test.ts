@@ -791,6 +791,172 @@ describe('Approve / Reject buttons', () => {
   });
 });
 
+// ── what the approver sees is what the hash covers ───────────────────────────
+
+describe('the card is bound to what is approved', () => {
+  async function withCard(over: Partial<OutboxApprovalsConfig> = {}, row = rowFor(D1, { body: 'wire the refund to 999-ATTACKER' })) {
+    const hash = rig.sender.put(row);
+    const b = await rig.boot(over);
+    await rig.announce(b);
+    const post = rig.cards()[0] as { id: string; message: string; props?: unknown };
+    return { b, post, hash };
+  }
+
+  it('a card edited after it was posted (by whoever holds the bot token) cannot be approved', async () => {
+    const { post } = await withCard();
+    const original = rig.current(post.id);
+    rig.mm.tamper(post.id, original.replace('wire the refund to 999-ATTACKER', 'Thanks for your note.'));
+    rig.react(post.id, ADA);
+    await waitFor(() => rig.auditLines().some((l) => l.event === 'outbox.decided' && l.reason === 'card_edited'), 'refusal audited');
+    assert.equal(approvesSent().length, 0, 'nothing reached the sender');
+    assert.equal(rig.sender.ofAction('approve').length, 0);
+    await waitFor(() => rig.current(post.id).includes('edited after the bridge posted it'), 'card says why');
+    assert.ok(rig.current(post.id).includes('999-ATTACKER'), 'the true text is put back on the card');
+    assert.ok(!rig.current(post.id).includes('Thanks for your note.'));
+    // and it stays dead: a second 👍 does nothing
+    rig.react(post.id, FOUNDER);
+    await pause(150);
+    assert.equal(approvesSent().length, 0);
+  });
+
+  it('an edit that is put back before the approval is checked is still refused (edit_at is stamped)', async () => {
+    const { post } = await withCard();
+    const original = rig.current(post.id);
+    rig.mm.tamper(post.id, 'Thanks for your note.');
+    rig.mm.tamper(post.id, original);
+    assert.equal(rig.current(post.id), original);
+    rig.react(post.id, ADA);
+    await waitFor(() => rig.auditLines().some((l) => l.reason === 'card_edited'), 'refusal audited');
+    assert.equal(approvesSent().length, 0);
+  });
+
+  it('a post whose text differs from the card, with no edit stamp, is refused as well', async () => {
+    const { post } = await withCard();
+    (rig.mm.posts.get(post.id) as { message: string }).message = 'Thanks for your note.';
+    rig.react(post.id, ADA);
+    await waitFor(() => rig.auditLines().some((l) => l.reason === 'card_edited'), 'refusal audited');
+    assert.equal(approvesSent().length, 0);
+  });
+
+  it('if Mattermost cannot be asked about the card, nothing is approved and the card stays open for a retry', async () => {
+    const { post } = await withCard();
+    rig.mm.failPostReads = true;
+    rig.react(post.id, ADA);
+    await waitFor(() => rig.current(post.id).includes('card_unverifiable'), 'card says it could not check');
+    assert.equal(approvesSent().length, 0);
+    rig.mm.failPostReads = false;
+    rig.react(post.id, ADA, '-1'); // not a retry of the approval; the card is still pending, so a fresh 👍 is
+    await waitFor(() => rig.current(post.id).includes('Rejected'), 'still pending, so it could be decided');
+  });
+
+  it('an untouched card is still approved (the check does not get in the way)', async () => {
+    const { post } = await withCard();
+    rig.react(post.id, ADA);
+    await waitFor(() => approvesSent().length === 1, 'approve message');
+  });
+
+  it('hashed fields that do not fit on the card are never cut: the card is posted closed, with no way to approve it', async () => {
+    const row = rowFor(D1, { subject: 'S'.repeat(15_000), body: 'Hi' });
+    const b0 = rig.sender.put(row);
+    const b = await rig.boot({ buttons: { callbackUrl: 'http://127.0.0.1:9/x', listenPort: await freePortNum(), secret: SECRET } });
+    await rig.announce(b);
+    const post = rig.cards()[0] as { id: string; message: string; props?: { attachments: unknown[] } };
+    assert.ok(post, 'a card was posted');
+    assert.ok(post.message.length <= 15_000, 'it fits in one post');
+    assert.match(post.message, /cannot be approved here/);
+    assert.match(post.message, /Closed|\*\*Closed\.\*\*/);
+    assert.ok(!post.message.includes('(card shortened)'));
+    assert.deepEqual(post.props, { attachments: [] }, 'no buttons');
+    rig.react(post.id, ADA);
+    await pause(200);
+    assert.equal(approvesSent().length, 0, 'a 👍 on it approves nothing');
+    assert.ok(rig.auditLines().some((l) => l.event === 'outbox.refused' && l.reason === 'card_too_long'));
+    assert.equal(rig.sender.announced.has(`${D1}:${b0}`), true, 'it was acked, so the sender stops offering it');
+  });
+
+  it('a long To list or recipient cannot push a Cc or later field off an approvable card either', async () => {
+    const row = rowFor(D1, { to: `${'a'.repeat(15_000)}@example.com`, body: 'Hi' });
+    rig.sender.put(row);
+    const b = await rig.boot();
+    await rig.announce(b);
+    const post = rig.cards()[0] as { id: string; message: string };
+    assert.match(post.message, /cannot be approved here/);
+    rig.react(post.id, ADA);
+    await pause(200);
+    assert.equal(approvesSent().length, 0);
+  });
+
+  it('when only the body is long, the body is squeezed to make the whole card fit, and the fields stay whole and approvable', async () => {
+    const subject = 'T'.repeat(13_800);
+    const { post } = await withCard({}, rowFor(D1, { subject, body: 'long line '.repeat(800) }));
+    assert.ok(post.message.includes(subject), 'the subject is shown whole');
+    assert.match(post.message, /truncated: \d+ more characters/);
+    assert.ok(post.message.length <= 15_000);
+    assert.ok(!/cannot be approved here/.test(post.message));
+    rig.react(post.id, ADA);
+    await waitFor(() => approvesSent().length === 1, 'approve message');
+  });
+
+  it('text with no body marker is never cut', () => {
+    const text = `**Draft**\n${'x'.repeat(10_000)}\nCc: evil@attacker.example`;
+    const out = shortenRenderedText(text, 200);
+    assert.ok(out.endsWith('Cc: evil@attacker.example'));
+    assert.equal(out.length, text.length);
+  });
+
+  it('a button signature with multibyte characters is a 403, not a crash', async () => {
+    const port = await freePortNum();
+    rig.sender.put(rowFor(D1));
+    const b = await rig.boot({ buttons: { callbackUrl: `http://127.0.0.1:${port}/cb`, listenPort: port, secret: SECRET } });
+    await rig.announce(b);
+    const card = rig.cards()[0] as { id: string };
+    const res = await fetch(`http://127.0.0.1:${port}/cb`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: ADA, post_id: card.id, context: { action: 'approve', sig: 'é'.repeat(64) } }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    assert.equal(res.status, 403);
+    assert.ok(rig.auditLines().some((l) => l.event === 'outbox.refused' && l.reason === 'bad_signature'));
+    assert.equal(approvesSent().length, 0);
+  });
+});
+
+describe('an approvals-only bot', () => {
+  const file = (bot: Record<string, unknown>) => ({
+    mattermostUrl: 'http://mm.example',
+    dataDir: '/nonexistent',
+    bots: { outbox: { mattermostToken: { value: 'tok' }, allowedUsers: [], allowedChannels: [], ...bot } as never },
+  });
+  const block = { channel: 'royalti-co', approvers: [ADA] };
+
+  it('loads with only outboxApprovals: no daemon, no chi', () => {
+    const [bot] = resolveBridgeConfigs(file({ outboxApprovals: block }));
+    assert.equal(bot?.daemon, undefined);
+    assert.equal(bot?.chi, undefined);
+    assert.deepEqual(bot?.outboxApprovals?.approvers, [ADA]);
+  });
+
+  it('a bot without outboxApprovals still needs daemon and chi, and a half of the pair is refused', () => {
+    assert.throws(() => resolveBridgeConfigs(file({})), /daemon.url is required/);
+    assert.throws(() => resolveBridgeConfigs(file({ outboxApprovals: block, chi: { engine: 'claude-code' } })), /daemon.url is required/);
+    assert.throws(() => resolveBridgeConfigs(file({ outboxApprovals: block, daemon: { url: 'http://d', auth: { kind: 'bearer', token: { value: 't' } } } })), /chi.engine is required/);
+  });
+
+  it('cannot carry Chi-side features', () => {
+    assert.throws(() => resolveBridgeConfigs(file({ outboxApprovals: block, approvals: { approvers: ['alice'] } })), /need daemon and chi/);
+  });
+});
+
+async function freePortNum(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const port = (s.address() as net.AddressInfo).port;
+      s.close(() => resolve(port));
+    });
+  });
+}
+
 // ── the socket client on its own ─────────────────────────────────────────────
 
 describe('SenderSocket', () => {

@@ -206,17 +206,22 @@ Per bot, optional, and independent of Chi: the bot posts a **card** in a channel
 approver's 👍 or **Approve** button records the approval in the sender's ledger. Nothing is sent from here: the sender sends, and only a draft with a matching,
 unconsumed approval. Built for Ruby's replies (box: `#royalti-co`, private); nothing in it is Ruby-specific.
 
+**Run it on a dedicated approvals bot, never on the bot of the agent that writes the drafts.** A Mattermost bot may edit its own posts (`PUT /posts/{id}/patch`), so whoever holds the posting bot's token can change what a card shows after the fact. If that is Ruby's token, the draft's author controls the card its approvers read. Give the cards their own Mattermost bot account (for example `approvals`, with its own token in a secret that Ruby's account cannot read) and put `outboxApprovals` on that bot alone. A bot with only `outboxApprovals` needs no `daemon` and no `chi`. The bridge also checks the card itself before it approves anything (see "The card is what was approved" below), but the dedicated account is what removes the author's access to it.
+
 The wire format, hash and reply codes are the sender's **approvals contract v1** (royalti-co `scripts/cron/docs/approvals-contract.md` and
 `approvals-contract-vectors.json`, pinned at `71fef38f`). This is its Mattermost client side; the sender is the reference implementation.
 
 ```json
-"ruby": {
+"outbox": {
+  "mattermostToken": { "env": "MM_OUTBOX_TOKEN" },
+  "allowedUsers": [],
+  "allowedChannels": [],
   "outboxApprovals": {
     "channel": "royalti-co",
     "approvers": ["9s65in45np8h98qeatgx7anuoa", "buay4kf99bbk7cjtbeupd5rxow", "f3w99k5x6fgomdprh8axosmmsc"],
     "socketPath": "/run/ikenga-sender/approvals.sock",
     "outboxUrl": "https://box.example.com/outbox/approvals",
-    "buttons": { "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/ruby", "listenPort": 8765, "secret": { "file": "/etc/ikenga/ruby-buttons.secret" } }
+    "buttons": { "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/outbox", "listenPort": 8765, "secret": { "file": "/etc/ikenga/outbox-buttons.secret" } }
   }
 }
 ```
@@ -227,7 +232,7 @@ The wire format, hash and reply codes are the sender's **approvals contract v1**
 | `approvers` (required) | Mattermost **user ids** (26 characters) who may approve or reject. Usernames are refused at config load. Deny by default; separate from `allowedUsers` and from B3 `approvals.approvers` |
 | `socketPath` | The sender's socket. Default `/run/ikenga-sender/approvals.sock` |
 | `pollMs` | How often to ask for new drafts. Default 30 000 (1 000 to 3 600 000) |
-| `bodyMaxChars` | Body characters shown before the card says it was cut. Default 1500 (200 to 8000). Every field above the body is always shown whole |
+| `bodyMaxChars` | Body characters shown before the card says it was cut. Default 1500 (200 to 8000). Fields the hash covers are never cut: if they cannot all fit on one card the card is posted closed and cannot be approved here (below) |
 | `requestTimeoutMs` | Per socket request. Default 10 000 |
 | `outboxUrl` | A link to the Ikenga Outbox, shown on the card. Optional |
 | `buttons` | Optional Approve / Reject buttons. Without it, cards are reaction-only. See below |
@@ -236,7 +241,7 @@ The wire format, hash and reply codes are the sender's **approvals contract v1**
 
 1. `pull_announcements` every `pollMs`. For each draft+hash not yet carded, post one card as the bot (the sender's approver text: recipient, subject, channel, every field the hash covers, then the body block-quoted and cut with a note; `@channel`/`@all`/`@here` are defanged), store it, then `ack_announcement` with the post id. **One card per draft and hash**: a repeated or re-offered announcement (lost ack, restart) finds the card and only re-acks.
 2. An **edited draft** has a new hash, so it gets a new card and the earlier live cards of that draft are edited to **Superseded** (an approved card says its approval no longer applies).
-3. **👍** (`+1` / `thumbsup`, any skin tone) or **Approve** from an approver: the bridge asks `get_draft` first and refuses if the hash is no longer the card's (the card is superseded; the new card follows) or the draft is already `sending` / `sent`; then writes an `outbox.approve_requested` audit record; then sends
+3. **👍** (`+1` / `thumbsup`, any skin tone) or **Approve** from an approver: the bridge asks `get_draft` first and refuses if the hash is no longer the card's (the card is superseded; the new card follows) or the draft is already `sending` / `sent`; then re-reads the card post and refuses if it is not exactly what the bridge posted (see below); then writes an `outbox.approve_requested` audit record; then sends
    `{"v":1,"action":"approve","draftId":…,"payloadHash":…,"source":"mattermost","approver":{"kind":"mattermost","id":<user id>}}`.
    The draft id and hash are the ones stored when the card was posted, never anything an event or callback carried. On `{"ok":true}` the card is edited to **Approved by @x — sending**; on a refusal the card shows the sender's code (`unauthorized_approver`, `approver_is_owner`, `ledger_error: …`, …) and stays open, except `draft_not_found` and `ledger_error*`, which close it. If the sender cannot be reached the card says nothing was approved and how to retry (remove and re-add the 👍, or the button).
 4. **👎** or **Reject**: the contract has no reject message, so the card is marked **Rejected by @x** and the draft is left alone in the Ikenga Outbox (it was acknowledged, so it is not announced again; edit it there for a new card, or approve it there).
@@ -244,13 +249,18 @@ The wire format, hash and reply codes are the sender's **approvals contract v1**
 
 **Who may decide** (each rule has a test in `src/outbox-approvals.test.ts`). The clicker's id must be in `approvers`; then `GET /users/{id}` must return that same user, who must not be a bot (`is_bot`) or an `ik-*` account; the bot itself is refused. Matching is by id, so a user whose **username** is `ada` but whose id is not listed is ignored; the event's `user_name` is never read. Whatever the bridge accepts, the sender still checks the bridge's uid (SO_PEERCRED), its own approver list, that the approver is not the draft's owner, and the hash at send time.
 
+**The card is what was approved.** Two rules bind what the approver saw to what the hash covers; both fail closed.
+
+- *The post is re-read before every approval.* The bridge fetches the card (`GET /posts/{id}`) and refuses unless the post is still by the bridge's bot, was never deleted, has the `edit_at` the bridge itself last produced, and its message equals the text the bridge would render for that card. An edit by anyone (a bot token holder, an admin), even one put back before the check, closes the card ("edited after the bridge posted it"), restores the true text, and approves nothing; review the draft in the Ikenga Outbox. If Mattermost cannot be asked, nothing is approved and the card stays open for a retry. Only a 👍 / Approve is gated; a reject changes nothing.
+- *Hashed fields are never cut off a card.* Only the body may be shortened (and the card says so). If the fields around the body do not fit in one post even with the body cut to 200 characters (a very long subject or To list pushing the Cc, From name, References or send-time identity off the end), the card is posted **closed**, with a preview, no buttons and a note that it cannot be approved here; it is acked so the sender stops offering it, and a 👍 on it does nothing. Text with no `**Body:**` marker is never cut at all.
+
 **The hash.** The bridge does not compute what it approves: it holds neither the draft row nor the sender's credential environment (the send-time identity, contract 3.3), so it approves the hash the sender announced for the text on the card, which is what the contract prescribes. `src/draft-hash.ts` implements the contract's canonical hash and `src/draft-hash.test.ts` re-computes all nine of the contract's vectors (`src/fixtures/approvals-contract-vectors.json`), so the bridge is proven to compute the same value. A contract change that alters a hash bumps the vectors file and this implementation.
 
 **State.** `<dataDir>/outbox-approvals-<bot>.json` (mode 0600, temp file + rename), one record per card, **including the card text, which is customer email content**; finished cards are dropped after 30 days. After a restart pending cards are kept, not re-posted, and a 👍/👎 made while the bridge was down is applied (reactions newer than the last look, earliest first).
 
 **Audit.** Same log as everything else (`outbox.card_posted`, `outbox.approve_requested` (fsynced, before the sender is asked: no record, no approval), `outbox.decided`, `outbox.refused`, `outbox.superseded`, `outbox.sender_unavailable`). Ids, hashes and codes only: never a recipient, subject or body.
 
-**Buttons.** Mattermost calls a URL when a button is clicked, so `buttons` makes the bridge listen (`listenHost`, default `127.0.0.1`, and `listenPort`) at the path of `callbackUrl`, which is the URL **Mattermost** must reach (on the box, loopback; Mattermost may need that host in `AllowedUntrustedInternalConnections`). A callback is authenticated by an HMAC-SHA256, keyed with `secret` (a secret source like the others; at least 12 characters, `openssl rand -hex 32` recommended), over `draft id`, `hash` and the action, carried in the button's context; a wrong or missing signature gets 403 and is audited. From the callback only the clicker's id and the action are used. A click is then decided exactly like a reaction. A decided card loses its buttons.
+**Buttons.** Mattermost calls a URL when a button is clicked, so `buttons` makes the bridge listen (`listenHost`, default `127.0.0.1`, and `listenPort`) at the path of `callbackUrl`, which is the URL **Mattermost** must reach (on the box, loopback; Mattermost may need that host in `AllowedUntrustedInternalConnections`). A callback is authenticated by an HMAC-SHA256, keyed with `secret` (a secret source like the others; at least 12 characters, `openssl rand -hex 32` recommended), over `draft id`, `hash` and the action, carried in the button's context; a wrong or missing signature gets 403 and is audited. From the callback only the clicker's id and the action are used. A click is then decided exactly like a reaction. A decided card loses its buttons. The signature is a bearer token: it covers draft, hash and action but not the clicker, so anyone who can read it could claim an approver's id. That is acceptable only because Mattermost strips an integration's `url` and `context` from every post it serves to clients (`Post.StripActionIntegrations`) and the bridge keeps `secret` redacted; do not weaken either (for example by logging card props).
 
 **Operating notes and gaps.**
 

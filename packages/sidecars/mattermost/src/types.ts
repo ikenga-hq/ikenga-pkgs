@@ -186,6 +186,8 @@ export interface MattermostPost {
   id: string;
   create_at?: number;
   update_at?: number;
+  /** Set (non-zero) by Mattermost whenever the post's message is edited, by anyone. */
+  edit_at?: number;
   delete_at?: number;
   is_pinned?: boolean;
   user_id: string;

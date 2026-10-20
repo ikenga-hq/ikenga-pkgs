@@ -33,6 +33,10 @@ export const DEFAULT_BODY_MAX_CHARS = 1500;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 /** Mattermost caps a post at 16383 characters. */
 const POST_MAX_CHARS = 15_000;
+/** The body is squeezed to this before a card is given up as too long to approve. */
+const MIN_BODY_CHARS = 200;
+/** How much of an unapprovable draft's text its closed card previews. */
+const UNFIT_PREVIEW_CHARS = 3000;
 /** Cards announced per poll; the rest wait for the next one. */
 const MAX_CARDS_PER_CYCLE = 20;
 /** Finished cards are forgotten after this long. Pending cards are kept until decided. */
@@ -144,14 +148,16 @@ function defang(text: string): string {
 
 /**
  * The sender's approver text (`renderedText`) shows every field the hash covers and block-quotes the body. Only the body
- * is shortened: every field above it stays whole, because the approval binds all of them.
+ * is shortened: every field above it (and after it) stays whole, because the approval binds all of them. Text with no
+ * `**Body:**` marker cannot be told apart from its fields, so it is never cut here; if it does not fit on a card the
+ * card is not approvable (see `OutboxApprovals.fits`).
  */
 export function shortenRenderedText(text: string, bodyMaxChars: number): string {
   const marker = '\n\n**Body:**\n';
   const at = text.indexOf(marker);
   let out: string;
   if (at < 0) {
-    out = text.length > bodyMaxChars * 2 ? `${text.slice(0, bodyMaxChars * 2)}\n> ... (truncated; the full text is in the Ikenga Outbox)` : text;
+    out = text;
   } else {
     const head = text.slice(0, at + marker.length);
     const rest = text.slice(at + marker.length).split('\n');
@@ -186,6 +192,13 @@ export interface CardRecord {
   shown: string;
   /** Last refusal or problem, shown on the card. */
   note?: string;
+  /**
+   * Mattermost's `edit_at` for the card as the bridge last wrote it (0 for a post never edited). A pending card whose
+   * `edit_at` differs now was edited by someone else, so what the approver saw may not be what the hash covers.
+   */
+  edit_at?: number;
+  /** The fields the hash covers did not fit on a card, so it was posted closed: it can only be approved in the Outbox. */
+  unapprovable?: boolean;
   created_at: number;
   /** Reactions made before this time were already looked at. */
   seen_until: number;
@@ -298,6 +311,7 @@ export class OutboxCardStore {
 export interface OutboxApi {
   reply(channelId: string, message: string, rootId?: string, props?: Record<string, unknown>): Promise<MattermostPost>;
   updatePost(postId: string, message: string, props?: Record<string, unknown>): Promise<MattermostPost>;
+  getPost(postId: string): Promise<MattermostPost>;
   getReactions(postId: string): Promise<MattermostReaction[]>;
   getUser(userId: string): Promise<{ id: string; username: string; is_bot?: boolean }>;
   resolveChannelId(ref: string): Promise<string>;
@@ -481,6 +495,21 @@ export class OutboxApprovals {
         seen_until: this.now(),
         acked: false,
       };
+      if (!this.fits(rec)) {
+        // Squeeze the body first; the fields the hash covers are never shortened.
+        rec.shown = shortenRenderedText(item.renderedText, MIN_BODY_CHARS);
+      }
+      if (!this.fits(rec)) {
+        // The fields themselves are too long to show: an approval would bind text the approver never saw. Fail closed.
+        rec.shown = `${rec.shown.slice(0, UNFIT_PREVIEW_CHARS)}\n... (cut: the rest of this draft is in the Ikenga Outbox)`;
+        rec.state = 'closed';
+        rec.unapprovable = true;
+        rec.decided_at = this.now();
+        rec.note = `**This draft cannot be approved here.** Its fields are too long to show in full on a card, so an approval would cover text no approver saw. Review it in the Ikenga Outbox${
+          this.opts.config.outboxUrl ? `: ${this.opts.config.outboxUrl}` : ''
+        }.`;
+        this.opts.audit.record('outbox.refused', { draft_id: rec.draft_id, payload_hash: rec.payload_hash, reason: 'card_too_long' });
+      }
       let post: MattermostPost;
       try {
         post = await this.opts.client.reply(channelId, this.cardText(rec), undefined, this.propsFor(rec));
@@ -489,9 +518,16 @@ export class OutboxApprovals {
         continue; // not acked: offered again next poll
       }
       rec.post_id = post.id;
+      rec.edit_at = post.edit_at ?? 0;
       await this.opts.store.put(rec); // on disk before the ack: a restart must not post it twice
       posted += 1;
-      this.opts.audit.record('outbox.card_posted', { draft_id: rec.draft_id, payload_hash: rec.payload_hash, post_id: rec.post_id, channel_id: rec.channel_id });
+      this.opts.audit.record('outbox.card_posted', {
+        draft_id: rec.draft_id,
+        payload_hash: rec.payload_hash,
+        post_id: rec.post_id,
+        channel_id: rec.channel_id,
+        ...(rec.unapprovable ? { unapprovable: true } : {}),
+      });
       await this.supersedeOlder(rec);
       await this.ack(rec);
     }
@@ -673,6 +709,25 @@ export class OutboxApprovals {
       return { kind: 'refused', reason: `draft_${info.status}`, text: card.note };
     }
 
+    // Is the card still exactly what the bridge posted? Whoever can edit the bot's posts could otherwise show an approver
+    // one text under a hash that covers another. Checked after the draft (so a stale card is reported as stale) and
+    // before anything is recorded or sent.
+    let post: MattermostPost;
+    try {
+      post = await this.opts.client.getPost(card.post_id);
+    } catch (err) {
+      return this.refuse(card, who, base, `card_unverifiable: ${(err as Error).message}`, 'transport', 'could not check the card with Mattermost');
+    }
+    if (!this.cardIntact(card, post)) {
+      card.state = 'closed';
+      card.note = 'This card was edited after the bridge posted it, so what it showed may not be what the draft says. Nothing was approved. Review the draft in the Ikenga Outbox.';
+      card.decided_at = this.now();
+      await this.opts.store.put(card);
+      await this.edit(card); // puts the real text back
+      audit.record('outbox.decided', { ...base, decision: 'refused', reason: 'card_edited' });
+      return { kind: 'refused', reason: 'card_edited', text: 'This card was edited after it was posted; nothing was approved.' };
+    }
+
     // No record, no action: the approval request is on disk before the sender hears of it.
     try {
       audit.must('outbox.approve_requested', base);
@@ -713,7 +768,7 @@ export class OutboxApprovals {
     const help = REFUSAL_HELP[code];
     card.note =
       from === 'transport'
-        ? `Approval by @${who.name} did not go through: could not reach the sender (\`${code}\`). Nothing was approved. Remove and re-add your 👍, or use the Approve button, to try again.`
+        ? `Approval by @${who.name} did not go through: could not reach ${code.startsWith('card_unverifiable') ? 'Mattermost to check this card' : 'the sender'} (\`${code}\`). Nothing was approved. Remove and re-add your 👍, or use the Approve button, to try again.`
         : `Approval by @${who.name} refused: \`${code}\`${help ? ` (${help})` : ''}.`;
     if (from === 'sender' && isTerminalRefusal(rawCode)) card.state = 'closed';
     card.decided_at = card.state === 'closed' ? this.now() : card.decided_at;
@@ -793,9 +848,22 @@ export class OutboxApprovals {
     const parts = [head];
     if (rec.note) parts.push(rec.note);
     parts.push('', '---', rec.shown, '---', hint);
-    let text = parts.join('\n');
-    if (text.length > POST_MAX_CHARS) text = `${text.slice(0, POST_MAX_CHARS - 40)}\n... (card shortened)`;
-    return this.redact(text);
+    // Never cut here: a cut would drop hashed fields the approver is meant to see. Too long is decided by `fits`.
+    return this.redact(parts.join('\n'));
+  }
+
+  /** Does the whole card fit in one post? A card that does not is never offered for approval. */
+  private fits(rec: CardRecord): boolean {
+    return this.cardText(rec).length <= POST_MAX_CHARS;
+  }
+
+  /** Is the live post the one the bridge wrote: same author, never edited by anyone else, same text? */
+  private cardIntact(card: CardRecord, post: MattermostPost): boolean {
+    if (!post || post.id !== card.post_id) return false;
+    if (post.delete_at) return false;
+    if (this.botUserId && post.user_id !== this.botUserId) return false;
+    if ((post.edit_at ?? 0) !== (card.edit_at ?? 0)) return false;
+    return post.message === this.cardText(card);
   }
 
   private sig(card: Pick<CardRecord, 'draft_id' | 'payload_hash'>, action: Verdict): string {
@@ -819,7 +887,9 @@ export class OutboxApprovals {
 
   private async edit(rec: CardRecord): Promise<void> {
     try {
-      await this.opts.client.updatePost(rec.post_id, this.cardText(rec), this.propsFor(rec));
+      const post = await this.opts.client.updatePost(rec.post_id, this.cardText(rec), this.propsFor(rec));
+      rec.edit_at = post?.edit_at ?? rec.edit_at;
+      await this.opts.store.put(rec);
     } catch (err) {
       this.log(`could not edit card ${rec.post_id}: ${this.redact((err as Error).message)}`);
     }
@@ -884,6 +954,9 @@ export class OutboxApprovals {
 }
 
 function sigEquals(given: unknown, expected: string): boolean {
-  if (typeof given !== 'string' || given.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (typeof given !== 'string') return false;
+  // Compare bytes: a multibyte string of the same length would otherwise reach timingSafeEqual with a different size and throw.
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

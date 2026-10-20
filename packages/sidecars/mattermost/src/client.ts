@@ -123,6 +123,17 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as MattermostPost;
   }
 
+  /** One post as it is now (`GET /posts/{id}`): its current message, who wrote it, and whether it was ever edited. */
+  async getPost(postId: string): Promise<MattermostPost> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}`, {
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`Mattermost getPost failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as MattermostPost;
+  }
+
   /** Delete a post (`DELETE /posts/{id}`). */
   async deletePost(postId: string): Promise<void> {
     const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}`, {

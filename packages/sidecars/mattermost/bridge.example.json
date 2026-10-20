@@ -45,17 +45,6 @@
       },
       "maxMode": "plan",
       "audit": { "channel": "ruby-audit" },
-      "outboxApprovals": {
-        "channel": "royalti-co",
-        "approvers": ["9s65in45np8h98qeatgx7anuoa", "buay4kf99bbk7cjtbeupd5rxow", "f3w99k5x6fgomdprh8axosmmsc"],
-        "socketPath": "/run/ikenga-sender/approvals.sock",
-        "outboxUrl": "https://ikenga.example.com/outbox/approvals",
-        "buttons": {
-          "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/ruby",
-          "listenPort": 8765,
-          "secret": { "file": "/etc/ikenga/ruby-buttons.secret" }
-        }
-      },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Ruby, the sales and customer-reply agent at Royalti. You are read-only.", "persistent": true },
       "schedules": [
         {
@@ -66,6 +55,22 @@
           "task": "Produce the daily Ruby re-engagement digest. Query email_drafts for the last 24h across active campaigns (slug LIKE 'reengage-%' OR 'trial-reactivate-%'): count sent, count replies by classification, list pending-review drafts with their IDs and recipient context, list auto-handled (not_now/unsubscribe) counts, list sequence_exit contacts added. Post a concise digest to #sales. Format per agents/ruby/email-handler-plan.md §6.\n"
         }
       ]
+    },
+    "outbox": {
+      "mattermostToken": { "env": "MM_OUTBOX_TOKEN" },
+      "allowedUsers": [],
+      "allowedChannels": [],
+      "outboxApprovals": {
+        "channel": "royalti-co",
+        "approvers": ["9s65in45np8h98qeatgx7anuoa", "buay4kf99bbk7cjtbeupd5rxow", "f3w99k5x6fgomdprh8axosmmsc"],
+        "socketPath": "/run/ikenga-sender/approvals.sock",
+        "outboxUrl": "https://ikenga.example.com/outbox/approvals",
+        "buttons": {
+          "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/outbox",
+          "listenPort": 8765,
+          "secret": { "file": "/etc/ikenga/outbox-buttons.secret" }
+        }
+      }
     }
   }
 }
