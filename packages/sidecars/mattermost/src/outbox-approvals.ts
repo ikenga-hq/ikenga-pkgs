@@ -364,7 +364,8 @@ function verdictOf(emoji: string): Verdict | undefined {
 }
 
 /** Sender replies that end a card (the draft is gone or its approval is already used); anything else leaves it open. */
-const isTerminalRefusal = (code: string) => code === 'draft_not_found' || code.startsWith('ledger_error');
+const isTerminalRefusal = (code: string) =>
+  code === 'draft_not_found' || code === 'draft_not_approvable' || code.startsWith('ledger_error');
 
 const REFUSAL_HELP: Record<string, string> = {
   unauthorized_approver: 'the sender does not list this user as an approver',
@@ -372,6 +373,7 @@ const REFUSAL_HELP: Record<string, string> = {
   source_uid_mismatch: 'the bridge is not running as the user the sender expects',
   unauthorized_peer_uid: 'the bridge is not running as the user the sender expects',
   draft_not_found: 'the sender has no such draft',
+  draft_not_approvable: 'the draft is no longer awaiting approval (rejected, failed, sending or sent)',
   ruby_db_unavailable: 'the sender cannot read the drafts database',
   draft_unreadable: 'the sender could not read or hash the draft',
 };
