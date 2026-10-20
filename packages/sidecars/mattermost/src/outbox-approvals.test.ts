@@ -499,6 +499,17 @@ describe('approve', () => {
     assert.equal(approvesSent().length, 1, 'a closed card is never approved again');
   });
 
+  it('a draft that is no longer approvable (rejected in the Outbox) closes the card with a plain reason', async () => {
+    const { post } = await withCard();
+    rig.sender.approveReply = () => ({ ok: false, error: 'draft_not_approvable' });
+    rig.react(post, ADA);
+    await waitFor(() => rig.current(post).includes('**Closed.**'), 'closed');
+    assert.match(rig.current(post), /no longer awaiting approval/);
+    rig.react(post, FOUNDER);
+    await pause(150);
+    assert.equal(approvesSent().length, 1, 'a closed card is never approved again');
+  });
+
   it('says so when the sender cannot be reached (checking the draft, or approving), and decides nothing', async () => {
     const { post } = await withCard();
     rig.sender.hangUp = true;
