@@ -115,6 +115,34 @@ export interface AuditConfig {
   path?: string;
 }
 
+/**
+ * Outbox approvals (approvals contract v1): the bot posts a card in `channel` for every draft the sender announces, and
+ * an approver's 👍 / Approve (or 👎 / Reject) decides it. Deny by default: `approvers` must be non-empty and holds
+ * Mattermost USER IDS (never usernames). Separate from `allowedUsers` and from the B3 `approvals` block.
+ */
+export interface OutboxApprovalsConfig {
+  /** Channel name (with or without `#`) or id the cards go to, e.g. `royalti-co`. A channel the bot cannot see refuses the start. */
+  channel: string;
+  /** Mattermost user ids (26 lowercase letters and digits) who may approve or reject. Required, non-empty. */
+  approvers: string[];
+  /** The sender's approvals socket. Default `/run/ikenga-sender/approvals.sock`. */
+  socketPath?: string;
+  /** How often the sender is asked for new drafts, ms. Default 30 000. */
+  pollMs?: number;
+  /** Characters of the body shown on a card before it is cut with a note. Default 1500. */
+  bodyMaxChars?: number;
+  /** Give up on one socket request after this long, ms. Default 10 000. */
+  requestTimeoutMs?: number;
+  /** Link to the Ikenga Outbox, shown on the card. Optional. */
+  outboxUrl?: string;
+  /**
+   * Approve / Reject buttons. Mattermost calls `callbackUrl` when one is clicked, so the bridge listens for it on
+   * `listenHost:listenPort` (default host `127.0.0.1`); the callback is authenticated by an HMAC keyed with `secret`.
+   * Without this block the cards are reaction-only.
+   */
+  buttons?: { callbackUrl: string; listenPort: number; listenHost?: string; secret: string };
+}
+
 export interface MattermostBridgeConfig {
   mattermostUrl: string;
   mattermostToken: string;
@@ -150,12 +178,16 @@ export interface MattermostBridgeConfig {
   audit?: AuditConfig;
   /** Scheduler state file. Default `<dataDir>/schedules-<name>.json`. */
   schedulesPath?: string;
+  /** Cards for the sender's drafts, decided by approvers' reactions or buttons. Independent of `daemon` and `chi`. */
+  outboxApprovals?: OutboxApprovalsConfig;
 }
 
 export interface MattermostPost {
   id: string;
   create_at?: number;
   update_at?: number;
+  /** Set (non-zero) by Mattermost whenever the post's message is edited, by anyone. */
+  edit_at?: number;
   delete_at?: number;
   is_pinned?: boolean;
   user_id: string;

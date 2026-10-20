@@ -573,6 +573,9 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.41
+      marked:
+        specifier: 16.4.2
+        version: 16.4.2
       tsx:
         specifier: ^4.21.0
         version: 4.21.0

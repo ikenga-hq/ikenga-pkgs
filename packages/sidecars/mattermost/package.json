@@ -21,10 +21,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
-    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts src/approvals.test.ts src/cron.test.ts src/schedules.test.ts src/audit.test.ts src/rails.test.ts src/rails.integration.test.ts src/reconnect.test.ts src/run-cap.test.ts src/hygiene.test.ts"
+    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts src/approvals.test.ts src/cron.test.ts src/schedules.test.ts src/audit.test.ts src/rails.test.ts src/rails.integration.test.ts src/reconnect.test.ts src/run-cap.test.ts src/draft-hash.test.ts src/outbox-approvals.test.ts src/hygiene.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "marked": "16.4.2",
     "tsx": "^4.21.0",
     "typescript": "^5.4.0"
   },

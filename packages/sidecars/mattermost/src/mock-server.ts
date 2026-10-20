@@ -91,11 +91,11 @@ export class MockMattermostServer {
   pingCount = 0;
   /** Answer websocket `ping`s (as Mattermost does). Set false to play a half-open peer that goes silent. */
   answerPings = true;
-  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string }> = [];
-  /** Every post the bridge created, by id, with its CURRENT message (patches applied). */
-  readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
-  /** Every `PUT /posts/{id}/patch` the bridge made, in order. */
-  readonly patches: Array<{ id: string; message: string }> = [];
+  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown> }> = [];
+  /** Every post the bridge created, by id, with its CURRENT message and props (patches applied). */
+  readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown>; user_id?: string; edit_at?: number }>();
+  /** Every `PUT /posts/{id}/patch` the bridge made, in order (`props` only when the patch carried them). */
+  readonly patches: Array<{ id: string; message: string; props?: Record<string, unknown> }> = [];
   /** Every `DELETE /posts/{id}` the bridge made, in order. */
   readonly deletes: string[] = [];
   /** Answer every `DELETE /posts/{id}` with a 500 (the post stays). */
@@ -110,6 +110,8 @@ export class MockMattermostServer {
     ['bob', 'bob'],
     ['mallory', 'mallory'],
   ]);
+  /** User ids that `GET /users/{id}` reports with `is_bot: true`. */
+  readonly bots = new Set<string>();
   /** Make `GET /users/{id}` fail (a Mattermost outage). */
   failUserLookups = false;
   /** Channels the bot can see, `name -> id`, in one team. A missing name is a 404. */
@@ -119,6 +121,17 @@ export class MockMattermostServer {
     ['ruby-test', 'c-ruby-test'],
     ['rex-alerts', 'c-alerts'],
   ]);
+  /** Answer every `GET /posts/{id}` with a 500. */
+  failPostReads = false;
+  /** Answer every `PUT /posts/{id}/patch` with a 500 (the post is not changed). */
+  failPatches = false;
+  /** Edit a post the way anyone with the author's token can (`PUT /posts/{id}/patch`): new message, `edit_at` stamped. */
+  tamper(id: string, message: string): void {
+    const p = this.posts.get(id);
+    if (!p) throw new Error(`no such post ${id}`);
+    p.message = message;
+    p.edit_at = (p.edit_at ?? 0) + 1;
+  }
   /** Make channel lookups fail with a 500 (a Mattermost outage). */
   failChannelLookups = false;
   private nextPostId = 1;
@@ -152,14 +165,23 @@ export class MockMattermostServer {
             }
             const id = `bot-post-${this.nextPostId++}`;
             this.receivedPosts.push({ ...data, id });
-            this.posts.set(id, { id, ...data });
+            this.posts.set(id, { id, ...data, user_id: this.botId, edit_at: 0 });
             res.writeHead(201, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ id, ...data }));
+            res.end(JSON.stringify({ id, ...data, user_id: this.botId, edit_at: 0 }));
           } catch (err) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid json' }));
           }
         });
+        return;
+      }
+
+      // `GET /posts/{id}`: the post as it is now (message, author, edit_at).
+      const postOf = /^\/api\/v4\/posts\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && postOf) {
+        const post = this.posts.get(decodeURIComponent(postOf[1] as string));
+        res.writeHead(post && !this.failPostReads ? 200 : this.failPostReads ? 500 : 404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(post && !this.failPostReads ? post : { error: 'no such post' }));
         return;
       }
 
@@ -181,7 +203,7 @@ export class MockMattermostServer {
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ id, username }));
+        res.end(JSON.stringify({ id, username, ...(this.bots.has(id) ? { is_bot: true } : {}) }));
         return;
       }
 
@@ -235,15 +257,22 @@ export class MockMattermostServer {
         });
         req.on('end', () => {
           const id = decodeURIComponent(patch[1] as string);
+          if (this.failPatches) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'patch failed' }));
+            return;
+          }
           const existing = this.posts.get(id);
           if (!existing) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'no such post' }));
             return;
           }
-          const { message } = JSON.parse(body) as { message: string };
+          const { message, props } = JSON.parse(body) as { message: string; props?: Record<string, unknown> };
           existing.message = message;
-          this.patches.push({ id, message });
+          existing.edit_at = (existing.edit_at ?? 0) + 1; // Mattermost stamps every edit, whoever makes it
+          if (props) existing.props = props;
+          this.patches.push({ id, message, ...(props ? { props } : {}) });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(existing));
         });
