@@ -91,11 +91,11 @@ export class MockMattermostServer {
   pingCount = 0;
   /** Answer websocket `ping`s (as Mattermost does). Set false to play a half-open peer that goes silent. */
   answerPings = true;
-  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string }> = [];
-  /** Every post the bridge created, by id, with its CURRENT message (patches applied). */
-  readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string }>();
-  /** Every `PUT /posts/{id}/patch` the bridge made, in order. */
-  readonly patches: Array<{ id: string; message: string }> = [];
+  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown> }> = [];
+  /** Every post the bridge created, by id, with its CURRENT message and props (patches applied). */
+  readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown> }>();
+  /** Every `PUT /posts/{id}/patch` the bridge made, in order (`props` only when the patch carried them). */
+  readonly patches: Array<{ id: string; message: string; props?: Record<string, unknown> }> = [];
   /** Every `DELETE /posts/{id}` the bridge made, in order. */
   readonly deletes: string[] = [];
   /** Answer every `DELETE /posts/{id}` with a 500 (the post stays). */
@@ -110,6 +110,8 @@ export class MockMattermostServer {
     ['bob', 'bob'],
     ['mallory', 'mallory'],
   ]);
+  /** User ids that `GET /users/{id}` reports with `is_bot: true`. */
+  readonly bots = new Set<string>();
   /** Make `GET /users/{id}` fail (a Mattermost outage). */
   failUserLookups = false;
   /** Channels the bot can see, `name -> id`, in one team. A missing name is a 404. */
@@ -181,7 +183,7 @@ export class MockMattermostServer {
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ id, username }));
+        res.end(JSON.stringify({ id, username, ...(this.bots.has(id) ? { is_bot: true } : {}) }));
         return;
       }
 
@@ -241,9 +243,10 @@ export class MockMattermostServer {
             res.end(JSON.stringify({ error: 'no such post' }));
             return;
           }
-          const { message } = JSON.parse(body) as { message: string };
+          const { message, props } = JSON.parse(body) as { message: string; props?: Record<string, unknown> };
           existing.message = message;
-          this.patches.push({ id, message });
+          if (props) existing.props = props;
+          this.patches.push({ id, message, ...(props ? { props } : {}) });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(existing));
         });

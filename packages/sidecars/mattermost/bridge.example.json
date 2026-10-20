@@ -45,6 +45,17 @@
       },
       "maxMode": "plan",
       "audit": { "channel": "ruby-audit" },
+      "outboxApprovals": {
+        "channel": "royalti-co",
+        "approvers": ["9s65in45np8h98qeatgx7anuoa", "buay4kf99bbk7cjtbeupd5rxow", "f3w99k5x6fgomdprh8axosmmsc"],
+        "socketPath": "/run/ikenga-sender/approvals.sock",
+        "outboxUrl": "https://ikenga.example.com/outbox/approvals",
+        "buttons": {
+          "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/ruby",
+          "listenPort": 8765,
+          "secret": { "file": "/etc/ikenga/ruby-buttons.secret" }
+        }
+      },
       "chi": { "engine": "claude-code", "cwd": "~/work/royalti", "systemPrompt": "You are Ruby, the sales and customer-reply agent at Royalti. You are read-only.", "persistent": true },
       "schedules": [
         {

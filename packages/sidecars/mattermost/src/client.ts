@@ -95,13 +95,16 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as { id: string; username: string };
   }
 
-  async reply(channelId: string, message: string, rootId?: string): Promise<MattermostPost> {
+  async reply(channelId: string, message: string, rootId?: string, props?: Record<string, unknown>): Promise<MattermostPost> {
     const payload: Record<string, unknown> = {
       channel_id: channelId,
       message,
     };
     if (rootId) {
       payload.root_id = rootId;
+    }
+    if (props) {
+      payload.props = props;
     }
 
     const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts`, {
@@ -132,15 +135,18 @@ export class MattermostClient extends EventEmitter {
     }
   }
 
-  /** Edit a post's message in place (`PUT /posts/{id}/patch`). Edits do not notify. */
-  async updatePost(postId: string, message: string): Promise<MattermostPost> {
+  /**
+   * Edit a post's message in place (`PUT /posts/{id}/patch`). Edits do not notify. `props`, when given, replaces the
+   * post's props (`{attachments: []}` takes interactive buttons off a post).
+   */
+  async updatePost(postId: string, message: string, props?: Record<string, unknown>): Promise<MattermostPost> {
     const res = await fetch(`${this.config.mattermostUrl}/api/v4/posts/${encodeURIComponent(postId)}/patch`, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${this.config.mattermostToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(props ? { message, props } : { message }),
     });
 
     if (!res.ok) {
@@ -162,14 +168,14 @@ export class MattermostClient extends EventEmitter {
   }
 
   /** A user's profile, to turn a reaction's `user_id` into a username. */
-  async getUser(userId: string): Promise<{ id: string; username: string }> {
+  async getUser(userId: string): Promise<{ id: string; username: string; is_bot?: boolean }> {
     const res = await fetch(`${this.config.mattermostUrl}/api/v4/users/${encodeURIComponent(userId)}`, {
       headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
     });
     if (!res.ok) {
       throw new Error(`Mattermost getUser failed: HTTP ${res.status} ${res.statusText}`);
     }
-    return (await res.json()) as { id: string; username: string };
+    return (await res.json()) as { id: string; username: string; is_bot?: boolean };
   }
 
   /**

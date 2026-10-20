@@ -6,10 +6,11 @@ import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
+import { resolveOutboxApprovals } from './outbox-approvals.js';
 import { resolveLimits } from './run-gate.js';
 import type { RunLimits } from './run-gate.js';
 import { resolveBranchPrefix, resolveModeRails } from './rails.js';
-import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, ProgressConfig, ScheduleConfig } from './types.js';
+import type { AuditConfig, BotApprovalsConfig, BotChiConfig, MattermostBridgeConfig, OutboxApprovalsConfig, ProgressConfig, ScheduleConfig } from './types.js';
 
 /**
  * On-disk bridge config (`MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`).
@@ -46,6 +47,10 @@ export interface BotFileConfig {
   branchPrefix?: string;
   /** B5: audit options (the log itself is always on). */
   audit?: AuditConfig;
+  /** Outbox approvals: cards for the sender's drafts. Optional; `buttons.secret` is a secret source like the others. */
+  outboxApprovals?: Omit<OutboxApprovalsConfig, 'buttons'> & {
+    buttons?: Omit<NonNullable<OutboxApprovalsConfig['buttons']>, 'secret'> & { secret: SecretSource };
+  };
 }
 
 export interface BridgeFileConfig {
@@ -118,6 +123,18 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
     // B4: refuse a bad schedule (cron, channel, duplicate name, unknown field) at load, naming the bot and the schedule.
     resolveSchedules(bot.schedules, where, bot.allowedChannels ?? []);
 
+    // Outbox approvals: resolve the button secret, then refuse a bad block at load, naming the bot.
+    let outboxApprovals: OutboxApprovalsConfig | undefined;
+    if (bot.outboxApprovals !== undefined) {
+      const o = bot.outboxApprovals;
+      const b = o && typeof o === 'object' ? o.buttons : undefined;
+      outboxApprovals = {
+        ...(o as object),
+        ...(b && typeof b === 'object' && b.secret !== undefined ? { buttons: { ...b, secret: resolveSecret(b.secret, `${where} outboxApprovals.buttons.secret`) } } : {}),
+      } as OutboxApprovalsConfig;
+      resolveOutboxApprovals(outboxApprovals, where);
+    }
+
     return {
       name,
       mattermostUrl,
@@ -141,6 +158,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       maxMode: bot.maxMode,
       branchPrefix: bot.branchPrefix,
       audit: bot.audit,
+      outboxApprovals,
     };
   });
 }

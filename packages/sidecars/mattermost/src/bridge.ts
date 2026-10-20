@@ -6,6 +6,8 @@ import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js
 import { ChannelLookupError, MattermostClient } from './client.js';
 import type { MattermostClientTiming } from './client.js';
 import { loadBridgeSetup, defaultDataDir } from './config.js';
+import { OutboxApprovals, OutboxCardStore, resolveOutboxApprovals } from './outbox-approvals.js';
+import { SenderSocket } from './sender-socket.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
 import { Rails, effectiveMode, resolveBranchPrefix, resolveModeRails } from './rails.js';
@@ -27,6 +29,8 @@ export class MattermostBridge {
   readonly daemon?: DaemonClient;
   /** Present when the bot has an `approvals` block (B3). */
   readonly approvals?: ApprovalManager;
+  /** Present when the bot has an `outboxApprovals` block: cards for the sender's drafts, decided by approvers. */
+  readonly outbox?: OutboxApprovals;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
   /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
@@ -140,6 +144,21 @@ export class MattermostBridge {
     } else if (config.schedules?.length) {
       throw new Error(`bot '${config.name ?? 'bot'}': schedules needs daemon and chi (B2) to be configured`);
     }
+    // Outbox approvals (approvals contract v1). Independent of Chi: it only needs Mattermost, the audit log and the
+    // sender's socket. A bad block refuses the start here, whichever way the config arrived.
+    if (config.outboxApprovals) {
+      const resolved = resolveOutboxApprovals(config.outboxApprovals, botWhere);
+      if (resolved.buttons) redactor.add(resolved.buttons.secret);
+      this.outbox = new OutboxApprovals({
+        bot: botName,
+        client: this.client,
+        store: new OutboxCardStore(path.join(config.dataDir ?? defaultDataDir(), `outbox-approvals-${botName}.json`), botName),
+        config: resolved,
+        sender: new SenderSocket({ socketPath: resolved.socketPath, timeoutMs: resolved.requestTimeoutMs }),
+        audit: this.audit,
+        redact: (t) => redactor.redact(t),
+      });
+    }
     if (opts.reserveRecovered !== false) this.reserveRecovered();
   }
 
@@ -190,6 +209,7 @@ export class MattermostBridge {
       if (me?.id) {
         this.gate.setBotUserId(me.id);
         this.approvals?.setBotUserId(me.id);
+        this.outbox?.setBotUserId(me.id);
       }
       if (me?.username) this.router?.setBotUsername(me.username);
     } catch (err) {
@@ -197,6 +217,7 @@ export class MattermostBridge {
       if (this.config.botUserId) {
         this.gate.setBotUserId(this.config.botUserId);
         this.approvals?.setBotUserId(this.config.botUserId);
+        this.outbox?.setBotUserId(this.config.botUserId);
       }
     }
 
@@ -273,6 +294,8 @@ export class MattermostBridge {
         schedule_engines: cfg.schedules?.map((x) => x.engine ?? cfg.chi?.engine ?? ''),
         approvals: Boolean(this.approvals),
         approvers: cfg.approvals?.approvers?.length,
+        outbox_approvals: this.outbox ? true : undefined,
+        outbox_approvers: cfg.outboxApprovals?.approvers?.length,
         schedules: cfg.schedules?.map((x) => x.name),
         branch_prefix: this.rails?.branchPrefix,
         allowed_users: cfg.allowedUsers.length,
@@ -335,6 +358,15 @@ export class MattermostBridge {
         });
       });
     }
+    // Outbox cards: the same rule, with its own approver list (Mattermost user ids) checked inside.
+    if (this.outbox) {
+      const outbox = this.outbox;
+      this.client.on('reaction', (reaction: MattermostReaction) => {
+        outbox.handleReaction(reaction).catch((err) => {
+          console.error('Failed to handle outbox reaction:', err instanceof Error ? err.message : err);
+        });
+      });
+    }
 
     if (stopped()) {
       this.client.close();
@@ -355,6 +387,18 @@ export class MattermostBridge {
       throw err;
     }
     if (stopped()) return;
+    // Outbox approvals: a channel Mattermost does not know refuses the start; a sender that is down only logs (it is
+    // polled until it answers). Started last, so a failed start above never leaves its poll timer or listener running.
+    try {
+      await this.outbox?.start();
+    } catch (err) {
+      this.stop();
+      throw err;
+    }
+    if (stopped()) {
+      this.outbox?.stop();
+      return;
+    }
     this.running = true;
   }
 
@@ -383,6 +427,7 @@ export class MattermostBridge {
     this.router?.stop();
     this.approvals?.stop();
     this.scheduler?.stop();
+    this.outbox?.stop();
     this.client.close();
   }
 
