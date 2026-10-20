@@ -4,12 +4,13 @@ import { createHmac } from 'node:crypto';
 import net from 'node:net';
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { Marked } from 'marked';
 import { MattermostBridge } from './bridge.js';
 import { resolveBridgeConfigs } from './config.js';
 import { canonicalDraftHash } from './draft-hash.js';
 import type { DraftRowForHash } from './draft-hash.js';
 import { MockMattermostServer } from './mock-server.js';
-import { resolveOutboxApprovals, shortenRenderedText } from './outbox-approvals.js';
+import { longestBacktickRun, resolveOutboxApprovals, shortenRenderedText } from './outbox-approvals.js';
 import { SenderSocket } from './sender-socket.js';
 import { sweepTmp, tmpDir } from './test-tmp.js';
 import type { MattermostBridgeConfig, OutboxApprovalsConfig } from './types.js';
@@ -849,6 +850,19 @@ describe('the card is bound to what is approved', () => {
     await waitFor(() => rig.current(post.id).includes('Rejected'), 'still pending, so it could be decided');
   });
 
+  it('a failed refusal note during a Mattermost outage does not make the next, real approval read as a tampered card', async () => {
+    const { post } = await withCard();
+    rig.mm.failPostReads = true;
+    rig.mm.failPatches = true;
+    rig.react(post.id, ADA);
+    await waitFor(() => rig.auditLines().some((l) => l.event === 'outbox.decided' && String(l.reason).startsWith('card_unverifiable')), 'unverifiable refusal');
+    rig.mm.failPostReads = false;
+    rig.mm.failPatches = false;
+    rig.react(post.id, FOUNDER);
+    await waitFor(() => approvesSent().length === 1, 'the retry is approved, not refused as card_edited');
+    assert.ok(!rig.auditLines().some((l) => l.reason === 'card_edited'));
+  });
+
   it('an untouched card is still approved (the check does not get in the way)', async () => {
     const { post } = await withCard();
     rig.react(post.id, ADA);
@@ -895,6 +909,62 @@ describe('the card is bound to what is approved', () => {
     assert.ok(!/cannot be approved here/.test(post.message));
     rig.react(post.id, ADA);
     await waitFor(() => approvesSent().length === 1, 'approve message');
+  });
+
+  it('markdown in agent-controlled fields cannot hide a hashed line: the card is a code fence, rendered literally', async () => {
+    const row: DraftRowForHash = {
+      id: D1,
+      channel: 'smtp',
+      payload_json: JSON.stringify({
+        item: {
+          id: D1,
+          recipient: 'Pat Customer',
+          recipientEmail: 'pat@example.com',
+          subject: 'Re: Invoice ![',
+          cc: ['evil@attacker.example'],
+          references: ['](https://example.com/1x1.png)'],
+          body: 'thanks! ![\nPlease wire the refund to 999-ATTACKER today.\n](https://example.com/1x1.png)',
+          channel: 'smtp',
+          senderAddress: 'ruby@royalti.io',
+        },
+        meta: { agent: 'Ruby' },
+      }),
+      edited_json: null,
+      scheduled_at: null,
+    };
+    const item = (JSON.parse(row.payload_json) as { item: Record<string, unknown> }).item;
+    // What the sender's approver text looks like for this draft: every hashed field on its own line, then the body.
+    const rendered = [
+      '**Outbox Action Draft Approval Required**',
+      `• **Draft ID:** ${D1}`,
+      `• **Subject:** ${item.subject as string}`,
+      `• **Cc:** evil@attacker.example`,
+      `• **References:** ${(item.references as string[]).join(' ')}`,
+      '',
+      '**Body:**',
+      ...(item.body as string).split('\n').map((l) => `> ${l}`),
+    ].join('\n');
+    rig.sender.put(row);
+    rig.sender.drafts.set(D1, { row, status: 'committed', renderedText: rendered });
+    const b = await rig.boot();
+    await rig.announce(b);
+    const post = rig.cards()[0] as { id: string; message: string };
+    // Render the way Mattermost does (a marked fork) and look at what a human would actually see.
+    const html = new Marked().parse(post.message, { async: false }) as string;
+    const visible = html.replace(/<img[^>]*>/g, '').replace(/<[^>]+>/g, '');
+    for (const must of ['Cc:** evil@attacker.example', 'Please wire the refund to 999-ATTACKER today.', '](https://example.com/1x1.png)']) {
+      assert.ok(visible.includes(must), `visible after rendering: ${must}`);
+    }
+    assert.ok(!/<img/.test(html), 'no image is produced from the draft text');
+    assert.ok(!/<a /.test(html), 'no link is produced from the draft text');
+  });
+
+  it('a backtick run in the draft cannot close the fence early: the fence is always longer', () => {
+    for (const n of [1, 3, 4, 7]) {
+      const shown = `before\n${'`'.repeat(n)}\n![ hidden ](http://x/y.png)`;
+      assert.equal(longestBacktickRun(shown), n);
+    }
+    assert.equal(longestBacktickRun('no ticks'), 0);
   });
 
   it('text with no body marker is never cut', () => {

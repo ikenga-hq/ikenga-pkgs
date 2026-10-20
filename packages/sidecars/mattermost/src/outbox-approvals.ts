@@ -146,6 +146,13 @@ function defang(text: string): string {
   return text.replace(/@(channel|all|here)\b/gi, '@​$1');
 }
 
+/** The length of the longest run of backticks in `text` (0 when there are none). */
+export function longestBacktickRun(text: string): number {
+  let best = 0;
+  for (const m of text.matchAll(/`+/g)) best = Math.max(best, m[0].length);
+  return best;
+}
+
 /**
  * The sender's approver text (`renderedText`) shows every field the hash covers and block-quotes the body. Only the body
  * is shortened: every field above it (and after it) stays whole, because the approval binds all of them. Text with no
@@ -197,6 +204,12 @@ export interface CardRecord {
    * `edit_at` differs now was edited by someone else, so what the approver saw may not be what the hash covers.
    */
   edit_at?: number;
+  /**
+   * The message text the bridge last actually got onto the post (set when the card is posted and when an edit succeeds).
+   * `cardText` can drift ahead of it in memory when an edit fails (a note set during a Mattermost outage), so the
+   * integrity check compares the live post with this, not with a re-render. Absent on records saved before it existed.
+   */
+  written?: string;
   /** The fields the hash covers did not fit on a card, so it was posted closed: it can only be approved in the Outbox. */
   unapprovable?: boolean;
   created_at: number;
@@ -512,7 +525,9 @@ export class OutboxApprovals {
       }
       let post: MattermostPost;
       try {
-        post = await this.opts.client.reply(channelId, this.cardText(rec), undefined, this.propsFor(rec));
+        const text = this.cardText(rec);
+        post = await this.opts.client.reply(channelId, text, undefined, this.propsFor(rec));
+        rec.written = text;
       } catch (err) {
         this.log(`could not post the card for draft ${item.draftId}: ${this.redact((err as Error).message)}`);
         continue; // not acked: offered again next poll
@@ -847,7 +862,11 @@ export class OutboxApprovals {
     }
     const parts = [head];
     if (rec.note) parts.push(rec.note);
-    parts.push('', '---', rec.shown, '---', hint);
+    // The sender's text carries agent-controlled fields (subject, cc, references, body). Posted as live markdown, a stray
+    // `![` or `[` can swallow the lines after it into image alt text or a link label, hiding hashed fields the approver
+    // is meant to see. A code fence longer than any backtick run in the text shows every character literally.
+    const fence = '`'.repeat(Math.max(3, longestBacktickRun(rec.shown) + 1));
+    parts.push('', '---', fence, rec.shown, fence, '---', hint);
     // Never cut here: a cut would drop hashed fields the approver is meant to see. Too long is decided by `fits`.
     return this.redact(parts.join('\n'));
   }
@@ -863,7 +882,7 @@ export class OutboxApprovals {
     if (post.delete_at) return false;
     if (this.botUserId && post.user_id !== this.botUserId) return false;
     if ((post.edit_at ?? 0) !== (card.edit_at ?? 0)) return false;
-    return post.message === this.cardText(card);
+    return post.message === (card.written ?? this.cardText(card));
   }
 
   private sig(card: Pick<CardRecord, 'draft_id' | 'payload_hash'>, action: Verdict): string {
@@ -887,7 +906,9 @@ export class OutboxApprovals {
 
   private async edit(rec: CardRecord): Promise<void> {
     try {
-      const post = await this.opts.client.updatePost(rec.post_id, this.cardText(rec), this.propsFor(rec));
+      const text = this.cardText(rec);
+      const post = await this.opts.client.updatePost(rec.post_id, text, this.propsFor(rec));
+      rec.written = text;
       rec.edit_at = post?.edit_at ?? rec.edit_at;
       await this.opts.store.put(rec);
     } catch (err) {

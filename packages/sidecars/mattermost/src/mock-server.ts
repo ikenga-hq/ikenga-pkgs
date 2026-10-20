@@ -123,6 +123,8 @@ export class MockMattermostServer {
   ]);
   /** Answer every `GET /posts/{id}` with a 500. */
   failPostReads = false;
+  /** Answer every `PUT /posts/{id}/patch` with a 500 (the post is not changed). */
+  failPatches = false;
   /** Edit a post the way anyone with the author's token can (`PUT /posts/{id}/patch`): new message, `edit_at` stamped. */
   tamper(id: string, message: string): void {
     const p = this.posts.get(id);
@@ -255,6 +257,11 @@ export class MockMattermostServer {
         });
         req.on('end', () => {
           const id = decodeURIComponent(patch[1] as string);
+          if (this.failPatches) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'patch failed' }));
+            return;
+          }
           const existing = this.posts.get(id);
           if (!existing) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
