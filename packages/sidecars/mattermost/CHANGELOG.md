@@ -1,5 +1,11 @@
 # @ikenga/pkg-mattermost
 
+## 0.5.1
+
+### Patch Changes
+
+- [#163](https://github.com/ikenga-hq/ikenga-pkgs/pull/163) [`b435809`](https://github.com/ikenga-hq/ikenga-pkgs/commit/b435809da493d42edf294f69276da6a2ef5e1b3c) Thanks [@nedjamez](https://github.com/nedjamez)! - Outbox approval cards close with a plain reason when the sender answers `draft_not_approvable` (the draft was rejected, failed or already sent elsewhere), instead of staying open with a raw error code.
+
 ## 0.5.0
 
 ### Minor Changes
