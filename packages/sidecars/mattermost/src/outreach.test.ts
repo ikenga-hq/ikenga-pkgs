@@ -1028,10 +1028,12 @@ describe('through the bridge', () => {
     rig.mm.broadcastReaction({ user_id: CHINEDUM, post_id: pauseCard.id as string, emoji_name: '+1' });
     await waitFor(() => rig.sender.ofAction('outreach_resume').length === 1, 'resume');
     assert.equal((rig.sender.ofAction('outreach_resume')[0]?.approver as { id: string }).id, CHINEDUM);
+    await waitFor(() => rig.mm.thread(pauseCard.id as string).length === 1, 'resume confirmation');
 
     rig.mm.broadcastReaction({ user_id: ADA, post_id: replyCard.id as string, emoji_name: 'no_entry_sign' });
     await waitFor(() => rig.sender.ofAction('outreach_optout').length === 1, 'opt-out');
     assert.equal(rig.sender.ofAction('outreach_optout')[0]?.draftId, ev.draftId);
+    await waitFor(() => rig.mm.thread(replyCard.id as string).length === 1, 'opt-out confirmation');
 
     // Restart: same data dir, nothing new to say.
     b.stop();
@@ -1041,7 +1043,7 @@ describe('through the bridge', () => {
     await again.outreach?.whenIdle();
     await again.outreach?.runCycle();
     await again.outreach?.whenIdle();
-    const fresh = rig.mm.receivedPosts.slice(postsBefore).filter((p) => p.channel_id === 'c-royalti');
+    const fresh = rig.mm.receivedPosts.slice(postsBefore).filter((p) => p.channel_id === 'c-royalti' && !p.root_id);
     assert.equal(fresh.length, 1, 'only the new pause got a card; the reply was not posted again');
     assert.match(fresh[0]?.message ?? '', /^Outreach sending is paused/);
   });

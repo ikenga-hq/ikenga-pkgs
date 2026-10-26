@@ -8,6 +8,7 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 - **B3**: approvals. Optional per bot: plan first, an approver's reaction decides whether it is carried out.
 - **B4**: scheduled posts. Per-bot cron schedules start a read-only Chi run and post the result in a channel.
 - **Outbox approvals** (optional per bot): Mattermost cards for the sender's drafts, approved by a 👍 or a button; see "Outbox approvals (sender drafts)".
+- **Outreach cards** (optional, inside `outboxApprovals`): pause, reply and bounce cards and a daily summary for the box outreach sender; see "Outreach cards (box sender)".
 - **B5** (this): safety rails and audit. A per-bot mode ceiling (`maxMode`), an append-only audit log, and an honest table of what is enforced where. The bridge still has no tool beyond the Chi run.
 
 ## How a thread maps to a run
@@ -270,6 +271,63 @@ The wire format, hash and reply codes are the sender's **approvals contract v1**
 - A crash between posting a card and storing it can leave one orphan card with no record; its reactions are ignored.
 - An approval made in the Ikenga Outbox does not update a card that is still open; a later 👍 on it gets the sender's answer (for example a `ledger_error` about a consumed approval) and closes it.
 
+## Outreach cards (box sender)
+
+An optional `outreach` block inside `outboxApprovals`, **off unless `enabled` is `true`**. It is the Mattermost side of the box's
+publisher-outreach sender (approvals contract r5, sections 3.8, 3.9 and 4.6 to 4.9). Outreach emails are approved in the Ikenga
+Outbox by their assignee, never by reaction; what the channel gets instead is a pause card, a card per reply or bounce, and one
+summary a day. Same channel, same dedicated approvals bot, same socket as the cards above.
+
+```json
+"outboxApprovals": {
+  "channel": "royalti-co",
+  "approvers": ["9s65in45np8h98qeatgx7anuoa"],
+  "outreach": {
+    "enabled": true,
+    "exportPath": "/var/lib/ikenga-sender/export/outreach-status-{day}.csv",
+    "exportLocalTime": "08:00",
+    "timezone": "Africa/Lagos"
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Default `false`. A block that is present but not enabled is still validated, and changes nothing |
+| `exportPath` | Absolute path of the file the sender's export writes, attached to the daily post when the bridge can read it. `{day}` stands for the local day (`YYYY-MM-DD`), because the sender names its files `outreach-status-<day>.csv`. Optional |
+| `exportLocalTime` | When the daily post is due, 24-hour `HH:MM` in `timezone`. Default `08:00` |
+| `timezone` | IANA zone that defines "the day". Default `Africa/Lagos` |
+| `pollMs` | How often the sender is asked, 1000 to 3 600 000. Default: the outbox block's `pollMs` |
+
+Unknown keys and malformed values refuse the bot at load, naming the field. With the block absent or `enabled: false` no outreach
+action is sent to the socket, no state file is written and nothing about the existing cards changes (`src/outreach.test.ts`,
+"outreach disabled").
+
+**What each poll does.** One `outreach_status` call, then the three things below. A failure in one step is logged by code and
+never stops the next; a sender that is down or silent (the request timeout is the outbox block's `requestTimeoutMs`) only logs.
+
+1. **Pause card.** After 30 sends the sender pauses. If the pause has no card yet, the bridge posts one: `Outreach sending is paused after N sends. R replies, B bounces so far. React with :+1: to resume. Only Chinedum can resume.` (counts only), then tells the sender which post it is (`outreach_pause_ack`). The post id is written to the bridge's store before the ack, so an ack that fails is retried alone and never produces a second card. After a restart, or if the bridge's store is lost, the mapping is rebuilt from `outreach_status` (`pause.cardPostId`). A 👍 (`+1` / `thumbsup`, any skin tone) from a human on the **current** pause card sends `outreach_resume` with the reaction event's user id (on success one threaded line, `Outreach sending resumed.`). The bridge does not check who that is: the sender answers `not_chinedum`, `stale_pause_id`, `no_open_pause` and the rest, the bridge logs the code, and nothing else happens (no retry, no edit, no reply). A reaction on any other post, including the card of an earlier pause, does nothing.
+2. **Reply and bounce cards.** `outreach_replies` from a saved cursor. A reply gets `Reply from <company> (assigned to <assignee>). React with :no_entry_sign: to mark do-not-contact.`; a bounce gets `Bounce: <company> (<assignee>)` and offers no opt-out. The cursor moves only after every card of the batch is posted; cards already posted are remembered by draft, time and kind, so a retry or a restart never posts one twice. A :no_entry_sign: from a human on a **reply** card sends `outreach_optout` with the draft id and the reactor's user id (the request has no address field; the sender takes the address from its own record and enforces "the row's assignee or Chinedum"). On success one threaded line, `Marked do-not-contact.`; on a refusal only the code is logged and the card stays usable.
+3. **Daily post.** Once per local day, at `exportLocalTime` or the first poll after it: sends today per sender, total sent, replies, bounces and the lead count per status, from `outreach_status`. If `exportPath` names a readable file it is uploaded and attached; if not, the summary goes up without it and the log (not the channel) says `export file not attached`. The file is streamed to Mattermost and never read into a log. The last posted day is stored, so a restart does not repost.
+
+**No per-draft cards for outreach.** The sender announces outreach drafts like any other, so the card flow above skips them, **whether or not the `outreach` block is on**: `outreach:<key>` and `outreach-fu:<key>` ids, an action id or source kind naming outreach if the sender sends one, and any draft whose rendered header carries the outreach field labels (`Outreach assignee`, `Sender address: outreach:...`). Every check fails towards skipping: a missing or oddly typed field counts as outreach. A skipped draft is not acked, so the sender keeps offering it; the log says how many are being skipped, only when that number changes. A plain reply that merely mentions outreach in its body still gets its card.
+
+**Who may do what.** The reaction event's `user_id` is the only identity used (never a username or anything in a post). The bot's own reactions, accounts flagged as bots, `ik-*` accounts and reactors Mattermost cannot look up are ignored, as is any emoji other than the two above (and either one on the wrong kind of card). Everything else is the sender's decision.
+
+**Privacy.** The bridge never holds SMTP or IMAP credentials. The events the sender publishes carry a company, an assignee, a kind and a time; nothing here ever contains a prospect's address, a reply's text or a subject. A company or assignee is shown on one line, cut to 80 characters, with `@` defanged and anything shaped like an address removed. The one sender reply that carries an address (`outreach_optout`) is dropped inside the socket client, so no post, log, audit record or state file can hold it.
+
+**State.** `<dataDir>/outreach-<bot>.json` (mode 0600, temp file + rename): the open pause card's post id, the reply cursor, the posted-card keys and reply-card draft ids (the newest 5000), and the last daily post's day. Ids, a cursor and a date only.
+
+**Audit.** `outreach.pause_card_posted` (`pause_id`, `post_id`, `channel_id`), `outreach.resumed` / `outreach.resume_refused` (`pause_id`, `approver_id`, `reason` for a refusal), `outreach.optout` / `outreach.optout_refused` (`draft_id`, `approver_id`, `reason`). Ids and codes only.
+
+**Gaps.**
+
+- A 👍 or :no_entry_sign: made while the bridge was down is not replayed (the outbox cards' reactions are); remove and re-add it.
+- A crash between posting the pause card and writing its id to the store can leave a second card on the next poll; only the card the sender is told about works.
+- If the bridge's store file is unreadable it is moved aside and the cursor restarts at 0: replies are posted again once.
+- The daily file is attached as it is on disk when the post goes up. If the sender's export has not run yet the summary goes up without it; there is no second attempt that day.
+- The sender writes its export `0600` for its own user; the bridge runs as another, so it can attach the file only if the box makes it group-readable.
+
 ## Safety rails and audit (B5)
 
 The old Rex/Ruby rails lived in code and prompts of `royalti-agents`: a `rex/` branch rule in Rex's `CLAUDE.md`, Ruby's "read-only"
@@ -322,6 +380,9 @@ Every record has `v`, `ts` (ISO, UTC), `bot`, `event`, event fields, and `prev`:
 | `outbox.approve_requested` | before the sender is asked to record an approval (fsynced) | `draft_id`, `payload_hash`, `post_id`, `approver_id`, `approver_name`, `via` (`reaction`, `button`) |
 | `outbox.decided` | an approver's decision was applied or refused by the sender | `decision` (`approved`, `rejected`, `refused`), `reason` (refusals: the sender's code, `draft_changed`, `draft_sent`), plus the `outbox.approve_requested` fields |
 | `outbox.refused` / `outbox.sender_unavailable` | a click from someone who may not decide (`reason`: `not_approver`, `self`, `bot`, `unverifiable_user`, `bad_signature`; coalesced per minute); the sender's socket stopped (or resumed) answering | `draft_id`, `post_id`, `user_id`, `via`, `reason` |
+| `outreach.pause_card_posted` | the outreach pause card was posted | `pause_id`, `post_id`, `channel_id` |
+| `outreach.resumed` / `outreach.resume_refused` | a 👍 on the pause card was accepted or refused by the sender | `pause_id`, `approver_id`, `reason` (refusals: the sender's code) |
+| `outreach.optout` / `outreach.optout_refused` | a :no_entry_sign: on a reply card was accepted or refused by the sender | `draft_id`, `approver_id`, `reason` (refusals: the sender's code) |
 | `approval.expired` / `approval.withdrawn` | timeout; a newer message (`superseded`) or `stop` (`cancelled`) | `request_id`, `plan_hash`, `reason` |
 | `approval.rejected` | a 👍/👎 from someone who may not decide, or who could not be looked up | `user_id`, `user_name`, `verdict`, `reason` (`not_approver`, `unverifiable_user`) |
 | `schedule.requested` | before a scheduled (or manual) run | `schedule`, `engine`, `mode` (effective), `requested_mode`, `mode_enforced`, `slot`, `late`, `manual`, `request_id` |
