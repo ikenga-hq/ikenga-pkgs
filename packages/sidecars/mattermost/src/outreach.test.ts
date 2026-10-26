@@ -864,7 +864,7 @@ describe('outreach drafts get no per-draft card', () => {
       rig.sender.announcements = offered();
       const b = await boot(outreach);
       await announce(b);
-      const cards = rig.posts();
+      const cards = rig.posts().filter((p) => !p.message.startsWith('**Outreach summary')); // the daily summary fires by the wall clock once it is past 08:00 Lagos
       assert.equal(cards.length, 1, 'one card, for the plain draft');
       assert.ok(cards[0]?.message.includes('ruby-reply:em-1001'));
       assert.ok(!JSON.stringify(rig.mm.receivedPosts).includes('prospect-label'));
@@ -1022,7 +1022,7 @@ describe('through the bridge', () => {
     await b.outreach?.whenIdle();
     await b.outreach?.runCycle();
     await b.outreach?.whenIdle();
-    const [pauseCard, replyCard] = rig.posts();
+    const [pauseCard, replyCard] = rig.posts().filter((p) => !p.message.startsWith('**Outreach summary'));
     assert.ok(pauseCard && replyCard);
 
     rig.mm.broadcastReaction({ user_id: CHINEDUM, post_id: pauseCard.id as string, emoji_name: '+1' });
@@ -1054,7 +1054,7 @@ describe('through the bridge', () => {
     await b.outreach?.whenIdle();
     await b.outreach?.runCycle();
     await b.outreach?.whenIdle();
-    const card = rig.posts()[0]?.id as string;
+    const card = rig.posts().filter((p) => !p.message.startsWith('**Outreach summary'))[0]?.id as string;
     rig.mm.broadcastReaction({ user_id: rig.mm.botId, post_id: card, emoji_name: '+1' });
     await pause(200);
     assert.equal(rig.sender.ofAction('outreach_resume').length, 0);
