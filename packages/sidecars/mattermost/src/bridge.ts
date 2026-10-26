@@ -7,6 +7,7 @@ import { ChannelLookupError, MattermostClient } from './client.js';
 import type { MattermostClientTiming } from './client.js';
 import { loadBridgeSetup, defaultDataDir } from './config.js';
 import { OutboxApprovals, OutboxCardStore, resolveOutboxApprovals } from './outbox-approvals.js';
+import { OutreachManager, OutreachStore } from './outreach.js';
 import { SenderSocket } from './sender-socket.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
@@ -31,6 +32,8 @@ export class MattermostBridge {
   readonly approvals?: ApprovalManager;
   /** Present when the bot has an `outboxApprovals` block: cards for the sender's drafts, decided by approvers. */
   readonly outbox?: OutboxApprovals;
+  /** Present when the outbox block has an enabled `outreach` block: pause card, reply and bounce cards, daily summary. */
+  readonly outreach?: OutreachManager;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
   /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
@@ -149,15 +152,28 @@ export class MattermostBridge {
     if (config.outboxApprovals) {
       const resolved = resolveOutboxApprovals(config.outboxApprovals, botWhere);
       if (resolved.buttons) redactor.add(resolved.buttons.secret);
+      const sender = new SenderSocket({ socketPath: resolved.socketPath, timeoutMs: resolved.requestTimeoutMs });
       this.outbox = new OutboxApprovals({
         bot: botName,
         client: this.client,
         store: new OutboxCardStore(path.join(config.dataDir ?? defaultDataDir(), `outbox-approvals-${botName}.json`), botName),
         config: resolved,
-        sender: new SenderSocket({ socketPath: resolved.socketPath, timeoutMs: resolved.requestTimeoutMs }),
+        sender,
         audit: this.audit,
         redact: (t) => redactor.redact(t),
       });
+      if (resolved.outreach) {
+        this.outreach = new OutreachManager({
+          bot: botName,
+          client: this.client,
+          store: new OutreachStore(path.join(config.dataDir ?? defaultDataDir(), `outreach-${botName}.json`)),
+          config: resolved.outreach,
+          channel: resolved.channel,
+          sender,
+          audit: this.audit,
+          redact: (t) => redactor.redact(t),
+        });
+      }
     }
     if (opts.reserveRecovered !== false) this.reserveRecovered();
   }
@@ -210,6 +226,7 @@ export class MattermostBridge {
         this.gate.setBotUserId(me.id);
         this.approvals?.setBotUserId(me.id);
         this.outbox?.setBotUserId(me.id);
+        this.outreach?.setBotUserId(me.id);
       }
       if (me?.username) this.router?.setBotUsername(me.username);
     } catch (err) {
@@ -218,6 +235,7 @@ export class MattermostBridge {
         this.gate.setBotUserId(this.config.botUserId);
         this.approvals?.setBotUserId(this.config.botUserId);
         this.outbox?.setBotUserId(this.config.botUserId);
+        this.outreach?.setBotUserId(this.config.botUserId);
       }
     }
 
@@ -296,6 +314,7 @@ export class MattermostBridge {
         approvers: cfg.approvals?.approvers?.length,
         outbox_approvals: this.outbox ? true : undefined,
         outbox_approvers: cfg.outboxApprovals?.approvers?.length,
+        outreach: this.outreach ? true : undefined,
         schedules: cfg.schedules?.map((x) => x.name),
         branch_prefix: this.rails?.branchPrefix,
         allowed_users: cfg.allowedUsers.length,
@@ -368,6 +387,16 @@ export class MattermostBridge {
       });
     }
 
+    // Outreach cards: a 👍 on the pause card and a :no_entry_sign: on a reply card. Who may act is the sender's call.
+    if (this.outreach) {
+      const outreach = this.outreach;
+      this.client.on('reaction', (reaction: MattermostReaction) => {
+        outreach.handleReaction(reaction).catch((err) => {
+          console.error('Failed to handle outreach reaction:', err instanceof Error ? err.message : err);
+        });
+      });
+    }
+
     if (stopped()) {
       this.client.close();
       return;
@@ -395,8 +424,11 @@ export class MattermostBridge {
       this.stop();
       throw err;
     }
+    // Outreach polling starts after the outbox: it never throws, and a sender that is down only logs.
+    await this.outreach?.start();
     if (stopped()) {
       this.outbox?.stop();
+      this.outreach?.stop();
       return;
     }
     this.running = true;
@@ -428,6 +460,7 @@ export class MattermostBridge {
     this.approvals?.stop();
     this.scheduler?.stop();
     this.outbox?.stop();
+    this.outreach?.stop();
     this.client.close();
   }
 

@@ -95,11 +95,14 @@ export class MattermostClient extends EventEmitter {
     return (await res.json()) as { id: string; username: string };
   }
 
-  async reply(channelId: string, message: string, rootId?: string, props?: Record<string, unknown>): Promise<MattermostPost> {
+  async reply(channelId: string, message: string, rootId?: string, props?: Record<string, unknown>, fileIds?: string[]): Promise<MattermostPost> {
     const payload: Record<string, unknown> = {
       channel_id: channelId,
       message,
     };
+    if (fileIds?.length) {
+      payload.file_ids = fileIds;
+    }
     if (rootId) {
       payload.root_id = rootId;
     }
@@ -121,6 +124,28 @@ export class MattermostClient extends EventEmitter {
     }
 
     return (await res.json()) as MattermostPost;
+  }
+
+  /**
+   * Upload one file to a channel (`POST /files`, multipart) and return its file id, to attach with `reply(..., fileIds)`.
+   * Gives up after `timeoutMs` (default 60 s) so a stuck upload cannot hold a poll.
+   */
+  async uploadFile(channelId: string, filename: string, data: Uint8Array, timeoutMs = 60_000): Promise<string> {
+    const form = new FormData();
+    form.append('channel_id', channelId);
+    form.append('files', new Blob([new Uint8Array(data)]), filename);
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/files`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`Mattermost uploadFile failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    const id = ((await res.json()) as { file_infos?: Array<{ id?: string }> }).file_infos?.[0]?.id;
+    if (!id) throw new Error('Mattermost uploadFile failed: no file id in the reply');
+    return id;
   }
 
   /** One post as it is now (`GET /posts/{id}`): its current message, who wrote it, and whether it was ever edited. */

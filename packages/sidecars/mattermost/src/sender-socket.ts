@@ -23,6 +23,12 @@ export interface Announcement {
   draftId: string;
   payloadHash: string;
   renderedText: string;
+  /**
+   * Contract 4.3 names exactly three fields; these two are read only if a sender ever adds them, and only to widen the
+   * outreach skip rule (`isOutreachDraft`). Never rendered, never stored.
+   */
+  actionId?: string;
+  sourceKind?: string;
 }
 
 export interface DraftInfo {
@@ -35,6 +41,33 @@ export interface MattermostApprover {
   kind: 'mattermost';
   id: string;
 }
+
+/** The pause nobody has resumed (contract 4.6 `P`). `cardPostId` is null until `outreach_pause_ack`. */
+export interface OutreachPause {
+  id: number;
+  at: string;
+  sentCount: number;
+  threshold: number;
+  cardPostId: string | null;
+}
+
+/** Counts only (contract 4.6 `C` and `S`). Nothing here names a prospect or an address. */
+export interface OutreachStatus {
+  pause: OutreachPause | null;
+  counts: { lagosDay: string; total: number; cap: number; pauseAt: number; today: { ada: number; chinedum: number } };
+  summary?: { replies: number; bounces: number; states: Record<string, number> };
+}
+
+/** One reply or bounce event (contract 4.9): exactly these five fields, no text, no subject, no address. */
+export interface OutreachEvent {
+  draftId: string;
+  company: string;
+  assignee: string;
+  kind: 'reply' | 'bounce';
+  at: string;
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
 
@@ -55,7 +88,13 @@ export class SenderSocket {
     const out: Announcement[] = [];
     for (const a of raw as Array<Record<string, unknown>>) {
       if (a && typeof a.draftId === 'string' && a.draftId && isPayloadHash(a.payloadHash) && typeof a.renderedText === 'string') {
-        out.push({ draftId: a.draftId, payloadHash: a.payloadHash, renderedText: a.renderedText });
+        out.push({
+          draftId: a.draftId,
+          payloadHash: a.payloadHash,
+          renderedText: a.renderedText,
+          ...(typeof a.actionId === 'string' ? { actionId: a.actionId } : typeof a.action_id === 'string' ? { actionId: a.action_id } : {}),
+          ...(typeof a.sourceKind === 'string' ? { sourceKind: a.sourceKind } : {}),
+        });
       }
     }
     return out;
@@ -76,6 +115,81 @@ export class SenderSocket {
   /** `approve` with source `mattermost`. Resolves on `{"ok":true}`; throws `SenderSocketError(code)` on a refusal. */
   async approve(draftId: string, payloadHash: string, approver: MattermostApprover): Promise<void> {
     await this.request({ action: 'approve', draftId, payloadHash, source: 'mattermost', approver });
+  }
+
+  /** `outreach_status` (no draftIds): the open pause, today's counts and the lead-state summary. Counts only. */
+  async outreachStatus(): Promise<OutreachStatus> {
+    const r = await this.request({ action: 'outreach_status' });
+    const o = r.outreach as Record<string, unknown> | undefined;
+    if (!o || typeof o !== 'object') throw new SenderSocketError('malformed_reply', false);
+    let pause: OutreachPause | null = null;
+    if (o.pause !== null && o.pause !== undefined) {
+      const p = o.pause as Record<string, unknown>;
+      if (!p || typeof p !== 'object' || !isCount(p.id) || p.id < 1 || !isCount(p.sentCount)) throw new SenderSocketError('malformed_reply', false);
+      pause = {
+        id: p.id,
+        at: typeof p.at === 'string' ? p.at : '',
+        sentCount: p.sentCount,
+        threshold: isCount(p.threshold) ? p.threshold : 0,
+        cardPostId: typeof p.cardPostId === 'string' && p.cardPostId ? p.cardPostId : null,
+      };
+    }
+    const c = (o.counts ?? {}) as Record<string, unknown>;
+    const today = (c.today ?? {}) as Record<string, unknown>;
+    const counts = {
+      lagosDay: typeof c.lagosDay === 'string' ? c.lagosDay : '',
+      total: isCount(c.total) ? c.total : 0,
+      cap: isCount(c.cap) ? c.cap : 0,
+      pauseAt: isCount(c.pauseAt) ? c.pauseAt : 0,
+      today: { ada: isCount(today.ada) ? today.ada : 0, chinedum: isCount(today.chinedum) ? today.chinedum : 0 },
+    };
+    let summary: OutreachStatus['summary'];
+    const s = o.summary as Record<string, unknown> | undefined;
+    if (s && typeof s === 'object') {
+      const states: Record<string, number> = {};
+      for (const [k, v] of Object.entries((s.states ?? {}) as Record<string, unknown>)) if (isCount(v)) states[k] = v;
+      summary = { replies: isCount(s.replies) ? s.replies : 0, bounces: isCount(s.bounces) ? s.bounces : 0, states };
+    }
+    return { pause, counts, ...(summary ? { summary } : {}) };
+  }
+
+  /** `outreach_replies`: events after `since`, oldest first, and the cursor to pass next time. Malformed events are dropped. */
+  async outreachReplies(since: number, limit: number): Promise<{ events: OutreachEvent[]; cursor: number }> {
+    const r = await this.request({ action: 'outreach_replies', since, limit });
+    if (!Array.isArray(r.replies) || !isCount(r.cursor)) throw new SenderSocketError('malformed_reply', false);
+    const events: OutreachEvent[] = [];
+    for (const e of r.replies as Array<Record<string, unknown>>) {
+      if (
+        e &&
+        typeof e.draftId === 'string' && e.draftId &&
+        typeof e.company === 'string' &&
+        typeof e.assignee === 'string' &&
+        (e.kind === 'reply' || e.kind === 'bounce') &&
+        typeof e.at === 'string' && e.at
+      ) {
+        events.push({ draftId: e.draftId, company: e.company, assignee: e.assignee, kind: e.kind, at: e.at });
+      }
+    }
+    return { events, cursor: r.cursor };
+  }
+
+  /** `outreach_resume` with source `mattermost`. The approver is the reaction event's user id; the sender decides. */
+  async outreachResume(pauseId: number, approverId: string): Promise<void> {
+    await this.request({ action: 'outreach_resume', pauseId, source: 'mattermost', approver: { kind: 'mattermost', id: approverId } });
+  }
+
+  /** `outreach_pause_ack` (bridge only): the post that carries the pause card, so it is not posted twice. */
+  async outreachPauseAck(pauseId: number, postId: string): Promise<void> {
+    await this.request({ action: 'outreach_pause_ack', pauseId, postId });
+  }
+
+  /**
+   * `outreach_optout`. The request names the draft only; the sender takes the address from its own record. The reply
+   * carries the address, which this method drops: nothing downstream can log or post it.
+   */
+  async outreachOptout(draftId: string, approverId: string): Promise<{ added: boolean }> {
+    const r = await this.request({ action: 'outreach_optout', draftId, source: 'mattermost', approver: { kind: 'mattermost', id: approverId } });
+    return { added: r.added === true };
   }
 
   /** One request. Throws `SenderSocketError` for `{"ok":false,"error":...}` (refused) and for transport trouble (not refused). */
