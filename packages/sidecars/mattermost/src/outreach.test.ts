@@ -382,6 +382,15 @@ describe('a reaction on the pause card', () => {
     assert.equal(rig.sender.ofAction('outreach_resume')[0]?.pauseId, 2);
   });
 
+  it('a reaction on the card of a pause that has since been resumed does nothing', async () => {
+    const { m, cardId } = await paused();
+    rig.sender.pause = null; // resumed in the shell
+    await rig.tick(m);
+    assert.equal(stored().pause, null, 'the mapping goes with the pause');
+    await rig.react(m, cardId, CHINEDUM);
+    assert.equal(rig.sender.ofAction('outreach_resume').length, 0);
+  });
+
   it('a reaction on a card that was never a pause card does nothing', async () => {
     const { m } = await paused();
     await rig.react(m, 'some-other-post', CHINEDUM);
@@ -532,6 +541,25 @@ describe('reply and bounce cards', () => {
     await rig.tick(m);
     assert.equal(rig.posts().length, 1);
     assert.ok(!everythingSaid().includes('pat.secret'));
+  });
+});
+
+describe('the socket client', () => {
+  it('drops the address the sender answers an opt-out with', async () => {
+    const { socketPath } = await rig.endpoints();
+    const sock = new SenderSocket({ socketPath, timeoutMs: 2000 });
+    const out = await sock.outreachOptout('outreach:5aa8df94a4d25f16', ADA);
+    assert.deepEqual(out, { added: true });
+    assert.ok(!JSON.stringify(out).includes('pat.secret'));
+  });
+
+  it('drops malformed events and refuses a reply with no cursor', async () => {
+    const { socketPath } = await rig.endpoints();
+    rig.sender.events = [reply('Acme Records', '2026-10-27T04:00:00Z'), { draftId: 'outreach:x', company: 'Bad', assignee: 'ada', kind: 'other' as 'reply', at: 'now' }, { ...reply('NoAt', ''), at: '' }];
+    const sock = new SenderSocket({ socketPath, timeoutMs: 2000 });
+    const got = await sock.outreachReplies(0, 100);
+    assert.deepEqual(got.events.map((e) => e.company), ['Acme Records']);
+    assert.equal(got.cursor, 3);
   });
 });
 
@@ -778,7 +806,7 @@ describe('outreach drafts get no per-draft card', () => {
   it('isOutreachDraft: the id prefixes, the action, the source kind, the field labels, and anything doubtful', () => {
     const ok = { draftId: 'ruby-reply:em-1', renderedText: plainText('ruby-reply:em-1') };
     assert.equal(isOutreachDraft(ok), false);
-    assert.equal(isOutreachDraft({ ...ok, renderedText: plainText('ruby-reply:em-1', 'we run outreach campaigns; Outreach assignee: ada') }), false, 'talking about outreach in the body is not outreach');
+    assert.equal(isOutreachDraft({ ...ok, renderedText: plainText('ruby-reply:em-1', 'we run outreach campaigns; **Outreach assignee:** ada, outreach_email, ruby/outreach-email') }), false, 'talking about outreach in the body is not outreach');
 
     assert.equal(isOutreachDraft({ draftId: 'outreach:5aa8df94a4d25f16', renderedText: plainText('x') }), true);
     assert.equal(isOutreachDraft({ draftId: 'outreach-fu:5aa8df94a4d25f16', renderedText: plainText('x') }), true);
