@@ -209,6 +209,8 @@ export interface MattermostBridgeConfig {
    * policy's own channels with a fixed toolset. Omitted = none (nothing changes). Needs `daemon` + `chi` (claude-code).
    */
   userPolicies?: Record<string, UserPolicy>;
+  /** Directories no policy `cwd` may overlap (besides `chi.cwd`). See `BotFileConfig.privateRoots`. */
+  privateRoots?: string[];
 }
 
 export interface MattermostPost {

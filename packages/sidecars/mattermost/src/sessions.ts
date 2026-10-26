@@ -102,6 +102,12 @@ export interface RouterOptions {
    * `actingMode`. Unset keeps the B2 behaviour (`chi.mode`, no gate).
    */
   approvals?: { manager: ApprovalManager; actingMode: string };
+  /**
+   * Asked before every policy run is started or resumed (`userPolicies`): is the daemon able to enforce `toolPolicy` right now?
+   * Absent, or anything but `{ ok: true }`, refuses the run (fail closed): a daemon that does not know the field would run
+   * the session with the account's full tools.
+   */
+  policyGuard?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   botUsername?: string;
   now?: () => number;
   log?: (msg: string) => void;
@@ -407,6 +413,24 @@ export class ThreadRouter {
       this.endTurn(turn);
       await this.say(post.channel_id, rootId, 'This thread was started by a session with different permissions, so I will not continue it here. Start a new message of your own instead.');
       return;
+    }
+
+    // A policy session is started or resumed only on a daemon that says it enforces `toolPolicy` (checked live, every time):
+    // otherwise the field would be dropped and the run would have every tool the account has. Nothing is started.
+    if (policy) {
+      let guard: { ok: true } | { ok: false; reason: string };
+      try {
+        guard = (await this.opts.policyGuard?.()) ?? { ok: false, reason: 'no policy guard is configured' };
+      } catch (err) {
+        guard = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+      if (!guard.ok) {
+        rails.audit.record('run.refused', { ...base, kind: rec ? 'resume' : 'thread', reason: 'policy_capability_missing', detail: guard.reason, run_id: rec?.run_id });
+        turn.finished = true;
+        this.endTurn(turn);
+        await this.say(post.channel_id, rootId, 'I cannot run this: the Ikenga daemon does not report that it enforces tool limits for this kind of session, so nothing was started. Ask the operator to upgrade the daemon.');
+        return;
+      }
     }
 
     // Say something straight away; the engine can take a while to boot.

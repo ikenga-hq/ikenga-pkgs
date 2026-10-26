@@ -125,6 +125,11 @@ export class MockMattermostServer {
     ['ruby-test', 'c-ruby-test'],
     ['rex-alerts', 'c-alerts'],
   ]);
+  /** Further teams the bot belongs to, `team id -> (channel name -> id)`: the same channel name may exist in each (`addTeam`). */
+  readonly otherTeams = new Map<string, Map<string, string>>();
+  addTeam(teamId: string, channels: Record<string, string>): void {
+    this.otherTeams.set(teamId, new Map(Object.entries(channels)));
+  }
   /** Answer every `GET /posts/{id}` with a 500. */
   failPostReads = false;
   /** Answer every `PUT /posts/{id}/patch` with a 500 (the post is not changed). */
@@ -233,13 +238,14 @@ export class MockMattermostServer {
 
       if (req.method === 'GET' && url.pathname === '/api/v4/users/me/teams') {
         res.writeHead(this.failChannelLookups ? 500 : 200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(this.failChannelLookups ? { error: 'down' } : [{ id: 'team1', name: 'royalti' }]));
+        res.end(JSON.stringify(this.failChannelLookups ? { error: 'down' } : [{ id: 'team1', name: 'royalti' }, ...[...this.otherTeams.keys()].map((id) => ({ id, name: id }))]));
         return;
       }
 
       const channelByName = /^\/api\/v4\/teams\/([^/]+)\/channels\/name\/([^/]+)$/.exec(url.pathname);
       if (req.method === 'GET' && channelByName) {
-        const id = this.channels.get(decodeURIComponent(channelByName[2] as string));
+        const teamChannels = channelByName[1] === 'team1' ? this.channels : this.otherTeams.get(decodeURIComponent(channelByName[1] as string)) ?? new Map<string, string>();
+        const id = teamChannels.get(decodeURIComponent(channelByName[2] as string));
         const status = this.failChannelLookups ? 500 : id ? 200 : 404;
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status === 200 ? { id, name: decodeURIComponent(channelByName[2] as string) } : { error: 'no such channel' }));
@@ -251,7 +257,7 @@ export class MockMattermostServer {
       const channelById = /^\/api\/v4\/channels\/([^/]+)$/.exec(url.pathname);
       if (req.method === 'GET' && channelById) {
         const id = decodeURIComponent(channelById[1] as string);
-        const name = [...this.channels.entries()].find(([, v]) => v === id)?.[0];
+        const name = [...this.channels.entries(), ...[...this.otherTeams.values()].flatMap((m) => [...m.entries()])].find(([, v]) => v === id)?.[0];
         const status = this.failChannelLookups ? 500 : name ? 200 : 404;
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status === 200 ? { id, name } : { error: 'no such channel' }));

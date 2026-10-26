@@ -11,7 +11,7 @@ import { OutreachManager, OutreachStore } from './outreach.js';
 import { SenderSocket } from './sender-socket.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
-import { claudeArgsForToolPolicy, policyChannels, policySettingsJson, resolveUserPolicies } from './policy.js';
+import { POLICY_CAPABILITY, claudeArgsForToolPolicy, policyChannels, resolveUserPolicies } from './policy.js';
 import type { ResolvedUserPolicy } from './policy.js';
 import { Rails, effectiveMode, resolveBranchPrefix, resolveModeRails } from './rails.js';
 import { Redactor } from './secrets.js';
@@ -76,6 +76,7 @@ export class MattermostBridge {
       approvals: config.approvals,
       runsChi: Boolean(config.daemon && config.chi),
       botUserId: config.botUserId,
+      privateRoots: config.privateRoots,
     });
     this.gate = new MattermostGate(config, this.policies);
     this.auditCfg = resolveAuditConfig(config.audit, botWhere, [...config.allowedChannels, ...policyChannels(this.policies)]);
@@ -137,6 +138,7 @@ export class MattermostBridge {
         runGate: this.runGate,
         progress: config.progress,
         approvals: gate,
+        policyGuard: () => this.policyGuard(),
       });
       if (config.schedules?.length) {
         const where = `bot '${name}'`;
@@ -277,7 +279,7 @@ export class MattermostBridge {
         await assertAuditChannelWriteOnly(
           id,
           ref,
-          this.config.allowedChannels,
+          [...this.config.allowedChannels, ...policyChannels(this.policies)],
           async (r) => {
             try {
               return await this.client.resolveChannelId(r);
@@ -343,6 +345,19 @@ export class MattermostBridge {
       this.audit.setSink(undefined);
       this.client.close();
       throw err;
+    }
+
+    // Per-user policies: which channel ids each policy user may use, and whether the daemon can enforce a policy at all. Neither
+    // throws: a channel that cannot be resolved leaves that user refused, and a daemon without the capability leaves every
+    // policy run refused (checked again, live, before each one).
+    if (this.policies.size > 0) {
+      await this.resolvePolicyChannels();
+      await this.checkPolicyCapability('startup');
+      if (stopped()) return;
+      this.client.on('reconnected', () => {
+        void this.resolvePolicyChannels();
+        void this.checkPolicyCapability('reconnect');
+      });
     }
 
     this.client.on('post', async (event: MattermostPostEvent, post: MattermostPost) => {
@@ -450,6 +465,64 @@ export class MattermostBridge {
     this.running = true;
   }
 
+  /** `policy user id -> (channel ref -> channel id)`: resolved once, kept; only what is still unresolved is looked up again. */
+  private readonly policyChannelCache = new Map<string, Map<string, string>>();
+
+  /**
+   * Resolve each policy user's channel names/ids to channel ids (the gate matches ids only), once at startup and again on a
+   * websocket reconnect for whatever is still unresolved. A name that exists in two of the bot's teams is refused as
+   * ambiguous (give the id). Never throws: an unresolved channel leaves the user refused there, and says so in the log and audit.
+   */
+  private async resolvePolicyChannels(): Promise<void> {
+    const bot = this.config.name ?? 'bot';
+    for (const policy of this.policies.values()) {
+      let cache = this.policyChannelCache.get(policy.userId);
+      if (!cache) this.policyChannelCache.set(policy.userId, (cache = new Map()));
+      for (const ref of policy.channels) {
+        if (cache.has(ref)) continue;
+        try {
+          cache.set(ref, await this.client.resolveChannelIdUnique(ref));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[mattermost:${bot}] policy '${policy.label}': channel '${ref}' not usable: ${msg}`);
+          this.audit.recordCoalesced(`policy.channel_unresolved|${policy.userId}|${ref}`, 'policy.channel_unresolved', {
+            policy: policy.label,
+            channel: ref,
+            reason: err instanceof ChannelLookupError && err.notFound ? 'not_found' : 'lookup_failed',
+          });
+        }
+      }
+      this.gate.setPolicyChannelIds(policy.userId, cache.values());
+    }
+  }
+
+  /**
+   * Whether the daemon advertises `chi.toolPolicy` right now (live, no cache). A policy run is started or resumed only when
+   * it does: a daemon without it would drop `toolPolicy` and run the session unrestricted. Anything but a clean yes is a no.
+   */
+  async policyGuard(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.checkPolicyCapability('run');
+  }
+
+  private policyCapability: boolean | undefined;
+
+  private async checkPolicyCapability(why: 'startup' | 'reconnect' | 'run'): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const daemon = this.daemon;
+    const caps = daemon ? await daemon.capabilities() : [];
+    const ok = caps.includes(POLICY_CAPABILITY);
+    // The audit shows the state at startup and every change after it, not one line per run.
+    if (why !== 'run' || this.policyCapability !== ok) {
+      this.audit.record('policy.capability', { capability: POLICY_CAPABILITY, advertised: ok, why });
+    }
+    if (this.policyCapability !== ok) {
+      const tag = `[mattermost:${this.config.name ?? 'bot'}]`;
+      if (ok) console.log(`${tag} daemon advertises ${POLICY_CAPABILITY}: policy sessions enabled`);
+      else console.error(`${tag} daemon does not advertise ${POLICY_CAPABILITY}: every policy session is refused until it does`);
+    }
+    this.policyCapability = ok;
+    return ok ? { ok: true } : { ok: false, reason: `the daemon does not advertise '${POLICY_CAPABILITY}'` };
+  }
+
   private loggingAttached = false;
 
   private attachConnectionLogging(): void {
@@ -490,7 +563,7 @@ interface CliArgs {
   listSchedules: boolean;
   /** `--list-policies`: one line per per-user policy. */
   listPolicies: boolean;
-  /** `--print-policy <bot>/<user id>`: that policy's `toolPolicy`, claude argv and settings.json. */
+  /** `--print-policy <bot>/<user id>`: that policy's `toolPolicy` and the claude argv for it (a diagnostic). */
   printPolicy?: string;
   /** `--audit <bot>` (B5). */
   audit?: string;
@@ -557,11 +630,11 @@ async function runOperatorCommand(bridges: MattermostBridge[], cli: CliArgs): Pr
       console.error(`error: --print-policy expects <bot>/<mattermost user id> of an existing policy; bots: ${bridges.map((b) => b.config.name ?? 'bot').join(', ')}`);
       return 2;
     }
-    // `toolPolicy` is what the bridge sends in chi_run; `claudeArgs` is the argv the daemon must add for it; `settings` is
-    // the .claude/settings.json for the policy cwd (enforcedBy "settings-file", and defence in depth under "daemon").
+    // A DIAGNOSTIC: `toolPolicy` is what the bridge sends in chi_run and `claudeArgs` the argv the daemon must add for it. Printing
+    // them proves nothing about the daemon; what makes a policy run is the daemon advertising chi.toolPolicy, checked live.
     console.log(
       JSON.stringify(
-        { user: policy.userId, label: policy.label, channels: policy.channels, cwd: policy.cwd, mode: policy.mode, enforcedBy: policy.enforcedBy, toolPolicy: policy.toolPolicy, claudeArgs: claudeArgsForToolPolicy(policy.toolPolicy), settings: policySettingsJson(policy) },
+        { user: policy.userId, label: policy.label, channels: policy.channels, cwd: policy.cwd, mode: policy.mode, enforcedBy: policy.enforcedBy, toolPolicy: policy.toolPolicy, claudeArgs: claudeArgsForToolPolicy(policy.toolPolicy) },
         null,
         2,
       ),

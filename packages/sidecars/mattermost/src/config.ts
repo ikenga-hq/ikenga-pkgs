@@ -6,7 +6,7 @@ import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
-import { policyChannels, resolveUserPolicies } from './policy.js';
+import { policyChannels, resolvePrivateRoots, resolveUserPolicies } from './policy.js';
 import type { UserPolicy } from './policy.js';
 import { resolveOutboxApprovals } from './outbox-approvals.js';
 import { resolveLimits } from './run-gate.js';
@@ -55,6 +55,8 @@ export interface BotFileConfig {
    * channels, with a fixed toolset instead of the bot's. Needs `daemon` + `chi` (claude-code). Absent = nothing changes.
    */
   userPolicies?: Record<string, UserPolicy>;
+  /** Directories the operator keeps private (the hub checkout, secrets, other accounts' homes): no policy `cwd` may be, contain or sit inside one, besides `chi.cwd`, which always counts. Absolute or `~/...`. */
+  privateRoots?: string[];
   /** Outbox approvals: cards for the sender's drafts. Optional; `buttons.secret` is a secret source like the others. */
   outboxApprovals?: Omit<OutboxApprovalsConfig, 'buttons'> & {
     buttons?: Omit<NonNullable<OutboxApprovalsConfig['buttons']>, 'secret'> & { secret: SecretSource };
@@ -134,6 +136,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
     // B5: the ceiling. Refuses chi.mode / approvals.actingMode above maxMode (default plan) rather than downgrading.
     const modes = resolveModeRails(bot, where);
     resolveBranchPrefix(bot.branchPrefix, where);
+    resolvePrivateRoots(bot.privateRoots, where);
     // Per-user policies: refused at load, naming the bot and the user. A policy user's channels count as talk channels, so
     // the write-only audit channel may not be one of them either.
     const policies = resolveUserPolicies(bot.userPolicies, where, {
@@ -143,6 +146,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       approvals: bot.approvals,
       runsChi: !approvalsOnly,
       botUserId: bot.botUserId,
+      privateRoots: bot.privateRoots,
     });
     resolveAuditConfig(bot.audit, where, [...(bot.allowedChannels ?? []), ...policyChannels(policies)]);
 
@@ -181,6 +185,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       audit: bot.audit,
       outboxApprovals,
       ...(bot.userPolicies !== undefined ? { userPolicies: bot.userPolicies } : {}),
+      ...(bot.privateRoots !== undefined ? { privateRoots: bot.privateRoots } : {}),
     };
   });
 }

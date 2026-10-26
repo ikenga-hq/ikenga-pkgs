@@ -1,3 +1,6 @@
+import { lstatSync, realpathSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { modeRank } from './rails.js';
 import type { WireMode } from './rails.js';
 
@@ -9,16 +12,28 @@ import type { WireMode } from './rails.js';
  * daemon builds the `claude` command line. So "the claude flags" are a contract between this bridge and the daemon. The bridge
  * side of it lives here: a policy is validated at load, turned into one `toolPolicy` object that rides in the `chi_run`
  * options, and `claudeArgsForToolPolicy` is the exact argv the daemon must append for it (the README has the contract and the
- * probes that pinned it). Whether the daemon honours `toolPolicy` is NOT something the bridge can see, so every policy must
- * say how its limits are really enforced (`enforcedBy`). See the README, "User policies".
+ * probes that pinned it). The ONLY enforcement is the daemon's: the bridge refuses to start a policy run unless the daemon
+ * advertises the `chi.toolPolicy` capability on `/api/health` (see `POLICY_CAPABILITY`), so an old daemon fails closed.
  */
 
-/** Built-in Claude Code tool names a policy may mention. An unknown name is a typo or a tool this list has not caught up with: both are refused. */
-const KNOWN_TOOLS: ReadonlySet<string> = new Set([
+/** The `/api/health` capability a daemon advertises when it applies `opts.toolPolicy`. */
+export const POLICY_CAPABILITY = 'chi.toolPolicy';
+
+/**
+ * Built-in Claude Code tool names a policy may mention, in the order they are listed in `--disallowedTools`. An unknown name is
+ * a typo or a tool this list has not caught up with: both are refused. Names the CLI has but this list lacks cannot be
+ * allowed, and are not denied by name either; `--tools` (the exact built-in set) is what leaves them out of the session.
+ */
+const KNOWN_TOOL_LIST: readonly string[] = [
   'Bash',
   'BashOutput',
   'KillShell',
   'TaskOutput',
+  'TaskStop',
+  'TaskCreate',
+  'TaskGet',
+  'TaskList',
+  'TaskUpdate',
   'Read',
   'Write',
   'Edit',
@@ -27,6 +42,7 @@ const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   'Glob',
   'Grep',
   'LS',
+  'LSP',
   'WebFetch',
   'WebSearch',
   'Task',
@@ -34,29 +50,64 @@ const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   'TodoWrite',
   'Skill',
   'SlashCommand',
+  'ToolSearch',
+  'Monitor',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+  'ScheduleWakeup',
+  'SendMessage',
+  'RemoteTrigger',
+  'PushNotification',
+  'EnterWorktree',
+  'ExitWorktree',
+  'EnterPlanMode',
   'ExitPlanMode',
   'AskUserQuestion',
-]);
+  'ListAgents',
+  'TeamCreate',
+  'TeamDelete',
+  'PowerShell',
+  'Artifact',
+  'ArtifactComments',
+  'ArtifactData',
+  'DesignSync',
+  'ReportFindings',
+  'SendFeedback',
+  'StructuredOutput',
+  'ListMcpResources',
+  'ReadMcpResource',
+];
+const KNOWN_TOOLS: ReadonlySet<string> = new Set(KNOWN_TOOL_LIST);
+
+/** The only built-in tools a policy session can ever have. Everything else known is denied outright. */
+const ALLOWABLE_TOOLS: ReadonlySet<string> = new Set(['Bash', 'BashOutput', 'KillShell', 'Read', 'Glob', 'Grep', 'LS', 'TodoWrite', 'ToolSearch']);
 
 /**
- * Tools that are always denied to a policy user, whatever the policy says, and that a policy may not allow: anything that
- * writes a file, reaches the network or starts another agent. They are added to `--disallowedTools` as well as being left out
- * of `--tools`, so a daemon that honours only one of the two still refuses them.
+ * Tools that are always denied to a policy user, whatever the policy says, and that a policy may not allow: everything known
+ * except `ALLOWABLE_TOOLS` (so anything that writes a file, reaches the network, starts another agent, schedules work, messages
+ * someone or would wait for an answer). They are added to `--disallowedTools` as well as being left out of `--tools`.
  */
-export const POLICY_HARD_DENY: readonly string[] = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'Skill', 'SlashCommand'];
+export const POLICY_HARD_DENY: readonly string[] = KNOWN_TOOL_LIST.filter((t) => !ALLOWABLE_TOOLS.has(t));
 const HARD_DENY_SET: ReadonlySet<string> = new Set(POLICY_HARD_DENY);
 
 /** Read-side tools. Allowing one without a path scope would allow it everywhere (a bare `Read` rule reads `/etc`). */
 const SCOPED_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS']);
 
-/** Programs that run anything they are given: `Bash(bash:*)` is arbitrary Bash. Allowed only as `<interpreter> <script path> ...`. */
-const INTERPRETERS: ReadonlySet<string> = new Set([
-  'bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'env', 'node', 'nodejs', 'bun', 'deno', 'npx', 'pnpm', 'npm', 'yarn', 'tsx',
-  'python', 'python3', 'perl', 'ruby', 'php', 'lua', 'sudo', 'doas', 'xargs', 'eval', 'exec', 'nohup', 'timeout', 'time',
-  'ssh', 'curl', 'wget', 'nc', 'ncat', 'socat', 'sqlite3', 'git',
-]);
+/**
+ * A Bash allow rule is exactly `Bash(<interpreter> <script path>)`, with an optional `:*` or ` *` (any arguments) suffix. The
+ * script path is relative to the policy cwd, is made of plain path segments only (no `..`, no leading `/` or `~`, no dotfile
+ * segment, no glob, no quote, no `$`, no space, no redirection, no operator: anything outside `[A-Za-z0-9._-]` is refused),
+ * and the interpreter is one of a short list. Everything else is a refusal, so a hole is closed by what the rule cannot
+ * express rather than by a list of what is known to be bad.
+ */
+const BASH_INTERPRETERS = ['bash', 'sh', 'node', 'python3'] as const;
+const BASH_RULE = new RegExp(`^(${BASH_INTERPRETERS.join('|')}) ((?:\\./)?(?:[A-Za-z0-9_][A-Za-z0-9._-]*/)*[A-Za-z0-9_][A-Za-z0-9._-]*)(:\\*| \\*)?$`);
 
-const SETTING_SOURCES: ReadonlySet<string> = new Set(['user', 'project', 'local']);
+/** Characters a Read/Grep/Glob/LS path scope may contain. No `{}`/`[]`/`!` (expansion), no `$`, no space, no `\`. */
+const READ_SPEC_CHARS = /^[A-Za-z0-9._\-/*?@+]+$/;
+
+const SETTING_SOURCES: ReadonlySet<string> = new Set(['project']);
 const POLICY_KEYS: ReadonlySet<string> = new Set([
   'label',
   'channels',
@@ -71,18 +122,24 @@ const POLICY_KEYS: ReadonlySet<string> = new Set([
 ]);
 const MM_ID = /^[a-z0-9]{26}$/;
 
-/** How the tool limits are really enforced: the operator's statement, recorded in the audit log. */
-export type PolicyEnforcement = 'daemon' | 'settings-file';
+/** How the tool limits are enforced. The daemon is the only thing that can; a policy must say so, and the bridge verifies the daemon can. */
+export type PolicyEnforcement = 'daemon';
+
+/** The permission mode a policy run uses: `dontAsk` denies a tool that is not allowed at once instead of asking (probed on claude 2.1.310). */
+export type PolicyPermissionMode = 'default' | 'dontAsk';
 
 /** One policy as written in `bridge.json`, under `userPolicies.<mattermost user id>`. */
 export interface UserPolicy {
   /** Shown in the audit log and the operator commands. Default: the user id. */
   label?: string;
-  /** Channels (name, `#name` or id) this user may use the bot in. Required. Independent of the bot's `allowedChannels`. */
+  /** Channels (name, `#name` or id) this user may use the bot in. Required. Resolved to channel IDS once at startup; only an id ever matches. Independent of the bot's `allowedChannels`. */
   channels: string[];
-  /** Working directory of this user's runs: a directory holding only what they may read. Absolute or `~/…`. Required; must differ from `chi.cwd`. */
+  /**
+   * Working directory of this user's runs: a directory holding only what they may read. Absolute or `~/…`. Required; it may not
+   * be, contain or sit inside `chi.cwd` or any `privateRoots` entry (spelling, `~` and symlinks are resolved first).
+   */
   cwd: string;
-  /** `default` (the default) or `plan`. `plan` refuses every command, including an allowed one, so it cannot queue anything. */
+  /** `default` (the default and the only value): the wire mode recorded for the run. The permission mode the session really runs in is `toolPolicy.mode`. */
   mode?: string;
   /** Replaces `chi.systemPrompt` for this user's runs. Advisory: the limits do not depend on it. */
   systemPrompt?: string;
@@ -90,11 +147,11 @@ export interface UserPolicy {
   allowedTools: string[];
   /** The built-in tools the session has at all (`--tools`). Default: the tool names in `allowedTools`. */
   tools?: string[];
-  /** Extra deny rules, added to the hard floor (`Write`, `Edit`, `WebFetch`, `WebSearch`, ...). */
+  /** Extra deny rules, added to every known tool the session does not have (`Write`, `Edit`, `WebFetch`, ...). */
   disallowedTools?: string[];
-  /** Which settings files claude may read: any of `user`, `project`, `local`. Default `["project"]`, so the account's own `~/.claude/settings.json` cannot widen the policy. */
+  /** Which settings files claude may read: `[]` (the default) or `["project"]`. `user` and `local` are refused. */
   settingSources?: string[];
-  /** Required: `daemon` (the daemon applies `toolPolicy`) or `settings-file` (the policy cwd holds a `.claude/settings.json` from `--print-policy`). */
+  /** Required: `daemon` (the daemon applies `toolPolicy`; the bridge refuses to run unless the daemon advertises `chi.toolPolicy`). */
   enforcedBy: PolicyEnforcement;
 }
 
@@ -103,26 +160,25 @@ export interface UserPolicy {
  * It is deliberately complete: a daemon that applies it needs no other input.
  */
 export interface ToolPolicy {
-  /** `--tools`: the built-in tools that exist in the session. */
+  /** `--tools`: the built-in tools that exist in the session (exact set). */
   tools: string[];
   /** `--allowedTools`: rules that run without a prompt. */
   allowedTools: string[];
-  /** `--disallowedTools`: rules that are refused, always winning over an allow. */
+  /** `--disallowedTools`: rules that are refused, always winning over an allow. Defaults to every known tool not in `tools`. */
   disallowedTools: string[];
-  /** `--permission-prompts none`: anything not allowed is refused at once, nobody is asked. */
-  permissionPrompts: 'none';
-  /** `--setting-sources`. */
+  /** `--permission-mode`: `dontAsk` denies anything not allowed, immediately; nothing ever waits for an answer (no `awaiting_auth`). */
+  mode: PolicyPermissionMode;
+  /** `--strict-mcp-config` (with no `--mcp-config`): no MCP server, so no MCP tool. Always true. */
+  strictMcp: true;
+  /** `--setting-sources`: `[]` or `["project"]`. */
   settingSources: string[];
-  /** `--strict-mcp-config` (with no `--mcp-config`): no MCP server, so no MCP tool. */
-  strictMcpConfig: true;
-  /** `--disable-slash-commands`. */
-  disableSlashCommands: true;
 }
 
 export interface ResolvedUserPolicy {
   /** The Mattermost user id the policy is for. */
   userId: string;
   label: string;
+  /** Channel references as written (names or ids). The bridge resolves them to ids at startup; the gate matches ids only. */
   channels: string[];
   cwd: string;
   mode: WireMode;
@@ -140,6 +196,12 @@ export interface PolicyContext {
   /** Whether the bot has `daemon` + `chi` (an approvals-only bot runs nothing). */
   runsChi: boolean;
   botUserId?: string;
+  /** Directories the operator keeps private: a policy cwd may not be, contain or sit inside one. Absolute or `~/…`. */
+  privateRoots?: readonly string[];
+  /** The home directory `~` means (default: the process's). Tests only. */
+  home?: string;
+  /** The uid of the account the bot runs as, for the script ownership check (default: the process's). Tests only. */
+  botUid?: number;
 }
 
 interface ParsedRule {
@@ -158,26 +220,133 @@ function knownTool(name: string): boolean {
   return KNOWN_TOOLS.has(name);
 }
 
-/** A Bash rule must name a program or script, not "anything". */
-function checkBashSpec(spec: string | undefined, label: string, where: string): void {
-  const s = (spec ?? '').trim();
-  if (!s) throw new Error(`${where}: ${label} is a bare Bash rule, which allows any command; name the one command it may run, e.g. Bash(bash scripts/cron/run-social-queue-submit.sh:*)`);
-  // Strip the prefix wildcard (`:*` or ` *`) and look at what is left.
-  const base = s.replace(/(?::\*|\s\*)$/, '').trim();
-  if (!base || /^[*:]/.test(base)) throw new Error(`${where}: ${label} allows any command (it starts with a wildcard)`);
-  const tokens = base.split(/\s+/);
-  const first = (tokens[0] as string).split('/').pop() as string;
-  if (INTERPRETERS.has(first)) {
-    const arg = tokens[1];
-    // `bash:*` and `bash -c:*` run anything; `bash scripts/x.sh:*` runs one script.
-    if (!arg || arg.startsWith('-') || arg.includes('*')) {
-      throw new Error(`${where}: ${label} lets '${first}' run any command; give it one script path, e.g. Bash(${first} scripts/cron/<script>.sh:*)`);
-    }
-  }
-  if (/[;&|`\n]|\$\(/.test(base)) throw new Error(`${where}: ${label} contains a shell operator; allow one plain command`);
+// ── paths ────────────────────────────────────────────────────────────────────
+
+function expandHome(p: string, home: string): string {
+  if (p === '~') return home;
+  if (p.startsWith('~/')) return path.join(home, p.slice(2));
+  return p;
 }
 
-function checkRuleList(value: unknown, field: string, where: string, kind: 'allow' | 'deny'): string[] {
+/**
+ * A path in one canonical spelling: `~` expanded, lexically normalised (`//`, `/./`, trailing `/.` and `/` go), and the longest
+ * prefix that exists on disk resolved through symlinks (the rest is appended as written). Two spellings of one directory,
+ * and a symlink to it, therefore compare equal.
+ */
+export function canonicalPath(raw: string, home: string = os.homedir()): string {
+  const abs = path.resolve(expandHome(raw.trim(), home));
+  const rest: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return abs;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** How `cwd` overlaps `root`, or undefined when the two are apart. */
+function overlap(cwd: string, root: string): 'is' | 'inside' | 'above' | undefined {
+  if (cwd === root) return 'is';
+  if (isInside(cwd, root)) return 'inside';
+  if (isInside(root, cwd)) return 'above';
+  return undefined;
+}
+
+function shapeOk(p: unknown): p is string {
+  return typeof p === 'string' && (p.startsWith('/') || p.startsWith('~/')) && !p.split('/').includes('..') && !p.includes('\0');
+}
+
+// ── rules ────────────────────────────────────────────────────────────────────
+
+/** Mode bits that let someone other than the owner change a file. */
+const GROUP_OR_WORLD_WRITABLE = 0o022;
+
+/**
+ * A Bash allow rule is one interpreter and one script path relative to the policy cwd (see `BASH_RULE`). When the script exists
+ * at load time it must also be something the bot's own account cannot rewrite: not a symlink out of the cwd, not group/world
+ * writable and not owned by the bot's uid, and the same for every directory between it and the cwd (rename-over defeats a
+ * read-only file in a writable directory). That is a check at load, not a guarantee later; the README says so.
+ */
+function checkBashAllow(spec: string | undefined, label: string, where: string, cwd: string, c: { home: string; botUid: number | undefined }): void {
+  const m = spec === undefined ? null : BASH_RULE.exec(spec);
+  if (!m) {
+    throw new Error(
+      `${where}: ${label} is not an allowed Bash rule; the only form is Bash(<${BASH_INTERPRETERS.join('|')}> <script path relative to the policy cwd>) with an optional ':*' suffix, e.g. Bash(bash scripts/cron/run-social-queue-submit.sh:*) (no '..', no absolute or ~ path, no shell characters, no other command)`,
+    );
+  }
+  const script = m[2] as string;
+  const root = canonicalPath(cwd, c.home);
+  const full = path.join(root, script);
+  let st;
+  try {
+    st = lstatSync(full);
+  } catch {
+    return; // not there yet: nothing to check at load
+  }
+  if (st.isSymbolicLink()) throw new Error(`${where}: ${label}: '${script}' is a symlink; name the real file`);
+  let real: string;
+  try {
+    real = realpathSync(full);
+  } catch {
+    return;
+  }
+  if (!isInside(real, root)) throw new Error(`${where}: ${label}: '${script}' resolves outside the policy cwd`);
+  const mine = (uid: number) => c.botUid !== undefined && uid === c.botUid;
+  const bad = (what: string, s: { mode: number; uid: number }): string | undefined =>
+    s.mode & GROUP_OR_WORLD_WRITABLE ? `${what} is group- or world-writable` : mine(s.uid) ? `${what} is owned by the bot's own account (uid ${s.uid}), which could rewrite it` : undefined;
+  const fileProblem = bad(`'${script}'`, st);
+  if (fileProblem) throw new Error(`${where}: ${label}: ${fileProblem}; the script a policy user can trigger must be root-owned and not writable by the bot`);
+  // Every directory from the script's up to and including the cwd.
+  for (let d = path.dirname(real); ; d = path.dirname(d)) {
+    const ds = lstatSync(d);
+    const p = bad(`directory '${path.relative(root, d) || '.'}'`, ds);
+    if (p) throw new Error(`${where}: ${label}: ${p}; the script a policy user can trigger must be root-owned and not replaceable by the bot`);
+    if (d === root || path.dirname(d) === d) break;
+  }
+}
+
+/**
+ * A Read/Grep/Glob/LS rule must scope itself to a relative path inside the policy cwd. The first path segment must be a literal
+ * name (so `Read(**)`, `Grep(*)`, `Read(./**)` are unscoped), and `/…`, `//…`, `~…`, `..` and every shell/glob-expansion
+ * character outside `* ?` are refused. A literal prefix that exists must not be a symlink out of the cwd.
+ */
+function checkReadAllow(name: string, spec: string | undefined, label: string, where: string, cwd: string, home: string): void {
+  const hint = `scope it relative to the policy cwd, e.g. ${name}(./docs/**)`;
+  const s = spec ?? '';
+  if (!s) throw new Error(`${where}: ${label} has no path scope, so it would read anywhere; ${hint}`);
+  if (!READ_SPEC_CHARS.test(s)) throw new Error(`${where}: ${label}: the path scope has a character that is not allowed (only letters, digits and . _ - / * ? @ +); ${hint}`);
+  if (s.startsWith('/') || s.startsWith('~')) throw new Error(`${where}: ${label}: an absolute or ~ path reaches outside the policy cwd; ${hint}`);
+  const segs = s.split('/').filter((x) => x !== '' && x !== '.');
+  if (segs.includes('..')) throw new Error(`${where}: ${label}: '..' leaves the policy cwd; ${hint}`);
+  const first = segs[0];
+  if (first === undefined || /[*?]/.test(first)) throw new Error(`${where}: ${label} is not scoped to a directory or file of its own (it starts with a wildcard); ${hint}`);
+  const literal: string[] = [];
+  for (const seg of segs) {
+    if (/[*?]/.test(seg)) break;
+    literal.push(seg);
+  }
+  const root = canonicalPath(cwd, home);
+  const target = path.join(root, ...literal);
+  let real: string | undefined;
+  try {
+    real = realpathSync(target);
+  } catch {
+    real = undefined; // not there yet
+  }
+  if (real !== undefined && !isInside(real, root)) throw new Error(`${where}: ${label}: '${literal.join('/')}' is a symlink that leaves the policy cwd`);
+}
+
+function checkRuleList(value: unknown, field: string, where: string, kind: 'allow' | 'deny', cwd: string, c: { home: string; botUid: number | undefined }): string[] {
   if (!Array.isArray(value)) throw new Error(`${where}: ${field} must be a list of tool rules`);
   const out: string[] = [];
   for (const raw of value) {
@@ -190,16 +359,15 @@ function checkRuleList(value: unknown, field: string, where: string, kind: 'allo
       continue;
     }
     if (!knownTool(rule.name)) {
-      throw new Error(`${where}: ${label}: unknown tool '${rule.name}' (known: ${[...KNOWN_TOOLS].join(', ')})`);
+      throw new Error(`${where}: ${label}: unknown tool '${rule.name}' (known: ${KNOWN_TOOL_LIST.join(', ')})`);
     }
     if (kind === 'allow') {
       if (HARD_DENY_SET.has(rule.name)) {
-        throw new Error(`${where}: ${label}: ${rule.name} can never be allowed for a policy user (no file writes, no network, no sub-agents)`);
+        throw new Error(`${where}: ${label}: ${rule.name} can never be allowed for a policy user (no file writes, no network, no sub-agents, no scheduling, nothing that waits for an answer)`);
       }
-      if (rule.name === 'Bash') checkBashSpec(rule.spec, label, where);
-      if (SCOPED_TOOLS.has(rule.name) && !(rule.spec ?? '').trim()) {
-        throw new Error(`${where}: ${label} has no path scope, so it would read anywhere; scope it, e.g. ${rule.name}(./docs/**)`);
-      }
+      if (rule.name === 'Bash') checkBashAllow(rule.spec, label, where, cwd, c);
+      else if (SCOPED_TOOLS.has(rule.name)) checkReadAllow(rule.name, rule.spec, label, where, cwd, c.home);
+      else if (rule.spec !== undefined) throw new Error(`${where}: ${label}: ${rule.name} takes no specifier`);
     }
     out.push((raw as string).trim());
   }
@@ -210,8 +378,13 @@ function uniq(list: readonly string[]): string[] {
   return [...new Set(list)];
 }
 
-function stripSlash(p: string): string {
-  return p.length > 1 ? p.replace(/\/+$/, '') : p;
+/** `privateRoots` as written: a list of absolute or `~/…` paths. */
+export function resolvePrivateRoots(raw: unknown, where: string): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.some((r) => !shapeOk(r))) {
+    throw new Error(`${where}: privateRoots must be a list of absolute or ~/... paths without '..' (the directories no policy cwd may overlap)`);
+  }
+  return uniq(raw as string[]);
 }
 
 /**
@@ -231,14 +404,30 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
   if (ctx.chi?.engine !== 'claude-code') {
     throw new Error(`${where}: userPolicies need chi.engine 'claude-code'; only Claude Code has the tool flags a policy is turned into (got '${String(ctx.chi?.engine)}')`);
   }
-  const allowedUsers = new Set(ctx.allowedUsers.map((u) => u.replace(/^@/, '')));
+  const chiCwd = ctx.chi?.cwd;
+  if (!shapeOk(chiCwd)) {
+    throw new Error(`${where}: userPolicies need chi.cwd (absolute or ~/...): the bot's own working directory, which no policy cwd may overlap`);
+  }
+  const home = ctx.home ?? os.homedir();
+  const botUid = ctx.botUid ?? (typeof process.getuid === 'function' ? process.getuid() : undefined);
+  const roots = [{ what: 'chi.cwd', dir: chiCwd }, ...resolvePrivateRoots(ctx.privateRoots, where).map((d) => ({ what: `privateRoots '${d}'`, dir: d }))].map((r) => ({ ...r, canon: canonicalPath(r.dir, home) }));
+
+  // A username entry cannot be compared with a policy's user id (it is a different name for the same person, or for no one
+  // by the time it is read), so a bot with policies lists its own users by id only.
+  const allowedIds = new Set<string>();
+  for (const u of ctx.allowedUsers) {
+    if (!MM_ID.test(u)) {
+      throw new Error(`${where}: allowedUsers entry '${u}' is a username; a bot with userPolicies must list allowedUsers by Mattermost user id, so that no listed user can also be a policy user under another spelling`);
+    }
+    allowedIds.add(u);
+  }
 
   for (const [userId, value] of entries) {
     const w = `${where}: userPolicies.${userId}`;
     if (!MM_ID.test(userId)) {
       throw new Error(`${w}: the key must be a Mattermost user id (26 lowercase letters and digits), not a username: a username can be renamed or reused`);
     }
-    if (allowedUsers.has(userId)) throw new Error(`${w}: this user is also in allowedUsers, which would give them an unrestricted session; remove them from one of the two`);
+    if (allowedIds.has(userId)) throw new Error(`${w}: this user is also in allowedUsers, which would give them an unrestricted session; remove them from one of the two`);
     if (ctx.botUserId && ctx.botUserId === userId) throw new Error(`${w}: this is the bot's own user id`);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${w}: must be an object`);
     const p = value as Record<string, unknown>;
@@ -253,16 +442,22 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
     const channels = uniq((p.channels as string[]).map((c) => c.replace(/^#/, '').trim()));
 
     // Where it runs.
-    if (typeof p.cwd !== 'string' || !(p.cwd.startsWith('/') || p.cwd.startsWith('~/')) || p.cwd.split('/').includes('..')) {
+    if (!shapeOk(p.cwd)) {
       throw new Error(`${w}: cwd is required: an absolute path or ~/..., without '..' (a directory holding only what this user may read; never the bot's own cwd)`);
     }
-    if (ctx.chi?.cwd && stripSlash(ctx.chi.cwd) === stripSlash(p.cwd)) {
-      throw new Error(`${w}: cwd is the same as chi.cwd; a policy user needs a directory of their own`);
+    const cwdCanon = canonicalPath(p.cwd, home);
+    for (const r of roots) {
+      const o = overlap(cwdCanon, r.canon);
+      if (o === 'is') throw new Error(`${w}: cwd is the same directory as ${r.what} ('${r.canon}'); a policy user needs a directory of their own`);
+      if (o === 'inside') throw new Error(`${w}: cwd is inside ${r.what} ('${r.canon}'), so the user could read everything it holds; use a dedicated directory outside it`);
+      if (o === 'above') throw new Error(`${w}: cwd contains ${r.what} ('${r.canon}'), so the user could read it; use a dedicated directory that is neither inside nor above it`);
     }
 
-    // The permission mode. `plan` is accepted but cannot run an allowed command (see README), `default` is the working one.
+    // The permission mode. A policy session runs in `toolPolicy.mode`; `mode` here is the wire mode recorded for the run.
     const rawMode = p.mode === undefined ? 'default' : p.mode;
-    if (rawMode !== 'default' && rawMode !== 'plan') throw new Error(`${w}: mode must be 'default' or 'plan' (got '${String(rawMode)}'); a policy user never gets acceptEdits or bypassPermissions`);
+    if (rawMode !== 'default') {
+      throw new Error(`${w}: mode must be 'default' (got '${String(rawMode)}'); plan mode refuses even an allowed command and a policy user never gets acceptEdits or bypassPermissions`);
+    }
     const mode = rawMode as WireMode;
     if (modeRank(mode) > modeRank(ctx.maxMode)) {
       throw new Error(`${w}: mode '${mode}' is above this bot's ceiling (maxMode '${ctx.maxMode}'); set maxMode to 'default' to allow it`);
@@ -270,9 +465,9 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
 
     if (p.label !== undefined && (typeof p.label !== 'string' || !p.label.trim() || p.label.length > 64)) throw new Error(`${w}: label must be a short non-empty string`);
     if (p.systemPrompt !== undefined && (typeof p.systemPrompt !== 'string' || !p.systemPrompt.trim())) throw new Error(`${w}: systemPrompt must be a non-empty string`);
-    if (p.enforcedBy !== 'daemon' && p.enforcedBy !== 'settings-file') {
+    if (p.enforcedBy !== 'daemon') {
       throw new Error(
-        `${w}: enforcedBy is required: 'daemon' (the Ikenga daemon applies toolPolicy as claude flags) or 'settings-file' (the policy cwd holds the .claude/settings.json printed by --print-policy). The bridge cannot see which is true, so it will not guess`,
+        `${w}: enforcedBy is required and must be 'daemon' (got '${String(p.enforcedBy)}'): the Ikenga daemon applies toolPolicy as claude flags, and the bridge refuses to run a policy session unless the daemon advertises '${POLICY_CAPABILITY}'. A settings file in the cwd cannot enforce a policy, so there is no other mode`,
       );
     }
 
@@ -280,7 +475,8 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
     if (!Array.isArray(p.allowedTools) || p.allowedTools.length === 0) {
       throw new Error(`${w}: allowedTools must name at least one tool rule; an empty allowlist would be a session that can do nothing, or, on a daemon that ignores it, anything`);
     }
-    const allowed = uniq(checkRuleList(p.allowedTools, 'allowedTools', w, 'allow'));
+    const rc = { home, botUid };
+    const allowed = uniq(checkRuleList(p.allowedTools, 'allowedTools', w, 'allow', p.cwd, rc));
     const allowedNames = uniq(allowed.map((r) => (parseRule(r) as ParsedRule).name));
 
     let tools: string[];
@@ -299,15 +495,17 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
       }
     }
 
-    const extraDeny = p.disallowedTools === undefined ? [] : checkRuleList(p.disallowedTools, 'disallowedTools', w, 'deny');
-    const disallowed = uniq([...POLICY_HARD_DENY, ...extraDeny]);
+    const extraDeny = p.disallowedTools === undefined ? [] : checkRuleList(p.disallowedTools, 'disallowedTools', w, 'deny', p.cwd, rc);
+    // Everything known that the session does not have is denied by name too: a daemon that honours only one of --tools and
+    // --disallowedTools still refuses it. (Names the CLI has but this list lacks are left out of `--tools` and so absent.)
+    const disallowed = uniq([...KNOWN_TOOL_LIST.filter((t) => !tools.includes(t)), ...extraDeny]);
     const clash = allowed.filter((r) => disallowed.includes(r));
     if (clash.length) throw new Error(`${w}: '${clash[0]}' is both allowed and disallowed`);
 
-    let settingSources = ['project'];
+    let settingSources: string[] = [];
     if (p.settingSources !== undefined) {
       if (!Array.isArray(p.settingSources) || p.settingSources.some((s) => typeof s !== 'string' || !SETTING_SOURCES.has(s))) {
-        throw new Error(`${w}: settingSources must be a list drawn from user, project, local`);
+        throw new Error(`${w}: settingSources must be a list drawn from project only (user and local settings are the account's own and could widen the policy); omit it for none`);
       }
       settingSources = uniq(p.settingSources as string[]);
     }
@@ -323,12 +521,11 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
         tools,
         allowedTools: allowed,
         disallowedTools: disallowed,
-        permissionPrompts: 'none',
+        mode: 'dontAsk',
+        strictMcp: true,
         settingSources,
-        strictMcpConfig: true,
-        disableSlashCommands: true,
       },
-      enforcedBy: p.enforcedBy,
+      enforcedBy: 'daemon',
     });
   }
 
@@ -338,12 +535,12 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
 
 /**
  * The argv fragment the daemon appends to the `claude` command for a run that carries `toolPolicy`. One element per argv
- * entry (the daemon execs without a shell, so there is no quoting). The prompt is not here: it goes in on stdin.
+ * entry (the daemon execs without a shell, so there is no quoting). The prompt is not here: it goes in on stdin. The
+ * daemon adds nothing else for a policy run (no `--mcp-config`, no `--permission-prompt-tool`).
  *
  * Pinned against `claude` 2.1.310 by running it: `--tools`, `--allowedTools`, `--disallowedTools` are variadic, so each is
- * followed by its values and the next `--flag` ends it; `--permission-prompts none` makes anything not allowed fail at once
- * instead of waiting for an answer nobody gives; in `--permission-mode plan` an allowed command is still refused, which is
- * why a policy runs in `default`.
+ * followed by its values and the next `--flag` ends it; `--permission-mode dontAsk` denies a tool that is not allowed at
+ * once instead of waiting for an answer nobody gives; `--setting-sources ''` loads no settings file.
  */
 export function claudeArgsForToolPolicy(tp: ToolPolicy): string[] {
   return [
@@ -353,31 +550,16 @@ export function claudeArgsForToolPolicy(tp: ToolPolicy): string[] {
     ...tp.allowedTools,
     '--disallowedTools',
     ...tp.disallowedTools,
-    '--permission-prompts',
-    tp.permissionPrompts,
+    '--permission-mode',
+    tp.mode,
     '--setting-sources',
     tp.settingSources.join(','),
-    ...(tp.strictMcpConfig ? ['--strict-mcp-config'] : []),
-    ...(tp.disableSlashCommands ? ['--disable-slash-commands'] : []),
+    ...(tp.strictMcp ? ['--strict-mcp-config'] : []),
+    '--disable-slash-commands',
   ];
 }
 
-/**
- * The `.claude/settings.json` for a policy's cwd, for `enforcedBy: "settings-file"` (and as defence in depth under `daemon`).
- * Project settings are read from the cwd, so this carries the allow and deny rules without any daemon support. It cannot
- * carry `--tools`, `--strict-mcp-config` or `--permission-prompts none`; the README says what that leaves open.
- */
-export function policySettingsJson(policy: ResolvedUserPolicy): { permissions: { defaultMode: string; allow: string[]; deny: string[] } } {
-  return {
-    permissions: {
-      defaultMode: policy.mode,
-      allow: [...policy.toolPolicy.allowedTools],
-      deny: [...policy.toolPolicy.disallowedTools],
-    },
-  };
-}
-
-/** Channels the policies add, for checks against the audit channel. */
+/** Channel references the policies add, for checks against the audit channel. */
 export function policyChannels(policies: ReadonlyMap<string, ResolvedUserPolicy>): string[] {
   return uniq([...policies.values()].flatMap((p) => p.channels));
 }

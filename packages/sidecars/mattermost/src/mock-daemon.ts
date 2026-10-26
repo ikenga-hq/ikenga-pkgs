@@ -38,6 +38,10 @@ export class MockDaemon {
   readonly calls: RpcCall[] = [];
   readonly sessions = new Set<string>();
   loginCount = 0;
+  /** `capabilities` in the `/api/health` body (a daemon with tool-policy support). Set to `undefined` for an old daemon that has no such field. */
+  capabilities: string[] | undefined = ['chi.toolPolicy'];
+  /** Number of `GET /api/health` calls (observable for tests). */
+  healthCalls = 0;
   /** Engines the daemon will not launch: `chi_run` leaves a failed row behind and answers with an error (seen live with cursor-agent). */
   readonly refuseEngines = new Set<string>();
   private nextRun = 1;
@@ -94,6 +98,11 @@ export class MockDaemon {
       res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
       res.end(payload === undefined ? undefined : JSON.stringify(payload));
     };
+
+    if (req.method === 'GET' && req.url === '/api/health') {
+      this.healthCalls += 1;
+      return json(200, { ok: true, name: 'ikenga-server', version: 'mock', status: 'ready', ...(this.capabilities ? { capabilities: this.capabilities } : {}) });
+    }
 
     if (req.method === 'POST' && req.url === '/auth/login') {
       if (this.mode !== 't1') return json(404, { ok: false, error: 'not found' });

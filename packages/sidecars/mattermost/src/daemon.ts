@@ -62,8 +62,9 @@ export interface ChiRunOpts {
   persistent?: boolean;
   /**
    * Per-user policy sessions only (omitted for every other run, so the wire is unchanged for them). The daemon turns it into
-   * `claude` flags (`claudeArgsForToolPolicy` in `policy.ts` is the exact argv). A daemon that does not know the field
-   * IGNORES it: that is why each policy carries an `enforcedBy` statement. See the README, "User policies".
+   * `claude` flags (`claudeArgsForToolPolicy` in `policy.ts` is the exact argv). A daemon that does not know the field would
+   * IGNORE it, so the bridge never sends it to one: it starts no policy run unless `/api/health` advertises
+   * `chi.toolPolicy` (`DaemonClient.capabilities`). See the README, "User policies".
    */
   toolPolicy?: ToolPolicy;
 }
@@ -142,6 +143,23 @@ export class DaemonClient {
 
   chiCancel(runId: string): Promise<ChiRunResult> {
     return this.rpc<ChiRunResult>('chi_cancel', { runId });
+  }
+
+  /**
+   * The capabilities the daemon advertises: `capabilities` (an array of strings) in the JSON of `GET /api/health`, which needs
+   * no credential. Anything that is not a clean answer (unreachable, not 200, not JSON, no such array) is an empty list: the
+   * caller treats a capability it cannot see as absent.
+   */
+  async capabilities(): Promise<string[]> {
+    try {
+      const res = await this.doFetch(`${this.base}/api/health`, { method: 'GET', headers: this.origin ? { Origin: this.origin } : {}, signal: AbortSignal.timeout(this.timeoutMs) });
+      if (!res.ok) return [];
+      const body = (await this.readJson(res)) as { capabilities?: unknown } | undefined;
+      const caps = body && typeof body === 'object' ? body.capabilities : undefined;
+      return Array.isArray(caps) ? caps.filter((c): c is string => typeof c === 'string') : [];
+    } catch {
+      return [];
+    }
   }
 
   // ── transport ────────────────────────────────────────────────────────────
