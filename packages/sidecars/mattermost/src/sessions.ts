@@ -1,6 +1,7 @@
 import { PLAN_MODE, planHash } from './approvals.js';
 import { effectiveMode, modeRank } from './rails.js';
-import type { ResolvedUserPolicy } from './policy.js';
+import { checkPolicyCwd } from './policy.js';
+import type { CwdCheck, ResolvedUserPolicy } from './policy.js';
 import type { Rails } from './rails.js';
 import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
@@ -433,6 +434,18 @@ export class ThreadRouter {
       }
     }
 
+    // The policy's cwd is the session's read boundary: walked again now, before every start and resume (it is cheap), and
+    // refused if anything in it could be read through (a symlink that appeared since load, a FIFO, a hard link ...).
+    if (policy) {
+      const tree = this.policyCwdCheck(policy, base, rec ? 'resume' : 'thread', rec?.run_id);
+      if (!tree.ok) {
+        turn.finished = true;
+        this.endTurn(turn);
+        await this.say(post.channel_id, rootId, 'I cannot run this: the working directory for this kind of session failed its safety check, so nothing was started. Ask the operator to look at the audit log.');
+        return;
+      }
+    }
+
     // Say something straight away; the engine can take a while to boot.
     const working = await this.opts.client.reply(post.channel_id, 'Working…', rootId);
     turn.progressPostId = working.id;
@@ -477,6 +490,7 @@ export class ThreadRouter {
         turn.mode = auth.mode;
         turn.engine = auth.engine;
         await this.takeSlot(turn, 'resume');
+        if (policy) this.policyCwdMustBeSafe(policy, base, 'resume', rec.run_id); // the wait for a slot can be long: once more, immediately before
         const carry = rec.carry ? `[What happened since your last turn: an approved run carried out your plan. Its report follows.]\n${rec.carry}\n\n---\n\n` : '';
         result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE + rails.branchNote() : ''}`);
         if (rec.carry) await store.update(rootId, { carry: '' });
@@ -514,6 +528,7 @@ export class ThreadRouter {
       turn.engine = auth.engine;
       // After the fallback from a resume that found its run gone the turn already holds its slot (that call started nothing).
       await this.takeSlot(turn, 'thread');
+      if (policy) this.policyCwdMustBeSafe(policy, base, 'thread'); // the wait for a slot can be long: once more, immediately before
       result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
@@ -564,6 +579,34 @@ export class ThreadRouter {
 
     const fresh = store.get(rootId) as ThreadRecord;
     turn.done = this.track(turn, fresh, notice);
+  }
+
+  /** Walk the policy cwd; on a problem write `policy.cwd_unsafe` (the first offending path, never contents) and return the result. */
+  private policyCwdCheck(policy: ResolvedUserPolicy, base: Record<string, string | number | boolean | undefined | null | string[]>, kind: 'thread' | 'resume', runId?: string): CwdCheck {
+    let tree: CwdCheck;
+    try {
+      tree = checkPolicyCwd(policy.cwd);
+    } catch {
+      tree = { ok: false, code: 'unreadable', path: '.', detail: 'the check itself failed' };
+    }
+    if (!tree.ok) {
+      this.opts.rails.audit.record('policy.cwd_unsafe', {
+        thread_root: base.thread_root as string,
+        channel_id: base.channel_id as string,
+        user_id: base.user_id as string,
+        policy: policy.label,
+        kind,
+        reason: tree.code,
+        path: tree.path,
+        run_id: runId,
+      });
+      this.log(`policy '${policy.label}': cwd is unsafe (${tree.code} at ${JSON.stringify(tree.path)}); no run started`);
+    }
+    return tree;
+  }
+
+  private policyCwdMustBeSafe(policy: ResolvedUserPolicy, base: Record<string, string | number | boolean | undefined | null | string[]>, kind: 'thread' | 'resume', runId?: string): void {
+    if (!this.policyCwdCheck(policy, base, kind, runId).ok) throw new Error('the working directory for this kind of session failed its safety check (see the audit log)');
   }
 
   private async failStart(turn: Turn, err: unknown): Promise<void> {

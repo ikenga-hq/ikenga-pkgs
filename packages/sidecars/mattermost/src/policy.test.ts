@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { MattermostBridge } from './bridge.js';
 import { resolveBridgeConfigs } from './config.js';
@@ -10,7 +10,7 @@ import { MattermostGate } from './gate.js';
 import { DaemonClient } from './daemon.js';
 import { MockDaemon } from './mock-daemon.js';
 import { MockMattermostServer } from './mock-server.js';
-import { POLICY_CAPABILITY, POLICY_HARD_DENY, canonicalPath, claudeArgsForToolPolicy, resolveUserPolicies } from './policy.js';
+import { POLICY_CAPABILITY, POLICY_HARD_DENY, canonicalPath, checkPolicyCwd, claudeArgsForToolPolicy, resolveUserPolicies } from './policy.js';
 import type { PolicyContext, UserPolicy } from './policy.js';
 import type { AuditRecord } from './audit.js';
 import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent } from './types.js';
@@ -148,9 +148,13 @@ describe('userPolicies validation', () => {
     refuse(adaPolicy({ enforcedBy: 'settings-file' as never }), /must be 'daemon'/);
     refuse({ ...adaPolicy(), allowedTool: ['x'] }, /unknown field 'allowedTool'/);
     refuse(adaPolicy({ channels: [] }), /channels must be a non-empty list/);
-    refuse(adaPolicy({ settingSources: ['user', 'cloud'] }), /settingSources must be a list/);
-    refuse(adaPolicy({ settingSources: ['project', 'local'] }), /settingSources must be a list/);
-    assert.deepEqual(resolve(adaPolicy({ settingSources: ['project'] })).get(ADA)?.toolPolicy.settingSources, ['project']);
+    // Only "no settings source" is accepted: 'project' would load CLAUDE.md from the cwd's parent directories into the session.
+    refuse(adaPolicy({ settingSources: ['user', 'cloud'] }), /settingSources must be omitted or \[\]/);
+    refuse(adaPolicy({ settingSources: ['project', 'local'] }), /settingSources must be omitted or \[\]/);
+    refuse(adaPolicy({ settingSources: ['project'] }), /'project' loads CLAUDE.md from the cwd's parent directories/);
+    refuse(adaPolicy({ settingSources: 'project' as never }), /settingSources must be omitted or \[\]/);
+    assert.deepEqual(resolve(adaPolicy({ settingSources: [] })).get(ADA)?.toolPolicy.settingSources, []);
+    assert.deepEqual(resolve(adaPolicy()).get(ADA)?.toolPolicy.settingSources, []);
   });
 
   it('refuses policies on a bot that cannot run them: no chi, other engine, approvals', () => {
@@ -655,6 +659,28 @@ describe('bash rules are an exact allowlist', () => {
     }
   });
 
+  describe('a script that does not exist yet', () => {
+    const dir = tmpDir('mm-policy-bash-missing-');
+    const cwd = path.join(dir, 'queue');
+    const elsewhere = path.join(dir, 'elsewhere');
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, path.join(cwd, 'scripts')); // scripts/ is a symlink out of the cwd
+    const load = (rule: string) => resolve(adaPolicy({ cwd, allowedTools: [rule] }), { home: dir, chi: { engine: 'claude-code', cwd: HUB }, botUid: (process.getuid?.() ?? 0) + 1 });
+
+    it('is still refused when a directory on its path is a symlink (it must not return early)', () => {
+      assert.throws(() => load('Bash(bash scripts/new.sh:*)'), /'scripts' is a symlink/);
+      assert.throws(() => load('Bash(bash scripts/deeper/new.sh:*)'), /'scripts' is a symlink/);
+    });
+    it('is accepted when nothing on its path exists, or the existing part is a real directory', () => {
+      const clean = path.join(dir, 'clean');
+      mkdirSync(path.join(clean, 'real'), { recursive: true });
+      const ok = (rule: string) => resolve(adaPolicy({ cwd: clean, allowedTools: [rule] }), { home: dir, chi: { engine: 'claude-code', cwd: HUB }, botUid: (process.getuid?.() ?? 0) + 1 });
+      assert.ok(ok('Bash(bash nothing/here/new.sh:*)').get(ADA));
+      assert.ok(ok('Bash(bash real/new.sh:*)').get(ADA));
+    });
+  });
+
   describe('a script that exists at load', () => {
     const dir = tmpDir('mm-policy-bash-');
     const cwd = path.join(dir, 'queue');
@@ -736,5 +762,279 @@ describe('DaemonClient.capabilities', () => {
     assert.deepEqual(await clientWith(() => new Response('not json')).capabilities(), []);
     assert.deepEqual(await clientWith(() => new Response('{}', { status: 503 })).capabilities(), []);
     assert.deepEqual(await clientWith(() => { throw new Error('down'); }).capabilities(), []);
+  });
+});
+
+// ── the cwd tree is the read boundary ────────────────────────────────────────
+
+describe('policy cwd tree: no symlink, special file or hard link anywhere in it', () => {
+  const dir = tmpDir('mm-policy-tree-');
+  const hub = path.join(dir, 'royalti-co');
+  mkdirSync(hub, { recursive: true });
+  writeFileSync(path.join(hub, 'notes.txt'), 'HUB-SECRET\n');
+  let n = 0;
+  /** A fresh, clean policy cwd next to the hub: docs/a.md, scripts/q.sh. */
+  const fresh = (): string => {
+    const cwd = path.join(dir, `queue-${++n}`);
+    mkdirSync(path.join(cwd, 'docs'), { recursive: true });
+    mkdirSync(path.join(cwd, 'scripts'), { recursive: true });
+    writeFileSync(path.join(cwd, 'docs', 'a.md'), 'doc\n');
+    writeFileSync(path.join(cwd, 'scripts', 'q.sh'), 'echo ok\n');
+    return cwd;
+  };
+  const c = { home: dir, chi: { engine: 'claude-code', cwd: hub } };
+  const load = (cwd: string) => resolve(adaPolicy({ cwd, allowedTools: [WRAPPER] }), c);
+  const refused = (cwd: string, code: string, rel: string) => {
+    const r = checkPolicyCwd(cwd, dir);
+    assert.equal(r.ok, false, `${code} ${rel}`);
+    if (!r.ok) {
+      assert.equal(r.code, code);
+      assert.equal(r.path, rel);
+    }
+    assert.throws(() => load(cwd), new RegExp(`cwd is unsafe: ${JSON.stringify(rel).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} .*\\(${code}\\)`));
+  };
+
+  it('a clean tree passes, and so does a cwd that does not exist yet', () => {
+    const cwd = fresh();
+    const r = checkPolicyCwd(cwd, dir);
+    assert.deepEqual(r, { ok: true, entries: 4 });
+    assert.ok(load(cwd).get(ADA));
+    assert.deepEqual(checkPolicyCwd(path.join(dir, 'not-there'), dir), { ok: true, entries: 0 });
+  });
+
+  it('refuses a symlink to outside the cwd at depth 1 and deeper', () => {
+    const d1 = fresh();
+    symlinkSync(hub, path.join(d1, 'hublink')); // hublink -> the hub (the verifier's `cat h*/notes.txt`)
+    refused(d1, 'symlink', 'hublink');
+    const d2 = fresh();
+    symlinkSync(path.join(hub, 'notes.txt'), path.join(d2, 'docs', 'more.txt')); // docs/more.txt -> hub file (`cat d*/m*`)
+    refused(d2, 'symlink', 'docs/more.txt');
+    const d3 = fresh();
+    mkdirSync(path.join(d3, 'docs', 'x', 'y', 'z'), { recursive: true });
+    symlinkSync('/etc/hostname', path.join(d3, 'docs', 'x', 'y', 'z', 'deep'));
+    refused(d3, 'symlink', 'docs/x/y/z/deep');
+  });
+
+  it('refuses a symlink that points INSIDE the cwd too, and a dangling one', () => {
+    const d1 = fresh();
+    symlinkSync('a.md', path.join(d1, 'docs', 'alias.md'));
+    refused(d1, 'symlink', 'docs/alias.md');
+    const d2 = fresh();
+    symlinkSync('docs', path.join(d2, 'docslink'));
+    refused(d2, 'symlink', 'docslink');
+    const d3 = fresh();
+    symlinkSync('/nonexistent/target', path.join(d3, 'dangling'));
+    refused(d3, 'symlink', 'dangling');
+  });
+
+  it('refuses a cwd that is itself a symlink, and one that is a file', () => {
+    const real = fresh();
+    const link = path.join(dir, `queue-link-${++n}`);
+    symlinkSync(real, link);
+    const r = checkPolicyCwd(link, dir);
+    assert.equal(r.ok === false && r.code, 'symlink');
+    assert.throws(() => load(link), /cwd is unsafe: "\." .*\(symlink\)/);
+    const file = path.join(dir, `queue-file-${++n}`);
+    writeFileSync(file, 'x');
+    const f = checkPolicyCwd(file, dir);
+    assert.equal(f.ok === false && f.code, 'not_a_directory');
+  });
+
+  it('refuses a FIFO', () => {
+    const cwd = fresh();
+    const mk = spawnSync('mkfifo', [path.join(cwd, 'docs', 'pipe')]);
+    if (mk.status !== 0) return; // no mkfifo on this machine
+    refused(cwd, 'special_file', 'docs/pipe');
+  });
+
+  it('refuses a hard link to a file (it may be a file outside the cwd), and says nothing about a lone file', () => {
+    const cwd = fresh();
+    linkSync(path.join(hub, 'notes.txt'), path.join(cwd, 'docs', 'hard.txt'));
+    refused(cwd, 'hardlink', 'docs/hard.txt');
+    const same = fresh();
+    linkSync(path.join(same, 'docs', 'a.md'), path.join(same, 'scripts', 'copy.md')); // two names inside the cwd: also refused
+    const r = checkPolicyCwd(same, dir);
+    assert.equal(r.ok === false && r.code, 'hardlink');
+    unlinkSync(path.join(same, 'scripts', 'copy.md'));
+    assert.ok(checkPolicyCwd(same, dir).ok);
+  });
+
+  it('reports the first offender in sorted order, with its path only', () => {
+    const cwd = fresh();
+    symlinkSync(hub, path.join(cwd, 'zz'));
+    symlinkSync(hub, path.join(cwd, 'aa'));
+    const r = checkPolicyCwd(cwd, dir);
+    assert.equal(r.ok === false && r.path, 'aa');
+    assert.ok(!JSON.stringify(r).includes('HUB-SECRET'));
+  });
+
+  it('is capped: too many entries and too deep are refused, with a clear error', () => {
+    const cwd = fresh();
+    for (let i = 0; i < 6; i++) writeFileSync(path.join(cwd, 'docs', `f${i}.md`), String(i));
+    const many = checkPolicyCwd(cwd, dir, { maxEntries: 5 });
+    assert.equal(many.ok === false && many.code, 'too_many_entries');
+    assert.ok(many.ok === false && /more than 10000 entries/.test(many.detail));
+    const deep = fresh();
+    mkdirSync(path.join(deep, 'a', 'b', 'c'), { recursive: true });
+    const tooDeep = checkPolicyCwd(deep, dir, { maxDepth: 2 });
+    assert.equal(tooDeep.ok === false && tooDeep.code, 'too_deep');
+    assert.equal(tooDeep.ok === false && tooDeep.path, 'a/b/c');
+    assert.ok(checkPolicyCwd(deep, dir, { maxDepth: 3 }).ok);
+    // Defaults: 20 levels are fine, 21 are not.
+    const d20 = fresh();
+    mkdirSync(path.join(d20, ...Array.from({ length: 20 }, (_, i) => `d${i}`)), { recursive: true });
+    assert.ok(checkPolicyCwd(d20, dir).ok);
+    mkdirSync(path.join(d20, ...Array.from({ length: 21 }, (_, i) => `d${i}`)), { recursive: true });
+    const r21 = checkPolicyCwd(d20, dir);
+    assert.equal(r21.ok === false && r21.code, 'too_deep');
+    assert.throws(() => load(d20), /nested deeper than 20 levels/);
+  });
+
+  it('glob-escape fixture: the shell really reads the hub through it, and the policy is refused at load', () => {
+    // The verifier's tree: hublink -> ../royalti-co and docs/more.txt -> ../../royalti-co/notes.txt.
+    const cwd = fresh();
+    symlinkSync('../royalti-co', path.join(cwd, 'hublink'));
+    symlinkSync('../../royalti-co/notes.txt', path.join(cwd, 'docs', 'more.txt'));
+    for (const cmd of ['cat h*/notes.txt', 'cat d*/m*']) {
+      const r = spawnSync('sh', ['-c', cmd], { cwd });
+      assert.equal(String(r.stdout), 'HUB-SECRET\n', `${cmd} escapes through the symlink`);
+    }
+    assert.throws(() => load(cwd), /cwd is unsafe: "docs\/more.txt" .*\(symlink\)/); // sorted order: docs/ before hublink
+    unlinkSync(path.join(cwd, 'docs', 'more.txt'));
+    assert.throws(() => load(cwd), /cwd is unsafe: "hublink" .*\(symlink\)/);
+    unlinkSync(path.join(cwd, 'hublink'));
+    assert.ok(load(cwd).get(ADA));
+  });
+
+  it('is checked through the whole config load, not only resolveUserPolicies', () => {
+    const cwd = fresh();
+    symlinkSync(hub, path.join(cwd, 'hublink'));
+    const file = (): BridgeFileConfig => ({
+      mattermostUrl: 'http://127.0.0.1:1',
+      bots: {
+        ruby: {
+          mattermostToken: { env: 'MM_TEST_TOKEN' },
+          allowedUsers: [FOUNDER],
+          allowedChannels: ['ruby-test'],
+          daemon: { url: 'http://127.0.0.1:1', auth: { kind: 'session', username: 'ruby', password: { env: 'DAEMON_TEST_PW' } } },
+          chi: { engine: 'claude-code', cwd: hub },
+          maxMode: 'default',
+          userPolicies: { [ADA]: adaPolicy({ cwd, allowedTools: [WRAPPER] }) },
+        },
+      },
+    });
+    process.env.MM_TEST_TOKEN = MM_TOKEN;
+    process.env.DAEMON_TEST_PW = PASSWORD;
+    assert.throws(() => resolveBridgeConfigs(file()), /cwd is unsafe: "hublink"/);
+  });
+});
+
+describe('bridge: the cwd is walked again before every policy start and resume', () => {
+  let mm: MockMattermostServer;
+  let daemon: MockDaemon;
+  let dir: string;
+  let cwd: string;
+  let bridge: MattermostBridge | undefined;
+  const audit = (): AuditRecord[] => {
+    try {
+      return readFileSync(path.join(dir, 'audit-ruby.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as AuditRecord);
+    } catch {
+      return [];
+    }
+  };
+  const chiRuns = () => daemon.rpcCalls('chi_run').map((c) => ((c.args.opts ?? c.args) as Record<string, unknown>));
+  const say = (id: string, text: string, root?: string) => mm.broadcastPost({ id, user_id: ADA, channel_id: 'id-royalti-co', message: text, root_id: root }, 'royalti-co', '@ada');
+  const link = () => symlinkSync('/etc/hostname', path.join(cwd, 'docs', 'sneaky.txt'));
+  const unlink = () => unlinkSync(path.join(cwd, 'docs', 'sneaky.txt'));
+
+  beforeEach(async () => {
+    mm = new MockMattermostServer();
+    daemon = new MockDaemon('t1', { username: 'ruby', password: PASSWORD });
+    dir = tmpDir('mm-policy-rewalk-');
+    cwd = path.join(dir, 'queue');
+    mkdirSync(path.join(cwd, 'docs'), { recursive: true });
+    writeFileSync(path.join(cwd, 'docs', 'a.md'), 'doc\n');
+    mm.channels.set('royalti-co', 'id-royalti-co');
+    const mmUrl = await mm.listen();
+    const daemonUrl = await daemon.listen();
+    process.env.MM_TEST_TOKEN = MM_TOKEN;
+    process.env.DAEMON_TEST_PW = PASSWORD;
+    const [cfg] = resolveBridgeConfigs({
+      mattermostUrl: mmUrl,
+      dataDir: dir,
+      bots: {
+        ruby: {
+          mattermostToken: { env: 'MM_TEST_TOKEN' },
+          allowedUsers: [FOUNDER],
+          allowedChannels: ['ruby-test'],
+          daemon: { url: daemonUrl, auth: { kind: 'session', username: 'ruby', password: { env: 'DAEMON_TEST_PW' } } },
+          chi: { engine: 'claude-code', cwd: HUB, systemPrompt: 'You are Ruby.', persistent: true },
+          maxMode: 'default',
+          progress: FAST,
+          userPolicies: { [ADA]: adaPolicy({ cwd }) },
+        },
+      },
+    });
+    bridge = new MattermostBridge(cfg as MattermostBridgeConfig);
+    await bridge.start();
+    await pause(60);
+  });
+  afterEach(async () => {
+    bridge?.stop();
+    bridge = undefined;
+    await mm.close();
+    await daemon.close();
+  });
+
+  it('a symlink that appears after load stops the next START: no chi_run, a channel message, policy.cwd_unsafe naming the path', async () => {
+    link();
+    say('a1', 'queue this');
+    await waitFor(() => mm.receivedPosts.some((p) => p.message.includes('failed its safety check')), 'refusal in the channel');
+    assert.equal(chiRuns().length, 0);
+    assert.equal(daemon.rpcCalls('chi_resume').length, 0);
+    const rec = audit().find((r) => r.event === 'policy.cwd_unsafe');
+    assert.ok(rec);
+    assert.equal(rec.reason, 'symlink');
+    assert.equal(rec.path, 'docs/sneaky.txt');
+    assert.equal(rec.kind, 'thread');
+    assert.equal(rec.policy, 'ada-social-queue');
+    assert.ok(!mm.receivedPosts.some((p) => p.message.includes('sneaky')), 'the channel message does not name the path');
+    // Fixed: the next message starts normally.
+    unlink();
+    say('a2', 'queue this again');
+    await waitFor(() => chiRuns().length === 1, 'run after the fix');
+  });
+
+  it('a symlink that appears after the first run stops the RESUME: no chi_resume', async () => {
+    say('a1', 'queue one');
+    await waitFor(() => chiRuns().length === 1, 'first run');
+    daemon.settle('run-1', 'done', { output: 'queued' });
+    await waitFor(() => mm.receivedPosts.some((p) => p.message.startsWith('queued')), 'answer');
+    await waitFor(() => bridge!.router!.activeCount() === 0, 'turn closed');
+    link();
+    say('a2', 'and another', 'a1');
+    await waitFor(() => audit().some((r) => r.event === 'policy.cwd_unsafe'), 'refused');
+    assert.equal(daemon.rpcCalls('chi_resume').length, 0);
+    assert.equal(chiRuns().length, 1);
+    const rec = audit().find((r) => r.event === 'policy.cwd_unsafe');
+    assert.equal(rec?.kind, 'resume');
+    assert.equal(rec?.run_id, 'run-1');
+    // A FIFO and a hard link are refused the same way.
+    unlink();
+    linkSync(path.join(cwd, 'docs', 'a.md'), path.join(cwd, 'docs', 'twin.md'));
+    say('a3', 'once more', 'a1');
+    await waitFor(() => audit().filter((r) => r.event === 'policy.cwd_unsafe').length === 2, 'second refusal');
+    assert.equal(audit().filter((r) => r.event === 'policy.cwd_unsafe').pop()?.reason, 'hardlink');
+    assert.equal(daemon.rpcCalls('chi_resume').length, 0);
+    unlinkSync(path.join(cwd, 'docs', 'twin.md'));
+    say('a4', 'finally', 'a1');
+    await waitFor(() => daemon.rpcCalls('chi_resume').length === 1, 'resume once the tree is clean');
+  });
+
+  it('the founder is not affected by the policy cwd', async () => {
+    link();
+    mm.broadcastPost({ id: 'f1', user_id: FOUNDER, channel_id: 'c-ruby-test', message: 'status?' }, 'ruby-test', '@founder');
+    await waitFor(() => chiRuns().length === 1, 'founder run');
+    assert.ok(!audit().some((r) => r.event === 'policy.cwd_unsafe'));
   });
 });

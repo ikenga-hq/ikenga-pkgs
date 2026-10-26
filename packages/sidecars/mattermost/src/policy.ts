@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { modeRank } from './rails.js';
@@ -107,7 +107,6 @@ const BASH_RULE = new RegExp(`^(${BASH_INTERPRETERS.join('|')}) ((?:\\./)?(?:[A-
 /** Characters a Read/Grep/Glob/LS path scope may contain. No `{}`/`[]`/`!` (expansion), no `$`, no space, no `\`. */
 const READ_SPEC_CHARS = /^[A-Za-z0-9._\-/*?@+]+$/;
 
-const SETTING_SOURCES: ReadonlySet<string> = new Set(['project']);
 const POLICY_KEYS: ReadonlySet<string> = new Set([
   'label',
   'channels',
@@ -149,7 +148,11 @@ export interface UserPolicy {
   tools?: string[];
   /** Extra deny rules, added to every known tool the session does not have (`Write`, `Edit`, `WebFetch`, ...). */
   disallowedTools?: string[];
-  /** Which settings files claude may read: `[]` (the default) or `["project"]`. `user` and `local` are refused. */
+  /**
+   * Which settings files claude may read. Omitted or `[]` (no settings file): the only accepted value. `project` is refused
+   * because it would load CLAUDE.md files from the cwd's parent directories into the session; `user` and `local` are the
+   * account's own settings and could widen the policy.
+   */
   settingSources?: string[];
   /** Required: `daemon` (the daemon applies `toolPolicy`; the bridge refuses to run unless the daemon advertises `chi.toolPolicy`). */
   enforcedBy: PolicyEnforcement;
@@ -170,7 +173,7 @@ export interface ToolPolicy {
   mode: PolicyPermissionMode;
   /** `--strict-mcp-config` (with no `--mcp-config`): no MCP server, so no MCP tool. Always true. */
   strictMcp: true;
-  /** `--setting-sources`: `[]` or `["project"]`. */
+  /** `--setting-sources`: always `[]` (a policy cannot enable any settings source). */
   settingSources: string[];
 }
 
@@ -266,6 +269,110 @@ function shapeOk(p: unknown): p is string {
   return typeof p === 'string' && (p.startsWith('/') || p.startsWith('~/')) && !p.split('/').includes('..') && !p.includes('\0');
 }
 
+// ── the cwd tree ─────────────────────────────────────────────────────────────
+
+/** The walk of a policy cwd gives up (and the cwd is refused) past this many entries or this depth (the cwd itself is depth 0). */
+export const CWD_WALK_MAX_ENTRIES = 10_000;
+export const CWD_WALK_MAX_DEPTH = 20;
+
+/** Why a policy cwd was refused. The first offending path is reported (relative to the cwd, `.` for the cwd itself), never its contents. */
+export type CwdProblem =
+  | 'symlink' // a symlink at any depth, whether it points inside, outside or nowhere
+  | 'special_file' // a FIFO, socket or device
+  | 'hardlink' // a regular file with more than one link (it may be the same file as one outside the cwd)
+  | 'escapes_cwd' // a directory whose real path is not inside the cwd
+  | 'not_a_directory' // the cwd itself is not a directory
+  | 'too_many_entries'
+  | 'too_deep'
+  | 'unreadable';
+
+export type CwdCheck = { ok: true; entries: number } | { ok: false; code: CwdProblem; path: string; detail: string };
+
+const CWD_DETAIL: Record<CwdProblem, string> = {
+  symlink: 'is a symlink; a shell glob can read through it past the read boundary',
+  special_file: 'is not a regular file or directory (FIFO, socket or device)',
+  hardlink: 'is a regular file with more than one hard link, so it may be the same file as one outside the cwd',
+  escapes_cwd: 'is a directory whose real path is outside the cwd',
+  not_a_directory: 'is not a directory',
+  too_many_entries: `the cwd holds more than ${CWD_WALK_MAX_ENTRIES} entries`,
+  too_deep: `the cwd is nested deeper than ${CWD_WALK_MAX_DEPTH} levels`,
+  unreadable: 'could not be read',
+};
+
+/**
+ * Walk a policy cwd with `lstat` (nothing is followed) and refuse anything that could let a session read outside it.
+ * The session's read boundary is the cwd, and Claude's own path check does not follow a shell glob through a symlink
+ * (`cat h*\/notes.txt` read the hub through `hublink -> ../hub`, verified on claude 2.1.310, while `cat hublink/notes.txt` was
+ * denied). So the tree must hold only regular files and real directories: refused are a symlink at ANY depth (even one that
+ * points inside), a FIFO, socket or device, a directory whose realpath leaves the cwd, and a regular file with `nlink > 1`.
+ * A hard link cannot be told from a legitimate file except by its link count, so a file with two names is refused (a
+ * file the operator really needs under two names is copied instead). Not detected: bind mounts, and a file with `nlink`
+ * 1 that is changed or replaced later (the walk runs again before every run, and the README states the TOCTOU).
+ *
+ * A missing cwd passes (there is nothing in it, and a run there fails in the daemon). The walk is capped; past a cap
+ * the cwd is refused rather than assumed fine. Entries are visited in sorted order, so the first offender is stable.
+ */
+export function checkPolicyCwd(cwd: string, home: string = os.homedir(), limits: { maxEntries?: number; maxDepth?: number } = {}): CwdCheck {
+  const maxEntries = limits.maxEntries ?? CWD_WALK_MAX_ENTRIES;
+  const maxDepth = limits.maxDepth ?? CWD_WALK_MAX_DEPTH;
+  const abs = path.resolve(expandHome(cwd.trim(), home));
+  const fail = (code: CwdProblem, rel: string): CwdCheck => ({ ok: false, code, path: rel, detail: CWD_DETAIL[code] });
+  let rootStat;
+  try {
+    rootStat = lstatSync(abs);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { ok: true, entries: 0 } : fail('unreadable', '.');
+  }
+  if (rootStat.isSymbolicLink()) return fail('symlink', '.');
+  if (!rootStat.isDirectory()) return fail('not_a_directory', '.');
+  let root: string;
+  try {
+    root = realpathSync(abs);
+  } catch {
+    return fail('unreadable', '.');
+  }
+  let count = 0;
+  const visit = (dir: string, rel: string, depth: number): CwdCheck | undefined => {
+    let names: string[];
+    try {
+      names = readdirSync(dir).sort();
+    } catch {
+      return fail('unreadable', rel || '.');
+    }
+    for (const name of names) {
+      const entryRel = rel ? `${rel}/${name}` : name;
+      if (++count > maxEntries) return fail('too_many_entries', entryRel);
+      const full = path.join(dir, name);
+      let st;
+      try {
+        st = lstatSync(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // gone since the listing: nothing to read
+        return fail('unreadable', entryRel);
+      }
+      if (st.isSymbolicLink()) return fail('symlink', entryRel);
+      if (st.isDirectory()) {
+        if (depth + 1 > maxDepth) return fail('too_deep', entryRel);
+        let real: string;
+        try {
+          real = realpathSync(full);
+        } catch {
+          return fail('unreadable', entryRel);
+        }
+        if (!isInside(real, root)) return fail('escapes_cwd', entryRel);
+        const inner = visit(full, entryRel, depth + 1);
+        if (inner) return inner;
+      } else if (st.isFile()) {
+        if (st.nlink > 1) return fail('hardlink', entryRel);
+      } else {
+        return fail('special_file', entryRel);
+      }
+    }
+    return undefined;
+  };
+  return visit(abs, '', 0) ?? { ok: true, entries: count };
+}
+
 // ── rules ────────────────────────────────────────────────────────────────────
 
 /** Mode bits that let someone other than the owner change a file. */
@@ -286,14 +393,39 @@ function checkBashAllow(spec: string | undefined, label: string, where: string, 
   }
   const script = m[2] as string;
   const root = canonicalPath(cwd, c.home);
-  const full = path.join(root, script);
+  // Every component that exists, from the cwd down to the script, must be a real entry (lstat, not followed) that stays
+  // inside the cwd. This runs whether or not the script itself exists yet: a rule whose directory is a symlink, or whose
+  // directory chain leaves the cwd, is refused, so creating the script later cannot place it outside.
+  let cur = root;
+  const segs = script.split('/').filter((x) => x !== '' && x !== '.');
+  for (let i = 0; i < segs.length; i++) {
+    cur = path.join(cur, segs[i] as string);
+    const last = i === segs.length - 1;
+    let ls;
+    try {
+      ls = lstatSync(cur);
+    } catch {
+      return; // this component and everything below it are not there yet: nothing more to check at load
+    }
+    const shown = segs.slice(0, i + 1).join('/');
+    if (ls.isSymbolicLink()) {
+      throw new Error(last ? `${where}: ${label}: '${script}' is a symlink; name the real file` : `${where}: ${label}: '${shown}' is a symlink; the script's directory chain must be real directories inside the policy cwd`);
+    }
+    let realPart: string;
+    try {
+      realPart = realpathSync(cur);
+    } catch {
+      return;
+    }
+    if (!isInside(realPart, root)) throw new Error(`${where}: ${label}: '${shown}' resolves outside the policy cwd`);
+  }
+  const full = path.join(root, ...segs);
   let st;
   try {
     st = lstatSync(full);
   } catch {
-    return; // not there yet: nothing to check at load
+    return;
   }
-  if (st.isSymbolicLink()) throw new Error(`${where}: ${label}: '${script}' is a symlink; name the real file`);
   let real: string;
   try {
     real = realpathSync(full);
@@ -502,12 +634,21 @@ export function resolveUserPolicies(raw: unknown, where: string, ctx: PolicyCont
     const clash = allowed.filter((r) => disallowed.includes(r));
     if (clash.length) throw new Error(`${w}: '${clash[0]}' is both allowed and disallowed`);
 
-    let settingSources: string[] = [];
-    if (p.settingSources !== undefined) {
-      if (!Array.isArray(p.settingSources) || p.settingSources.some((s) => typeof s !== 'string' || !SETTING_SOURCES.has(s))) {
-        throw new Error(`${w}: settingSources must be a list drawn from project only (user and local settings are the account's own and could widen the policy); omit it for none`);
-      }
-      settingSources = uniq(p.settingSources as string[]);
+    // Only "no settings source". `project` would make claude read CLAUDE.md files from the cwd's PARENT directories into the
+    // session (probed on 2.1.310): the hub's instructions and anything near it. `user` and `local` are the account's own.
+    if (p.settingSources !== undefined && (!Array.isArray(p.settingSources) || p.settingSources.length !== 0)) {
+      throw new Error(
+        `${w}: settingSources must be omitted or []; a policy cannot enable any settings source ('project' loads CLAUDE.md from the cwd's parent directories into the session, and 'user' and 'local' are the account's own settings). Put what the session needs in the cwd and the system prompt`,
+      );
+    }
+    const settingSources: string[] = [];
+
+    // The cwd tree is the read boundary (see checkPolicyCwd). Checked last so a mistake in a rule is reported as the rule.
+    const tree = checkPolicyCwd(p.cwd, home);
+    if (!tree.ok) {
+      throw new Error(
+        `${w}: cwd is unsafe: ${JSON.stringify(tree.path)} ${tree.detail} (${tree.code}). A policy cwd may hold only regular files and real directories, with no symlink at any depth, no FIFO/socket/device and no hard-linked file; it is checked again before every run`,
+      );
     }
 
     out.set(userId, {
