@@ -1,5 +1,7 @@
 import { PLAN_MODE, planHash } from './approvals.js';
 import { effectiveMode, modeRank } from './rails.js';
+import { checkPolicyCwd } from './policy.js';
+import type { CwdCheck, ResolvedUserPolicy } from './policy.js';
 import type { Rails } from './rails.js';
 import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
@@ -64,6 +66,8 @@ interface Turn {
   cancelledBy?: Who;
   /** Who asked for this turn. */
   by?: Who;
+  /** The user id of the policy this turn runs under (`userPolicies`); absent for an ordinary (allowedUsers) turn. */
+  policyKey?: string;
   /** The EFFECTIVE permission mode of `runId` (`bypassPermissions` on an engine that does not enforce modes). */
   mode?: string;
   /** The engine `runId` runs on. */
@@ -99,6 +103,12 @@ export interface RouterOptions {
    * `actingMode`. Unset keeps the B2 behaviour (`chi.mode`, no gate).
    */
   approvals?: { manager: ApprovalManager; actingMode: string };
+  /**
+   * Asked before every policy run is started or resumed (`userPolicies`): is the daemon able to enforce `toolPolicy` right now?
+   * Absent, or anything but `{ ok: true }`, refuses the run (fail closed): a daemon that does not know the field would run
+   * the session with the account's full tools.
+   */
+  policyGuard?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   botUsername?: string;
   now?: () => number;
   log?: (msg: string) => void;
@@ -160,7 +170,7 @@ export class ThreadRouter {
     }
   }
 
-  async handle(post: MattermostPost, who?: Who): Promise<void> {
+  async handle(post: MattermostPost, who?: Who, policy?: ResolvedUserPolicy): Promise<void> {
     const by: Who = who ?? { id: post.user_id };
     const rootId = post.root_id || post.id;
     const isReply = Boolean(post.root_id);
@@ -168,6 +178,13 @@ export class ThreadRouter {
     if (!text) return;
 
     const existing = this.turns.get(rootId);
+
+    // A thread belongs to one session. Someone with a different policy (or none) can neither cancel nor queue behind
+    // another session's turn.
+    if (existing && (existing.policyKey ?? '') !== (policy?.userId ?? '')) {
+      await this.say(post.channel_id, rootId, 'Another session is working in this thread. Start a new message of your own instead.');
+      return;
+    }
 
     if (isReply && CANCEL_RE.test(text)) {
       await this.cancel(rootId, post.channel_id, existing, by);
@@ -192,6 +209,7 @@ export class ThreadRouter {
       startedAt: this.now(),
       cancelRequested: false,
       by,
+      policyKey: policy?.userId,
       finished: false,
       abort: new AbortController(),
       queueAbort: new AbortController(),
@@ -202,7 +220,7 @@ export class ThreadRouter {
       // A new message supersedes a plan still waiting for a decision: an approver
       // must not be able to 👍 a plan the conversation has moved past.
       await this.opts.approvals?.manager.withdraw(rootId, 'a newer message arrived in this thread', 'superseded');
-      await this.start(turn, post, text, isReply);
+      await this.start(turn, post, text, isReply, policy);
     } catch (err) {
       await this.failStart(turn, err);
     }
@@ -251,6 +269,7 @@ export class ThreadRouter {
         startedAt: active.started_at,
         cancelRequested: false,
         by: active.by,
+        policyKey: rec.policy,
         // The mode the run STARTED with, as persisted when it started; never today's config. A record from before this
         // was persisted falls back to the thread's own record (a plan turn) or to nothing (an acting run): unrecorded
         // beats a guess that may be wrong.
@@ -366,7 +385,7 @@ export class ThreadRouter {
 
   // ── starting / resuming ────────────────────────────────────────────────────
 
-  private async start(turn: Turn, post: MattermostPost, text: string, isReply: boolean): Promise<void> {
+  private async start(turn: Turn, post: MattermostPost, text: string, isReply: boolean, policy?: ResolvedUserPolicy): Promise<void> {
     const { daemon, store, chi, rails } = this.opts;
     const rootId = turn.rootId;
     const by = turn.by ?? { id: post.user_id };
@@ -375,6 +394,9 @@ export class ThreadRouter {
       channel_id: post.channel_id,
       user_id: by.id,
       user_name: by.name,
+      // A policy session says so in every record, so the audit trail shows which limits the run was started under.
+      policy: policy?.label,
+      policy_enforced_by: policy?.enforcedBy,
       ...rails.promptFields(text),
     };
     // Ignore a record from another channel (defence in depth; Mattermost
@@ -382,6 +404,47 @@ export class ThreadRouter {
     const stored = store.get(rootId);
     let rec = stored && stored.channel_id === post.channel_id ? stored : undefined;
     const gated = Boolean(this.opts.approvals);
+
+    // A run is resumed only by the session that started it. A resume cannot change a run's tools or cwd, and the thread
+    // record is keyed by thread alone: letting a different policy continue it would hand them the other's permissions
+    // (or, writing a fresh run over it, take the other's thread away). Nothing is started.
+    if (rec && (rec.policy ?? '') !== (policy?.userId ?? '')) {
+      rails.audit.record('run.refused', { ...base, kind: 'thread', reason: 'thread_policy_mismatch', run_id: rec.run_id });
+      turn.finished = true;
+      this.endTurn(turn);
+      await this.say(post.channel_id, rootId, 'This thread was started by a session with different permissions, so I will not continue it here. Start a new message of your own instead.');
+      return;
+    }
+
+    // A policy session is started or resumed only on a daemon that says it enforces `toolPolicy` (checked live, every time):
+    // otherwise the field would be dropped and the run would have every tool the account has. Nothing is started.
+    if (policy) {
+      let guard: { ok: true } | { ok: false; reason: string };
+      try {
+        guard = (await this.opts.policyGuard?.()) ?? { ok: false, reason: 'no policy guard is configured' };
+      } catch (err) {
+        guard = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+      if (!guard.ok) {
+        rails.audit.record('run.refused', { ...base, kind: rec ? 'resume' : 'thread', reason: 'policy_capability_missing', detail: guard.reason, run_id: rec?.run_id });
+        turn.finished = true;
+        this.endTurn(turn);
+        await this.say(post.channel_id, rootId, 'I cannot run this: the Ikenga daemon does not report that it enforces tool limits for this kind of session, so nothing was started. Ask the operator to upgrade the daemon.');
+        return;
+      }
+    }
+
+    // The policy's cwd is the session's read boundary: walked again now, before every start and resume (it is cheap), and
+    // refused if anything in it could be read through (a symlink that appeared since load, a FIFO, a hard link ...).
+    if (policy) {
+      const tree = this.policyCwdCheck(policy, base, rec ? 'resume' : 'thread', rec?.run_id);
+      if (!tree.ok) {
+        turn.finished = true;
+        this.endTurn(turn);
+        await this.say(post.channel_id, rootId, 'I cannot run this: the working directory for this kind of session failed its safety check, so nothing was started. Ask the operator to look at the audit log.');
+        return;
+      }
+    }
 
     // Say something straight away; the engine can take a while to boot.
     const working = await this.opts.client.reply(post.channel_id, 'Working…', rootId);
@@ -427,6 +490,7 @@ export class ThreadRouter {
         turn.mode = auth.mode;
         turn.engine = auth.engine;
         await this.takeSlot(turn, 'resume');
+        if (policy) this.policyCwdMustBeSafe(policy, base, 'resume', rec.run_id); // the wait for a slot can be long: once more, immediately before
         const carry = rec.carry ? `[What happened since your last turn: an approved run carried out your plan. Its report follows.]\n${rec.carry}\n\n---\n\n` : '';
         result = await daemon.chiResume(rec.run_id, `${carry}${text}${gated ? PLAN_NOTE + rails.branchNote() : ''}`);
         if (rec.carry) await store.update(rootId, { carry: '' });
@@ -454,23 +518,26 @@ export class ThreadRouter {
     }
 
     if (!record) {
-      const prompt = this.withPrefix(gated ? `${text}${PLAN_NOTE}${rails.branchNote()}` : text);
-      // Under approvals the thread is always read-only; otherwise `chi.mode`, which is `plan` when unset (B5).
-      const mode = gated ? PLAN_MODE : rails.threadMode;
+      const prompt = this.withPrefix(gated ? `${text}${PLAN_NOTE}${rails.branchNote()}` : text, policy);
+      // Under approvals the thread is always read-only; a policy user's session runs in the policy's mode; otherwise
+      // `chi.mode`, which is `plan` when unset (B5).
+      const mode = gated ? PLAN_MODE : (policy ? policy.mode : rails.threadMode);
       const auth = rails.authorizeRun({ kind: 'thread', engine: chi.engine, mode, fields: base });
       turn.requestId = auth.requestId;
       turn.mode = auth.mode;
       turn.engine = auth.engine;
       // After the fallback from a resume that found its run gone the turn already holds its slot (that call started nothing).
       await this.takeSlot(turn, 'thread');
+      if (policy) this.policyCwdMustBeSafe(policy, base, 'thread'); // the wait for a slot can be long: once more, immediately before
       result = await daemon.chiRun({
         engineId: chi.engine,
         prompt,
-        cwd: chi.cwd,
+        cwd: policy ? policy.cwd : chi.cwd,
         model: chi.model,
         mode,
         timeoutSeconds: chi.timeoutSeconds,
         persistent: chi.persistent ?? true,
+        ...(policy ? { toolPolicy: policy.toolPolicy } : {}),
       });
       requireRunId(result);
       rails.audit.record('run.started', { ...base, request_id: turn.requestId, run_id: result.run_id, kind: 'thread', engine: auth.engine, mode: auth.mode, queue_wait_s: turn.queueWaitS });
@@ -483,6 +550,7 @@ export class ThreadRouter {
         brief: prompt,
         mode,
         engine: chi.engine,
+        ...(policy ? { policy: policy.userId } : {}),
         created_at: t,
         updated_at: t,
       };
@@ -511,6 +579,34 @@ export class ThreadRouter {
 
     const fresh = store.get(rootId) as ThreadRecord;
     turn.done = this.track(turn, fresh, notice);
+  }
+
+  /** Walk the policy cwd; on a problem write `policy.cwd_unsafe` (the first offending path, never contents) and return the result. */
+  private policyCwdCheck(policy: ResolvedUserPolicy, base: Record<string, string | number | boolean | undefined | null | string[]>, kind: 'thread' | 'resume', runId?: string): CwdCheck {
+    let tree: CwdCheck;
+    try {
+      tree = checkPolicyCwd(policy.cwd);
+    } catch {
+      tree = { ok: false, code: 'unreadable', path: '.', detail: 'the check itself failed' };
+    }
+    if (!tree.ok) {
+      this.opts.rails.audit.record('policy.cwd_unsafe', {
+        thread_root: base.thread_root as string,
+        channel_id: base.channel_id as string,
+        user_id: base.user_id as string,
+        policy: policy.label,
+        kind,
+        reason: tree.code,
+        path: tree.path,
+        run_id: runId,
+      });
+      this.log(`policy '${policy.label}': cwd is unsafe (${tree.code} at ${JSON.stringify(tree.path)}); no run started`);
+    }
+    return tree;
+  }
+
+  private policyCwdMustBeSafe(policy: ResolvedUserPolicy, base: Record<string, string | number | boolean | undefined | null | string[]>, kind: 'thread' | 'resume', runId?: string): void {
+    if (!this.policyCwdCheck(policy, base, kind, runId).ok) throw new Error('the working directory for this kind of session failed its safety check (see the audit log)');
   }
 
   private async failStart(turn: Turn, err: unknown): Promise<void> {
@@ -877,8 +973,8 @@ export class ThreadRouter {
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
-  private withPrefix(text: string): string {
-    const prefix = this.opts.chi.systemPrompt?.trim();
+  private withPrefix(text: string, policy?: ResolvedUserPolicy): string {
+    const prefix = (policy?.systemPrompt ?? this.opts.chi.systemPrompt)?.trim();
     return prefix ? `${prefix}\n\n---\n\n${text}` : text;
   }
 

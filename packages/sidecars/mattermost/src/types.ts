@@ -1,4 +1,5 @@
 import type { DaemonAuth } from './daemon.js';
+import type { ResolvedUserPolicy, UserPolicy } from './policy.js';
 
 /** How a bot reaches the Ikenga daemon. Each bot has its own entry. */
 export interface BotDaemonConfig {
@@ -203,6 +204,13 @@ export interface MattermostBridgeConfig {
   schedulesPath?: string;
   /** Cards for the sender's drafts, decided by approvers' reactions or buttons. Independent of `daemon` and `chi`. */
   outboxApprovals?: OutboxApprovalsConfig;
+  /**
+   * Per-user policies, keyed by Mattermost user id: users who are not in `allowedUsers` but may use the bot in the
+   * policy's own channels with a fixed toolset. Omitted = none (nothing changes). Needs `daemon` + `chi` (claude-code).
+   */
+  userPolicies?: Record<string, UserPolicy>;
+  /** Directories no policy `cwd` may overlap (besides `chi.cwd`). See `BotFileConfig.privateRoots`. */
+  privateRoots?: string[];
 }
 
 export interface MattermostPost {
@@ -254,4 +262,6 @@ export interface GateResult {
   reason?: string;
   /** Machine-readable denial reason (the audit log records this, not `reason`, which names a user). */
   code?: 'own_post' | 'system_post' | 'no_allowed_users' | 'user_not_allowed' | 'no_allowed_channels' | 'channel_not_allowed';
+  /** Set when the poster is a policy user (not in `allowedUsers`): their session must be started under this policy. */
+  policy?: ResolvedUserPolicy;
 }

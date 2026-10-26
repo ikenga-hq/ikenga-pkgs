@@ -43,12 +43,13 @@ describe('resolveModeRails (refused at config load)', () => {
     assert.deepEqual(resolveModeRails({ chi: {} }, WHERE), { maxMode: 'plan', threadMode: 'plan', actingMode: undefined });
   });
 
-  it('accepts plan | acceptEdits | bypassPermissions (and the daemon id `auto`), and refuses anything else', () => {
+  it('accepts plan | default | acceptEdits | bypassPermissions (and the daemon id `auto`), and refuses anything else', () => {
+    assert.equal(resolveModeRails({ maxMode: 'default' }, WHERE).maxMode, 'default');
     assert.equal(resolveModeRails({ maxMode: 'acceptEdits' }, WHERE).maxMode, 'auto');
     assert.equal(resolveModeRails({ maxMode: 'auto' }, WHERE).maxMode, 'auto');
     assert.equal(resolveModeRails({ maxMode: 'bypassPermissions' }, WHERE).maxMode, 'bypassPermissions');
-    for (const bad of ['default', 'yolo', '', 'PLAN']) {
-      assert.throws(() => resolveModeRails({ maxMode: bad }, WHERE), /bot 'rex': maxMode must be one of plan, acceptEdits, bypassPermissions/);
+    for (const bad of ['yolo', '', 'PLAN']) {
+      assert.throws(() => resolveModeRails({ maxMode: bad }, WHERE), /bot 'rex': maxMode must be one of plan, default, acceptEdits, bypassPermissions/);
     }
   });
 
@@ -322,7 +323,7 @@ describe('B1 Rails.authorizeRun: the engine actually sent decides the effective 
 describe('B2 prototype keys are not mode names, engines or ceilings', () => {
   it('maxMode: refused, never an unlimited ceiling', () => {
     for (const name of PROTO_NAMES) {
-      assert.throws(() => resolveModeRails({ maxMode: name }, WHERE), /bot 'rex': maxMode must be one of plan, acceptEdits, bypassPermissions/, name);
+      assert.throws(() => resolveModeRails({ maxMode: name }, WHERE), /bot 'rex': maxMode must be one of plan, default, acceptEdits, bypassPermissions/, name);
       assert.throws(() => resolveModeRails({ maxMode: name, chi: { mode: 'bypassPermissions' } }, WHERE), /maxMode must be one of/, name);
       assert.throws(() => resolveModeRails({ maxMode: name, approvals: { actingMode: 'bypassPermissions' } }, WHERE), /maxMode must be one of/, name);
     }

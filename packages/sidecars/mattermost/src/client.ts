@@ -245,6 +245,32 @@ export class MattermostClient extends EventEmitter {
   }
 
   /**
+   * Like `resolveChannelId`, for a gate that must match by id only: a channel NAME is looked up in every team the bot belongs
+   * to and must be found in exactly one, because the same name in two teams is two different channels and picking the first
+   * would let the wrong one in. Throws `ChannelLookupError` (`notFound` true when there is no such channel; false when the
+   * name is ambiguous or the lookup failed).
+   */
+  async resolveChannelIdUnique(ref: string): Promise<string> {
+    const name = ref.replace(/^#/, '');
+    if (/^[a-z0-9]{26}$/.test(name)) return this.resolveChannelId(name);
+    const auth = { Authorization: `Bearer ${this.config.mattermostToken}` };
+    const base = this.config.mattermostUrl;
+    const teamsRes = await fetch(`${base}/api/v4/users/me/teams`, { headers: auth });
+    if (!teamsRes.ok) throw new ChannelLookupError(`team lookup failed: HTTP ${teamsRes.status} ${teamsRes.statusText}`, false);
+    const teams = ((await teamsRes.json()) as Array<{ id: string }> | null) ?? [];
+    const found = new Set<string>();
+    for (const team of teams) {
+      const res = await fetch(`${base}/api/v4/teams/${encodeURIComponent(team.id)}/channels/name/${encodeURIComponent(name)}`, { headers: auth });
+      if (res.ok) found.add(((await res.json()) as { id: string }).id);
+      else if (res.status !== 404 && res.status !== 403) throw new ChannelLookupError(`channel lookup failed: HTTP ${res.status} ${res.statusText}`, false);
+    }
+    if (found.size > 1) throw new ChannelLookupError(`channel '#${name}' exists in more than one team the bot belongs to; give its channel id instead`, false);
+    const [id] = [...found];
+    if (!id) throw new ChannelLookupError(`channel '#${name}' not found in any team the bot belongs to (is the bot a member?)`, true);
+    return id;
+  }
+
+  /**
    * Open the websocket. The returned promise rejects if the FIRST connection cannot be made (the caller decides what
    * that means; the bridge exits non-zero and lets systemd restart it). Once it has resolved, an unexpected loss of
    * the connection is retried here, forever, with capped exponential backoff, until `close()` is called.

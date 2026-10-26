@@ -1,14 +1,29 @@
+import type { ResolvedUserPolicy } from './policy.js';
 import type { GateResult, MattermostBridgeConfig, MattermostPost, MattermostPostEvent } from './types.js';
 
 export class MattermostGate {
   private allowedUsersSet: Set<string>;
   private allowedChannelsSet: Set<string>;
   private botUserId?: string;
+  /** Policy users by Mattermost user id. Empty unless the bridge hands the RESOLVED policies in: raw config alone grants nothing. */
+  private readonly policies: ReadonlyMap<string, ResolvedUserPolicy>;
+  /**
+   * The channel IDS each policy user may use the bot in, resolved from the policy's channel names/ids once at startup (the
+   * bridge calls `setPolicyChannelIds`). A policy user matches by channel id ONLY: a name in an event is not trusted, and the
+   * same name in another team is another channel. Until the ids are known (or if they cannot be) the user is refused.
+   */
+  private readonly policyChannelIds = new Map<string, ReadonlySet<string>>();
 
-  constructor(config: MattermostBridgeConfig) {
+  constructor(config: MattermostBridgeConfig, policies?: ReadonlyMap<string, ResolvedUserPolicy>) {
     this.allowedUsersSet = new Set(config.allowedUsers);
     this.allowedChannelsSet = new Set(config.allowedChannels);
     this.botUserId = config.botUserId;
+    this.policies = policies ?? new Map();
+  }
+
+  /** Replace the resolved channel ids of one policy user. An empty list refuses them everywhere. */
+  setPolicyChannelIds(userId: string, ids: Iterable<string>): void {
+    this.policyChannelIds.set(userId, new Set(ids));
   }
 
   setBotUserId(botUserId: string): void {
@@ -27,7 +42,7 @@ export class MattermostGate {
     }
 
     // 3. Deny by default: require non-empty allowedUsers
-    if (this.allowedUsersSet.size === 0) {
+    if (this.allowedUsersSet.size === 0 && this.policies.size === 0) {
       return { allowed: false, reason: 'no allowed users configured (deny by default)', code: 'no_allowed_users' };
     }
 
@@ -43,6 +58,15 @@ export class MattermostGate {
       (username && this.allowedUsersSet.has(`@${username}`));
 
     if (!userAllowed) {
+      // A policy user is let in by Mattermost user id only (a username can be renamed or reused), and only in the
+      // channels of their own policy (by channel id): `allowedChannels` is the allowedUsers' list, not theirs.
+      const policy = this.policies.get(post.user_id);
+      if (policy) {
+        if (!this.policyChannelIds.get(post.user_id)?.has(post.channel_id)) {
+          return { allowed: false, reason: `channel '${post.channel_id}' (${event.data?.channel_name || 'unknown'}) is not in this user's policy channels`, code: 'channel_not_allowed' };
+        }
+        return { allowed: true, policy };
+      }
       return { allowed: false, reason: `user '${post.user_id}' (${username || 'unknown'}) is not in allowed_users`, code: 'user_not_allowed' };
     }
 

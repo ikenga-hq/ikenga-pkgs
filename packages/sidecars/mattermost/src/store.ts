@@ -48,6 +48,8 @@ export interface ThreadRecord {
   mode?: string;
   /** The engine `run_id` was started on. Which mode applies to a resume depends on it. Records without one count as an engine that enforces nothing. */
   engine?: string;
+  /** The user id of the policy (`userPolicies`) this run was started under; absent for an ordinary run. Only that policy may resume or cancel it. */
+  policy?: string;
   /** Report of the last approved run, handed to the next plan turn (it cannot remember it). */
   carry?: string;
   created_at: number;

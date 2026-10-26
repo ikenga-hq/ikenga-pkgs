@@ -371,6 +371,7 @@ Every record has `v`, `ts` (ISO, UTC), `bot`, `event`, event fields, and `prev`:
 | `run.start_failed` | authorised, but the daemon gave no run | `request_id`, `thread_root`, `kind`, `engine`, `mode`, `error_kind`, `run_id` (only when the bridge had one), `run_unjoined` (true when none: the daemon can leave a failed row in `chi_list` that a failed `chi_run` gives no id for) |
 | `run.cancelled` | someone said `stop` | `run_id`, `thread_root`, `user_id`, `user_name`, `engine`, `mode` |
 | `run.finished` | the bridge saw the run end | `run_id`, `thread_root`, `kind`, `engine`, `mode` (the mode the run STARTED with, persisted with the active turn, so it survives a restart and a config change), `status` (`done`, `failed`, `cancelled`, `timed_out`, `run_gone`, `lost_contact`, `unwatched`), `duration_s` |
+| `policy.cwd_unsafe` | a policy run was not started or resumed because the policy `cwd` failed its walk (see "The cwd is the read boundary") | `thread_root`, `channel_id`, `user_id`, `policy`, `kind` (`thread`, `resume`), `reason` (`symlink`, `special_file`, `hardlink`, `escapes_cwd`, `not_a_directory`, `too_many_entries`, `too_deep`, `unreadable`), `path` (the first offending path relative to the cwd, never its contents), `run_id` (resumes) |
 | `run.refused` | the mode rail said no | `kind`, `reason: mode_exceeds_max`, `engine`, `requested_mode`, `effective_mode`, `mode_enforced`, `max_mode`, `run_id` (resumes) |
 | `audit.recovered` | the first append after a crash that left a half-written last line | `torn_sha` (SHA-256 of the half line, which stays in the file as evidence), `torn_bytes`. `--verify` then reports `recovered after crash at <file>:<line>` instead of a broken chain |
 | `approval.requested` | the plan was posted for approval | `request_id`, `thread_root`, `plan_run_id`, `plan_hash` (SHA-256 of the plan exactly as shown), `requester_*`, `acting_mode`, `expires_at` |
@@ -406,7 +407,7 @@ It is the one copy of the trail that the agent's account cannot edit, so restric
 
 ### Mode ceiling: `maxMode`
 
-`maxMode` is `plan` | `acceptEdits` | `bypassPermissions` (`auto` is accepted as the daemon's name for `acceptEdits`), **default `plan`**. Ranked
+`maxMode` is `plan` | `default` | `acceptEdits` | `bypassPermissions` (`auto` is accepted as the daemon's name for `acceptEdits`), **default `plan`**. Ranked
 `plan` < `default` < `acceptEdits` < `bypassPermissions`. At load the bridge refuses (naming the bot and the field) a `chi.mode` or an
 `approvals.actingMode` above it, an unknown `chi.mode` (the daemon would silently run it as `default`), and a `maxMode` of anything else.
 At every `chi_run` and `chi_resume` call site it asserts the mode again, and a run that would exceed it is not started: a `run.refused` record is
@@ -480,6 +481,162 @@ Related, and true today: Ruby's "read-only" at the data layer is whatever her da
 - **A mode on a non-`claude-code` engine is not a restriction.** If you run `pi`, `opencode`, `codex` or `antigravity-cli` you need `maxMode: bypassPermissions`, and then the plan-then-approve gate (approvals) does not make the plan phase read-only. `approval.*` records and the approval post name the mode that was ASKED for.
 - A reaction made while the bot has no websocket is not seen until the next start (unchanged from B3), so it is not in the audit log either.
 - The prompt-hash option hashes the message the bot received (after stripping `@bot`), not what the model finally saw.
+
+## User policies (`userPolicies`)
+
+A bot can let a few more people in, each with a fixed toolset, without touching what its `allowedUsers` get. The case this was
+built for: Ruby answers Ada in `#royalti-co` and can queue social posts for her, and can do nothing else for her.
+
+```json
+"ruby": {
+  "allowedUsers": ["9s65in45np8h98qeatgx7anuoa"],
+  "allowedChannels": ["ruby-test"],
+  "maxMode": "default",
+  "chi": { "engine": "claude-code", "cwd": "~/projects/royalti-co", "systemPrompt": "...", "persistent": true },
+  "privateRoots": ["~/projects/royalti-co", "~/.ikenga", "~/.ssh"],
+  "userPolicies": {
+    "buay4kf99bbk7cjtbeupd5rxow": {
+      "label": "ada-social-queue",
+      "channels": ["royalti-co"],
+      "cwd": "~/projects/royalti-co-queue",
+      "systemPrompt": "...",
+      "allowedTools": ["Bash(bash scripts/cron/run-social-queue-submit.sh:*)", "Read(./docs/**)"],
+      "enforcedBy": "daemon"
+    }
+  }
+}
+```
+
+The hub (`~/projects/royalti-co`, Ruby's own `chi.cwd`) and Ada's directory (`~/projects/royalti-co-queue`) are **siblings**: hers is
+neither inside nor above the hub. That is enforced at load, not a convention (see `cwd` below).
+
+| Field | Meaning |
+|-------|---------|
+| key | The user's **Mattermost id** (26 lowercase letters and digits). Usernames are refused: they can be renamed or reused. |
+| `allowedUsers` (of the bot) | On a bot with `userPolicies` every `allowedUsers` entry must itself be a Mattermost id (a username entry is refused, since it cannot be compared with a policy id), and a policy whose id is in `allowedUsers` is refused. |
+| `channels` | Where this user may use the bot. Required. **Independent of `allowedChannels`**: the founder keeps `ruby-test`, Ada gets `royalti-co`, neither can use the other's. A name or id is resolved **once at startup** through the REST API to a channel **id**, and only the id ever matches: the channel name in an incoming event is not trusted, and a same-named channel in another team is another id. A name that exists in two of the bot's teams is refused as ambiguous (give the id). A channel that cannot be resolved leaves that user refused there (log line, `policy.channel_unresolved` audit record), and is retried on a websocket reconnect. |
+| `cwd` | Directory of this user's runs. Required, absolute or `~/...`, no `..`. It is the **read boundary** (see "The cwd is the read boundary" below): everything in it is readable by the session, so put in it only what they may read, and no symlink. At load both it and `chi.cwd` / `privateRoots` are resolved (`~` expanded, `//` and `/.` normalised, symlinks followed where the path exists) and a `cwd` that **is, contains or sits inside** `chi.cwd` or any `privateRoots` entry is refused. `~/projects`, `~/` and `/` contain the hub, so they are refused too. `chi.cwd` is required with `userPolicies`. |
+| `privateRoots` (of the bot) | Optional list of further directories no policy `cwd` may overlap (the hub checkout, `~/.ikenga`, `~/.ssh`, ...). Absolute or `~/...`. |
+| `mode` | `default`, the only value (the wire mode recorded for the run; it must not exceed `maxMode`, so a bot with policies needs `maxMode: "default"` or higher, while the founder's sessions keep `plan` via `chi.mode` unset). The permission mode the session really runs in is `toolPolicy.mode`, `dontAsk`. `plan` is refused: it blocks even an allowed command. |
+| `systemPrompt` | Replaces `chi.systemPrompt` for this user. Advisory only. |
+| `allowedTools` | Rules that run without a prompt. Required, non-empty. See "Rule forms" below. |
+| `tools` | The built-in tools that exist in the session (`--tools`, an exact set). Default: the tool names in `allowedTools`. Only `Bash`, `BashOutput`, `KillShell`, `Read`, `Glob`, `Grep`, `LS`, `TodoWrite`, `ToolSearch` can ever be listed. |
+| `disallowedTools` | Extra deny rules. The default deny list is **every known tool that is not in `tools`** (the file writers, `WebFetch`, `WebSearch`, `Task`/`Agent`, `Skill`, `ToolSearch`, `Monitor`, `CronCreate`/`CronDelete`/`CronList`, `SendMessage`, `RemoteTrigger`, `PushNotification`, `AskUserQuestion`, `EnterWorktree`, ... see `KNOWN_TOOL_LIST` in `src/policy.ts`); this list adds rules to it (also `mcp__...` names). An unknown tool name is refused, in any list. |
+| `settingSources` | Omitted or `[]`: the only accepted value (claude reads no settings file). `project` is **refused at load**: it makes claude load `CLAUDE.md` files from the cwd's *parent* directories into the session (a verifier probe), which pulls the hub's instructions into Ada's session. `user` and `local` are the account's own settings and are refused too. Put what the session needs in the cwd and in `systemPrompt`. |
+| `enforcedBy` | **Required, and only `daemon`.** There is no settings-file mode: a `.claude/settings.json` in the cwd cannot give `--tools`, `--strict-mcp-config` or the permission mode, and the account that runs the bot can usually write it. The audit log records the value at every start. |
+
+### Rule forms (`allowedTools`)
+
+- **Bash** is an exact allowlist: `Bash(<interpreter> <script path>)`, optionally ending `:*` or ` *` for "any arguments". The interpreter is one of
+  `bash`, `sh`, `node`, `python3`. The script path is relative to the policy cwd, made only of letters, digits, `.`, `_`, `-` and `/`, with no `..`, no
+  leading `/` or `~`, no dotfile segment. Anything else is refused: `cat`, `find`, `awk`, `cp`, `tee`, `source`, `.`, `busybox`, `env`, `command`,
+  `${IFS}`, `<(...)`, redirections, pipes, `;`, `&&`, quotes, backticks, `$(...)`, globs, extra fixed arguments, flags, other interpreters. When the
+  script exists at load it must also be a real file inside the cwd (not a symlink), **not group- or world-writable and not owned by the bot's own uid**,
+  and so must every directory between it and the cwd (otherwise the bot can rename another file over it). Every component of the path that exists is
+  checked with `lstat` even when the script itself does not exist yet: a rule whose directory is a symlink, or whose chain leaves the cwd, is refused.
+  The ownership check is at load only: make the script and its directories root-owned and read-only to the bot, so it stays true.
+- **Read / Grep / Glob / LS** are scoped relative to the cwd: `Read(./docs/**)`. **This does not confine what the session can read** (see "The cwd is the read boundary"): it only names what those tools are pre-approved for. The first path segment must be a literal name. Refused: `Read(/**)`,
+  `Read(//..)`, `Read(~/**)`, `Read(../**)`, `Read(./**)`, `Grep(*)`, any unscoped form, and `{}[]!$` or spaces in the path. A literal prefix that exists must
+  not be a symlink out of the cwd.
+- `TodoWrite`, `ToolSearch`, `BashOutput`, `KillShell` take no specifier. Everything else known, and every `mcp__` tool, is refused in `allowedTools`.
+
+### The cwd is the read boundary
+
+**Anything inside the policy `cwd` is readable by the session, whatever the `Read(...)` rules say.** In `dontAsk` (and `default`) a read inside the working
+directory needs no rule (`Read ./secret.txt` ran with only `Read(./docs/**)` allowed), and a chained read-only shell command is allowed along with the wrapper
+rule. So `Read(./docs/**)` scopes nothing; the directory is the scope. It follows that the queue directory must:
+
+- hold **only what Ada may read**: the docs and the forwarding wrapper. No credentials, no state, no tokens, no copies of private files;
+- contain **no symlink at any depth**, not even one pointing inside it. Claude's path check does not follow a shell glob through a symlink: with
+  `hublink -> ../royalti-co` and `docs/more.txt -> ../../royalti-co/notes.txt` in the cwd, `cat h*/notes.txt` and `cat d*/m*` were **allowed** under the daemon's
+  argv (claude 2.1.310, `dontAsk`) while `cat hublink/notes.txt` was denied;
+- be **root-owned and not writable by the bot's account** (the bot could otherwise add a symlink, a hard link or a credential after the checks).
+
+The bridge enforces the first part it can see. At load, and **again immediately before every policy run start and every resume** (cheap; once more after
+a wait for a run slot), it walks the cwd tree with `lstat` (nothing followed) and refuses: a symlink at any depth (and a cwd that is itself a symlink); any entry
+that is not a regular file or directory (FIFO, socket, device); a directory whose real path leaves the cwd; and a regular file with more than one hard link
+(`nlink > 1`; **a hard link cannot be detected any other way**, so a file that has two names is refused, copy it instead). The walk is capped at
+10000 entries and depth 20 and refuses past either. A missing cwd passes (nothing to read; a run there fails in the daemon). At load a refusal is a
+config error naming the first offending path (stderr, exit 1). At run time nothing is started: the thread gets "the working directory for this kind of
+session failed its safety check", and the audit log gets `policy.cwd_unsafe` with `reason` and `path` (the path only, never contents; the channel message does
+not name it). Entries are visited in sorted order, so the first offender is stable.
+
+What the walk does **not** do: it is a check at a moment, not a lock (an entry added after the walk and before `claude` opens it is not seen; root-owned
+and read-only to the bot is the real control), it cannot see bind mounts, and it cannot tell what is *in* a file.
+
+**The forwarding wrapper validates its own arguments.** Ada controls them. The `Bash(bash scripts/x.sh:*)` rule allows any arguments, so the wrapper must treat
+every one as hostile: `--file /etc/shadow`, `../..`, `'; id'`, newlines, a `*` glob. Accept **exactly one JSON string argument, or stdin**, parse it as data,
+and never put it in a shell command line, a path, or an option position. Refuse anything else. Test it by execution with those inputs.
+
+**Persistent policy runs fall back in-process and do not survive a daemon restart.** `chi.persistent` asks for a detached chi-runner, but a policy
+run falls back to running in-process (and a resume always does), so a daemon restart ends it. Do not rely on a policy run outliving the daemon: the
+bridge reports the failure and the next message starts a fresh run, which carries no memory of the earlier ones.
+
+### What the bridge enforces, and what it cannot
+
+The bridge never starts `claude`. It asks the daemon for a Chi run (`chi_run`), and the **daemon** builds the `claude` command line. So:
+
+| Limit | Enforced by | State |
+|-------|-------------|-------|
+| Who may talk, in which channel (by id) | the bridge (gate: user id, then the policy's own channel ids) | enforced, tested |
+| A policy user's run uses the policy's `cwd`, `mode`, prompt | the bridge (`chi_run` options) | enforced, tested |
+| A thread belongs to one session: a different policy (or none) cannot resume, cancel or queue behind it | the bridge (thread record carries the policy) | enforced, tested |
+| The mode ceiling, audit record of every policy run | the bridge (`maxMode`, `run.requested` / `run.started` carry `policy`) | enforced |
+| **No policy run starts unless the daemon advertises `chi.toolPolicy`** | the bridge (live `GET /api/health` before every start and resume; also at startup and on websocket reconnect) | enforced, tested with a daemon that omits it |
+| `--tools`, `--allowedTools`, `--disallowedTools`, `--permission-mode dontAsk`, `--setting-sources`, `--strict-mcp-config`, `--disable-slash-commands` | the **daemon**, from `opts.toolPolicy` | the daemon side of the protocol below; **not in the shipped daemon until it advertises the capability** |
+
+**Fail closed.** An old daemon has no `chi.toolPolicy` in `/api/health` and would silently drop `toolPolicy` and run the session with every tool the account has.
+So the bridge asks `GET /api/health` (no credential needed) and refuses a policy run, saying so in the thread ("the Ikenga daemon does not report that
+it enforces tool limits...") and in the audit log (`run.refused`, `reason: policy_capability_missing`), unless the JSON has `"capabilities": ["chi.toolPolicy"]`.
+Anything unclear (daemon unreachable, a non-200, no `capabilities` array) counts as "not advertised". The check is live every time, so an upgrade takes
+effect on the next message and a rollback stops policy runs at once. The audit log has `policy.capability` at startup, on every websocket reconnect and
+whenever the answer changes. Runs for `allowedUsers` do not depend on it.
+
+### The daemon protocol
+
+`chi_run` accepts `opts.toolPolicy`; these are exactly the field names the bridge sends (the object is complete, the daemon needs no other input):
+
+```json
+{ "tools": ["Bash", "Read"],
+  "allowedTools": ["Bash(bash scripts/cron/run-social-queue-submit.sh:*)", "Read(./docs/**)"],
+  "disallowedTools": ["Write", "Edit", "..."],
+  "mode": "dontAsk",
+  "strictMcp": true,
+  "settingSources": [] }
+```
+
+`opts.mode` is `default` (the wire mode the bridge records and checks against `maxMode`); for a run with `toolPolicy` the daemon uses `toolPolicy.mode` as
+`--permission-mode`. The daemon, for a run that carries `toolPolicy`, appends exactly `claudeArgsForToolPolicy(toolPolicy)` (`src/policy.ts`) and nothing else:
+
+```
+--tools <tools joined by ,> --allowedTools <one argv element per rule> --disallowedTools <one per rule>
+--permission-mode <mode> --setting-sources <joined by , ; empty string for none> --strict-mcp-config --disable-slash-commands
+```
+
+with no `--mcp-config` (so no MCP tool loads) and no permission-prompt tool. It never lets an unlisted tool wait for an answer (no `awaiting_auth`: a
+tool that is not allowed is denied at once), **stores the policy with the run and re-applies it on `chi_resume`** (a resume cannot be given options), and a
+resume of a policy run whose stored policy is missing **fails closed**. An unknown or malformed `toolPolicy` field makes `chi_run` fail with an error
+(never ignored). Runs without `toolPolicy` are unchanged. The daemon advertises it by adding `"chi.toolPolicy"` to the `capabilities` array of `/api/health`.
+
+**Pinned by running `claude` 2.1.310** (`-p`, haiku, in a scratch directory, `--permission-mode dontAsk --tools Bash,Read --allowedTools 'Bash(bash scripts/q.sh:*)' --disallowedTools Write Edit WebFetch --setting-sources '' --strict-mcp-config --disable-slash-commands`):
+
+- In `dontAsk`: the allowed script ran; `ls /etc` was denied at once, with no prompt ("Permission to use Bash has been denied because Claude Code is running in don't ask mode"); `script; ls /etc` was denied; `cat secret.txt` through Bash was denied; a `Read` of `/etc/hostname` was denied; with no `Write` in `--tools` there was no way to create a file. `--setting-sources ''` is accepted. So `dontAsk` denies instead of prompting, and no prompt wiring is needed. (In `plan` the allowed command is refused too, which is why a policy does not use it.)
+- **Allow rules do not confine reads.** In `dontAsk` (and `default`) `Read ./secret.txt` ran although only `Read(./docs/**)` was allowed: reads inside the working directory need no rule. The read boundary is the **cwd**: see "The cwd is the read boundary" above (no symlink at any depth, nothing private in it, root-owned). Never point a policy at a checkout that holds anything private; give it a directory of its own (a sibling of the hub, not inside or above it) holding the queue docs and a forwarding wrapper. The load-time overlap check against `chi.cwd` and `privateRoots` is there for exactly this.
+- **A shell glob walks through a symlink that a literal path does not.** With a symlink in the cwd pointing outside it, `cat h*/notes.txt` read the hub while `cat hublink/notes.txt` was denied; the chained read-only command is allowed because the rule allows the wrapper. Hence the symlink ban above.
+
+Operator commands (no websocket, no secrets resolved beyond what the config load needs):
+
+```bash
+MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json node dist/bridge.js --list-policies
+MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json node dist/bridge.js --print-policy ruby/buay4kf99bbk7cjtbeupd5rxow
+```
+
+`--print-policy` prints the `toolPolicy` the bridge sends and the exact `claudeArgs` for it. It is a **diagnostic**: it proves nothing about the daemon, and
+nothing a policy needs depends on running it.
+
+Not covered: what an allowed command does with its arguments (the queue wrapper validates its own input, and its argument is Ada's text, so test it by
+execution); script and directory ownership after load; entries added to the cwd between the walk and the run (the walk is a moment, not a lock); a user whose account can reach the daemon some other way; inbound attachments (the bridge
+ignores `file_ids` on incoming posts, and a post with no text is dropped).
 
 ## Concurrency cap
 
@@ -557,6 +714,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 - `schedules` is optional; see "Scheduled posts (B4)". Needs the same `daemon` and `chi` as thread runs.
 - `approvals` is optional. Without it the bot behaves as in B2 (`chi.mode`, no gate). With it, see "Approvals (B3)".
   Do not set `chi.mode` together with it.
+- `userPolicies` is optional (keyed by Mattermost user id; see "User policies"): per-user channel scope, cwd and tool allowlist for people who are not in `allowedUsers`. Needs `daemon` and `chi` (with `claude-code` and a `cwd`), a daemon that advertises `chi.toolPolicy`, and cannot be combined with `approvals`. `privateRoots` lists directories no policy `cwd` may overlap.
 - `maxMode` (B5, default `plan`) caps every run the bot starts, and `approvals` or a `chi.mode` above `plan` need it raised; see "Mode ceiling". `branchPrefix` is advisory. `audit` takes `channel`, `promptHash`, `maxBytes`, `keep`, `path`; the log itself is always on.
 - No `Origin` header is sent (the daemon allows a missing one for non-browser clients). Set `daemon.origin` only if needed.
 - Passwords, tokens and the session cookie are redacted from every error and log line.
@@ -603,7 +761,7 @@ The result text is `chi_status.output` once the status is `done`.
 - **A bridge restart in the middle of a scheduled run loses that run's post** (the occurrence is already marked handled, to rule out a
   double post). The bridge posts a notice saying so and names the Chi run, which may have finished in the Chi view; it does not
   re-attach to it the way a thread turn does. A run that exceeds `progress.maxWaitMs` (2 hours) is reported as "stopped watching".
-- Not here: DMs, files, slash commands. B5 gaps are listed under "Safety rails and audit".
+- Not here: DMs, inbound files and images (ignored), slash commands. B5 gaps are listed under "Safety rails and audit".
 
 ## Testing
 
