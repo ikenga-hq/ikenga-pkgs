@@ -11,6 +11,8 @@ import { OutreachManager, OutreachStore } from './outreach.js';
 import { SenderSocket } from './sender-socket.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
+import { claudeArgsForToolPolicy, policyChannels, policySettingsJson, resolveUserPolicies } from './policy.js';
+import type { ResolvedUserPolicy } from './policy.js';
 import { Rails, effectiveMode, resolveBranchPrefix, resolveModeRails } from './rails.js';
 import { Redactor } from './secrets.js';
 import { RunGate, resolveLimits } from './run-gate.js';
@@ -24,6 +26,8 @@ export class MattermostBridge {
   readonly config: MattermostBridgeConfig;
   readonly client: MattermostClient;
   readonly gate: MattermostGate;
+  /** Per-user policies (`userPolicies`), resolved and validated, by Mattermost user id. Empty for a bot without them. */
+  readonly policies: ReadonlyMap<string, ResolvedUserPolicy>;
   readonly echoPrefix: string;
   /** Present when the bot is configured for Chi runs (B2); absent means B1 echo. */
   readonly router?: ThreadRouter;
@@ -57,7 +61,6 @@ export class MattermostBridge {
     this.config = config;
     this.runGate = runGate ?? new RunGate({ max: resolveLimits(undefined).maxConcurrentRuns });
     this.echoPrefix = config.echoPrefix ?? 'echo: ';
-    this.gate = new MattermostGate(config);
     this.client = new MattermostClient(config, clientTiming);
 
     const botName = config.name ?? 'bot';
@@ -65,7 +68,17 @@ export class MattermostBridge {
     // B5: refuse, before anything starts, a mode above the ceiling (default `plan`), a bad branch prefix or audit block.
     const modes = resolveModeRails(config, botWhere);
     const branchPrefix = resolveBranchPrefix(config.branchPrefix, botWhere);
-    this.auditCfg = resolveAuditConfig(config.audit, botWhere, config.allowedChannels);
+    // Per-user policies: validated again here, whichever way the config arrived. The gate gets the RESOLVED policies only.
+    this.policies = resolveUserPolicies(config.userPolicies, botWhere, {
+      allowedUsers: config.allowedUsers,
+      maxMode: modes.maxMode,
+      chi: config.chi,
+      approvals: config.approvals,
+      runsChi: Boolean(config.daemon && config.chi),
+      botUserId: config.botUserId,
+    });
+    this.gate = new MattermostGate(config, this.policies);
+    this.auditCfg = resolveAuditConfig(config.audit, botWhere, [...config.allowedChannels, ...policyChannels(this.policies)]);
     const redactor = new Redactor();
     redactor.add(config.mattermostToken);
     const dAuth = config.daemon?.auth;
@@ -319,6 +332,9 @@ export class MattermostBridge {
         branch_prefix: this.rails?.branchPrefix,
         allowed_users: cfg.allowedUsers.length,
         allowed_channels: cfg.allowedChannels.length,
+        // Policy users and how their limits are really enforced (the operator's statement, `enforcedBy`).
+        policy_users: this.policies.size || undefined,
+        policy_enforced_by: this.policies.size ? [...new Set([...this.policies.values()].map((p) => p.enforcedBy))] : undefined,
         audit_channel: Boolean(this.auditCfg.channel),
         prompt_hash: this.auditCfg.promptHash,
         chi: Boolean(this.router),
@@ -351,7 +367,7 @@ export class MattermostBridge {
       if (this.router) {
         // The gate has already run: everything below is for allowed users in allowed channels.
         try {
-          await this.router.handle(post, { id: post.user_id, name: event.data?.sender_name?.replace(/^@/, '') || undefined });
+          await this.router.handle(post, { id: post.user_id, name: event.data?.sender_name?.replace(/^@/, '') || undefined }, gateResult.policy);
         } catch (err) {
           console.error('Failed to route post:', err instanceof Error ? err.message : err);
         }
@@ -472,19 +488,32 @@ export class MattermostBridge {
 interface CliArgs {
   runSchedule?: string;
   listSchedules: boolean;
+  /** `--list-policies`: one line per per-user policy. */
+  listPolicies: boolean;
+  /** `--print-policy <bot>/<user id>`: that policy's `toolPolicy`, claude argv and settings.json. */
+  printPolicy?: string;
   /** `--audit <bot>` (B5). */
   audit?: string;
   since?: string;
   verify: boolean;
 }
 
-/** `--run-schedule <bot>/<name>`, `--list-schedules` and `--audit <bot>`: operator commands that never start the websocket. */
+/** `--run-schedule <bot>/<name>`, `--list-schedules`, `--list-policies`, `--print-policy <bot>/<user>` and `--audit <bot>`: operator commands that never start the websocket. */
 function parseCli(argv: string[]): CliArgs {
-  const out: CliArgs = { listSchedules: false, verify: false };
+  const out: CliArgs = { listSchedules: false, listPolicies: false, verify: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--list-schedules') out.listSchedules = true;
+    else if (a === '--list-policies') out.listPolicies = true;
     else if (a === '--verify') out.verify = true;
+    else if (a === '--print-policy') {
+      const v = argv[++i];
+      if (!v || v.startsWith('--')) {
+        console.error('error: --print-policy needs <bot>/<mattermost user id>');
+        process.exit(2);
+      }
+      out.printPolicy = v;
+    } else if (a.startsWith('--print-policy=')) out.printPolicy = a.slice('--print-policy='.length);
     else if (a === '--audit' || a === '--since') {
       const v = argv[++i];
       if (!v || v.startsWith('--')) {
@@ -509,6 +538,36 @@ function parseCli(argv: string[]): CliArgs {
 
 /** Operator commands. Returns the process exit code. */
 async function runOperatorCommand(bridges: MattermostBridge[], cli: CliArgs): Promise<number> {
+  if (cli.listPolicies) {
+    for (const b of bridges) {
+      for (const p of b.policies.values()) {
+        console.log(
+          `${b.config.name ?? 'bot'}/${p.userId}\t${p.label}\tchannels ${p.channels.join(',')}\tcwd ${p.cwd}\tmode ${p.mode}\tenforcedBy ${p.enforcedBy}\tallow ${p.toolPolicy.allowedTools.length}`,
+        );
+      }
+    }
+    return 0;
+  }
+  if (cli.printPolicy) {
+    const [botName, ...rest] = cli.printPolicy.split('/');
+    const userId = rest.join('/');
+    const bridge = bridges.find((b) => (b.config.name ?? 'bot') === botName);
+    const policy = bridge?.policies.get(userId);
+    if (!bridge || !policy) {
+      console.error(`error: --print-policy expects <bot>/<mattermost user id> of an existing policy; bots: ${bridges.map((b) => b.config.name ?? 'bot').join(', ')}`);
+      return 2;
+    }
+    // `toolPolicy` is what the bridge sends in chi_run; `claudeArgs` is the argv the daemon must add for it; `settings` is
+    // the .claude/settings.json for the policy cwd (enforcedBy "settings-file", and defence in depth under "daemon").
+    console.log(
+      JSON.stringify(
+        { user: policy.userId, label: policy.label, channels: policy.channels, cwd: policy.cwd, mode: policy.mode, enforcedBy: policy.enforcedBy, toolPolicy: policy.toolPolicy, claudeArgs: claudeArgsForToolPolicy(policy.toolPolicy), settings: policySettingsJson(policy) },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
   if (cli.listSchedules) {
     for (const b of bridges) {
       for (const name of b.scheduler?.names() ?? []) {
@@ -554,7 +613,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
   let runGate: RunGate | undefined;
   const configFile = process.env.MATTERMOST_BRIDGE_CONFIG;
   const cli = parseCli(process.argv.slice(2));
-  const operator = Boolean(cli.runSchedule) || cli.listSchedules;
+  const operator = Boolean(cli.runSchedule) || cli.listSchedules || cli.listPolicies || Boolean(cli.printPolicy);
 
   if (cli.audit) {
     // Reads the audit file only: no secrets resolved, no bridge constructed, nothing written.
@@ -568,7 +627,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
       runGate = new RunGate({ max: setup.limits.maxConcurrentRuns });
       for (const cfg of setup.bots) bridges.push(new MattermostBridge(cfg, undefined, runGate, { reserveRecovered: !operator }));
     } else if (operator) {
-      console.error('error: --run-schedule and --list-schedules need MATTERMOST_BRIDGE_CONFIG');
+      console.error('error: --run-schedule, --list-schedules, --list-policies and --print-policy need MATTERMOST_BRIDGE_CONFIG');
       process.exit(2);
     } else {
       // B1 fallback: a single echo bot configured from the environment.

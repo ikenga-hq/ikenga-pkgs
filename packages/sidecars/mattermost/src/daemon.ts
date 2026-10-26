@@ -1,3 +1,4 @@
+import type { ToolPolicy } from './policy.js';
 import { Redactor } from './secrets.js';
 
 /**
@@ -59,6 +60,12 @@ export interface ChiRunOpts {
   parentId?: string;
   resumeSessionId?: string;
   persistent?: boolean;
+  /**
+   * Per-user policy sessions only (omitted for every other run, so the wire is unchanged for them). The daemon turns it into
+   * `claude` flags (`claudeArgsForToolPolicy` in `policy.ts` is the exact argv). A daemon that does not know the field
+   * IGNORES it: that is why each policy carries an `enforcedBy` statement. See the README, "User policies".
+   */
+  toolPolicy?: ToolPolicy;
 }
 
 export type DaemonErrorKind = 'auth' | 'throttled' | 'rpc' | 'http' | 'network';

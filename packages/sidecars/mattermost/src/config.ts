@@ -6,6 +6,8 @@ import type { SecretSource } from './secrets.js';
 import { resolveApprovals } from './approvals.js';
 import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
+import { policyChannels, resolveUserPolicies } from './policy.js';
+import type { UserPolicy } from './policy.js';
 import { resolveOutboxApprovals } from './outbox-approvals.js';
 import { resolveLimits } from './run-gate.js';
 import type { RunLimits } from './run-gate.js';
@@ -48,6 +50,11 @@ export interface BotFileConfig {
   branchPrefix?: string;
   /** B5: audit options (the log itself is always on). */
   audit?: AuditConfig;
+  /**
+   * Per-user policies, keyed by Mattermost user id: someone NOT in `allowedUsers` who may use this bot in the policy's own
+   * channels, with a fixed toolset instead of the bot's. Needs `daemon` + `chi` (claude-code). Absent = nothing changes.
+   */
+  userPolicies?: Record<string, UserPolicy>;
   /** Outbox approvals: cards for the sender's drafts. Optional; `buttons.secret` is a secret source like the others. */
   outboxApprovals?: Omit<OutboxApprovalsConfig, 'buttons'> & {
     buttons?: Omit<NonNullable<OutboxApprovalsConfig['buttons']>, 'secret'> & { secret: SecretSource };
@@ -125,9 +132,19 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
     }
 
     // B5: the ceiling. Refuses chi.mode / approvals.actingMode above maxMode (default plan) rather than downgrading.
-    resolveModeRails(bot, where);
+    const modes = resolveModeRails(bot, where);
     resolveBranchPrefix(bot.branchPrefix, where);
-    resolveAuditConfig(bot.audit, where, bot.allowedChannels ?? []);
+    // Per-user policies: refused at load, naming the bot and the user. A policy user's channels count as talk channels, so
+    // the write-only audit channel may not be one of them either.
+    const policies = resolveUserPolicies(bot.userPolicies, where, {
+      allowedUsers: bot.allowedUsers ?? [],
+      maxMode: modes.maxMode,
+      chi: bot.chi,
+      approvals: bot.approvals,
+      runsChi: !approvalsOnly,
+      botUserId: bot.botUserId,
+    });
+    resolveAuditConfig(bot.audit, where, [...(bot.allowedChannels ?? []), ...policyChannels(policies)]);
 
     // B4: refuse a bad schedule (cron, channel, duplicate name, unknown field) at load, naming the bot and the schedule.
     resolveSchedules(bot.schedules, where, bot.allowedChannels ?? []);
@@ -163,6 +180,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       branchPrefix: bot.branchPrefix,
       audit: bot.audit,
       outboxApprovals,
+      ...(bot.userPolicies !== undefined ? { userPolicies: bot.userPolicies } : {}),
     };
   });
 }

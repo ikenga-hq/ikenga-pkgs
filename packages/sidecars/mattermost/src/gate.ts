@@ -1,14 +1,18 @@
+import type { ResolvedUserPolicy } from './policy.js';
 import type { GateResult, MattermostBridgeConfig, MattermostPost, MattermostPostEvent } from './types.js';
 
 export class MattermostGate {
   private allowedUsersSet: Set<string>;
   private allowedChannelsSet: Set<string>;
   private botUserId?: string;
+  /** Policy users by Mattermost user id. Empty unless the bridge hands the RESOLVED policies in: raw config alone grants nothing. */
+  private readonly policies: ReadonlyMap<string, ResolvedUserPolicy>;
 
-  constructor(config: MattermostBridgeConfig) {
+  constructor(config: MattermostBridgeConfig, policies?: ReadonlyMap<string, ResolvedUserPolicy>) {
     this.allowedUsersSet = new Set(config.allowedUsers);
     this.allowedChannelsSet = new Set(config.allowedChannels);
     this.botUserId = config.botUserId;
+    this.policies = policies ?? new Map();
   }
 
   setBotUserId(botUserId: string): void {
@@ -27,7 +31,7 @@ export class MattermostGate {
     }
 
     // 3. Deny by default: require non-empty allowedUsers
-    if (this.allowedUsersSet.size === 0) {
+    if (this.allowedUsersSet.size === 0 && this.policies.size === 0) {
       return { allowed: false, reason: 'no allowed users configured (deny by default)', code: 'no_allowed_users' };
     }
 
@@ -43,6 +47,17 @@ export class MattermostGate {
       (username && this.allowedUsersSet.has(`@${username}`));
 
     if (!userAllowed) {
+      // A policy user is let in by Mattermost user id only (a username can be renamed or reused), and only in the
+      // channels of their own policy: `allowedChannels` is the allowedUsers' list, not theirs.
+      const policy = this.policies.get(post.user_id);
+      if (policy) {
+        const channelName = event.data?.channel_name || '';
+        const inPolicyChannel = policy.channels.some((c) => c === post.channel_id || (channelName && c === channelName));
+        if (!inPolicyChannel) {
+          return { allowed: false, reason: `channel '${post.channel_id}' (${channelName || 'unknown'}) is not in this user's policy channels`, code: 'channel_not_allowed' };
+        }
+        return { allowed: true, policy };
+      }
       return { allowed: false, reason: `user '${post.user_id}' (${username || 'unknown'}) is not in allowed_users`, code: 'user_not_allowed' };
     }
 

@@ -25,9 +25,10 @@ const RANK: ReadonlyMap<string, number> = new Map([
 /** A run started with no mode becomes `default` on the daemon. */
 const DAEMON_DEFAULT: WireMode = 'default';
 
-/** Spellings accepted for `maxMode` (the task's vocabulary is Claude Code's; `auto` is the daemon's id for acceptEdits). */
+/** Spellings accepted for `maxMode` (the task's vocabulary is Claude Code's; `auto` is the daemon's id for acceptEdits). `default` was added for user policies: a policy session must run in `default`, since `plan` refuses even an allowed command. */
 const MAX_MODE_NAMES: ReadonlyMap<string, WireMode> = new Map<string, WireMode>([
   ['plan', 'plan'],
+  ['default', 'default'],
   ['acceptEdits', 'auto'],
   ['auto', 'auto'],
   ['bypassPermissions', 'bypassPermissions'],
@@ -121,7 +122,7 @@ export function resolveModeRails(input: ModeRailInput, where: string): ResolvedM
   if (rawMax !== undefined) {
     const m = typeof rawMax === 'string' ? MAX_MODE_NAMES.get(rawMax) : undefined;
     if (!m) {
-      throw new Error(`${where}: maxMode must be one of plan, acceptEdits, bypassPermissions (got '${String(rawMax)}')`);
+      throw new Error(`${where}: maxMode must be one of plan, default, acceptEdits, bypassPermissions (got '${String(rawMax)}')`);
     }
     maxMode = m;
   }

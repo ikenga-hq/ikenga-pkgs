@@ -406,7 +406,7 @@ It is the one copy of the trail that the agent's account cannot edit, so restric
 
 ### Mode ceiling: `maxMode`
 
-`maxMode` is `plan` | `acceptEdits` | `bypassPermissions` (`auto` is accepted as the daemon's name for `acceptEdits`), **default `plan`**. Ranked
+`maxMode` is `plan` | `default` | `acceptEdits` | `bypassPermissions` (`auto` is accepted as the daemon's name for `acceptEdits`), **default `plan`**. Ranked
 `plan` < `default` < `acceptEdits` < `bypassPermissions`. At load the bridge refuses (naming the bot and the field) a `chi.mode` or an
 `approvals.actingMode` above it, an unknown `chi.mode` (the daemon would silently run it as `default`), and a `maxMode` of anything else.
 At every `chi_run` and `chi_resume` call site it asserts the mode again, and a run that would exceed it is not started: a `run.refused` record is
@@ -480,6 +480,94 @@ Related, and true today: Ruby's "read-only" at the data layer is whatever her da
 - **A mode on a non-`claude-code` engine is not a restriction.** If you run `pi`, `opencode`, `codex` or `antigravity-cli` you need `maxMode: bypassPermissions`, and then the plan-then-approve gate (approvals) does not make the plan phase read-only. `approval.*` records and the approval post name the mode that was ASKED for.
 - A reaction made while the bot has no websocket is not seen until the next start (unchanged from B3), so it is not in the audit log either.
 - The prompt-hash option hashes the message the bot received (after stripping `@bot`), not what the model finally saw.
+
+## User policies (`userPolicies`)
+
+A bot can let a few more people in, each with a fixed toolset, without touching what its `allowedUsers` get. The case this was
+built for: Ruby answers Ada in `#royalti-co` and can queue social posts for her, and can do nothing else for her.
+
+```json
+"ruby": {
+  "allowedUsers": ["9s65in45np8h98qeatgx7anuoa"],
+  "allowedChannels": ["ruby-test"],
+  "maxMode": "default",
+  "chi": { "engine": "claude-code", "cwd": "~/projects", "systemPrompt": "...", "persistent": true },
+  "userPolicies": {
+    "buay4kf99bbk7cjtbeupd5rxow": {
+      "label": "ada-social-queue",
+      "channels": ["royalti-co"],
+      "cwd": "~/projects/royalti-co-queue",
+      "systemPrompt": "...",
+      "allowedTools": ["Bash(bash scripts/cron/run-social-queue-submit.sh:*)", "Read(./docs/**)"],
+      "enforcedBy": "daemon"
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| key | The user's **Mattermost id** (26 lowercase letters and digits). Usernames are refused: they can be renamed or reused. A user in both `allowedUsers` and `userPolicies` is refused at load. |
+| `channels` | Where this user may use the bot. Required. **Independent of `allowedChannels`**: the founder keeps `ruby-test`, Ada gets `royalti-co`, neither can use the other's. |
+| `cwd` | Directory of this user's runs. Required, absolute or `~/...`, no `..`, not the bot's `chi.cwd`. It is the **read boundary** (see below): put in it only what they may read. |
+| `mode` | `default` (the default) or `plan`. A policy user never gets `acceptEdits` or `bypassPermissions`. Must not exceed `maxMode`, so a bot with policies needs `maxMode: "default"` or higher; the founder's own sessions keep `plan` (`chi.mode` unset). |
+| `systemPrompt` | Replaces `chi.systemPrompt` for this user. Advisory only. |
+| `allowedTools` | Rules that run without a prompt. Required, non-empty. Unknown tool names are refused; so is a bare `Bash`, `Bash(*)`, an interpreter with no script (`Bash(bash:*)`, `Bash(sh -c:*)`), a shell operator in a rule, an unscoped `Read`/`Grep`/`Glob`, any MCP tool, and `Write`, `Edit`, `NotebookEdit`, `WebFetch`, `WebSearch`, `Agent`, `Task`. |
+| `tools` | The built-in tools that exist in the session (`--tools`). Default: the tool names in `allowedTools`. |
+| `disallowedTools` | Extra deny rules, added to a fixed floor (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `WebFetch`, `WebSearch`, `Task`, `Agent`, `Skill`, `SlashCommand`). |
+| `settingSources` | Which settings files claude reads: any of `user`, `project`, `local`. Default `["project"]`, so the account's own `~/.claude/settings.json` cannot widen the policy. |
+| `enforcedBy` | **Required.** `daemon` or `settings-file`, see below. The audit log records it at every start. |
+
+### What the bridge enforces, and what it cannot
+
+The bridge never starts `claude`. It asks the daemon for a Chi run (`chi_run`), and the **daemon** builds the `claude` command line
+(`build_engine_command_with` in the shell's `chi_exec.rs`: fixed flags, `--permission-mode`, `--model`, nothing for tools). The daemon's
+`chi_run` has no tool field today and ignores options it does not know. So:
+
+| Limit | Enforced by | State |
+|-------|-------------|-------|
+| Who may talk, in which channel | the bridge (gate: user id, then the policy's own channels) | enforced, tested |
+| A policy user's run uses the policy's `cwd`, `mode`, prompt | the bridge (`chi_run` options) | enforced, tested |
+| A thread belongs to one session: a different policy (or none) cannot resume, cancel or queue behind it | the bridge (thread record carries the policy) | enforced, tested |
+| The mode ceiling, audit record of every policy run | the bridge (`maxMode`, `run.requested` / `run.started` carry `policy`) | enforced |
+| **`--tools`, `--allowedTools`, `--disallowedTools`, `--permission-prompts none`, `--setting-sources`, `--strict-mcp-config`** | the **daemon**, from `opts.toolPolicy` | **not implemented in the daemon yet.** The bridge sends the object; a daemon that does not know it drops it |
+| Same rules without daemon support | claude itself, from `<cwd>/.claude/settings.json` | works today for allow and deny rules; cannot set `--tools`, `--strict-mcp-config`, `--permission-prompts none` |
+
+`enforcedBy` makes the operator say which of the last two rows is real, because the bridge cannot tell. `daemon`: the daemon applies
+`toolPolicy` (set it only after checking the daemon, by reading a run's `claude` argv). `settings-file`: the policy's `cwd` holds the
+`.claude/settings.json` printed by `--print-policy`, written by root, not writable by the bot's account.
+
+**The daemon contract.** `chi_run` accepts `opts.toolPolicy`:
+
+```json
+{ "tools": ["Bash", "Read"], "allowedTools": ["Bash(bash scripts/cron/run-social-queue-submit.sh:*)", "Read(./docs/**)"],
+  "disallowedTools": ["Write", "Edit", "..."], "permissionPrompts": "none", "settingSources": ["project"],
+  "strictMcpConfig": true, "disableSlashCommands": true }
+```
+
+The daemon appends exactly `claudeArgsForToolPolicy(toolPolicy)` (`src/policy.ts`; `--setting-sources` and `--strict-mcp-config` and
+`--permission-prompts none` in place of the prompt tool; one argv element per value, no shell) to the `claude` command, **stores the policy
+with the run and re-applies it on `chi_resume`** (a resume cannot be given options), and refuses to start the run if it cannot. Without
+the last clause an old daemon silently runs the session unrestricted.
+
+**Pinned by running `claude` 2.1.310** (`-p`, haiku, in a scratch directory, `--permission-mode default --permission-prompts none --tools Bash,Read --allowedTools 'Bash(bash ./q.sh:*)' --setting-sources project --strict-mcp-config`):
+
+- In `--permission-mode plan` the allowed command is **refused** ("plan mode blocks anything that isn't read-only"). That is why a policy runs in `default`, and why Ruby's existing `plan` sessions cannot queue anything.
+- In `default`: the allowed script ran; `ls /etc` was denied at once (no prompt, because `--permission-prompts none`); `script; ls /etc` was denied; `script $(ls /etc)` was denied; `> file` redirection was denied; `curl` was denied; a `Read` of `/etc/hostname` was denied; with no `Write` in `--tools` there is no way to create a file except Bash, which was denied.
+- **Allow rules do not confine reads.** In `default` mode `Read ./secret.txt` and `script && cat ./secret.txt` both ran although only `Read(./docs/**)` was allowed: reads inside the working directory need no rule. The read boundary is the **cwd**. Never point a policy at a checkout that holds anything private (the whole `royalti-co` clone is that); give it a directory of its own holding the queue docs and a forwarding wrapper.
+
+Operator commands (no websocket, no secrets resolved beyond what the config load needs):
+
+```bash
+MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json node dist/bridge.js --list-policies
+MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json node dist/bridge.js --print-policy ruby/buay4kf99bbk7cjtbeupd5rxow
+```
+
+`--print-policy` prints the `toolPolicy` sent to the daemon, the exact `claudeArgs`, and the `settings` JSON for the cwd.
+
+Not covered: what an allowed command does with its arguments (the queue wrapper validates its own input, and its argument is Ada's text,
+so test it by execution); a user whose account can reach the daemon some other way; inbound attachments (the bridge ignores
+`file_ids` on incoming posts, and a post with no text is dropped).
 
 ## Concurrency cap
 
@@ -557,6 +645,7 @@ Set `MATTERMOST_BRIDGE_CONFIG=/path/to/bridge.json`. Secrets are never inline: e
 - `schedules` is optional; see "Scheduled posts (B4)". Needs the same `daemon` and `chi` as thread runs.
 - `approvals` is optional. Without it the bot behaves as in B2 (`chi.mode`, no gate). With it, see "Approvals (B3)".
   Do not set `chi.mode` together with it.
+- `userPolicies` is optional (keyed by Mattermost user id; see "User policies"): per-user channel scope, cwd, mode and tool allowlist for people who are not in `allowedUsers`. Needs `daemon` and `chi` with `claude-code`, and cannot be combined with `approvals`.
 - `maxMode` (B5, default `plan`) caps every run the bot starts, and `approvals` or a `chi.mode` above `plan` need it raised; see "Mode ceiling". `branchPrefix` is advisory. `audit` takes `channel`, `promptHash`, `maxBytes`, `keep`, `path`; the log itself is always on.
 - No `Origin` header is sent (the daemon allows a missing one for non-browser clients). Set `daemon.origin` only if needed.
 - Passwords, tokens and the session cookie are redacted from every error and log line.
@@ -603,7 +692,7 @@ The result text is `chi_status.output` once the status is `done`.
 - **A bridge restart in the middle of a scheduled run loses that run's post** (the occurrence is already marked handled, to rule out a
   double post). The bridge posts a notice saying so and names the Chi run, which may have finished in the Chi view; it does not
   re-attach to it the way a thread turn does. A run that exceeds `progress.maxWaitMs` (2 hours) is reported as "stopped watching".
-- Not here: DMs, files, slash commands. B5 gaps are listed under "Safety rails and audit".
+- Not here: DMs, inbound files and images (ignored), slash commands. B5 gaps are listed under "Safety rails and audit".
 
 ## Testing
 
