@@ -116,6 +116,27 @@ export interface AuditConfig {
 }
 
 /**
+ * Box outreach (approvals contract r5): a pause card, reply and bounce cards and a daily summary in the outbox channel.
+ * Off unless `enabled` is true. Outreach emails themselves never get a per-draft card (they are approved in the Ikenga
+ * Outbox by their assignee); this block only adds the three things above.
+ */
+export interface OutreachConfig {
+  /** Default false. A block that is present but not enabled changes nothing. */
+  enabled?: boolean;
+  /**
+   * Absolute path of the file the sender's export writes, attached to the daily post when the bridge can read it.
+   * `{day}` stands for the local day (`YYYY-MM-DD`), because the sender names its files by day.
+   */
+  exportPath?: string;
+  /** When the daily post is due, 24-hour local time in `timezone`. Default `08:00`. */
+  exportLocalTime?: string;
+  /** IANA time zone of "the day". Default `Africa/Lagos`. */
+  timezone?: string;
+  /** How often the sender is asked about the pause, replies and counts, ms. Default: the block's `pollMs`. */
+  pollMs?: number;
+}
+
+/**
  * Outbox approvals (approvals contract v1): the bot posts a card in `channel` for every draft the sender announces, and
  * an approver's 👍 / Approve (or 👎 / Reject) decides it. Deny by default: `approvers` must be non-empty and holds
  * Mattermost USER IDS (never usernames). Separate from `allowedUsers` and from the B3 `approvals` block.
@@ -141,6 +162,8 @@ export interface OutboxApprovalsConfig {
    * Without this block the cards are reaction-only.
    */
   buttons?: { callbackUrl: string; listenPort: number; listenHost?: string; secret: string };
+  /** Box outreach: pause card, reply and bounce cards, daily summary. Optional, off by default. */
+  outreach?: OutreachConfig;
 }
 
 export interface MattermostBridgeConfig {

@@ -65,6 +65,12 @@
         "approvers": ["9s65in45np8h98qeatgx7anuoa", "buay4kf99bbk7cjtbeupd5rxow", "f3w99k5x6fgomdprh8axosmmsc"],
         "socketPath": "/run/ikenga-sender/approvals.sock",
         "outboxUrl": "https://ikenga.example.com/outbox/approvals",
+        "outreach": {
+          "enabled": false,
+          "exportPath": "/var/lib/ikenga-sender/export/outreach-status-{day}.csv",
+          "exportLocalTime": "08:00",
+          "timezone": "Africa/Lagos"
+        },
         "buttons": {
           "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/outbox",
           "listenPort": 8765,

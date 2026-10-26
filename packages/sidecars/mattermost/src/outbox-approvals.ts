@@ -5,6 +5,8 @@ import path from 'node:path';
 import { AuditUnavailableError } from './audit.js';
 import type { AuditLog } from './audit.js';
 import { ChannelLookupError } from './client.js';
+import { isOutreachDraft, resolveOutreach } from './outreach.js';
+import type { ResolvedOutreach } from './outreach.js';
 import { SenderSocketError } from './sender-socket.js';
 import type { SenderSocket } from './sender-socket.js';
 import type { MattermostPost, MattermostReaction, OutboxApprovalsConfig } from './types.js';
@@ -57,9 +59,11 @@ export interface ResolvedOutboxApprovals {
   requestTimeoutMs: number;
   outboxUrl?: string;
   buttons?: { callbackUrl: string; listenHost: string; listenPort: number; secret: string };
+  /** Present only when `outreach.enabled` is true. */
+  outreach?: ResolvedOutreach;
 }
 
-const OUTBOX_KEYS = new Set(['channel', 'approvers', 'socketPath', 'pollMs', 'bodyMaxChars', 'requestTimeoutMs', 'outboxUrl', 'buttons']);
+const OUTBOX_KEYS = new Set(['channel', 'approvers', 'socketPath', 'pollMs', 'bodyMaxChars', 'requestTimeoutMs', 'outboxUrl', 'buttons', 'outreach']);
 const BUTTON_KEYS = new Set(['callbackUrl', 'listenHost', 'listenPort', 'secret']);
 
 function httpUrl(v: unknown, what: string): URL {
@@ -135,6 +139,10 @@ export function resolveOutboxApprovals(cfg: OutboxApprovalsConfig, where: string
       throw new Error(`${where}: outboxApprovals.buttons.secret is required and must be at least 12 characters, 32 random ones recommended (it authenticates Mattermost's button callbacks)`);
     }
     out.buttons = { callbackUrl: callbackUrl.toString(), listenHost: listenHost.trim(), listenPort, secret: b.secret };
+  }
+  if (c.outreach !== undefined) {
+    const outreach = resolveOutreach(c.outreach, where, out.pollMs);
+    if (outreach) out.outreach = outreach;
   }
   return out;
 }
@@ -393,6 +401,7 @@ export class OutboxApprovals {
   private stopped = false;
   private server?: http.Server;
   private lastSenderProblem?: string;
+  private lastOutreachSkipped = 0;
 
   constructor(private readonly opts: OutboxManagerOptions) {
     this.approvers = new Set(opts.config.approvers);
@@ -483,8 +492,12 @@ export class OutboxApprovals {
       return;
     }
     let posted = 0;
+    this.noteOutreachSkipped(items.filter((i) => isOutreachDraft(i)).length);
     for (const item of items) {
       if (this.stopped) return;
+      // Outreach emails are approved in the Ikenga Outbox by their assignee. A card each would flood the channel and put
+      // a prospect's address in it. Never acked, so the sender keeps offering them; they are simply not looked at here.
+      if (isOutreachDraft(item)) continue;
       const existing = store.byDraftHash(item.draftId, item.payloadHash);
       if (existing) {
         // Posted already (the ack was lost, or the sender forgot it): one card per draft+hash, just tell it again.
@@ -581,6 +594,13 @@ export class OutboxApprovals {
         was_approved: wasApproved,
       });
     }
+  }
+
+  /** A count only, and only when it changes: the sender offers the same outreach drafts every poll. */
+  private noteOutreachSkipped(count: number): void {
+    if (count === this.lastOutreachSkipped) return;
+    this.lastOutreachSkipped = count;
+    if (count > 0) this.log(`${count} outreach draft${count === 1 ? ' is' : 's are'} announced; they are approved in the Ikenga Outbox and get no card`);
   }
 
   private noteSender(problem: string | undefined): void {

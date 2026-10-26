@@ -91,7 +91,11 @@ export class MockMattermostServer {
   pingCount = 0;
   /** Answer websocket `ping`s (as Mattermost does). Set false to play a half-open peer that goes silent. */
   answerPings = true;
-  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown> }> = [];
+  readonly receivedPosts: Array<{ id?: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown>; file_ids?: string[] }> = [];
+  /** Files uploaded with `POST /files`, by file id (name, channel and size only: tests never need the bytes back). */
+  readonly uploads = new Map<string, { channel_id: string; filename: string; bytes: number }>();
+  /** Answer every `POST /files` with a 500. */
+  failUploads = false;
   /** Every post the bridge created, by id, with its CURRENT message and props (patches applied). */
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown>; user_id?: string; edit_at?: number }>();
   /** Every `PUT /posts/{id}/patch` the bridge made, in order (`props` only when the patch carried them). */
@@ -147,6 +151,26 @@ export class MockMattermostServer {
       if (req.method === 'GET' && url.pathname === '/api/v4/users/me') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ id: this.botId, username: this.botUsername }));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v4/files') {
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          if (this.failUploads) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'upload failed' }));
+            return;
+          }
+          const raw = Buffer.concat(chunks).toString('latin1');
+          const filename = /filename="([^"]*)"/.exec(raw)?.[1] ?? '';
+          const channel_id = /name="channel_id"\r\n\r\n([^\r]*)/.exec(raw)?.[1] ?? '';
+          const id = `file-${this.uploads.size + 1}`;
+          this.uploads.set(id, { channel_id, filename, bytes: Buffer.concat(chunks).length });
+          res.writeHead(201, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ file_infos: [{ id, name: filename }], client_ids: [] }));
+        });
         return;
       }
 
