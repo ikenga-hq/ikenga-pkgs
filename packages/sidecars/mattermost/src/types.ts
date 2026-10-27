@@ -1,4 +1,5 @@
 import type { DaemonAuth } from './daemon.js';
+import type { MediaConfig } from './media.js';
 import type { ResolvedUserPolicy, UserPolicy } from './policy.js';
 
 /** How a bot reaches the Ikenga daemon. Each bot has its own entry. */
@@ -211,6 +212,8 @@ export interface MattermostBridgeConfig {
   userPolicies?: Record<string, UserPolicy>;
   /** Directories no policy `cwd` may overlap (besides `chi.cwd`). See `BotFileConfig.privateRoots`. */
   privateRoots?: string[];
+  /** Inbound PNG/JPEG attachments from listed users, uploaded to GCS by the bridge. Omitted or not enabled = attachments are ignored as before. */
+  media?: MediaConfig;
 }
 
 export interface MattermostPost {
@@ -229,6 +232,21 @@ export interface MattermostPost {
   type?: string;
   props?: Record<string, unknown>;
   filenames?: string[];
+  /** Ids of the files attached to the post. */
+  file_ids?: string[];
+}
+
+/** `GET /files/{id}/info`: the fields the media block reads. */
+export interface MattermostFileInfo {
+  id?: string;
+  post_id?: string;
+  /** Absent on older Mattermost servers. */
+  channel_id?: string;
+  name?: string;
+  /** Without the dot. */
+  extension?: string;
+  size?: number;
+  mime_type?: string;
 }
 
 export interface MattermostPostEvent {

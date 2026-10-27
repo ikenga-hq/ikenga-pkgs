@@ -6,6 +6,8 @@ import { ApprovalManager, ApprovalStore, resolveApprovals } from './approvals.js
 import { ChannelLookupError, MattermostClient } from './client.js';
 import type { MattermostClientTiming } from './client.js';
 import { loadBridgeSetup, defaultDataDir } from './config.js';
+import { MediaIngest, loadMediaCredential, resolveMedia } from './media.js';
+import type { MediaCredential, MediaIngestOptions } from './media.js';
 import { OutboxApprovals, OutboxCardStore, resolveOutboxApprovals } from './outbox-approvals.js';
 import { OutreachManager, OutreachStore } from './outreach.js';
 import { SenderSocket } from './sender-socket.js';
@@ -46,6 +48,11 @@ export class MattermostBridge {
   readonly rails?: Rails;
   /** The bridge-wide cap on Chi runs in flight. One per process, handed to every bot; a bot built alone gets its own. */
   readonly runGate: RunGate;
+  /** Present when the bot has an enabled `media` block AND its credential loaded: PNG/JPEG attachments are uploaded to GCS. */
+  readonly media?: MediaIngest;
+  /** The `media` block is enabled but its credential did not load: media stays off, and `start()` says why (the variable's NAME only). */
+  private mediaDisabled?: Extract<MediaCredential, { ok: false }>;
+  private mediaProject?: string;
   private readonly auditCfg: ResolvedAuditConfig;
   private auditMirror?: AuditMirror;
   private running = false;
@@ -56,8 +63,14 @@ export class MattermostBridge {
    * `opts.reserveRecovered` (default true) takes slots for runs a restart found still going while the bridge is being
    * built, i.e. for every bot before any of them starts, so the cap holds however the starts interleave. The
    * one-shot operator commands (`--run-schedule`) are a separate process from the running bridge and pass `false`.
+   * `opts.media` is a test seam for the media block (stub GCS endpoints, a clock, an environment): code only, no config key or env var.
    */
-  constructor(config: MattermostBridgeConfig, clientTiming?: MattermostClientTiming, runGate?: RunGate, opts: { reserveRecovered?: boolean } = {}) {
+  constructor(
+    config: MattermostBridgeConfig,
+    clientTiming?: MattermostClientTiming,
+    runGate?: RunGate,
+    opts: { reserveRecovered?: boolean; media?: Pick<MediaIngestOptions, 'endpoints' | 'now' | 'timeoutMs'> & { env?: NodeJS.ProcessEnv } } = {},
+  ) {
     this.config = config;
     this.runGate = runGate ?? new RunGate({ max: resolveLimits(undefined).maxConcurrentRuns });
     this.echoPrefix = config.echoPrefix ?? 'echo: ';
@@ -80,6 +93,8 @@ export class MattermostBridge {
     });
     this.gate = new MattermostGate(config, this.policies);
     this.auditCfg = resolveAuditConfig(config.audit, botWhere, [...config.allowedChannels, ...policyChannels(this.policies)]);
+    // The media block is validated here again, whichever way the config arrived.
+    const mediaCfg = resolveMedia(config.media, botWhere, { runsChi: Boolean(config.daemon && config.chi) });
     const redactor = new Redactor();
     redactor.add(config.mattermostToken);
     const dAuth = config.daemon?.auth;
@@ -104,6 +119,19 @@ export class MattermostBridge {
         audit: this.audit,
       });
       this.daemon = new DaemonClient(config.daemon);
+      // Fail closed: a credential that is missing or malformed turns media OFF (attachments ignored, as before) and the rest of
+      // the bridge starts as usual. `start()` logs the reason, naming the variable and never its value.
+      if (mediaCfg?.enabled) {
+        const { env, ...seam } = opts.media ?? {};
+        const cred = loadMediaCredential(mediaCfg, env ?? process.env);
+        if (cred.ok) {
+          redactor.add(cred.account.privateKeyPem);
+          this.media = new MediaIngest({ bot: botName, config: mediaCfg, files: this.client, account: cred.account, audit: this.audit, ...seam });
+          this.mediaProject = cred.projectId;
+        } else {
+          this.mediaDisabled = cred;
+        }
+      }
       const store = new ThreadStore(
         config.storePath ?? path.join(config.dataDir ?? defaultDataDir(), `threads-${name}.json`),
         name,
@@ -139,6 +167,7 @@ export class MattermostBridge {
         progress: config.progress,
         approvals: gate,
         policyGuard: () => this.policyGuard(),
+        media: this.media,
       });
       if (config.schedules?.length) {
         const where = `bot '${name}'`;
@@ -313,6 +342,11 @@ export class MattermostBridge {
       this.audit.setSink((rec) => mirror.push(rec));
     }
 
+    if (this.mediaDisabled) {
+      const d = this.mediaDisabled;
+      console.error(`[mattermost:${this.config.name ?? 'bot'}] media is OFF: ${d.message}; attachments are ignored. Everything else is running.`);
+    }
+
     // B5: nothing runs unless the audit log is writable. Same rule as every run: no record, no action.
     const cfg = this.config;
     try {
@@ -337,6 +371,12 @@ export class MattermostBridge {
         // Policy users and how their limits are really enforced (the operator's statement, `enforcedBy`).
         policy_users: this.policies.size || undefined,
         policy_enforced_by: this.policies.size ? [...new Set([...this.policies.values()].map((p) => p.enforcedBy))] : undefined,
+        // Inbound images: on only when the block is enabled and its credential loaded. Names and counts, never a value.
+        media: this.media ? true : undefined,
+        media_off: this.mediaDisabled ? this.mediaDisabled.code : undefined,
+        media_off_env: this.mediaDisabled?.envName,
+        media_users: this.media ? cfg.media?.allowedUserIds?.length : undefined,
+        media_project: this.mediaProject,
         audit_channel: Boolean(this.auditCfg.channel),
         prompt_hash: this.auditCfg.promptHash,
         chi: Boolean(this.router),

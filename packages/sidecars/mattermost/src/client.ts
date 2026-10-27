@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { MattermostBridgeConfig, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
+import type { MattermostBridgeConfig, MattermostFileInfo, MattermostPost, MattermostPostEvent, MattermostReaction } from './types.js';
 
 export interface MattermostClientEvents {
   post: (event: MattermostPostEvent, post: MattermostPost) => void;
@@ -157,6 +157,26 @@ export class MattermostClient extends EventEmitter {
       throw new Error(`Mattermost getPost failed: HTTP ${res.status} ${res.statusText}`);
     }
     return (await res.json()) as MattermostPost;
+  }
+
+  /** A file's metadata (`GET /files/{id}/info`): its post, name, declared mime type and size. */
+  async getFileInfo(fileId: string, timeoutMs = 30_000): Promise<MattermostFileInfo> {
+    const res = await fetch(`${this.config.mattermostUrl}/api/v4/files/${encodeURIComponent(fileId)}/info`, {
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`Mattermost getFileInfo failed: HTTP ${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as MattermostFileInfo;
+  }
+
+  /** The response of `GET /files/{id}`, body unread: the caller streams it and decides how much to keep. */
+  async fetchFile(fileId: string, signal?: AbortSignal): Promise<Response> {
+    return fetch(`${this.config.mattermostUrl}/api/v4/files/${encodeURIComponent(fileId)}`, {
+      headers: { Authorization: `Bearer ${this.config.mattermostToken}` },
+      signal,
+    });
   }
 
   /** Delete a post (`DELETE /posts/{id}`). */
