@@ -8,6 +8,8 @@ import { resolveSchedules } from './schedules.js';
 import { resolveAuditConfig } from './audit.js';
 import { policyChannels, resolvePrivateRoots, resolveUserPolicies } from './policy.js';
 import type { UserPolicy } from './policy.js';
+import { resolveMedia } from './media.js';
+import type { MediaConfig } from './media.js';
 import { resolveOutboxApprovals } from './outbox-approvals.js';
 import { resolveLimits } from './run-gate.js';
 import type { RunLimits } from './run-gate.js';
@@ -57,6 +59,8 @@ export interface BotFileConfig {
   userPolicies?: Record<string, UserPolicy>;
   /** Directories the operator keeps private (the hub checkout, secrets, other accounts' homes): no policy `cwd` may be, contain or sit inside one, besides `chi.cwd`, which always counts. Absolute or `~/...`. */
   privateRoots?: string[];
+  /** Inbound PNG/JPEG attachments from listed users, uploaded to GCS by the bridge. Env var NAMES only; see the README. Needs `daemon` + `chi`. */
+  media?: MediaConfig;
   /** Outbox approvals: cards for the sender's drafts. Optional; `buttons.secret` is a secret source like the others. */
   outboxApprovals?: Omit<OutboxApprovalsConfig, 'buttons'> & {
     buttons?: Omit<NonNullable<OutboxApprovalsConfig['buttons']>, 'secret'> & { secret: SecretSource };
@@ -149,6 +153,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       privateRoots: bot.privateRoots,
     });
     resolveAuditConfig(bot.audit, where, [...(bot.allowedChannels ?? []), ...policyChannels(policies)]);
+    resolveMedia(bot.media, where, { runsChi: !approvalsOnly });
 
     // B4: refuse a bad schedule (cron, channel, duplicate name, unknown field) at load, naming the bot and the schedule.
     resolveSchedules(bot.schedules, where, bot.allowedChannels ?? []);
@@ -186,6 +191,7 @@ export function resolveBridgeConfigs(cfg: BridgeFileConfig): MattermostBridgeCon
       outboxApprovals,
       ...(bot.userPolicies !== undefined ? { userPolicies: bot.userPolicies } : {}),
       ...(bot.privateRoots !== undefined ? { privateRoots: bot.privateRoots } : {}),
+      ...(bot.media !== undefined ? { media: bot.media } : {}),
     };
   });
 }

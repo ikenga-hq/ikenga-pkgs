@@ -5,6 +5,7 @@ import type { CwdCheck, ResolvedUserPolicy } from './policy.js';
 import type { Rails } from './rails.js';
 import type { ApprovalManager, ApprovalRecord } from './approvals.js';
 import { DaemonError, TERMINAL_STATUSES } from './daemon.js';
+import type { MediaHook } from './media.js';
 import { RunGateClosedError, RunWaitAbortedError, isGateStop } from './run-gate.js';
 import type { RunGate, RunSlot } from './run-gate.js';
 import type { ChiRunResult, DaemonClient } from './daemon.js';
@@ -109,6 +110,12 @@ export interface RouterOptions {
    * the session with the account's full tools.
    */
   policyGuard?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
+   * Inbound images (the `media` block). Asked once per turn, after the thread is claimed and before anything is started: it
+   * uploads a listed user's PNG/JPEG attachments and answers with the block to append to the prompt, or a refusal (no run is
+   * started). Absent = attachments are ignored, as before.
+   */
+  media?: MediaHook;
   botUsername?: string;
   now?: () => number;
   log?: (msg: string) => void;
@@ -217,10 +224,23 @@ export class ThreadRouter {
     this.turns.set(rootId, turn);
 
     try {
+      // Images first: a refused or failed upload starts nothing, and must not withdraw a plan that is waiting for a decision.
+      let prompt = text;
+      if (this.opts.media) {
+        const media = await this.opts.media.process(post, text);
+        if (media.kind === 'refused' || turn.cancelRequested) {
+          turn.finished = true;
+          this.endTurn(turn);
+          await this.say(post.channel_id, rootId, media.kind === 'refused' ? media.reply : 'Cancelled while the images were uploading. Nothing was run.');
+          return;
+        }
+        // The user's words stay exactly as written; the bridge's block comes after them (its lines carry sanitized names only).
+        if (media.kind === 'ok') prompt = `${text}\n\n${media.block}`;
+      }
       // A new message supersedes a plan still waiting for a decision: an approver
       // must not be able to 👍 a plan the conversation has moved past.
       await this.opts.approvals?.manager.withdraw(rootId, 'a newer message arrived in this thread', 'superseded');
-      await this.start(turn, post, text, isReply, policy);
+      await this.start(turn, post, prompt, isReply, policy);
     } catch (err) {
       await this.failStart(turn, err);
     }

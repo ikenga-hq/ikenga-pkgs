@@ -77,6 +77,19 @@ function decodeFrames(buf: Buffer): string[] {
   return messages;
 }
 
+/** A file a user attached, as the mock serves it. `infoSize` is what the metadata SAYS (it may lie); `chunked` sends no Content-Length. */
+export interface MockAttachment {
+  id: string;
+  post_id: string;
+  channel_id?: string;
+  name: string;
+  extension?: string;
+  mime_type?: string;
+  bytes: Buffer;
+  infoSize?: number;
+  chunked?: boolean;
+}
+
 export class MockMattermostServer {
   private server: http.Server;
   private wsClients: Set<Socket> = new Set();
@@ -96,6 +109,16 @@ export class MockMattermostServer {
   readonly uploads = new Map<string, { channel_id: string; filename: string; bytes: number }>();
   /** Answer every `POST /files` with a 500. */
   failUploads = false;
+  /** Files users attached to posts, by file id (`addFile`): what `GET /files/{id}/info` and `GET /files/{id}` serve. */
+  readonly files = new Map<string, MockAttachment>();
+  /** Every file id whose BYTES were requested (`GET /files/{id}`), in order; and every id whose info was. */
+  readonly fileDownloads: string[] = [];
+  readonly fileInfoReads: string[] = [];
+  /** Bytes actually written to the client per file id (a download the bridge abandons stops early). */
+  readonly fileBytesSent = new Map<string, number>();
+  addFile(f: MockAttachment): void {
+    this.files.set(f.id, f);
+  }
   /** Every post the bridge created, by id, with its CURRENT message and props (patches applied). */
   readonly posts = new Map<string, { id: string; channel_id: string; message: string; root_id?: string; props?: Record<string, unknown>; user_id?: string; edit_at?: number }>();
   /** Every `PUT /posts/{id}/patch` the bridge made, in order (`props` only when the patch carried them). */
@@ -176,6 +199,68 @@ export class MockMattermostServer {
           res.writeHead(201, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ file_infos: [{ id, name: filename }], client_ids: [] }));
         });
+        return;
+      }
+
+      // `GET /files/{id}/info` and `GET /files/{id}` for what `addFile` registered; anything else is a 404.
+      const fileInfoOf = /^\/api\/v4\/files\/([^/]+)\/info$/.exec(url.pathname);
+      if (req.method === 'GET' && fileInfoOf) {
+        const id = decodeURIComponent(fileInfoOf[1] as string);
+        this.fileInfoReads.push(id);
+        const f = this.files.get(id);
+        res.writeHead(f ? 200 : 404, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify(
+            f
+              ? {
+                  id: f.id,
+                  post_id: f.post_id,
+                  ...(f.channel_id !== undefined ? { channel_id: f.channel_id } : {}),
+                  name: f.name,
+                  extension: f.extension ?? f.name.split('.').pop(),
+                  size: f.infoSize ?? f.bytes.length,
+                  mime_type: f.mime_type ?? 'image/png',
+                }
+              : { error: 'no such file' },
+          ),
+        );
+        return;
+      }
+      const fileOf = /^\/api\/v4\/files\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && fileOf) {
+        const id = decodeURIComponent(fileOf[1] as string);
+        this.fileDownloads.push(id);
+        const f = this.files.get(id);
+        if (!f) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'no such file' }));
+          return;
+        }
+        this.fileBytesSent.set(id, 0);
+        if (!f.chunked) {
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(f.bytes.length) });
+          res.end(f.bytes);
+          this.fileBytesSent.set(id, f.bytes.length);
+          return;
+        }
+        // No Content-Length: the size is only known by counting, as with a server that lies in the metadata.
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+        let off = 0;
+        let closed = false;
+        res.on('close', () => {
+          closed = true;
+        });
+        const step = () => {
+          if (closed || off >= f.bytes.length) {
+            if (!closed) res.end();
+            return;
+          }
+          const chunk = f.bytes.subarray(off, off + 256);
+          off += chunk.length;
+          this.fileBytesSent.set(id, off);
+          res.write(chunk, () => setImmediate(step));
+        };
+        step();
         return;
       }
 
