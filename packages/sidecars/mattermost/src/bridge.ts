@@ -535,7 +535,7 @@ export class MattermostBridge {
 
   /**
    * Create the upload socket, last, so a start that failed above never leaves a socket behind. A socket that cannot be created
-   * (group unknown, directory missing, path taken) only turns the socket off: one error line and one audit record, the bridge runs.
+   * (access list not settable, directory missing, path taken) only turns the socket off: one error line and one audit record, the bridge runs.
    */
   private async startUploadSocket(): Promise<void> {
     const us = this.uploadSocket;

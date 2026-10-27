@@ -284,6 +284,8 @@ describe('media.uploadSocket config', () => {
     ['a client with a capital', { clients: ['Ruby'] }, /clients must be a list/],
     ['a client starting with a digit', { clients: ['1ruby'] }, /clients must be a list/],
     ['a client starting with -', { clients: ['-m'] }, /clients must be a list/],
+    ['root as a client', { clients: ['root'] }, /must not name root or the render service/],
+    ['the render account as a client', { clients: ['ik-ruby', 'ikenga-render'] }, /must not name root or the render service/],
     ['a client with a colon (an ACL spec separator)', { clients: ['a:b'] }, /clients must be a list/],
     ['a client with a comma (an ACL spec separator)', { clients: ['a,b'] }, /clients must be a list/],
     ['a client with a space', { clients: ['a b'] }, /clients must be a list/],

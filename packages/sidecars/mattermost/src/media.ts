@@ -108,6 +108,8 @@ const MAX_SOCKET_PATH = 100;
 const ABS_PATH_RE = /^\/[A-Za-z0-9._\-/]*$/;
 /** A Unix account name as it reaches `setfacl -m u:<name>:rw`: nothing that could be a flag, a separator or a numeric uid. */
 export const CLIENT_NAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+/** Accounts that must never hold upload rights: root, and the sandboxed browser account of the render add-on. */
+const FORBIDDEN_CLIENTS = new Set(['root', 'ikenga-render']);
 const MAX_CLIENTS = 8;
 
 /** An absolute path in the plain alphabet, no `..` or `.` segment, no `//`, no trailing `/` (except the root itself is refused). */
@@ -152,6 +154,7 @@ function resolveUploadSocket(cfg: unknown, w: string, enabled: boolean): Resolve
     if (!Array.isArray(c.clients) || c.clients.length > MAX_CLIENTS) throw new Error(rule);
     for (const n of c.clients) {
       if (typeof n !== 'string' || !CLIENT_NAME_RE.test(n) || clients.includes(n)) throw new Error(rule);
+      if (FORBIDDEN_CLIENTS.has(n)) throw new Error(`${sw}.clients must not name root or the render service's own account`);
       clients.push(n);
     }
   }
