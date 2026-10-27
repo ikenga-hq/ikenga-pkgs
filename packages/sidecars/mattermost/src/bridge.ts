@@ -8,6 +8,8 @@ import type { MattermostClientTiming } from './client.js';
 import { loadBridgeSetup, defaultDataDir } from './config.js';
 import { MediaIngest, loadMediaCredential, resolveMedia } from './media.js';
 import type { MediaCredential, MediaIngestOptions } from './media.js';
+import { UploadSocket } from './upload-socket.js';
+import type { UploadSocketOptions } from './upload-socket.js';
 import { OutboxApprovals, OutboxCardStore, resolveOutboxApprovals } from './outbox-approvals.js';
 import { OutreachManager, OutreachStore } from './outreach.js';
 import { SenderSocket } from './sender-socket.js';
@@ -53,6 +55,8 @@ export class MattermostBridge {
   /** The `media` block is enabled but its credential did not load: media stays off, and `start()` says why (the variable's NAME only). */
   private mediaDisabled?: Extract<MediaCredential, { ok: false }>;
   private mediaProject?: string;
+  /** Present when the `media` block is enabled, its credential loaded AND it has an `uploadSocket`: renderers on this host publish PNGs through it. */
+  readonly uploadSocket?: UploadSocket;
   private readonly auditCfg: ResolvedAuditConfig;
   private auditMirror?: AuditMirror;
   private running = false;
@@ -63,13 +67,17 @@ export class MattermostBridge {
    * `opts.reserveRecovered` (default true) takes slots for runs a restart found still going while the bridge is being
    * built, i.e. for every bot before any of them starts, so the cap holds however the starts interleave. The
    * one-shot operator commands (`--run-schedule`) are a separate process from the running bridge and pass `false`.
-   * `opts.media` is a test seam for the media block (stub GCS endpoints, a clock, an environment): code only, no config key or env var.
+   * `opts.media` is a test seam for the media block (stub GCS endpoints, a clock, an environment, the upload socket's timeout and group
+   * lookup): code only, no config key or env var.
    */
   constructor(
     config: MattermostBridgeConfig,
     clientTiming?: MattermostClientTiming,
     runGate?: RunGate,
-    opts: { reserveRecovered?: boolean; media?: Pick<MediaIngestOptions, 'endpoints' | 'now' | 'timeoutMs'> & { env?: NodeJS.ProcessEnv } } = {},
+    opts: {
+      reserveRecovered?: boolean;
+      media?: Pick<MediaIngestOptions, 'endpoints' | 'now' | 'timeoutMs'> & { env?: NodeJS.ProcessEnv; uploadSocket?: Pick<UploadSocketOptions, 'requestTimeoutMs' | 'acl'> };
+    } = {},
   ) {
     this.config = config;
     this.runGate = runGate ?? new RunGate({ max: resolveLimits(undefined).maxConcurrentRuns });
@@ -122,12 +130,25 @@ export class MattermostBridge {
       // Fail closed: a credential that is missing or malformed turns media OFF (attachments ignored, as before) and the rest of
       // the bridge starts as usual. `start()` logs the reason, naming the variable and never its value.
       if (mediaCfg?.enabled) {
-        const { env, ...seam } = opts.media ?? {};
+        const { env, uploadSocket: socketSeam, ...seam } = opts.media ?? {};
         const cred = loadMediaCredential(mediaCfg, env ?? process.env);
         if (cred.ok) {
           redactor.add(cred.account.privateKeyPem);
           this.media = new MediaIngest({ bot: botName, config: mediaCfg, files: this.client, account: cred.account, audit: this.audit, ...seam });
           this.mediaProject = cred.projectId;
+          // The socket exists only with a working credential: without one there is nothing to publish with.
+          if (mediaCfg.uploadSocket) {
+            this.uploadSocket = new UploadSocket({
+              bot: botName,
+              bucket: mediaCfg.bucket,
+              prefix: mediaCfg.prefix,
+              config: mediaCfg.uploadSocket,
+              account: cred.account,
+              audit: this.audit,
+              ...seam,
+              ...socketSeam,
+            });
+          }
         } else {
           this.mediaDisabled = cred;
         }
@@ -344,7 +365,7 @@ export class MattermostBridge {
 
     if (this.mediaDisabled) {
       const d = this.mediaDisabled;
-      console.error(`[mattermost:${this.config.name ?? 'bot'}] media is OFF: ${d.message}; attachments are ignored. Everything else is running.`);
+      console.error(`[mattermost:${this.config.name ?? 'bot'}] media is OFF: ${d.message}; attachments are ignored${this.config.media?.uploadSocket ? ' and the upload socket is not created' : ''}. Everything else is running.`);
     }
 
     // B5: nothing runs unless the audit log is writable. Same rule as every run: no record, no action.
@@ -377,6 +398,7 @@ export class MattermostBridge {
         media_off_env: this.mediaDisabled?.envName,
         media_users: this.media ? cfg.media?.allowedUserIds?.length : undefined,
         media_project: this.mediaProject,
+        upload_socket: this.uploadSocket ? true : undefined,
         audit_channel: Boolean(this.auditCfg.channel),
         prompt_hash: this.auditCfg.promptHash,
         chi: Boolean(this.router),
@@ -502,7 +524,30 @@ export class MattermostBridge {
       this.outreach?.stop();
       return;
     }
+    await this.startUploadSocket();
+    if (stopped()) {
+      this.outbox?.stop();
+      this.outreach?.stop();
+      return;
+    }
     this.running = true;
+  }
+
+  /**
+   * Create the upload socket, last, so a start that failed above never leaves a socket behind. A socket that cannot be created
+   * (access list not settable, directory missing, path taken) only turns the socket off: one error line and one audit record, the bridge runs.
+   */
+  private async startUploadSocket(): Promise<void> {
+    const us = this.uploadSocket;
+    if (!us) return;
+    const res = await us.start();
+    const tag = `[mattermost:${this.config.name ?? 'bot'}]`;
+    if (res.ok) {
+      this.audit.record('media.upload_socket', { outcome: 'listening', path: us.socketPath });
+    } else {
+      console.error(`${tag} upload socket is OFF: ${res.message}. Everything else is running.`);
+      this.audit.record('media.upload_socket', { outcome: 'failed', path: us.socketPath });
+    }
   }
 
   /** `policy user id -> (channel ref -> channel id)`: resolved once, kept; only what is still unresolved is looked up again. */
@@ -590,6 +635,7 @@ export class MattermostBridge {
     this.scheduler?.stop();
     this.outbox?.stop();
     this.outreach?.stop();
+    void this.uploadSocket?.stop();
     this.client.close();
   }
 

@@ -10,6 +10,7 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 - **Outbox approvals** (optional per bot): Mattermost cards for the sender's drafts, approved by a 👍 or a button; see "Outbox approvals (sender drafts)".
 - **Outreach cards** (optional, inside `outboxApprovals`): pause, reply and bounce cards and a daily summary for the box outreach sender; see "Outreach cards (box sender)".
 - **Inbound images** (optional per bot, `media`): a listed user's PNG/JPEG attachments are validated and uploaded to GCS by the bridge, and the Claude prompt gets only the public URL; see "Inbound images (`media`)".
+- **Upload socket** (optional, inside `media`): a local renderer asks the bridge to publish a PNG it just rendered; the bridge alone holds the Google credential; see "Upload socket (`media.uploadSocket`)".
 - **B5** (this): safety rails and audit. A per-bot mode ceiling (`maxMode`), an append-only audit log, and an honest table of what is enforced where. The bridge still has no tool beyond the Chi run.
 
 ## How a thread maps to a run
@@ -733,6 +734,104 @@ remove the two variables from the env file and disable the service account in Go
 **Limits and gaps.** Only the bot's `chi` (Chi run) path uses it, not echo bots. PNG and JPEG only, no re-encoding or metadata
 stripping (EXIF in a JPEG goes public as is). A bridge restart between the upload and the run leaves the uploaded object behind. Every
 file of a message is read into memory one at a time (at most `maxBytes`), and the files of one message are not deduplicated by content.
+
+## Upload socket (`media.uploadSocket`)
+
+A renderer on the same host (the card renderer behind `render-card.sh`) writes a PNG and needs a public URL for it. It must not hold the Google
+key, so the **bridge** publishes it: the renderer connects to a Unix socket the bridge creates, names the file, and gets the URL back. The
+caller can only *name* a file; the bridge decides whether it may publish it, and the credential never leaves the bridge process. The object
+naming, the never-overwrite rule (`ifGenerationMatch=0`, a 412 counts as success) and the PNG magic check are the ones the inbound-image path uses.
+
+```json
+"media": {
+  "enabled": true, "bucket": "royalti-social-media", "allowedUserIds": ["..."], "credentialEnv": { "...": "..." },
+  "uploadSocket": {
+    "path": "/run/ikenga-mattermost/upload.sock",
+    "clients": ["ik-ruby"],
+    "sourceDir": "/var/lib/ikenga-render/out",
+    "maxBytes": 10485760,
+    "ratePerMinute": 12
+  }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | Default `/run/ikenga-mattermost/upload.sock`. Absolute, at most 100 characters of `[A-Za-z0-9._-/]`, no `..`/`.` segment, no `//`, no trailing `/`. The directory must exist (systemd `RuntimeDirectory=ikenga-mattermost`); the bridge does not create it. |
+| `clients` | **Required** (at least one, at most 8) when `media` is enabled; default none. Unix usernames, each matching `^[a-z_][a-z0-9_-]{0,31}$`, each once. The bridge grants exactly these accounts `rw` on the socket with a named-user POSIX ACL. There is **no** `group` key any more (it is rejected as an unknown field). Needs `/usr/bin/setfacl` and `/usr/bin/getfacl` (package `acl`) on the host. |
+| `sourceDir` | Default `/var/lib/ikenga-render/out`. Absolute. A request's file must really live below it (symlinks resolved). |
+| `maxBytes` | Default 10 MiB, hard maximum 20 MiB. Separate from `media.maxBytes` (which is for Mattermost attachments). |
+| `ratePerMinute` | Default 12, maximum 600. A bridge-wide token bucket (starts full, refills continuously). |
+
+The socket exists only when the block is `enabled` **and** `uploadSocket` is present **and** the credential loaded. A bot without the block, with
+`enabled: false`, or whose credential is missing or malformed creates no socket (the startup line says so). The block is validated strictly at
+load, and also while disabled; error messages never repeat the value typed.
+
+**Contract.** One connection per request. The client sends one JSON line, at most 4096 bytes including the newline, within 5 seconds:
+
+```
+{"path":"/var/lib/ikenga-render/out/20261027-0123456789abcdef-spring-sale.png"}
+```
+
+The bridge replies with one JSON line and closes:
+
+```
+{"ok":true,"url":"https://storage.googleapis.com/<bucket>/social/20261027-<sha16>/spring-sale.png","object":"social/20261027-<sha16>/spring-sale.png","sha256":"<hex>"}
+{"ok":false,"code":"outside_source_dir","message":"file is outside the render output directory"}
+```
+
+Other keys in the request are ignored (the bucket, prefix and object name can never be chosen by the caller). The object is
+`<prefix><YYYYMMDD of the upload>-<first 16 hex of the sha256 of the bytes>/<name>`; `<name>` is the file's basename with a leading
+`<YYYYMMDD>-<16 hex>-` (the render service's own prefix) dropped, reduced to `[A-Za-z0-9._-]`, at most 64 characters, extension forced to `.png`.
+
+| `code` | Fixed message | When |
+|--------|---------------|------|
+| `bad_request` | request must be one JSON line with a path / request line too long / request not received in time | Not JSON, no string `path`, relative or NUL path, over 4096 bytes, or no complete line within 5 s |
+| `not_found` | file not found | The path does not resolve (or loops, or cannot be read) |
+| `outside_source_dir` | file is outside the render output directory | The real path (after `..` and symlinks) is not below `realpath(sourceDir)`, or `sourceDir` does not exist |
+| `not_regular` | not an acceptable regular file | A FIFO, device, socket, directory, a file with another hard link (`nlink` is not 1), a symlink swapped in at open (`O_NOFOLLOW`), or one that changed while it was read |
+| `too_large` | file is too large | Over `maxBytes` (decided from `fstat`, before reading) |
+| `not_png` | file is not a PNG | Empty, or the first 8 bytes are not the PNG signature (a JPEG, SVG, GIF or HTML with a `.png` name is refused; the bytes decide, the extension does not) |
+| `rate_limited` | too many requests, try again shortly | The token bucket is empty, or 8 connections are already open |
+| `upload_failed` | upload failed | Google or the token endpoint refused or did not answer, or the handler failed. Never Google's body, status text, a path or a stack |
+| `media_off` | uploads are off | The bridge is shutting down |
+
+**What the bridge checks, in order.** `realpath` of the request and of `sourceDir`; the real path must be strictly inside; `lstat` must say regular
+file; the file is opened with `O_NOFOLLOW|O_NONBLOCK` and the open descriptor's `fstat` must agree (regular, `nlink` 1, same inode, within
+`maxBytes`, non-empty); on Linux `/proc/self/fd/N` must still point inside `sourceDir`; the bytes are read **through the descriptor** (never by path
+again) and the PNG signature is checked. Two uploads run at once at most; the rest of the admitted requests wait. Up to 8 connections are held; a ninth
+is answered `rate_limited` immediately. A crashed handler becomes an `upload_failed` reply and never takes the bridge down.
+
+**Audit.** One `media.upload` record per request: `outcome` (`uploaded` / `already_present` / `refused`), `reason` (the code), `file` (the
+**basename** only, reduced to the safe alphabet), `bytes`, `sha256`, `object`, `http_status` of a failed upload. Refusals that are `rate_limited` are
+written at most once a minute with a `suppressed` count, so a flood cannot push earlier history out of the rotation. `media.upload_socket`
+(`listening` / `failed`) is written at start and `config.loaded` says `upload_socket: true`. The key, token, request path, file contents and any
+Google response body are never recorded or logged.
+
+**Permission model.** The bridge owns its socket and decides who may connect; no group membership is involved. The node is born `0600` (the
+bridge user only). For each name in `clients` the bridge then runs `/usr/bin/setfacl -m u:<name>:rw,m::rw -- <socket>` (`execFile`, a fixed
+absolute path and an argument vector, no shell, a fixed environment), sets mode `0660` (with an ACL present that is the ACL mask; the file's group
+stays the bridge user's own and gets no access) and reads the ACL back with `/usr/bin/getfacl`. It must say exactly: the owner, one `rw-`
+entry per client and no other named user, no named group, a mask of `rw-`, nothing for the file group or for others. **Any failure** (setfacl
+missing or failing, for example an account that does not exist; a file system without ACLs; a listing that differs) removes the socket node, logs
+`upload socket is OFF: could not create <path>: access list could not be set or verified`, records `media.upload_socket` `failed`, and the bridge
+runs on with the upload socket off. The kernel checks `connect` against the ACL: other users, including the render service account unless
+it is listed, get `EACCES`. There is no password and no per-caller identity beyond the account: list **only the account of the process that
+calls the socket** (the card wrapper's caller, for example `ik-ruby`), never the render service account. Clients can publish any PNG that sits in
+`sourceDir`, within `ratePerMinute`, and nothing else: they cannot read a file back, pick the object name, bucket or prefix, or see the credential.
+`sourceDir` must be writable only by the render service and readable by the bridge user. A stale socket node is removed only if connecting to it is
+refused (nobody listening); a live listener, or anything else at the path (a file, directory, symlink), is left alone and the socket stays off for
+that bot. The socket is closed and unlinked on shutdown. `/etc/group` and `getent` are not consulted. The permission model is proved end to end with real accounts
+and real ACLs by `scripts/box/addons/render/test-xhalf-container.sh` in the royalti-co monorepo (it runs this package's built `dist/upload-socket.js`).
+
+**Rollback.** Delete the `uploadSocket` block (or set `media.enabled` to `false`) and restart the bridge: the socket is no longer created and the node
+is unlinked on the stop. Inbound images are unaffected by the first; objects already uploaded stay in the bucket (public, content-addressed). The
+render wrapper then reports its upload step as failed; run it with `--no-upload` meanwhile.
+
+**Limits and gaps.** PNG only. The whole file is read into memory (at most `maxBytes`). A file with a second hard link is refused, even a legitimate one.
+Access is by account (ACL), not by individual process. The rate limit and the connection cap are bridge-wide (one noisy caller can use up the budget of the others).
+Another process able to write inside `sourceDir` can publish what it wants there; protect that directory's mode. `process.umask` is changed for the
+single synchronous `bind()` call and restored at once.
 
 ## Concurrency cap
 

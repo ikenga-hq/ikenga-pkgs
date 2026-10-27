@@ -37,6 +37,10 @@ export class MockGcs {
   expiresIn = 3600;
   /** When set, the upload endpoint answers this status for every request (403, 500, ...) with a body that holds a secret-looking marker. */
   uploadStatus?: number;
+  /** Hold every upload this long (ms) before answering, and count how many are being held at once (`maxInFlight`). */
+  uploadDelayMs = 0;
+  inFlight = 0;
+  maxInFlight = 0;
   /** When set, the token endpoint answers this status. */
   tokenStatus?: number;
   /** Tokens the upload endpoint rejects with a 401 (a revoked token). */
@@ -112,9 +116,16 @@ export class MockGcs {
     const name = query.name ?? '';
     const authorization = req.headers.authorization;
     this.uploads.push({ bucket, name, query, authorization, contentType: req.headers['content-type'] });
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     const send = (status: number, payload: unknown) => {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(payload));
+      const go = () => {
+        this.inFlight -= 1;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+      };
+      if (this.uploadDelayMs > 0) setTimeout(go, this.uploadDelayMs);
+      else go();
     };
     if (this.uploadStatus) return send(this.uploadStatus, { error: { code: this.uploadStatus, message: 'mock failure SECRET-DETAIL' } });
     const bearer = /^Bearer (.+)$/.exec(authorization ?? '')?.[1];

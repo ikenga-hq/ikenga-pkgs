@@ -49,6 +49,36 @@ export interface MediaConfig {
   allowedUserIds?: string[];
   /** NAMES of the environment variables that hold the credential. Required when enabled. */
   credentialEnv?: { serviceAccountJson?: string; projectId?: string };
+  /**
+   * Optional Unix socket on which a local renderer asks the bridge to publish a PNG it just rendered (WP-4c). Off unless the block is
+   * `enabled` AND this is present. The bridge still alone holds the credential; the caller only names a file.
+   */
+  uploadSocket?: UploadSocketConfig;
+}
+
+/** The `media.uploadSocket` block as written in the bridge config. Every key is optional. */
+export interface UploadSocketConfig {
+  /** Absolute path of the socket the bridge creates. Default `/run/ikenga-mattermost/upload.sock`. */
+  path?: string;
+  /**
+   * Unix usernames that may connect, each granted `rw` on the socket by a named-user POSIX ACL the bridge sets itself. Nobody else
+   * but the bridge's own user can connect. REQUIRED (non-empty, at most 8) when the media block is enabled; default none.
+   */
+  clients?: string[];
+  /** Absolute directory a request's file must really live in (symlinks resolved). Default `/var/lib/ikenga-render/out`. */
+  sourceDir?: string;
+  /** Largest accepted PNG, bytes. Default 10 MiB, at most 20 MiB. */
+  maxBytes?: number;
+  /** Requests accepted per minute, bridge-wide (token bucket). Default 12. */
+  ratePerMinute?: number;
+}
+
+export interface ResolvedUploadSocket {
+  path: string;
+  clients: readonly string[];
+  sourceDir: string;
+  maxBytes: number;
+  ratePerMinute: number;
 }
 
 export type ResolvedMedia =
@@ -61,10 +91,94 @@ export type ResolvedMedia =
       maxFiles: number;
       allowedUserIds: ReadonlySet<string>;
       credentialEnv: { serviceAccountJson: string; projectId: string };
+      /** Present only when the block asked for the upload socket. */
+      uploadSocket?: ResolvedUploadSocket;
     };
 
-const MEDIA_KEYS = new Set(['enabled', 'bucket', 'prefix', 'maxBytes', 'maxFiles', 'allowedUserIds', 'credentialEnv']);
+const MEDIA_KEYS = new Set(['enabled', 'bucket', 'prefix', 'maxBytes', 'maxFiles', 'allowedUserIds', 'credentialEnv', 'uploadSocket']);
 const CRED_KEYS = new Set(['serviceAccountJson', 'projectId']);
+const SOCKET_KEYS = new Set(['path', 'clients', 'sourceDir', 'maxBytes', 'ratePerMinute']);
+export const DEFAULT_UPLOAD_SOCKET_PATH = '/run/ikenga-mattermost/upload.sock';
+export const DEFAULT_UPLOAD_SOURCE_DIR = '/var/lib/ikenga-render/out';
+const DEFAULT_UPLOAD_MAX_BYTES = 10 * MIB;
+const DEFAULT_UPLOAD_RATE = 12;
+const HARD_MAX_UPLOAD_RATE = 600;
+/** `sun_path` holds 108 bytes on Linux; stay clear of it. */
+const MAX_SOCKET_PATH = 100;
+const ABS_PATH_RE = /^\/[A-Za-z0-9._\-/]*$/;
+/** A Unix account name as it reaches `setfacl -m u:<name>:rw`: nothing that could be a flag, a separator or a numeric uid. */
+export const CLIENT_NAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+/** Accounts that must never hold upload rights: root, and the sandboxed browser account of the render add-on. */
+const FORBIDDEN_CLIENTS = new Set(['root', 'ikenga-render']);
+const MAX_CLIENTS = 8;
+
+/** An absolute path in the plain alphabet, no `..` or `.` segment, no `//`, no trailing `/` (except the root itself is refused). */
+function plainAbsolutePath(v: unknown, max: number): v is string {
+  return (
+    typeof v === 'string' &&
+    v.length > 1 &&
+    v.length <= max &&
+    ABS_PATH_RE.test(v) &&
+    !v.endsWith('/') &&
+    !v.includes('//') &&
+    v.split('/').every((seg) => seg !== '.' && seg !== '..')
+  );
+}
+
+/** Validate `media.uploadSocket`, strictly. The messages name the field and the rule, never the value typed. */
+function resolveUploadSocket(cfg: unknown, w: string, enabled: boolean): ResolvedUploadSocket | undefined {
+  if (cfg === undefined) return undefined;
+  const sw = `${w}.uploadSocket`;
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error(`${sw} must be an object`);
+  const c = cfg as Record<string, unknown>;
+  for (const k of Object.keys(c)) {
+    if (!SOCKET_KEYS.has(k)) throw new Error(`${sw}: unknown field '${k.slice(0, 40)}'; allowed: ${[...SOCKET_KEYS].join(', ')}`);
+  }
+  let socketPath = DEFAULT_UPLOAD_SOCKET_PATH;
+  if (c.path !== undefined) {
+    if (!plainAbsolutePath(c.path, MAX_SOCKET_PATH)) {
+      throw new Error(`${sw}.path must be an absolute path of at most ${MAX_SOCKET_PATH} characters (letters, digits, '.', '_', '-', '/'), with no '..' or '.' segment, no '//' and no trailing '/'`);
+    }
+    socketPath = c.path;
+  }
+  let sourceDir = DEFAULT_UPLOAD_SOURCE_DIR;
+  if (c.sourceDir !== undefined) {
+    if (!plainAbsolutePath(c.sourceDir, 256)) {
+      throw new Error(`${sw}.sourceDir must be an absolute directory path (letters, digits, '.', '_', '-', '/'), with no '..' or '.' segment, no '//' and no trailing '/'`);
+    }
+    sourceDir = c.sourceDir;
+  }
+  const clients: string[] = [];
+  if (c.clients !== undefined) {
+    const rule = `${sw}.clients must be a list of at most ${MAX_CLIENTS} Unix usernames (lower-case letters, digits, '_', '-'; starting with a letter or '_'; at most 32 characters), each once`;
+    if (!Array.isArray(c.clients) || c.clients.length > MAX_CLIENTS) throw new Error(rule);
+    for (const n of c.clients) {
+      if (typeof n !== 'string' || !CLIENT_NAME_RE.test(n) || clients.includes(n)) throw new Error(rule);
+      if (FORBIDDEN_CLIENTS.has(n)) throw new Error(`${sw}.clients must not name root or the render service's own account`);
+      clients.push(n);
+    }
+  }
+  // The socket is reachable only by the bridge itself and the named clients: with none named there is nobody to serve.
+  if (enabled && clients.length === 0) {
+    throw new Error(`${sw}.clients is required and must name at least one Unix user (the account of the process that renders cards) when media is enabled`);
+  }
+
+  let maxBytes = DEFAULT_UPLOAD_MAX_BYTES;
+  if (c.maxBytes !== undefined) {
+    if (typeof c.maxBytes !== 'number' || !Number.isInteger(c.maxBytes) || c.maxBytes < 1 || c.maxBytes > HARD_MAX_BYTES) {
+      throw new Error(`${sw}.maxBytes must be a whole number of bytes from 1 to ${HARD_MAX_BYTES} (20 MiB)`);
+    }
+    maxBytes = c.maxBytes;
+  }
+  let ratePerMinute = DEFAULT_UPLOAD_RATE;
+  if (c.ratePerMinute !== undefined) {
+    if (typeof c.ratePerMinute !== 'number' || !Number.isInteger(c.ratePerMinute) || c.ratePerMinute < 1 || c.ratePerMinute > HARD_MAX_UPLOAD_RATE) {
+      throw new Error(`${sw}.ratePerMinute must be a whole number from 1 to ${HARD_MAX_UPLOAD_RATE}`);
+    }
+    ratePerMinute = c.ratePerMinute;
+  }
+  return { path: socketPath, clients, sourceDir, maxBytes, ratePerMinute };
+}
 
 /**
  * Validate a bot's `media` block, strictly. Throws naming the bot; undefined means no block. Messages never repeat a value the
@@ -137,6 +251,9 @@ export function resolveMedia(cfg: unknown, where: string, ctx: { runsChi: boolea
     }
   }
 
+  // Checked whether or not the block is enabled, like every other field.
+  const uploadSocket = resolveUploadSocket(c.uploadSocket, w, enabled);
+
   if (!enabled) return { enabled: false };
 
   if (!ctx.runsChi) throw new Error(`${w}: needs daemon and chi (images are passed to a Chi run); this bot runs none`);
@@ -154,6 +271,7 @@ export function resolveMedia(cfg: unknown, where: string, ctx: { runsChi: boolea
     maxFiles,
     allowedUserIds: new Set(allowed),
     credentialEnv: { serviceAccountJson: credentialEnv.serviceAccountJson, projectId: credentialEnv.projectId },
+    ...(uploadSocket ? { uploadSocket } : {}),
   };
 }
 
@@ -213,6 +331,12 @@ function displayName(name: string | undefined, index: number): string {
   const base = (name ?? '').split(/[\\/]/).pop() ?? '';
   const s = base.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.{2,}/g, '.').replace(/_{2,}/g, '_').replace(/^[.]+/, '').slice(0, MAX_NAME);
   return s || `attachment ${index}`;
+}
+
+/** `<prefix><YYYYMMDD>-<first 16 hex of the hash>/<name>`: the content-addressed object name, shared by every way a file gets published. */
+export function mediaObjectName(prefix: string, nowMs: number, sha256: string, name: string): string {
+  const day = new Date(nowMs).toISOString().slice(0, 10).replace(/-/g, '');
+  return `${prefix}${day}-${sha256.slice(0, 16)}/${name}`;
 }
 
 type Kind = { ext: 'png' | 'jpg'; mime: 'image/png' | 'image/jpeg' };
@@ -391,9 +515,8 @@ export class MediaIngest implements MediaHook {
     const sniffed = sniffImage(bytes);
     if (!sniffed || sniffed !== declared) throw new FileRefusal('not_image');
 
-    const day = new Date(this.now()).toISOString().slice(0, 10).replace(/-/g, '');
     const name = safeObjectFileName(info.name, sniffed.ext);
-    const object = `${this.cfg.prefix}${day}-${sha256.slice(0, 16)}/${name}`;
+    const object = mediaObjectName(this.cfg.prefix, this.now(), sha256, name);
     seen.object = object;
     let created: boolean;
     try {
