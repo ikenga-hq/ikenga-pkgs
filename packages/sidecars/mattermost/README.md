@@ -747,7 +747,7 @@ naming, the never-overwrite rule (`ifGenerationMatch=0`, a 412 counts as success
   "enabled": true, "bucket": "royalti-social-media", "allowedUserIds": ["..."], "credentialEnv": { "...": "..." },
   "uploadSocket": {
     "path": "/run/ikenga-mattermost/upload.sock",
-    "group": "ikenga-renderers",
+    "clients": ["ik-ruby"],
     "sourceDir": "/var/lib/ikenga-render/out",
     "maxBytes": 10485760,
     "ratePerMinute": 12
@@ -758,7 +758,7 @@ naming, the never-overwrite rule (`ifGenerationMatch=0`, a 412 counts as success
 | Field | Meaning |
 |-------|---------|
 | `path` | Default `/run/ikenga-mattermost/upload.sock`. Absolute, at most 100 characters of `[A-Za-z0-9._-/]`, no `..`/`.` segment, no `//`, no trailing `/`. The directory must exist (systemd `RuntimeDirectory=ikenga-mattermost`); the bridge does not create it. |
-| `group` | Default `ikenga-renderers`. A group **name** (looked up in `/etc/group`, then `getent`) or a numeric gid. The root group (0) is refused. |
+| `clients` | **Required** (at least one, at most 8) when `media` is enabled; default none. Unix usernames, each matching `^[a-z_][a-z0-9_-]{0,31}$`, each once. The bridge grants exactly these accounts `rw` on the socket with a named-user POSIX ACL. There is **no** `group` key any more (it is rejected as an unknown field). Needs `/usr/bin/setfacl` and `/usr/bin/getfacl` (package `acl`) on the host. |
 | `sourceDir` | Default `/var/lib/ikenga-render/out`. Absolute. A request's file must really live below it (symlinks resolved). |
 | `maxBytes` | Default 10 MiB, hard maximum 20 MiB. Separate from `media.maxBytes` (which is for Mattermost attachments). |
 | `ratePerMinute` | Default 12, maximum 600. A bridge-wide token bucket (starts full, refills continuously). |
@@ -808,21 +808,28 @@ written at most once a minute with a `suppressed` count, so a flood cannot push 
 (`listening` / `failed`) is written at start and `config.loaded` says `upload_socket: true`. The key, token, request path, file contents and any
 Google response body are never recorded or logged.
 
-**Permission model.** The bridge process creates the socket: born `0600`, then `chown`ed to `group`, then `chmod 0660`. The group is the whole access
-control (kernel-checked on `connect`); there is no password and no per-caller identity, so put only the render service and the wrapper in
-`ikenga-renderers`. Members can publish any PNG that sits in `sourceDir`, within `ratePerMinute`, and nothing else: they cannot read a file back, pick
-the object name, bucket or prefix, or see the credential. `sourceDir` should be writable only by the render service (`2750`, group
-`ikenga-renderers`). The bridge user needs read access to it. A stale socket node is removed only if connecting to it is refused (nobody listening); a live
-listener, or anything else at the path (a file, directory, symlink), is left alone and the socket stays off for that bot. The socket is closed
-and unlinked on shutdown. A socket that cannot be created (unknown group, missing directory, `chown` not permitted) logs `upload socket is OFF: ...`,
-records `media.upload_socket` `failed`, and the bridge runs on without it.
+**Permission model.** The bridge owns its socket and decides who may connect; no group membership is involved. The node is born `0600` (the
+bridge user only). For each name in `clients` the bridge then runs `/usr/bin/setfacl -m u:<name>:rw,m::rw -- <socket>` (`execFile`, a fixed
+absolute path and an argument vector, no shell, a fixed environment), sets mode `0660` (with an ACL present that is the ACL mask; the file's group
+stays the bridge user's own and gets no access) and reads the ACL back with `/usr/bin/getfacl`. It must say exactly: the owner, one `rw-`
+entry per client and no other named user, no named group, a mask of `rw-`, nothing for the file group or for others. **Any failure** (setfacl
+missing or failing, for example an account that does not exist; a file system without ACLs; a listing that differs) removes the socket node, logs
+`upload socket is OFF: could not create <path>: access list could not be set or verified`, records `media.upload_socket` `failed`, and the bridge
+runs on with the upload socket off. The kernel checks `connect` against the ACL: other users, including the render service account unless
+it is listed, get `EACCES`. There is no password and no per-caller identity beyond the account: list **only the account of the process that
+calls the socket** (the card wrapper's caller, for example `ik-ruby`), never the render service account. Clients can publish any PNG that sits in
+`sourceDir`, within `ratePerMinute`, and nothing else: they cannot read a file back, pick the object name, bucket or prefix, or see the credential.
+`sourceDir` must be writable only by the render service and readable by the bridge user. A stale socket node is removed only if connecting to it is
+refused (nobody listening); a live listener, or anything else at the path (a file, directory, symlink), is left alone and the socket stays off for
+that bot. The socket is closed and unlinked on shutdown. `/etc/group` and `getent` are not consulted. The permission model is proved end to end with real accounts
+and real ACLs by `scripts/box/addons/render/test-xhalf-container.sh` in the royalti-co monorepo (it runs this package's built `dist/upload-socket.js`).
 
 **Rollback.** Delete the `uploadSocket` block (or set `media.enabled` to `false`) and restart the bridge: the socket is no longer created and the node
 is unlinked on the stop. Inbound images are unaffected by the first; objects already uploaded stay in the bucket (public, content-addressed). The
 render wrapper then reports its upload step as failed; run it with `--no-upload` meanwhile.
 
 **Limits and gaps.** PNG only. The whole file is read into memory (at most `maxBytes`). A file with a second hard link is refused, even a legitimate one.
-Access is by group, not by caller. The rate limit and the connection cap are bridge-wide (one noisy caller can use up the budget of the others).
+Access is by account (ACL), not by individual process. The rate limit and the connection cap are bridge-wide (one noisy caller can use up the budget of the others).
 Another process able to write inside `sourceDir` can publish what it wants there; protect that directory's mode. `process.umask` is changed for the
 single synchronous `bind()` call and restored at once.
 

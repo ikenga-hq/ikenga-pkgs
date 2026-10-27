@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import os from 'node:os';
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -17,8 +18,8 @@ import { MockDaemon } from './mock-daemon.js';
 import { MockGcs, publicKeyOf } from './mock-gcs.js';
 import { MockMattermostServer } from './mock-server.js';
 import { sweepTmp, tmpDir } from './test-tmp.js';
-import { UploadSocket } from './upload-socket.js';
-import type { UploadSocketOptions } from './upload-socket.js';
+import { UploadSocket, aclIsExactly, systemAcl } from './upload-socket.js';
+import type { AclOps, UploadSocketOptions } from './upload-socket.js';
 import type { MattermostBridgeConfig } from './types.js';
 
 /**
@@ -97,7 +98,25 @@ function ask(sock: string, payload: string | Buffer | undefined, o: { end?: bool
 }
 const req = (p: string) => `${JSON.stringify({ path: p })}\n`;
 
-const sgid = (): number => process.getgid?.() ?? 0;
+
+/** The `getfacl -c -p` text of a socket that carries exactly these named users (and nothing else). */
+const aclText = (users: string[], extra: string[] = []) => ['user::rw-', ...users.map((u) => `user:${u}:rw-`), 'group::---', 'mask::rw-', 'other::---', ...extra].join('\n') + '\n';
+/** An in-memory ACL: records the grants, lists what a real `getfacl` would print for them. */
+function fakeAcl(o: { failGrant?: boolean; failList?: boolean; listing?: (granted: string[]) => string } = {}): AclOps & { granted: string[] } {
+  const granted: string[] = [];
+  return {
+    granted,
+    grant: async (_p, user) => {
+      if (o.failGrant) throw new Error('acl');
+      granted.push(user);
+    },
+    list: async () => {
+      if (o.failList) throw new Error('acl');
+      return (o.listing ?? aclText)(granted);
+    },
+  };
+}
+const CLIENT = 'render-client';
 
 interface Rig {
   dir: string;
@@ -132,7 +151,7 @@ async function makeRig(o: { cfg?: Partial<ResolvedUploadSocket>; requestTimeoutM
     bot: 'ruby',
     bucket: BUCKET,
     prefix: 'social/',
-    config: { path: sock, group: sgid(), sourceDir: out, maxBytes: 10 * MIB, ratePerMinute: 12, ...o.cfg },
+    config: { path: sock, clients: [CLIENT], sourceDir: out, maxBytes: 10 * MIB, ratePerMinute: 12, ...o.cfg },
     account: (parsed as Extract<typeof parsed, { ok: true }>).account,
     audit,
     log: (m) => logs.push(m),
@@ -140,7 +159,7 @@ async function makeRig(o: { cfg?: Partial<ResolvedUploadSocket>; requestTimeoutM
     now: () => clock.t,
     timeoutMs: 5_000,
     requestTimeoutMs: o.requestTimeoutMs ?? 5_000,
-    resolveGroup: async (g) => (typeof g === 'number' ? g : undefined),
+    acl: fakeAcl(),
     ...o.seam,
   });
   const r: Rig = {
@@ -196,10 +215,10 @@ const enabledMedia = (over: Record<string, unknown> = {}) => ({
   bucket: BUCKET,
   allowedUserIds: [ADA],
   credentialEnv: { serviceAccountJson: 'MEDIA_SA', projectId: 'MEDIA_PROJ' },
-  uploadSocket: {},
+  uploadSocket: { clients: [CLIENT] },
   ...over,
 });
-const sockCfg = (over: Record<string, unknown>) => enabledMedia({ uploadSocket: over });
+const sockCfg = (over: Record<string, unknown>) => enabledMedia({ uploadSocket: { clients: [CLIENT], ...over } });
 const resolved = (over: Record<string, unknown> = {}) => {
   const m = resolveMedia(sockCfg(over), WHERE, { runsChi: true });
   assert.ok(m && m.enabled);
@@ -215,29 +234,31 @@ describe('media.uploadSocket config', () => {
   it('applies the defaults for an empty block', () => {
     assert.deepEqual(resolved({}), {
       path: '/run/ikenga-mattermost/upload.sock',
-      group: 'ikenga-renderers',
+      clients: [CLIENT],
       sourceDir: '/var/lib/ikenga-render/out',
       maxBytes: 10 * MIB,
       ratePerMinute: 12,
     });
   });
 
-  it('keeps what was asked for, a numeric group in either spelling', () => {
-    assert.deepEqual(resolved({ path: '/run/x/u.sock', group: 'renderers', sourceDir: '/srv/out', maxBytes: 20 * MIB, ratePerMinute: 600 }), {
+  it('keeps what was asked for', () => {
+    assert.deepEqual(resolved({ path: '/run/x/u.sock', clients: ['ik-ruby', '_svc', 'a'], sourceDir: '/srv/out', maxBytes: 20 * MIB, ratePerMinute: 600 }), {
       path: '/run/x/u.sock',
-      group: 'renderers',
+      clients: ['ik-ruby', '_svc', 'a'],
       sourceDir: '/srv/out',
       maxBytes: 20 * MIB,
       ratePerMinute: 600,
     });
-    assert.equal(resolved({ group: 1234 })?.group, 1234);
-    assert.equal(resolved({ group: '1234' })?.group, 1234);
+  });
+
+  it('accepts up to 8 clients and a 32-character name', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => `u${i}`);
+    assert.deepEqual(resolved({ clients: eight })?.clients, eight);
+    assert.deepEqual(resolved({ clients: ['a'.repeat(32)] })?.clients, ['a'.repeat(32)]);
   });
 
   const bad: Array<[string, unknown, RegExp]> = [
     ['an unknown field', { extra: 1 }, /uploadSocket: unknown field 'extra'/],
-    ['a non-object block', 'yes', /uploadSocket must be an object/],
-    ['an array block', [], /uploadSocket must be an object/],
     ['a relative path', { path: 'run/u.sock' }, /path must be an absolute path/],
     ['a path with ..', { path: '/run/../etc/u.sock' }, /path must be an absolute path/],
     ['a path with a . segment', { path: '/run/./u.sock' }, /path must be an absolute path/],
@@ -252,15 +273,25 @@ describe('media.uploadSocket config', () => {
     ['a sourceDir with ..', { sourceDir: '/var/../etc' }, /sourceDir must be an absolute directory/],
     ['a sourceDir with a trailing slash', { sourceDir: '/var/out/' }, /sourceDir must be an absolute directory/],
     ['the root as sourceDir', { sourceDir: '/' }, /sourceDir must be an absolute directory/],
-    ['group 0', { group: 0 }, /root group is refused/],
-    ['group "0"', { group: '0' }, /root group is refused/],
-    ['a negative gid', { group: -5 }, /root group is refused/],
-    ['a fractional gid', { group: 1.5 }, /root group is refused/],
-    ['a gid too big', { group: 4294967295 }, /root group is refused/],
-    ['a group name with a space', { group: 'a b' }, /group must be a group name/],
-    ['a group name starting with -', { group: '-rf' }, /group must be a group name/],
-    ['a group name with a slash', { group: 'a/b' }, /group must be a group name/],
-    ['a group that is a boolean', { group: true }, /group must be a group name/],
+    ['the old group key', { group: 'ikenga-renderers' }, /uploadSocket: unknown field 'group'/],
+    ['a numeric group', { group: 1234 }, /uploadSocket: unknown field 'group'/],
+    ['no clients while media is enabled', { clients: undefined }, /clients is required and must name at least one Unix user/],
+    ['an empty clients list', { clients: [] }, /clients is required and must name at least one Unix user/],
+    ['clients that is a string', { clients: 'ik-ruby' }, /clients must be a list of at most 8 Unix usernames/],
+    ['clients that is an object', { clients: { a: 1 } }, /clients must be a list of at most 8 Unix usernames/],
+    ['nine clients', { clients: Array.from({ length: 9 }, (_, i) => `u${i}`) }, /clients must be a list of at most 8/],
+    ['a client that is a number', { clients: [1000] }, /clients must be a list/],
+    ['a client with a capital', { clients: ['Ruby'] }, /clients must be a list/],
+    ['a client starting with a digit', { clients: ['1ruby'] }, /clients must be a list/],
+    ['a client starting with -', { clients: ['-m'] }, /clients must be a list/],
+    ['a client with a colon (an ACL spec separator)', { clients: ['a:b'] }, /clients must be a list/],
+    ['a client with a comma (an ACL spec separator)', { clients: ['a,b'] }, /clients must be a list/],
+    ['a client with a space', { clients: ['a b'] }, /clients must be a list/],
+    ['a client with a slash', { clients: ['a/b'] }, /clients must be a list/],
+    ['a client with a dot', { clients: ['a.b'] }, /clients must be a list/],
+    ['an empty client name', { clients: [''] }, /clients must be a list/],
+    ['a 33-character client name', { clients: ['a'.repeat(33)] }, /clients must be a list/],
+    ['a client listed twice', { clients: ['ik-ruby', 'ik-ruby'] }, /clients must be a list/],
     ['maxBytes over 20 MiB', { maxBytes: 20 * MIB + 1 }, /maxBytes must be/],
     ['maxBytes zero', { maxBytes: 0 }, /maxBytes must be/],
     ['maxBytes a string', { maxBytes: '8' }, /maxBytes must be/],
@@ -276,11 +307,14 @@ describe('media.uploadSocket config', () => {
   }
   it('refuses a non-object block too', () => {
     assert.throws(() => resolveMedia(enabledMedia({ uploadSocket: 'yes' }), WHERE, { runsChi: true }), /uploadSocket must be an object/);
+    assert.throws(() => resolveMedia(enabledMedia({ uploadSocket: [] }), WHERE, { runsChi: true }), /uploadSocket must be an object/);
   });
 
   it('checks the block even while media is disabled, and then ignores it', () => {
     assert.throws(() => resolveMedia({ enabled: false, uploadSocket: { path: 'rel' } }, WHERE, { runsChi: true }), /path must be an absolute path/);
+    // not enabled: clients are checked when present, but are not required
     assert.deepEqual(resolveMedia({ enabled: false, uploadSocket: {} }, WHERE, { runsChi: true }), { enabled: false });
+    assert.throws(() => resolveMedia({ enabled: false, uploadSocket: { clients: ['Bad Name'] } }, WHERE, { runsChi: true }), /clients must be a list/);
   });
 
   it('never repeats a value the operator typed', () => {
@@ -315,7 +349,7 @@ describe('media.uploadSocket config', () => {
         },
       },
     });
-    assert.throws(() => resolveBridgeConfigs(file(sockCfg({ group: 0 }))), /bot 'ruby': media.uploadSocket.group/);
+    assert.throws(() => resolveBridgeConfigs(file(sockCfg({ clients: ['Bad Name'] }))), /bot 'ruby': media.uploadSocket.clients/);
     const [ok] = resolveBridgeConfigs(file(sockCfg({ ratePerMinute: 5 })));
     assert.equal((ok as MattermostBridgeConfig).media?.uploadSocket?.ratePerMinute, 5);
   });
@@ -324,16 +358,14 @@ describe('media.uploadSocket config', () => {
 // ── the socket itself ────────────────────────────────────────────────────────
 
 describe('the socket node', () => {
-  it('is created with mode 0660, owned by the configured group, and is a socket', async () => {
-    // A group the process belongs to but is not its primary one, when there is one: chown to it must really change the group.
-    const other = (process.getgroups?.() ?? []).find((g) => g !== sgid());
-    const gid = other ?? sgid();
-    rig = await makeRig({ cfg: { group: gid } });
+  it('is created with mode 0660, owned by the bridge user, a socket, and each client gets an ACL entry', async () => {
+    const acl = fakeAcl();
+    rig = await makeRig({ cfg: { clients: ['ik-ruby', 'ik-ada'] }, seam: { acl } });
     const st = lstatSync(R().sock);
     assert.ok(st.isSocket());
     assert.equal(st.mode & 0o777, 0o660);
-    assert.equal(st.gid, gid);
     assert.equal(st.uid, process.getuid?.());
+    assert.deepEqual(acl.granted, ['ik-ruby', 'ik-ada']);
   });
 
   it('does not leave the process umask changed', async () => {
@@ -342,24 +374,88 @@ describe('the socket node', () => {
     assert.equal(process.umask(), before);
   });
 
-  it('fails, leaving nothing behind, for a group that does not exist', async () => {
-    rig = await makeRig({ cfg: { group: 'no-such-group-xyz' }, start: false });
+  it('fails, leaving nothing behind, when setfacl fails for a client', async () => {
+    rig = await makeRig({ seam: { acl: fakeAcl({ failGrant: true }) }, start: false });
     const res = await R().us.start();
     assert.equal(res.ok, false);
-    if (!res.ok) assert.match(res.message, /group 'no-such-group-xyz' does not exist/);
+    if (!res.ok) assert.match(res.message, /could not create .*: access list could not be set or verified/);
+    assert.equal(existsSync(R().sock), false, 'a socket without its ACL is removed');
+  });
+
+  it('fails, leaving nothing behind, when the second client cannot be granted', async () => {
+    let n = 0;
+    const acl: AclOps = { grant: async () => { if (++n === 2) throw new Error('acl'); }, list: async () => aclText(['a', 'b']) };
+    rig = await makeRig({ cfg: { clients: ['a', 'b'] }, seam: { acl }, start: false });
+    const res = await R().us.start();
+    assert.equal(res.ok, false);
     assert.equal(existsSync(R().sock), false);
   });
 
-  it('fails, leaving nothing behind, when the group is not one the process may give a file to', async () => {
-    if (process.getuid?.() === 0) return; // root may chown to anything
-    const groups = new Set([sgid(), ...(process.getgroups?.() ?? [])]);
-    let foreign = 65000;
-    while (groups.has(foreign)) foreign += 1;
-    rig = await makeRig({ cfg: { group: foreign }, start: false });
+  it('fails when the ACL cannot be read back', async () => {
+    rig = await makeRig({ seam: { acl: fakeAcl({ failList: true }) }, start: false });
+    assert.equal((await R().us.start()).ok, false);
+    assert.equal(existsSync(R().sock), false);
+  });
+
+  const wrongListings: Array<[string, (granted: string[]) => string]> = [
+    ['an extra named user', (g) => aclText(g, ['user:intruder:rw-'])],
+    ['a missing client', () => aclText([])],
+    ['a named group', (g) => aclText(g, ['group:wheel:rw-'])],
+    ['others able to connect', (g) => aclText(g).replace('other::---', 'other::rw-')],
+    ['the file group able to connect', (g) => aclText(g).replace('group::---', 'group::rw-')],
+    ['a mask that cuts the client off', (g) => aclText(g).replace('mask::rw-', 'mask::r--')],
+    ['a client that is read-only', (g) => aclText(g).replace(`user:${CLIENT}:rw-`, `user:${CLIENT}:r--`)],
+    ['no mask line', (g) => aclText(g).replace('mask::rw-\n', '')],
+    ['a default ACL', (g) => aclText(g, ['default:user::rw-'])],
+    ['garbage', () => 'getfacl: something went wrong\n'],
+    ['empty output', () => ''],
+  ];
+  for (const [what, listing] of wrongListings) {
+    it(`takes the socket down again when the ACL read back shows ${what}`, async () => {
+      rig = await makeRig({ seam: { acl: fakeAcl({ listing }) }, start: false });
+      const res = await R().us.start();
+      assert.equal(res.ok, false);
+      if (!res.ok) assert.match(res.message, /access list could not be set or verified/);
+      assert.equal(existsSync(R().sock), false);
+    });
+  }
+
+  it('fails with no clients configured (a config that skipped validation)', async () => {
+    rig = await makeRig({ cfg: { clients: [] }, start: false });
     const res = await R().us.start();
     assert.equal(res.ok, false);
-    if (!res.ok) assert.match(res.message, /could not create .*EPERM/);
-    assert.equal(existsSync(R().sock), false, 'a node that could not be put in its group is removed');
+    assert.equal(existsSync(R().sock), false);
+  });
+
+  it('aclIsExactly: comments are ignored, the client set must match exactly', () => {
+    assert.equal(aclIsExactly('user::rw-\nuser:ik-ruby:rw-\ngroup::---\t#effective:---\nmask::rw-\nother::---\n', ['ik-ruby']), true);
+    assert.equal(aclIsExactly('user::rw-\nuser:ik-ruby:rw-\ngroup::rw-\nmask::rw-\nother::---\n', ['ik-ruby']), false);
+    assert.equal(aclIsExactly(aclText(['ik-ruby']), ['ik-ruby']), true);
+    assert.equal(aclIsExactly(aclText(['ik-ruby']), ['ik-ada']), false);
+    assert.equal(aclIsExactly(aclText(['ik-ruby', 'ik-ada']), ['ik-ruby']), false);
+  });
+
+  const realUser = os.userInfo().username;
+  const haveRealAcl = existsSync('/usr/bin/setfacl') && existsSync('/usr/bin/getfacl') && /^[a-z_][a-z0-9_-]{0,31}$/.test(realUser);
+  it('with the real setfacl and getfacl: the ACL is on the socket and nobody else is listed', { skip: !haveRealAcl && 'setfacl/getfacl or a plain user name not available' }, async () => {
+    rig = await makeRig({ cfg: { clients: [realUser] }, seam: { acl: systemAcl }, start: false });
+    const res = await R().us.start();
+    if (!res.ok && /EOPNOTSUPP|not supported|access list/.test(res.message)) return; // a file system without ACLs: the bridge turned the socket off, which is the point
+    assert.deepEqual(res, { ok: true });
+    const listing = execFileSync('/usr/bin/getfacl', ['-c', '-p', R().sock], { encoding: 'utf8' });
+    assert.ok(aclIsExactly(listing, [realUser]), listing);
+    assert.equal(lstatSync(R().sock).mode & 0o777, 0o660);
+    const b = png(40);
+    R().put('20261027-0123456789abcdef-a.png', b);
+    assert.equal((await R().ask(path.join(R().out, '20261027-0123456789abcdef-a.png'))).ok, true);
+  });
+
+  it('with the real setfacl and a user that does not exist: the socket is off and removed', { skip: !haveRealAcl && 'setfacl not available' }, async () => {
+    rig = await makeRig({ cfg: { clients: ['no-such-user-xyz'] }, seam: { acl: systemAcl }, start: false });
+    const res = await R().us.start();
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.match(res.message, /access list could not be set or verified/);
+    assert.equal(existsSync(R().sock), false);
   });
 
   it('fails when the directory of the socket does not exist', async () => {
@@ -1043,7 +1139,7 @@ describe('the bridge and the upload socket', () => {
   process.env.MM_TEST_TOKEN = MM_TOKEN;
   process.env.DAEMON_TEST_PW = PASSWORD;
 
-  async function boot(o: { media?: Record<string, unknown> | null; env?: NodeJS.ProcessEnv; group?: number | undefined } = {}): Promise<void> {
+  async function boot(o: { media?: Record<string, unknown> | null; env?: NodeJS.ProcessEnv; acl?: AclOps } = {}): Promise<void> {
     mm.channels.set('royalti-co', 'id-royalti-co');
     const mmUrl = await mm.listen();
     const daemonUrl = await daemon.listen();
@@ -1060,7 +1156,7 @@ describe('the bridge and the upload socket', () => {
           chi: { engine: 'claude-code', cwd: HUB, systemPrompt: 'You are Ruby.', persistent: true },
           maxMode: 'default',
           progress: FAST,
-          ...(o.media === null ? {} : { media: enabledMedia({ uploadSocket: { path: sock, sourceDir: out, group: 'test-renderers' }, ...(o.media ?? {}) }) }),
+          ...(o.media === null ? {} : { media: enabledMedia({ uploadSocket: { path: sock, sourceDir: out, clients: [CLIENT] }, ...(o.media ?? {}) }) }),
         },
       },
     });
@@ -1070,7 +1166,7 @@ describe('the bridge and the upload socket', () => {
         now: () => NOW,
         env: o.env ?? ENV,
         timeoutMs: 5_000,
-        uploadSocket: { requestTimeoutMs: 300, resolveGroup: async (g) => (g === 'test-renderers' ? (o.group ?? sgid()) : undefined) },
+        uploadSocket: { requestTimeoutMs: 300, acl: o.acl ?? fakeAcl() },
       },
     });
     await bridge.start();
@@ -1134,10 +1230,10 @@ describe('the bridge and the upload socket', () => {
   });
 
   it('keeps running, with the socket off and one error line, when the socket cannot be created', async () => {
-    await boot({ media: { uploadSocket: { path: sock, sourceDir: out, group: 'missing-group' } } });
+    await boot({ acl: fakeAcl({ failGrant: true }) });
     assert.equal(bridge!.isRunning(), true);
     assert.equal(existsSync(sock), false);
-    assert.ok(logs.some((l) => l.includes('upload socket is OFF') && l.includes("group 'missing-group' does not exist")), logs.join('\n'));
+    assert.ok(logs.some((l) => l.includes('upload socket is OFF') && l.includes('access list could not be set or verified')), logs.join('\n'));
     assert.equal(audit().find((r) => r.event === 'media.upload_socket')?.outcome, 'failed');
   });
 

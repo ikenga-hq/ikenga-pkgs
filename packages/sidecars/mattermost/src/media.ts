@@ -60,8 +60,11 @@ export interface MediaConfig {
 export interface UploadSocketConfig {
   /** Absolute path of the socket the bridge creates. Default `/run/ikenga-mattermost/upload.sock`. */
   path?: string;
-  /** Group that may connect: a name or a numeric gid. Default `ikenga-renderers`. */
-  group?: string | number;
+  /**
+   * Unix usernames that may connect, each granted `rw` on the socket by a named-user POSIX ACL the bridge sets itself. Nobody else
+   * but the bridge's own user can connect. REQUIRED (non-empty, at most 8) when the media block is enabled; default none.
+   */
+  clients?: string[];
   /** Absolute directory a request's file must really live in (symlinks resolved). Default `/var/lib/ikenga-render/out`. */
   sourceDir?: string;
   /** Largest accepted PNG, bytes. Default 10 MiB, at most 20 MiB. */
@@ -72,7 +75,7 @@ export interface UploadSocketConfig {
 
 export interface ResolvedUploadSocket {
   path: string;
-  group: string | number;
+  clients: readonly string[];
   sourceDir: string;
   maxBytes: number;
   ratePerMinute: number;
@@ -94,9 +97,8 @@ export type ResolvedMedia =
 
 const MEDIA_KEYS = new Set(['enabled', 'bucket', 'prefix', 'maxBytes', 'maxFiles', 'allowedUserIds', 'credentialEnv', 'uploadSocket']);
 const CRED_KEYS = new Set(['serviceAccountJson', 'projectId']);
-const SOCKET_KEYS = new Set(['path', 'group', 'sourceDir', 'maxBytes', 'ratePerMinute']);
+const SOCKET_KEYS = new Set(['path', 'clients', 'sourceDir', 'maxBytes', 'ratePerMinute']);
 export const DEFAULT_UPLOAD_SOCKET_PATH = '/run/ikenga-mattermost/upload.sock';
-export const DEFAULT_UPLOAD_GROUP = 'ikenga-renderers';
 export const DEFAULT_UPLOAD_SOURCE_DIR = '/var/lib/ikenga-render/out';
 const DEFAULT_UPLOAD_MAX_BYTES = 10 * MIB;
 const DEFAULT_UPLOAD_RATE = 12;
@@ -104,7 +106,9 @@ const HARD_MAX_UPLOAD_RATE = 600;
 /** `sun_path` holds 108 bytes on Linux; stay clear of it. */
 const MAX_SOCKET_PATH = 100;
 const ABS_PATH_RE = /^\/[A-Za-z0-9._\-/]*$/;
-const GROUP_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]{0,31}$/;
+/** A Unix account name as it reaches `setfacl -m u:<name>:rw`: nothing that could be a flag, a separator or a numeric uid. */
+export const CLIENT_NAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+const MAX_CLIENTS = 8;
 
 /** An absolute path in the plain alphabet, no `..` or `.` segment, no `//`, no trailing `/` (except the root itself is refused). */
 function plainAbsolutePath(v: unknown, max: number): v is string {
@@ -120,7 +124,7 @@ function plainAbsolutePath(v: unknown, max: number): v is string {
 }
 
 /** Validate `media.uploadSocket`, strictly. The messages name the field and the rule, never the value typed. */
-function resolveUploadSocket(cfg: unknown, w: string): ResolvedUploadSocket | undefined {
+function resolveUploadSocket(cfg: unknown, w: string, enabled: boolean): ResolvedUploadSocket | undefined {
   if (cfg === undefined) return undefined;
   const sw = `${w}.uploadSocket`;
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error(`${sw} must be an object`);
@@ -142,22 +146,20 @@ function resolveUploadSocket(cfg: unknown, w: string): ResolvedUploadSocket | un
     }
     sourceDir = c.sourceDir;
   }
-  let group: string | number = DEFAULT_UPLOAD_GROUP;
-  if (c.group !== undefined) {
-    const g = c.group;
-    if (typeof g === 'number') {
-      if (!Number.isInteger(g) || g < 1 || g > 4294967294) throw new Error(`${sw}.group must be a group name or a numeric gid from 1 (the root group is refused)`);
-      group = g;
-    } else if (typeof g === 'string' && /^[0-9]{1,10}$/.test(g)) {
-      const n = Number(g);
-      if (n < 1 || n > 4294967294) throw new Error(`${sw}.group must be a group name or a numeric gid from 1 (the root group is refused)`);
-      group = n;
-    } else if (typeof g === 'string' && GROUP_NAME_RE.test(g)) {
-      group = g;
-    } else {
-      throw new Error(`${sw}.group must be a group name (letters, digits, '_', '-', '.') or a numeric gid`);
+  const clients: string[] = [];
+  if (c.clients !== undefined) {
+    const rule = `${sw}.clients must be a list of at most ${MAX_CLIENTS} Unix usernames (lower-case letters, digits, '_', '-'; starting with a letter or '_'; at most 32 characters), each once`;
+    if (!Array.isArray(c.clients) || c.clients.length > MAX_CLIENTS) throw new Error(rule);
+    for (const n of c.clients) {
+      if (typeof n !== 'string' || !CLIENT_NAME_RE.test(n) || clients.includes(n)) throw new Error(rule);
+      clients.push(n);
     }
   }
+  // The socket is reachable only by the bridge itself and the named clients: with none named there is nobody to serve.
+  if (enabled && clients.length === 0) {
+    throw new Error(`${sw}.clients is required and must name at least one Unix user (the account of the process that renders cards) when media is enabled`);
+  }
+
   let maxBytes = DEFAULT_UPLOAD_MAX_BYTES;
   if (c.maxBytes !== undefined) {
     if (typeof c.maxBytes !== 'number' || !Number.isInteger(c.maxBytes) || c.maxBytes < 1 || c.maxBytes > HARD_MAX_BYTES) {
@@ -172,7 +174,7 @@ function resolveUploadSocket(cfg: unknown, w: string): ResolvedUploadSocket | un
     }
     ratePerMinute = c.ratePerMinute;
   }
-  return { path: socketPath, group, sourceDir, maxBytes, ratePerMinute };
+  return { path: socketPath, clients, sourceDir, maxBytes, ratePerMinute };
 }
 
 /**
@@ -247,7 +249,7 @@ export function resolveMedia(cfg: unknown, where: string, ctx: { runsChi: boolea
   }
 
   // Checked whether or not the block is enabled, like every other field.
-  const uploadSocket = resolveUploadSocket(c.uploadSocket, w);
+  const uploadSocket = resolveUploadSocket(c.uploadSocket, w, enabled);
 
   if (!enabled) return { enabled: false };
 

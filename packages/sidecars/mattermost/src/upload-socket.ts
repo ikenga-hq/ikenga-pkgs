@@ -122,12 +122,12 @@ export interface UploadSocketOptions {
   account: ServiceAccount;
   audit: Pick<AuditLog, 'record' | 'recordCoalesced'>;
   log?: (msg: string) => void;
-  /** Test seams, constructor options only: stub GCS endpoints, a clock, timeouts, the group lookup. */
+  /** Test seams, constructor options only: stub GCS endpoints, a clock, timeouts, the ACL tools. */
   endpoints?: GcsUploaderOptions['endpoints'];
   now?: () => number;
   timeoutMs?: number;
   requestTimeoutMs?: number;
-  resolveGroup?: (group: string | number) => Promise<number | undefined>;
+  acl?: AclOps;
 }
 
 export type UploadSocketStart = { ok: true } | { ok: false; message: string };
@@ -160,9 +160,12 @@ export class UploadSocket {
   }
 
   /**
-   * Create the socket, mode 0660, group `config.group`, and start answering. Never throws: a problem is `{ok:false}` with a message
-   * that names the field or errno code, and nothing is left listening or on disk. A stale socket node is removed only when a
-   * connect to it is refused (nobody listens); anything else at the path is left alone and the start fails.
+   * Create the socket and start answering. The node is born 0600 (owner only); the bridge then grants each configured client `rw` with a
+   * named-user POSIX ACL (`setfacl`), sets mode 0660 (which, with an ACL present, is the ACL mask; the file's group stays the bridge's own
+   * and gets no access), and reads the ACL back: anything other than "owner, the listed clients (rw), mask rw, nothing for the group or
+   * others" removes the node again. Never throws: a problem is `{ok:false}` with a message that names the errno code or a fixed phrase,
+   * and nothing is left listening or on disk. A stale socket node is removed only when a connect to it is refused (nobody listens);
+   * anything else at the path is left alone and the start fails.
    */
   async start(): Promise<UploadSocketStart> {
     if (this.server || this.closing) return { ok: false, message: 'already started or stopped' };
@@ -176,8 +179,8 @@ export class UploadSocket {
       this.server = undefined;
     };
     try {
-      const gid = await (this.opts.resolveGroup ?? resolveGid)(this.cfg.group);
-      if (gid === undefined) return fail(`group '${typeof this.cfg.group === 'number' ? this.cfg.group : this.cfg.group.slice(0, 40)}' does not exist`);
+      if (this.cfg.clients.length === 0) return fail('no clients are configured');
+      const acl = this.opts.acl ?? systemAcl;
 
       const prep = await clearStaleSocket(sock);
       if (prep) return fail(prep);
@@ -186,7 +189,7 @@ export class UploadSocket {
       server = net.createServer({ allowHalfOpen: true }, (s) => this.onConnection(s));
       this.server = server;
       // bind() is synchronous, so a restrictive umask held across `listen` and restored at once cannot touch any other file. The
-      // node is born 0600: only after it is in the right group does it open to the group (0660), never wider than that.
+      // node is born 0600: it opens to the named clients (ACL) and only then to mode 0660, never wider than that.
       await new Promise<void>((resolve, reject) => {
         server!.once('error', reject);
         const old = process.umask(0o177);
@@ -199,21 +202,33 @@ export class UploadSocket {
         }
       });
       created = true;
-      await fsp.chown(sock, process.getuid?.() ?? -1, gid);
+      try {
+        for (const user of this.cfg.clients) await acl.grant(sock, user);
+      } catch {
+        throw new Error('acl');
+      }
       await fsp.chmod(sock, 0o660);
       const after = await fsp.lstat(sock);
-      if (!after.isSocket() || (after.mode & 0o777) !== 0o660 || after.gid !== gid) throw new Error('mode');
+      if (!after.isSocket() || (after.mode & 0o777) !== 0o660 || after.uid !== process.getuid?.()) throw new Error('mode');
+      let listing: string;
+      try {
+        listing = await acl.list(sock);
+      } catch {
+        throw new Error('acl');
+      }
+      if (!aclIsExactly(listing, this.cfg.clients)) throw new Error('acl');
       if (this.closing) {
         await undo();
         return fail('stopped while starting');
       }
       server.on('error', (err) => this.log(`server error: ${(err as NodeJS.ErrnoException).code ?? 'error'}`));
-      this.log(`listening on ${sock} (mode 660, gid ${gid}); files from ${this.cfg.sourceDir}; max ${this.cfg.maxBytes} bytes, ${this.cfg.ratePerMinute}/min`);
+      this.log(`listening on ${sock} (mode 660, ACL for ${this.cfg.clients.join(', ')}); files from ${this.cfg.sourceDir}; max ${this.cfg.maxBytes} bytes, ${this.cfg.ratePerMinute}/min`);
       return { ok: true };
     } catch (err) {
       await undo().catch(() => undefined);
       const code = (err as NodeJS.ErrnoException).code;
-      const why = code ?? ((err as Error).message === 'mode' ? 'permissions not as required' : 'error');
+      const msg = (err as Error).message;
+      const why = typeof code === 'string' ? code : msg === 'mode' ? 'permissions not as required' : msg === 'acl' ? 'access list could not be set or verified' : 'error';
       return fail(`could not create ${sock}: ${why}`);
     }
   }
@@ -480,22 +495,78 @@ async function clearStaleSocket(p: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** Group name or gid to gid: `/etc/group` first, then `getent` (for a directory service). A name that matches neither is undefined. */
-export async function resolveGid(group: string | number): Promise<number | undefined> {
-  if (typeof group === 'number') return group;
-  try {
-    for (const line of (await fsp.readFile('/etc/group', 'utf8')).split('\n')) {
-      const [name, , gid] = line.split(':');
-      if (name === group && gid !== undefined && /^\d+$/.test(gid)) return Number(gid);
-    }
-  } catch {
-    // fall through to getent
-  }
-  return new Promise((resolve) => {
-    // `group` was validated at config load (letters, digits, `_-.`, starting with a letter or `_`) and goes in as one argv entry.
-    execFile('/usr/bin/getent', ['group', group], { timeout: 3_000 }, (err, stdout) => {
-      const gid = err ? undefined : stdout.split(':')[2];
-      resolve(gid !== undefined && /^\d+$/.test(gid) ? Number(gid) : undefined);
-    });
+// ── the access list ──────────────────────────────────────────────────────────
+
+/** The two ACL operations the socket needs; the real ones run `setfacl` and `getfacl` with fixed absolute paths and argument vectors. */
+export interface AclOps {
+  /** Grant `user` read+write on `sockPath` and set the mask to rw (`setfacl -m u:<user>:rw,m::rw`). Rejects when it did not work. */
+  grant(sockPath: string, user: string): Promise<void>;
+  /** The ACL as `getfacl -c -p` prints it. */
+  list(sockPath: string): Promise<string>;
+}
+
+const SETFACL = '/usr/bin/setfacl';
+const GETFACL = '/usr/bin/getfacl';
+const ACL_TIMEOUT_MS = 5_000;
+/** Fixed environment for the ACL tools: nothing inherited (no PATH lookup, no locale surprises). */
+const ACL_ENV = { LC_ALL: 'C', PATH: '/usr/bin:/bin' };
+
+function runAcl(file: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // No shell: the socket path (validated at config load) and the user name (validated, ^[a-z_][a-z0-9_-]{0,31}$) are single argv entries.
+    execFile(file, args, { timeout: ACL_TIMEOUT_MS, env: ACL_ENV, maxBuffer: 64 * 1024 }, (err, stdout) => (err ? reject(new Error('acl')) : resolve(stdout)));
   });
+}
+
+export const systemAcl: AclOps = {
+  grant: async (sockPath, user) => {
+    await runAcl(SETFACL, ['-m', `u:${user}:rw,m::rw`, '--', sockPath]);
+  },
+  list: (sockPath) => runAcl(GETFACL, ['-c', '-p', '--', sockPath]),
+};
+
+/**
+ * True only when the `getfacl` listing says exactly: an owner entry, one named-user entry per client (and no other named user) with
+ * read+write, a mask with read+write, NO named group, and neither the file's group nor others able to read or write (effective rights,
+ * i.e. the group entry masked). Anything else, an unparsable line or a default ACL included, is false.
+ */
+export function aclIsExactly(listing: string, clients: readonly string[]): boolean {
+  const perm = /^[r-][w-][x-]$/;
+  let owner = 0;
+  let group: string | undefined;
+  let other: string | undefined;
+  let mask: string | undefined;
+  const named = new Map<string, string>();
+  for (const raw of listing.split('\n')) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const f = line.split(':');
+    if (f.length !== 3 || !perm.test(f[2]!)) return false;
+    const [tag, who, p] = f as [string, string, string];
+    if (tag === 'user' && who === '') owner += 1;
+    else if (tag === 'user') {
+      if (named.has(who)) return false;
+      named.set(who, p);
+    } else if (tag === 'group' && who === '') {
+      if (group !== undefined) return false;
+      group = p;
+    } else if (tag === 'mask' && who === '') {
+      if (mask !== undefined) return false;
+      mask = p;
+    } else if (tag === 'other' && who === '') {
+      if (other !== undefined) return false;
+      other = p;
+    } else return false; // a named group, a default: entry, anything unknown
+  }
+  if (owner !== 1 || group === undefined || other === undefined || mask === undefined) return false;
+  const rw = (p: string) => p[0] === 'r' && p[1] === 'w';
+  const none = (p: string) => p[0] === '-' && p[1] === '-';
+  if (!rw(mask)) return false;
+  if (named.size !== clients.length || new Set(clients).size !== clients.length) return false;
+  for (const c of clients) {
+    const p = named.get(c);
+    if (p === undefined || !rw(p)) return false;
+  }
+  const effectiveGroup = `${group[0] === 'r' && mask[0] === 'r' ? 'r' : '-'}${group[1] === 'w' && mask[1] === 'w' ? 'w' : '-'}`;
+  return none(effectiveGroup) && none(other);
 }

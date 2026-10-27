@@ -76,7 +76,7 @@ export class MattermostBridge {
     runGate?: RunGate,
     opts: {
       reserveRecovered?: boolean;
-      media?: Pick<MediaIngestOptions, 'endpoints' | 'now' | 'timeoutMs'> & { env?: NodeJS.ProcessEnv; uploadSocket?: Pick<UploadSocketOptions, 'requestTimeoutMs' | 'resolveGroup'> };
+      media?: Pick<MediaIngestOptions, 'endpoints' | 'now' | 'timeoutMs'> & { env?: NodeJS.ProcessEnv; uploadSocket?: Pick<UploadSocketOptions, 'requestTimeoutMs' | 'acl'> };
     } = {},
   ) {
     this.config = config;
