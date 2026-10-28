@@ -25,7 +25,7 @@ export interface Announcement {
   renderedText: string;
   /**
    * Contract 4.3 names exactly three fields; these two are read only if a sender ever adds them, and only to widen the
-   * outreach skip rule (`isOutreachDraft`). Never rendered, never stored.
+   * outreach and company-update skip rules (`isOutreachDraft`, `isCompanyUpdateDraft`). Never rendered, never stored.
    */
   actionId?: string;
   sourceKind?: string;
