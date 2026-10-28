@@ -5,6 +5,7 @@ import path from 'node:path';
 import { AuditUnavailableError } from './audit.js';
 import type { AuditLog } from './audit.js';
 import { ChannelLookupError } from './client.js';
+import { isCompanyUpdateDraft } from './founder-only.js';
 import { isOutreachDraft, resolveOutreach } from './outreach.js';
 import type { ResolvedOutreach } from './outreach.js';
 import { SenderSocketError } from './sender-socket.js';
@@ -402,6 +403,7 @@ export class OutboxApprovals {
   private server?: http.Server;
   private lastSenderProblem?: string;
   private lastOutreachSkipped = 0;
+  private lastCompanyUpdateSkipped = 0;
 
   constructor(private readonly opts: OutboxManagerOptions) {
     this.approvers = new Set(opts.config.approvers);
@@ -493,11 +495,16 @@ export class OutboxApprovals {
     }
     let posted = 0;
     this.noteOutreachSkipped(items.filter((i) => isOutreachDraft(i)).length);
+    this.noteCompanyUpdateSkipped(items.filter((i) => !isOutreachDraft(i) && isCompanyUpdateDraft(i)).length);
     for (const item of items) {
       if (this.stopped) return;
       // Outreach emails are approved in the Ikenga Outbox by their assignee. A card each would flood the channel and put
       // a prospect's address in it. Never acked, so the sender keeps offering them; they are simply not looked at here.
       if (isOutreachDraft(item)) continue;
+      // The monthly company update carries confidential investor figures and is approved by the founder in the Ikenga
+      // Outbox only. Same posture: no render, no store record, no ack, no post; the sender keeps offering it. It is
+      // skipped before the card cap is counted, so it never takes a slot from a draft that gets a card.
+      if (isCompanyUpdateDraft(item)) continue;
       const existing = store.byDraftHash(item.draftId, item.payloadHash);
       if (existing) {
         // Posted already (the ack was lost, or the sender forgot it): one card per draft+hash, just tell it again.
@@ -601,6 +608,13 @@ export class OutboxApprovals {
     if (count === this.lastOutreachSkipped) return;
     this.lastOutreachSkipped = count;
     if (count > 0) this.log(`${count} outreach draft${count === 1 ? ' is' : 's are'} announced; they are approved in the Ikenga Outbox and get no card`);
+  }
+
+  /** A count only (never an id, subject or text), and only when it changes. */
+  private noteCompanyUpdateSkipped(count: number): void {
+    if (count === this.lastCompanyUpdateSkipped) return;
+    this.lastCompanyUpdateSkipped = count;
+    if (count > 0) this.log(`${count} founder-only draft${count === 1 ? ' is' : 's are'} announced; they are approved in the Ikenga Outbox and get no card`);
   }
 
   private noteSender(problem: string | undefined): void {
