@@ -18,7 +18,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/derive.test.mjs tests/queue-fallback.test.mjs"
   },
   "devDependencies": {
     "@ikenga/tokens": "^0.3.0"
