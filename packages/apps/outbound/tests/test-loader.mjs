@@ -7,10 +7,15 @@ export async function resolve(specifier, context, nextResolve) {
         connect() { return Promise.resolve(); }
         callServerTool() { return Promise.resolve({ structuredContent: { ok: true, rows: [] } }); }
       }
-      export class QueryClient {}
+      export class QueryClient {
+        constructor(options = {}) {
+          this.defaultOptions = options.defaultOptions || {};
+        }
+      }
       export const QueryClientProvider = () => null;
       export const useState = (init) => [typeof init === 'function' ? init() : init, () => {}];
       export const useEffect = () => {};
+      export const useLayoutEffect = () => {};
       export const useMemo = (fn) => fn();
       export const useRef = (val) => ({ current: val });
       export const useCallback = (fn) => fn;
@@ -78,6 +83,7 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export function setMockQueryConfig(cfg) {
+  globalThis.__mockUseQuery = null;
   globalThis.__mockUseQueryConfig = cfg;
   globalThis.__lastQueryOptions = [];
 }

@@ -135,7 +135,10 @@ export async function hostDbQuery(sql, params = []) {
   });
   const sc = res?.structuredContent;
   if (!sc || sc.ok !== true) {
-    throw new Error(sc?.error ?? res?.content?.[0]?.text ?? 'host.dbQuery failed');
+    const err = new Error(sc?.error ?? res?.content?.[0]?.text ?? 'host.dbQuery failed');
+    if (sc?.reason) err.reason = sc.reason;
+    if (sc?.code) err.code = sc.code;
+    throw err;
   }
   return Array.isArray(sc.rows) ? sc.rows : [];
 }

@@ -157,19 +157,21 @@ function parseInitialTarget(activeFeature) {
  * @param {Object} counts   { email, newsletter, sequences, social } queue counts
  * @param {Object} agents   { pa, cmo, cbo } agent counts
  */
-function buildOutboundMenu(channel, view, counts = {}, agents = {}) {
+function buildOutboundMenu(channel, view, counts = {}, agents = {}, countsError = false, agentsError = false) {
   // Channels group (view kind = mutually exclusive radio)
   const channelItems = CHANNELS.map((ch) => {
     const meta = CHANNEL_META[ch];
-    const count = counts[ch] ?? 0;
+    const count = counts?.[ch] ?? 0;
+    const badge = countsError ? '—' : (count > 0 ? count : undefined);
     return {
       id: `ch:${ch}`,
       label: meta.label,
       icon: meta.icon,
       section: 'Channels',
       active: ch === channel,
-      hot: count > 0,
-      badge: count > 0 ? count : undefined,
+      hot: !countsError && count > 0,
+      badge,
+      title: countsError ? "Can't read this project's queue here" : undefined,
     };
   });
 
@@ -178,12 +180,14 @@ function buildOutboundMenu(channel, view, counts = {}, agents = {}) {
   const isQueueView = view === 'queue';
   const agentItems = AGENT_ITEMS.map((it) => {
     const key = it.id.replace('f:', '');
-    const count = agents[key] ?? 0;
+    const count = agents?.[key] ?? 0;
+    const badge = agentsError ? '—' : (count > 0 ? count : undefined);
     return {
       ...it,
       active: false,
       disabled: !isQueueView,
-      badge: count > 0 ? count : undefined,
+      badge,
+      title: agentsError ? "Can't read this project's queue here" : undefined,
     };
   });
 
@@ -276,28 +280,23 @@ export async function fetchNewsletterSent() {
 // ── Newsletter sent-history (WP-11) ──────────────────────────────────────────
 // Merges newsletter_sends rows + pa_action_drafts sent listmonk rows into a
 // uniform shape: { subject, draft_slug, edition, sent_at, body }.
-// Both sources are best-effort — errors in either leg are silently swallowed
-// so a missing table never breaks the queue view.
 async function fetchNewsletterHistory() {
-  let sendsRows = [];
+  if (isStandalone()) return FIXTURE_NL_HISTORY;
+  const sendsRows = await dbQueryFn(
+    `SELECT draft_slug, edition, subject, subject_alt, sent_at FROM newsletter_sends ORDER BY sent_at DESC LIMIT 200`,
+    []
+  );
   let draftsRows = [];
   try {
-    sendsRows = await hostDbQuery(
-      `SELECT draft_slug, edition, subject, subject_alt, sent_at FROM newsletter_sends ORDER BY sent_at DESC LIMIT 200`,
-      []
-    );
-  } catch {
-    /* newsletter_sends absent or unreadable — degrade gracefully */
-  }
-  try {
-    draftsRows = await hostDbQuery(
+    draftsRows = await dbQueryFn(
       `SELECT payload_json, sent_at FROM pa_action_drafts
        WHERE channel = 'listmonk' AND status = 'sent'
        ORDER BY sent_at DESC LIMIT 200`,
       []
     );
-  } catch {
-    /* pa_action_drafts read failure — degrade gracefully */
+  } catch (e) {
+    if (isPermissionRefusal(e)) throw e;
+    /* pa_action_drafts read failure — degrade gracefully only if not permission refusal */
   }
 
   const out = [];
@@ -833,15 +832,12 @@ function EditPanel({ subject, body, onSave, onCancel, pending }) {
 // (one approved social post fans out to N provider rows). batch_id is the group key.
 async function fetchSocialFanout(slug) {
   if (!slug) return [];
-  try {
-    const rows = await dbQueryFn(
-      `SELECT ${SEL_COLS} FROM pa_action_drafts WHERE batch_id = ? ORDER BY channel ASC`,
-      [slug]
-    );
-    return (rows || []).map(mapSocialSent);
-  } catch {
-    return [];
-  }
+  if (isStandalone()) return [];
+  const rows = await dbQueryFn(
+    `SELECT ${SEL_COLS} FROM pa_action_drafts WHERE batch_id = ? ORDER BY channel ASC`,
+    [slug]
+  );
+  return (rows || []).map(mapSocialSent);
 }
 
 // ─── Fixture data (fallback until real rows exist) ──────────────────────────────
@@ -2263,13 +2259,14 @@ function NewsletterQueueView({ standalone }) {
   // Sent-history query (WP-11): supplies Freshness + Previously-featured cells.
   // Keyed separately from the queue so it doesn't block the queue render.
   // Standalone resolves from FIXTURE_NL_HISTORY; live calls both DB sources.
-  const { data: historyRows } = useQuery({
+  const { data: historyRows, isError: historyError } = useQuery({
     queryKey: ['newsletter', 'history'],
     queryFn: () => {
       if (standalone) return Promise.resolve(FIXTURE_NL_HISTORY);
       return fetchNewsletterHistory();
     },
-    placeholderData: [],
+    enabled: !standalone,
+    placeholderData: standalone ? FIXTURE_NL_HISTORY : undefined,
   });
 
   const qc = useQueryClient();
@@ -2358,9 +2355,14 @@ function NewsletterQueueView({ standalone }) {
   const pick = (row) => { setSelected(row); setAbChoice(null); setRejectOpen(false); };
 
   // Compute history signals for the selected row (pure, uses historyRows from query).
-  const historySignals = sel
-    ? newsletterHistorySignals({ subject: sel.subject, body: sel.body, section: sel.draft_slug }, historyRows ?? [])
-    : null;
+  const historySignals = historyError
+    ? {
+        freshness: { label: 'Freshness', value: '—', sub: "Can't read this project's queue here", pct: 0, tone: 'warn' },
+        previouslyFeatured: { label: 'Prev. featured', value: '—', sub: "Can't read this project's queue here", pct: 0, tone: 'warn' },
+      }
+    : sel
+      ? newsletterHistorySignals({ subject: sel.subject, body: sel.body, section: sel.draft_slug }, historyRows ?? [])
+      : null;
   const qualityCells = sel ? newsletterQualityCells(sel, historySignals) : [];
 
   const sendToChat = () => {
@@ -2758,7 +2760,7 @@ function SequenceStepRail({ sequence, standalone }) {
       </div>
 
       ${isLoading ? html`<${StateDisplay} state="loading" message="Loading steps…" />`
-        : list.length === 0 ? html`<${StateDisplay} state="empty" message="No steps defined for this sequence yet" />`
+        : list.length === 0 ? html`<${StateDisplay} state="empty" message=${standalone ? "No steps defined for this sequence yet" : "Not available yet"} />`
         : html`
           <div class="step-rail">
             ${list.map((s, i) => html`
@@ -2896,7 +2898,7 @@ function RecipientCohort({ sequenceKey, fallback, standalone }) {
 
   const list = (recips && recips.length ? recips : (standalone ? fallback : [])) ?? [];
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading cohort…" />`;
-  if (!list.length) return html`<${StateDisplay} state="empty" message="No recipients enrolled" />`;
+  if (!list.length) return html`<${StateDisplay} state="empty" message=${standalone ? "No recipients enrolled" : "Not available yet"} />`;
 
   // Diagnostic counts.
   const stuck = {};
@@ -3236,17 +3238,17 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
     finally { setHashtagUpdatePending(false); }
   }
 
-  const { data: fanout } = useQuery({
+  const { data: fanout, isError: fanoutError } = useQuery({
     queryKey: ['social', 'fanout', post?.slug],
     queryFn: () => fetchSocialFanout(post?.slug),
     enabled: !standalone && !!post?.slug,
-    placeholderData: [],
+    placeholderData: standalone ? undefined : undefined,
   });
 
   const len = body.length;
   const anyBlocked = SOCIAL_PLATFORMS.some((p) => len > p.cap);
 
-  // Fan-out rows: live siblings if present, otherwise the three standard targets.
+  // Fan-out rows: live siblings if present, otherwise the three standard targets (standalone only).
   const fanRows = (fanout && fanout.length)
     ? fanout.map((r) => ({
         plat: ({ linkedin: 'plat-li', x: 'plat-x', twitter: 'plat-x', bluesky: 'plat-bs', instagram: 'plat-ig' }[r.platform] ?? 'plat-x'),
@@ -3254,7 +3256,9 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
         blocked: (r.content?.length ?? 0) > (PLATFORM_CAPS[r.platform] ?? 280),
         schedule: r.scheduled_for,
       }))
-    : SOCIAL_PLATFORMS.map((p) => ({ plat: p.plat, label: p.sub, blocked: len > p.cap, schedule: post?.scheduled_for }));
+    : (standalone
+        ? SOCIAL_PLATFORMS.map((p) => ({ plat: p.plat, label: p.sub, blocked: len > p.cap, schedule: post?.scheduled_for }))
+        : []);
 
   return html`
     <div class="ob-detail-wrap">
@@ -3317,19 +3321,25 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
       </div>
 
       <div class="so-fanout">
-        <div class="so-fanout-head">Per-platform fan-out · ${fanRows.length} row${fanRows.length > 1 ? 's' : ''}</div>
-        <table class="so-fanout-table">
-          <thead><tr><th>Platform</th><th>Status</th><th>Schedule</th></tr></thead>
-          <tbody>
-            ${fanRows.map((r, i) => html`
-              <tr key=${i}>
-                <td><span class=${cn('plat', r.plat)}>${r.label}</span></td>
-                <td>${r.blocked ? html`<span class="chip-warn-sm">blocked · over cap</span>` : html`<span class="chip-ok-sm">ready</span>`}</td>
-                <td class="meta">${r.blocked ? '—' : formatDate(r.schedule)}</td>
-              </tr>
-            `)}
-          </tbody>
-        </table>
+        <div class="so-fanout-head">Per-platform fan-out · ${fanoutError ? '—' : `${fanRows.length} row${fanRows.length > 1 ? 's' : ''}`}</div>
+        ${fanoutError ? html`
+          <div class="so-fanout-error" style=${{ padding: '1.25rem', textAlign: 'center', color: 'var(--fg-muted)', fontSize: '13px' }}>
+            <span title="Can't read this project's queue here">Can't read this project's queue here.</span>
+          </div>
+        ` : html`
+          <table class="so-fanout-table">
+            <thead><tr><th>Platform</th><th>Status</th><th>Schedule</th></tr></thead>
+            <tbody>
+              ${fanRows.map((r, i) => html`
+                <tr key=${i}>
+                  <td><span class=${cn('plat', r.plat)}>${r.label}</span></td>
+                  <td>${r.blocked ? html`<span class="chip-warn-sm">blocked · over cap</span>` : html`<span class="chip-ok-sm">ready</span>`}</td>
+                  <td class="meta">${r.blocked ? '—' : formatDate(r.schedule)}</td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        `}
       </div>
 
       ${rejectOpen ? html`
@@ -4092,20 +4102,20 @@ export function OutboundView({ activeFeature }) {
   const isApprovals = view === 'approvals';
 
   // Channel counts query (for sidebar badges)
-  const { data: counts } = useQuery({
+  const { data: counts, isError: countsError } = useQuery({
     queryKey: ['counts'],
     queryFn: fetchChannelCounts,
     enabled: !standalone,
     refetchInterval: 30_000,
-    placeholderData: standalone ? { email: 5, newsletter: 2, sequences: 4, social: 4 } : { email: 0, newsletter: 0, sequences: 0, social: 0 },
+    placeholderData: standalone ? { email: 5, newsletter: 2, sequences: 4, social: 4 } : undefined,
   });
 
   // Agent counts for the active channel
-  const { data: agents } = useQuery({
+  const { data: agents, isError: agentsError } = useQuery({
     queryKey: ['agents', channel],
     queryFn: () => fetchAgentCounts(channel),
     enabled: !standalone,
-    placeholderData: standalone ? { pa: 4, cmo: 5, cbo: 2 } : { pa: 0, cmo: 0, cbo: 0 },
+    placeholderData: standalone ? { pa: 4, cmo: 5, cbo: 2 } : undefined,
   });
 
   // Totals for the in-pane ob-header meta line. The design (F-14) also wanted a
@@ -4113,14 +4123,14 @@ export function OutboundView({ activeFeature }) {
   // is no statusLine field. Decision (2026-06-07 review, E.10): DROP the sidebar
   // mode line rather than extend the shell setMenu contract; these same totals
   // are surfaced in-pane below (ob-header .meta), so no information is lost.
-  const totalAwaiting = (counts?.email ?? 0) + (counts?.newsletter ?? 0) + (counts?.social ?? 0);
-  const activeSeqCount = counts?.sequences ?? 0;
+  const totalAwaiting = countsError ? '—' : ((counts?.email ?? 0) + (counts?.newsletter ?? 0) + (counts?.social ?? 0));
+  const activeSeqCount = countsError ? '—' : (counts?.sequences ?? 0);
 
   // Publish menu whenever channel/view/counts/agents change
   useEffect(() => {
-    const items = buildOutboundMenu(channel, view, counts ?? {}, agents ?? {});
+    const items = buildOutboundMenu(channel, view, counts ?? {}, agents ?? {}, countsError, agentsError);
     setMenu(items).catch(() => {/* standalone — ignore */});
-  }, [channel, view, counts, agents]);
+  }, [channel, view, counts, agents, countsError, agentsError]);
 
   // ── activeFeature → channel switching (side-menu item clicks) ──────────────
   // The shell relays sidebar clicks via the host-context re-emit
@@ -4179,7 +4189,7 @@ export function OutboundView({ activeFeature }) {
           <span>${isApprovals ? 'Outbox · Approvals' : `Outbox · ${meta.label}`}</span>
         </h1>
         <p class="sub">${isApprovals ? 'Cross-channel approve-gate · every channel' : meta.subtitle}</p>
-        <p class="meta">${totalAwaiting} awaiting · ${activeSeqCount} sequences active</p>
+        <p class="meta" title=${countsError ? "Can't read this project's queue here" : undefined}>${totalAwaiting} awaiting · ${activeSeqCount} sequences active</p>
       </div>
 
       <!-- Inner-tab strip: Approvals (cross-channel) + per-channel Approval queue / Schedule / Sent -->
@@ -4190,11 +4200,11 @@ export function OutboundView({ activeFeature }) {
           onClick=${() => setView('approvals')}
         >
           Approvals
-          ${totalAwaiting + activeSeqCount > 0 ? html`<span class="nl-tab-count">${totalAwaiting + activeSeqCount}</span>` : null}
+          ${countsError ? html`<span class="nl-tab-count" title="Can't read this project's queue here">—</span>` : (totalAwaiting + activeSeqCount > 0 ? html`<span class="nl-tab-count">${totalAwaiting + activeSeqCount}</span>` : null)}
         </button>
         ${meta.views.map(v => {
           const label = meta.viewLabels[v];
-          const cnt = v === 'queue' ? (counts?.[channel] ?? 0) : 0;
+          const cnt = v === 'queue' ? (countsError ? '—' : (counts?.[channel] ?? 0)) : 0;
           return html`
             <button
               key=${v}
@@ -4202,7 +4212,7 @@ export function OutboundView({ activeFeature }) {
               onClick=${() => setView(v)}
             >
               ${label}
-              ${v === 'queue' && cnt > 0 ? html`<span class="nl-tab-count">${cnt}</span>` : null}
+              ${v === 'queue' && (countsError || cnt > 0) ? html`<span class="nl-tab-count" title=${countsError ? "Can't read this project's queue here" : undefined}>${countsError ? '—' : cnt}</span>` : null}
             </button>
           `;
         })}
@@ -4215,6 +4225,26 @@ export function OutboundView({ activeFeature }) {
 
     </div>
   `;
+}
+
+export function isPermissionRefusal(error) {
+  if (!error) return false;
+  if (error.reason === 'scope-denied') return true;
+  if (error.code === 'E_OWNER_ONLY' || error.code === 'E_SCOPE_DENIED' || error.code === 'E_FORBIDDEN') return true;
+  const msg = String(error.message || error);
+  return (
+    /scope-denied/i.test(msg) ||
+    /E_OWNER_ONLY/i.test(msg) ||
+    /owner-only/i.test(msg) ||
+    /lacks the ['"]sqlite['"] capability/i.test(msg) ||
+    /not in pkg declared/i.test(msg) ||
+    /permission refused|permission denied|refusal|access denied/i.test(msg)
+  );
+}
+
+export function queryRetry(failureCount, error) {
+  if (isPermissionRefusal(error)) return false;
+  return failureCount < 1;
 }
 
 export {
@@ -4232,5 +4262,12 @@ export {
   SocialSentView,
   CrossChannelApprovalsView,
   ViewBody,
+  SocialEditor,
+  SocialEditor as SocialDetail,
+  SequenceStepRail,
+  RecipientCohort,
+  fetchNewsletterHistory,
+  fetchSocialFanout,
+  buildOutboundMenu,
 };
 
