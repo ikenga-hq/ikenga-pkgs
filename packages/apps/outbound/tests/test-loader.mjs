@@ -15,7 +15,33 @@ export async function resolve(specifier, context, nextResolve) {
       export const useRef = (val) => ({ current: val });
       export const useCallback = (fn) => fn;
       export const useReducer = (r, init) => [init, () => {}];
-      export const useQuery = () => ({ data: undefined, isLoading: false, isError: false, refetch: () => {} });
+      export const useQuery = (options) => {
+        if (typeof globalThis.__mockUseQuery === 'function') {
+          return globalThis.__mockUseQuery(options);
+        }
+        const cfg = globalThis.__mockUseQueryConfig || {};
+        if (Array.isArray(globalThis.__lastQueryOptions)) {
+          globalThis.__lastQueryOptions.push(options);
+        } else {
+          globalThis.__lastQueryOptions = [options];
+        }
+        const isError = typeof cfg.isError === 'boolean' ? cfg.isError : false;
+        const isLoading = typeof cfg.isLoading === 'boolean' ? cfg.isLoading : false;
+        const data = typeof cfg.data !== 'undefined'
+          ? (typeof cfg.data === 'function' ? cfg.data(options) : cfg.data)
+          : (options && options.placeholderData);
+        return {
+          data,
+          isLoading,
+          isError,
+          error: cfg.error || (isError ? new Error('Mock query error') : null),
+          refetch: () => {
+            if (typeof globalThis.__mockQueryRefetched === 'function') {
+              globalThis.__mockQueryRefetched(options);
+            }
+          },
+        };
+      };
       export const useMutation = () => ({ mutate: () => {}, isPending: false });
       export const useQueryClient = () => ({ invalidateQueries: () => {} });
       export const useAutoGrow = () => {};
@@ -27,7 +53,14 @@ export async function resolve(specifier, context, nextResolve) {
           if (i < values.length) {
             const v = values[i];
             if (typeof v === 'string' || typeof v === 'number') str += v;
-            else if (v && typeof v === 'object' && v.type) str += '[element:' + (typeof v.type === 'string' ? v.type : v.type.name) + ']';
+            else if (v && typeof v === 'object' && v.type) str += '[element:' + (typeof v.type === 'string' ? v.type : ((v.type && v.type.name) || 'element')) + (v.str ? ' ' + v.str : '') + ']';
+            else if (typeof v === 'function') {
+              str += '[component:' + (v.name || 'anonymous') + ']';
+              try {
+                const rendered = v({});
+                if (rendered && rendered.str) str += ' ' + rendered.str;
+              } catch (_) {}
+            }
           }
         }
         return { type: 'vnode', str, strings, values };
@@ -43,3 +76,24 @@ export async function resolve(specifier, context, nextResolve) {
   }
   return nextResolve(specifier, context);
 }
+
+export function setMockQueryConfig(cfg) {
+  globalThis.__mockUseQueryConfig = cfg;
+  globalThis.__lastQueryOptions = [];
+}
+
+export function getQueryCalls() {
+  return globalThis.__lastQueryOptions || [];
+}
+
+export function getLastQueryOptions() {
+  const calls = globalThis.__lastQueryOptions || [];
+  return calls[calls.length - 1];
+}
+
+export function resetMockQuery() {
+  globalThis.__mockUseQueryConfig = null;
+  globalThis.__mockUseQuery = null;
+  globalThis.__lastQueryOptions = [];
+}
+
