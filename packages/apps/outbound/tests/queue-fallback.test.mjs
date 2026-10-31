@@ -50,6 +50,16 @@ const {
   SocialSentView,
   CrossChannelApprovalsView,
   ViewBody,
+  SocialEditor,
+  SocialDetail,
+  SequenceStepRail,
+  RecipientCohort,
+  fetchNewsletterHistory,
+  fetchSocialFanout,
+  buildOutboundMenu,
+  OutboundView,
+  isPermissionRefusal,
+  queryRetry,
   FIXTURE_EMAIL_QUEUE,
   FIXTURE_EMAIL_SCHEDULE,
   FIXTURE_EMAIL_SENT,
@@ -64,6 +74,9 @@ const {
   FIXTURE_SOCIAL_SENT,
   FIXTURE_APPROVALS,
 } = await import('../dist/features/outbound/outbound-view.js');
+
+const { queryClient } = await import('../dist/app.js');
+const { hostDbQuery, setBridgeAppForTesting } = await import('../dist/lib/bridge.js');
 
 function setupStandalone() {
   globalThis.window = {};
@@ -363,4 +376,373 @@ test('6. useQuery options: mounted views have enabled:true and NO fixture placeh
     }
   }
 });
+
+test('7. TanStack QueryClient retry predicate & isPermissionRefusal', () => {
+  // Permission refusal cases -> true
+  assert.equal(isPermissionRefusal({ reason: 'scope-denied' }), true);
+  assert.equal(
+    isPermissionRefusal(new Error("host.dbQuery: pkg lacks the 'sqlite' capability")),
+    true
+  );
+  assert.equal(
+    isPermissionRefusal(new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables")),
+    true
+  );
+
+  // Non-refusal cases -> false
+  assert.equal(isPermissionRefusal(new Error("network timeout")), false);
+  assert.equal(isPermissionRefusal(new Error("database disk image is malformed")), false);
+  assert.equal(isPermissionRefusal(null), false);
+  assert.equal(isPermissionRefusal(undefined), false);
+  assert.equal(isPermissionRefusal(''), false);
+
+  // queryRetry predicate behavior:
+  // Immediate abort (0 retries) on permission refusal
+  assert.equal(queryRetry(0, { reason: 'scope-denied' }), false);
+  assert.equal(
+    queryRetry(0, new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables")),
+    false
+  );
+  // Other transient errors retry once at failureCount=0, stop at failureCount=1
+  assert.equal(queryRetry(0, new Error("network timeout")), true);
+  assert.equal(queryRetry(1, new Error("network timeout")), false);
+  assert.equal(queryRetry(2, new Error("network timeout")), false);
+
+  // queryClient configuration
+  assert.equal(queryClient.defaultOptions.queries.retry, queryRetry);
+  assert.equal(queryClient.defaultOptions.queries.retry(0, { reason: 'scope-denied' }), false);
+  assert.equal(queryClient.defaultOptions.queries.retry(0, new Error("timeout")), true);
+});
+
+test('7b. hostDbQuery propagates reason: "scope-denied" and fast-fails retry predicate', async () => {
+  setBridgeAppForTesting({
+    callServerTool: async () => ({
+      content: [{ type: 'text', text: "host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables" }],
+      isError: true,
+      structuredContent: {
+        ok: false,
+        reason: 'scope-denied',
+        error: "host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables",
+      },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await hostDbQuery('SELECT 1 FROM pa_action_drafts');
+      },
+      (err) => {
+        assert.equal(err.reason, 'scope-denied', 'Error carries reason: "scope-denied"');
+        assert.equal(isPermissionRefusal(err), true, 'isPermissionRefusal detects the error');
+        assert.equal(queryRetry(0, err), false, 'queryRetry returns false (0 retries)');
+        return true;
+      },
+      'hostDbQuery propagates reason and refuses retries'
+    );
+  } finally {
+    setBridgeAppForTesting(null);
+  }
+});
+
+test('8. Secondary query functions error propagation in mounted vs standalone mode', async () => {
+  // A. Mounted mode: DB errors must NOT be swallowed; they must propagate / reject
+  setupMounted();
+
+  // Simulated permission refusal
+  setDbQueryForTesting(() => {
+    const err = new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables");
+    err.reason = 'scope-denied';
+    throw err;
+  });
+
+  await assert.rejects(
+    () => fetchNewsletterHistory(),
+    (err) => err.reason === 'scope-denied' || /sqlite\.tables/.test(err.message),
+    'fetchNewsletterHistory propagates permission refusal when mounted'
+  );
+
+  await assert.rejects(
+    () => fetchSocialFanout('test-batch-slug'),
+    (err) => err.reason === 'scope-denied' || /sqlite\.tables/.test(err.message),
+    'fetchSocialFanout propagates permission refusal when mounted'
+  );
+
+  // General DB error propagation
+  setDbQueryForTesting(() => {
+    throw new Error('database disk I/O error');
+  });
+
+  await assert.rejects(
+    () => fetchNewsletterHistory(),
+    /database disk I\/O error/,
+    'fetchNewsletterHistory propagates general DB errors when mounted'
+  );
+
+  await assert.rejects(
+    () => fetchSocialFanout('test-batch-slug'),
+    /database disk I\/O error/,
+    'fetchSocialFanout propagates general DB errors when mounted'
+  );
+
+  // B. Standalone mode: fallback to fixtures/empty without querying DB
+  setupStandalone();
+  setDbQueryForTesting(() => {
+    throw new Error('Should not call DB in standalone mode');
+  });
+
+  const nlHistoryStandalone = await fetchNewsletterHistory();
+  assert.ok(Array.isArray(nlHistoryStandalone) && nlHistoryStandalone.length > 0, 'Standalone returns fixture newsletter history');
+
+  const socialFanoutStandalone = await fetchSocialFanout('test-batch-slug');
+  assert.deepEqual(socialFanoutStandalone, [], 'Standalone returns empty fanout array without throwing');
+});
+
+test('9. SocialDetail fan-out error renders inline notice, and mounted success with 0 rows shows default platforms', () => {
+  const samplePost = {
+    id: 'post-1',
+    slug: 'post-batch-1',
+    content: 'Draft content for social',
+    scheduled_for: '2026-11-01T12:00:00Z',
+    source: 'cmo-agent',
+  };
+
+  // A. Mounted with fanout error
+  setupMounted();
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
+    }
+    return { data: undefined, isLoading: false, isError: false };
+  };
+
+  const vnodeMountedErr = SocialDetail({ post: samplePost, standalone: false });
+  const strMountedErr = JSON.stringify(vnodeMountedErr);
+
+  // Must show inline error message and title
+  assert.ok(
+    strMountedErr.includes("Can't read this project's queue here."),
+    'SocialDetail renders inline error message when fanout query fails'
+  );
+  assert.ok(
+    strMountedErr.includes('title=\\"Can\'t read this project\'s queue here\\"'),
+    'SocialDetail renders tooltip title on fanout error'
+  );
+  // Must NOT render table or default platform fan-out rows on error
+  assert.ok(
+    !strMountedErr.includes('so-fanout-table'),
+    'SocialDetail does not render fanout table on error'
+  );
+  assert.ok(
+    !strMountedErr.includes('3 rows') && !strMountedErr.includes('2 rows') && !strMountedErr.includes('1 row'),
+    'SocialDetail fan-out header does not claim positive rows on error'
+  );
+
+  // B. Mounted success with zero rows (Item 1 requirement)
+  setupMounted();
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
+      return { data: [], isLoading: false, isError: false };
+    }
+    return { data: undefined, isLoading: false, isError: false };
+  };
+
+  const vnodeMountedZero = SocialDetail({ post: samplePost, standalone: false });
+  const strMountedZero = JSON.stringify(vnodeMountedZero);
+
+  assert.ok(
+    strMountedZero.includes('so-fanout-table'),
+    'Mounted post with 0 fan-out rows renders default platforms table'
+  );
+  assert.ok(
+    strMountedZero.includes('3 rows'),
+    'Mounted post with 0 fan-out rows shows 3 default platform targets'
+  );
+  assert.ok(
+    !strMountedZero.includes("Can't read this project's queue here."),
+    'Mounted post with 0 fan-out rows does not show error notice'
+  );
+
+  // C. Standalone fallback preserved
+  setupStandalone();
+  globalThis.__mockUseQuery = (options) => {
+    return { data: undefined, isLoading: false, isError: false };
+  };
+
+  const vnodeStandalone = SocialDetail({ post: samplePost, standalone: true });
+  const strStandalone = JSON.stringify(vnodeStandalone);
+
+  assert.ok(
+    strStandalone.includes('so-fanout-table'),
+    'Standalone renders fallback platform rows table'
+  );
+  assert.ok(
+    !strStandalone.includes("Can't read this project's queue here."),
+    'Standalone does not render error notice'
+  );
+  resetMockQuery();
+});
+
+test('10. NewsletterQueueView history error renders compact indicator in Freshness and Prev. featured', () => {
+  setupMounted();
+
+  const mockNewsletterRow = {
+    id: 'nl-row-1',
+    recipient: 'Subscribers',
+    subject: 'Weekly Dispatch #42',
+    subject_b: 'Alternative Subject',
+    preheader: 'Newsletter preview text',
+    body: 'Hello subscribers, this is the newsletter body.',
+    status: 'pending',
+    channel: 'resend',
+    newsletter_type: 'weekly_roundup',
+    edition: 42,
+    created_at: '2026-10-31T09:00:00Z',
+  };
+
+  // Mock: queue succeeds, history query fails with isError: true
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'newsletter' && options.queryKey[1] === 'history') {
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
+    }
+    // Main queue query returns 1 item
+    return { data: [mockNewsletterRow], isLoading: false, isError: false };
+  };
+
+  const vnodeErr = NewsletterQueueView({ standalone: false });
+  const strErr = JSON.stringify(vnodeErr);
+
+  // Verify scorecard cells have "Can't read this project's queue here"
+  assert.ok(
+    strErr.includes("Can't read this project's queue here"),
+    'Newsletter quality scorecard renders compact error indicator when history read fails'
+  );
+  assert.ok(
+    strErr.includes('—'),
+    'Newsletter scorecard displays dash value for history metrics on error'
+  );
+
+  // Verify when history query succeeds
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'newsletter' && options.queryKey[1] === 'history') {
+      return { data: [], isLoading: false, isError: false };
+    }
+    return { data: [mockNewsletterRow], isLoading: false, isError: false };
+  };
+
+  const vnodeOk = NewsletterQueueView({ standalone: false });
+  const strOk = JSON.stringify(vnodeOk);
+  assert.ok(
+    !strOk.includes("Can't read this project's queue here"),
+    'Newsletter scorecard does not display error message when history query succeeds'
+  );
+
+  resetMockQuery();
+});
+
+test('11. SequenceStepRail & RecipientCohort show neutral "Not available yet" when mounted', () => {
+  const dummySeq = { id: 'seq-1', name: 'Onboarding Sequence', slug: 'onboarding' };
+
+  // A. SequenceStepRail mounted with empty list
+  setupMounted();
+  setMockQueryConfig({ isError: false, data: [] });
+  const railMounted = SequenceStepRail({ sequence: dummySeq, standalone: false });
+  const railMountedStr = JSON.stringify(railMounted);
+  assert.ok(
+    railMountedStr.includes('Not available yet'),
+    'SequenceStepRail renders "Not available yet" when mounted with no steps'
+  );
+  assert.ok(
+    !railMountedStr.includes('No steps defined for this sequence yet'),
+    'SequenceStepRail NEVER claims "No steps defined for this sequence yet" when mounted'
+  );
+
+  // SequenceStepRail standalone
+  setupStandalone();
+  const railStandalone = SequenceStepRail({ sequence: dummySeq, standalone: true });
+  const railStandaloneStr = JSON.stringify(railStandalone);
+  assert.ok(
+    railStandaloneStr.includes('No steps defined for this sequence yet'),
+    'SequenceStepRail preserves "No steps defined for this sequence yet" in standalone'
+  );
+
+  // B. RecipientCohort mounted with empty list
+  setupMounted();
+  setMockQueryConfig({ isError: false, data: [] });
+  const cohortMounted = RecipientCohort({ sequenceKey: 'seq-1', fallback: [], standalone: false });
+  const cohortMountedStr = JSON.stringify(cohortMounted);
+  assert.ok(
+    cohortMountedStr.includes('Not available yet'),
+    'RecipientCohort renders "Not available yet" when mounted with no recipients'
+  );
+  assert.ok(
+    !cohortMountedStr.includes('No recipients enrolled'),
+    'RecipientCohort NEVER claims "No recipients enrolled" when mounted'
+  );
+
+  // RecipientCohort standalone
+  setupStandalone();
+  const cohortStandalone = RecipientCohort({ sequenceKey: 'seq-1', fallback: [], standalone: true });
+  const cohortStandaloneStr = JSON.stringify(cohortStandalone);
+  assert.ok(
+    cohortStandaloneStr.includes('No recipients enrolled'),
+    'RecipientCohort preserves "No recipients enrolled" in standalone'
+  );
+  resetMockQuery();
+});
+
+test('12. Sidebar and tab badges render "—" on counts or agent read errors', () => {
+  // A. buildOutboundMenu with countsError and agentsError
+  const menuErr = buildOutboundMenu('newsletter', 'queue', { email: 5, newsletter: 2 }, { pa: 3 }, true, true);
+  for (const item of menuErr) {
+    assert.equal(
+      item.badge,
+      '—',
+      `Menu item ${item.id} has badge "—" on countsError/agentsError`
+    );
+    assert.equal(
+      item.title,
+      undefined,
+      `Menu item ${item.id} has no title field (not supported by PkgMenuItem)`
+    );
+    if (item.hot !== undefined) {
+      assert.equal(item.hot, false, `Menu item ${item.id} hot indicator is false on error`);
+    }
+  }
+
+  // Healthy menu
+  const menuOk = buildOutboundMenu('newsletter', 'queue', { email: 5, newsletter: 2 }, { pa: 3 }, false, false);
+  const emailItem = menuOk.find((i) => i.id === 'ch:email');
+  assert.equal(emailItem.badge, 5);
+  assert.equal(emailItem.title, undefined);
+  assert.equal(emailItem.hot, true);
+
+  // B. OutboundView rendering with counts query error
+  setupMounted();
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'counts' || options.queryKey[0] === 'agents') {
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
+    }
+    return { data: [], isLoading: false, isError: false };
+  };
+
+  const obView = OutboundView({ activeFeature: 'v:newsletter' });
+  const obStr = JSON.stringify(obView);
+
+  assert.ok(
+    obStr.includes('title=\\"Can\'t read this project\'s queue here\\"'),
+    'OutboundView renders tooltip title when counts error'
+  );
+  assert.ok(
+    obStr.includes('— awaiting · — sequences active'),
+    'OutboundView header displays "— awaiting · — sequences active" on counts error'
+  );
+  assert.ok(
+    obStr.includes('nl-tab-count') && obStr.includes('—'),
+    'OutboundView inner tabs render "—" badge on counts error'
+  );
+
+  resetMockQuery();
+});
+
 

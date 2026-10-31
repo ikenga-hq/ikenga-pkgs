@@ -18,7 +18,11 @@ import {
   QueryClientProvider,
 } from './lib/ui.js';
 import { connectBridge, isStandalone } from './lib/bridge.js';
-import { OutboundView } from './features/outbound/outbound-view.js';
+import {
+  OutboundView,
+  isPermissionRefusal,
+  queryRetry,
+} from './features/outbound/outbound-view.js';
 import tokensCss from './lib/tokens-css.js';
 import appKitCss from './lib/app-kit-css.js';
 import outboundCss from './lib/outbound-css.js';
@@ -29,6 +33,7 @@ import outboundCss from './lib/outbound-css.js';
 // path as JS strings and is injected as inline <style> (style-src 'unsafe-inline').
 
 function injectCss(id, css) {
+  if (typeof document === 'undefined') return;
   if (document.querySelector(`style[${id}]`)) return;
   const el = document.createElement('style');
   el.setAttribute(id, '');
@@ -50,11 +55,11 @@ injectCss('data-outbound-css', outboundCss);
 // data-theme to light/dark and only fires on `mode` changes, never workspace
 // theme/tint/system-OS flips.
 const APPEARANCE_ATTRS = ['data-theme', 'data-mode', 'data-density', 'data-workspace'];
-const root = document.documentElement;
+const root = typeof document !== 'undefined' ? document.documentElement : null;
 
 function readShellAppearance() {
   try {
-    if (window.parent === window) return null;
+    if (typeof window === 'undefined' || window.parent === window) return null;
     const pr = window.parent.document.documentElement;
     const mode = pr.getAttribute('data-mode');
     if (mode !== 'light' && mode !== 'dark') return null;
@@ -70,12 +75,14 @@ function readShellAppearance() {
 }
 
 function applyAppearance(attrs) {
+  if (!root) return;
   for (const k of APPEARANCE_ATTRS) {
     if (attrs[k] != null) root.setAttribute(k, attrs[k]);
   }
 }
 
 function setupTheme() {
+  if (typeof window === 'undefined' || !root) return;
   const fromShell = readShellAppearance();
   if (fromShell) {
     applyAppearance(fromShell);
@@ -90,7 +97,8 @@ function setupTheme() {
       /* best-effort; the static apply above already themed the document */
     }
   } else {
-    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const mql = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    if (!mql) return;
     const applyOs = () =>
       applyAppearance({
         'data-theme': 'A',
@@ -107,16 +115,21 @@ function setupTheme() {
 // Run synchronously at module eval (before React mounts) → themed first paint.
 // Set data-workspace="outbox" so --tint-outbox-bg / --tint-outbox-fg resolve
 // correctly from the first paint.
-root.setAttribute('data-workspace', 'outbox');
-setupTheme();
+if (root) {
+  root.setAttribute('data-workspace', 'outbox');
+  setupTheme();
+}
 
 // ─── TanStack Query ────────────────────────────────────────────────────────────
 
-const queryClient = new QueryClient({
+export { isPermissionRefusal, queryRetry };
+
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
       refetchOnWindowFocus: false,
+      retry: queryRetry,
     },
   },
 });
@@ -162,4 +175,6 @@ function App() {
   return html`<${QueryClientProvider} client=${queryClient}><${OutboundView} activeFeature=${activeFeature} /></${QueryClientProvider}>`;
 }
 
-createRoot(document.getElementById('root')).render(html`<${App} />`);
+if (typeof document !== 'undefined' && document.getElementById('root')) {
+  createRoot(document.getElementById('root')).render(html`<${App} />`);
+}
