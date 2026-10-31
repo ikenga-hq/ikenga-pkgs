@@ -71,6 +71,10 @@
           "exportLocalTime": "08:00",
           "timezone": "Africa/Lagos"
         },
+        "vaultNotes": {
+          "enabled": false,
+          "channel": "royalti-co"
+        },
         "buttons": {
           "callbackUrl": "http://127.0.0.1:8765/outbox-approvals/outbox",
           "listenPort": 8765,

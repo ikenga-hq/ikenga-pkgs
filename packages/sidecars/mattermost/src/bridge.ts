@@ -12,6 +12,7 @@ import { UploadSocket } from './upload-socket.js';
 import type { UploadSocketOptions } from './upload-socket.js';
 import { OutboxApprovals, OutboxCardStore, resolveOutboxApprovals } from './outbox-approvals.js';
 import { OutreachManager, OutreachStore } from './outreach.js';
+import { VaultNotesManager, VaultNotesStore } from './vault-notes.js';
 import { SenderSocket } from './sender-socket.js';
 import { DaemonClient } from './daemon.js';
 import { MattermostGate } from './gate.js';
@@ -42,6 +43,8 @@ export class MattermostBridge {
   readonly outbox?: OutboxApprovals;
   /** Present when the outbox block has an enabled `outreach` block: pause card, reply and bounce cards, daily summary. */
   readonly outreach?: OutreachManager;
+  /** Present when the outbox block has an enabled `vaultNotes` block: notes for credential updates. */
+  readonly vaultNotes?: VaultNotesManager;
   /** Present when the bot has `schedules` (B4). Never given the approval manager: scheduled runs are always read-only. */
   readonly scheduler?: ScheduleRunner;
   /** B5: the bot's audit log. Always present, for echo bots too (gate denials, config load). */
@@ -239,6 +242,17 @@ export class MattermostBridge {
           redact: (t) => redactor.redact(t),
         });
       }
+      if (resolved.vaultNotes) {
+        this.vaultNotes = new VaultNotesManager({
+          bot: botName,
+          client: this.client,
+          store: new VaultNotesStore(path.join(config.dataDir ?? defaultDataDir(), `vault-notes-${botName}.json`)),
+          config: resolved.vaultNotes,
+          sender,
+          audit: this.audit,
+          redact: (t) => redactor.redact(t),
+        });
+      }
     }
     if (opts.reserveRecovered !== false) this.reserveRecovered();
   }
@@ -385,6 +399,7 @@ export class MattermostBridge {
         outbox_approvals: this.outbox ? true : undefined,
         outbox_approvers: cfg.outboxApprovals?.approvers?.length,
         outreach: this.outreach ? true : undefined,
+        vault_notes: this.vaultNotes ? true : undefined,
         schedules: cfg.schedules?.map((x) => x.name),
         branch_prefix: this.rails?.branchPrefix,
         allowed_users: cfg.allowedUsers.length,
@@ -524,10 +539,19 @@ export class MattermostBridge {
       this.outreach?.stop();
       return;
     }
+    // Vault notes polling: never throws, fails soft on sender errors.
+    await this.vaultNotes?.start();
+    if (stopped()) {
+      this.outbox?.stop();
+      this.outreach?.stop();
+      this.vaultNotes?.stop();
+      return;
+    }
     await this.startUploadSocket();
     if (stopped()) {
       this.outbox?.stop();
       this.outreach?.stop();
+      this.vaultNotes?.stop();
       return;
     }
     this.running = true;
@@ -635,6 +659,7 @@ export class MattermostBridge {
     this.scheduler?.stop();
     this.outbox?.stop();
     this.outreach?.stop();
+    this.vaultNotes?.stop();
     void this.uploadSocket?.stop();
     this.client.close();
   }

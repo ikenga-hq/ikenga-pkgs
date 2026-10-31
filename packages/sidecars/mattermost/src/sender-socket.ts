@@ -67,6 +67,17 @@ export interface OutreachEvent {
   at: string;
 }
 
+/** One vault audit event (contract 4.10): who, action, group, label, at, names. Never credential values. */
+export interface VaultEvent {
+  id: number;
+  at: string;
+  actor: string;
+  group: string;
+  label: string;
+  action: string;
+  names: string[];
+}
+
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
@@ -190,6 +201,35 @@ export class SenderSocket {
   async outreachOptout(draftId: string, approverId: string): Promise<{ added: boolean }> {
     const r = await this.request({ action: 'outreach_optout', draftId, source: 'mattermost', approver: { kind: 'mattermost', id: approverId } });
     return { added: r.added === true };
+  }
+
+  /** `vault.events`: credential events after `since`, oldest first, and newest cursor. Malformed events are dropped. */
+  async vaultEvents(since: number, limit = 100): Promise<{ events: VaultEvent[]; cursor: number }> {
+    const r = await this.request({ action: 'vault.events', since, limit });
+    if (!Array.isArray(r.events) || !isCount(r.cursor)) throw new SenderSocketError('malformed_reply', false);
+    const events: VaultEvent[] = [];
+    for (const e of r.events as Array<Record<string, unknown>>) {
+      if (
+        e &&
+        isCount(e.id) &&
+        typeof e.at === 'string' && e.at &&
+        typeof e.actor === 'string' &&
+        typeof e.group === 'string' &&
+        typeof e.label === 'string' &&
+        typeof e.action === 'string'
+      ) {
+        events.push({
+          id: e.id,
+          at: e.at,
+          actor: e.actor,
+          group: e.group,
+          label: e.label,
+          action: e.action,
+          names: Array.isArray(e.names) ? e.names.filter((n): n is string => typeof n === 'string') : [],
+        });
+      }
+    }
+    return { events, cursor: r.cursor };
   }
 
   /** One request. Throws `SenderSocketError` for `{"ok":false,"error":...}` (refused) and for transport trouble (not refused). */
