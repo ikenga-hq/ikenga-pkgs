@@ -5,19 +5,14 @@ import path from 'node:path';
 import { MattermostBridge } from './bridge.js';
 import { MattermostClient } from './client.js';
 import { MockMattermostServer } from './mock-server.js';
+import { cardField } from './outreach.js';
 import { resolveOutboxApprovals } from './outbox-approvals.js';
 import { SenderSocket } from './sender-socket.js';
 import type { VaultEvent } from './sender-socket.js';
 import { sweepTmp, tmpDir } from './test-tmp.js';
 import type { AuditLog } from './audit.js';
 import type { MattermostBridgeConfig } from './types.js';
-import {
-  VaultNotesManager,
-  VaultNotesStore,
-  escapeVaultNoteField,
-  resolveVaultNotes,
-  vaultNoteText,
-} from './vault-notes.js';
+import { VaultNotesManager, VaultNotesStore, resolveVaultNotes, vaultNoteText } from './vault-notes.js';
 import type { ResolvedVaultNotes } from './vault-notes.js';
 
 after(() => sweepTmp());
@@ -38,7 +33,13 @@ class FakeVaultSender {
   events: VaultEvent[] = [];
   hangUp: boolean | string = false;
   failCode: string | undefined;
-  announcements: Array<{ draftId: string; payloadHash: string; renderedText: string }> = [];
+  /** Replace the vault.events answer wholesale (for hostile or buggy senders). */
+  vaultOverride?: (since: number) => { events: VaultEvent[]; cursor: number };
+  announcements: Array<{
+    draftId: string;
+    payloadHash: string;
+    renderedText: string;
+  }> = [];
   private server = net.createServer((c) => this.serve(c));
   socketPath = '';
 
@@ -72,6 +73,7 @@ class FakeVaultSender {
       case 'vault.events': {
         const since = typeof msg.since === 'number' ? msg.since : 0;
         const limit = typeof msg.limit === 'number' ? msg.limit : 100;
+        if (this.vaultOverride) return { ok: true, ...this.vaultOverride(since) };
         const matched = this.events.filter((e) => e.id > since).slice(0, limit);
         const cursor = matched.length > 0 ? matched[matched.length - 1]!.id : since;
         return { ok: true, events: matched, cursor };
@@ -204,11 +206,13 @@ describe('vault notes', () => {
       assert.deepEqual(res, { channel: 'founder-notes', pollMs: 15000 });
     });
 
+    it('is off when the block is present but enabled is omitted', () => {
+      assert.equal(resolveVaultNotes({}, 'bot', 'c1', 5000), undefined);
+      assert.equal(resolveVaultNotes({ channel: 'x', pollMs: 2000 }, 'bot', 'c1', 5000), undefined);
+    });
+
     it('refuses unknown fields', () => {
-      assert.throws(
-        () => resolveVaultNotes({ enabled: true, bogus: 123 }, 'bot', 'c1', 5000),
-        /unknown field 'bogus'/,
-      );
+      assert.throws(() => resolveVaultNotes({ enabled: true, bogus: 123 }, 'bot', 'c1', 5000), /unknown field 'bogus'/);
     });
 
     it('refuses invalid enabled or pollMs', () => {
@@ -219,10 +223,23 @@ describe('vault notes', () => {
 
   describe('escaping and note formatting', () => {
     it('escapes mentions, markdown links, HTML tags, and addresses', () => {
-      assert.equal(escapeVaultNoteField('@channel'), '@\u200bchannel');
-      assert.equal(escapeVaultNoteField('<!here>'), ' !here ');
-      assert.equal(escapeVaultNoteField('[x](http://evil)'), ' x (http://evil)');
-      assert.equal(escapeVaultNoteField('user@example.com'), '(address removed)');
+      assert.equal(cardField('@channel'), '@\u200bchannel');
+      assert.equal(cardField('<!here>'), ' !here ');
+      assert.equal(cardField('[x](http://evil)'), ' x (http://evil)');
+      assert.equal(cardField('user@example.com'), '(address removed)');
+    });
+
+    it('collapses newlines in actor and label onto one line', () => {
+      const text = vaultNoteText(makeEvent(1, { actor: 'ada\n\nHACK', label: 'line1\r\nline2\tx' }));
+      assert.ok(!/[\r\n\t]/.test(text), 'no control whitespace');
+      assert.equal(text, "Sender vault: ada HACK performed 'set' on line1 line2 x (2026-10-30T10:00:00.000Z).");
+    });
+
+    it('truncates an overlong field', () => {
+      const text = vaultNoteText(makeEvent(1, { label: 'L'.repeat(500) }));
+      assert.ok(text.includes(`${'L'.repeat(80)}...`));
+      assert.ok(!text.includes('L'.repeat(81)));
+      assert.ok(text.length < 200);
     });
 
     it('formats a concise founder note without key values or names list', () => {
@@ -233,7 +250,10 @@ describe('vault notes', () => {
         action: 'replace',
       });
       const text = vaultNoteText(ev);
-      assert.equal(text, "Sender vault: @\u200bada performed 'replace' on  Mailbox (http://bad)  ADAUGO  (2026-10-30T10:00:00.000Z).");
+      assert.equal(
+        text,
+        "Sender vault: @\u200bada performed 'replace' on  Mailbox (http://bad)  ADAUGO  (2026-10-30T10:00:00.000Z).",
+      );
       assert.ok(!text.includes('OUTREACH_ADAUGO'));
       assert.ok(!text.includes('@ada\b'));
       assert.ok(!text.includes('[Mailbox]'));
@@ -241,25 +261,29 @@ describe('vault notes', () => {
   });
 
   describe('no replay on first run', () => {
-    it('establishes the current cursor on first run without posting historical events', async () => {
-      R.sender.events = [makeEvent(1), makeEvent(2), makeEvent(3)];
-      const m = await R.manager();
-      await m.runCycle();
+    it(
+      'establishes the current cursor on first run without posting historical events',
+      { timeout: 20000 },
+      async () => {
+        R.sender.events = [makeEvent(1), makeEvent(2), makeEvent(3)];
+        const m = await R.manager();
+        await m.runCycle();
 
-      assert.equal(R.posts().length, 0, 'no notes posted on first run');
-      const store = new VaultNotesStore(R.storeFile);
-      assert.equal(store.state.cursor, 3, 'cursor initialized to newest event');
+        assert.equal(R.posts().length, 0, 'no notes posted on first run');
+        const store = new VaultNotesStore(R.storeFile);
+        assert.equal(store.state.cursor, 3, 'cursor initialized to newest event');
 
-      // Next cycle with a new event: only the new event is posted
-      R.sender.events.push(makeEvent(4, { action: 'clear' }));
-      await m.runCycle();
+        // Next cycle with a new event: only the new event is posted
+        R.sender.events.push(makeEvent(4, { action: 'clear' }));
+        await m.runCycle();
 
-      assert.equal(R.posts().length, 1, 'only new event is posted');
-      assert.ok(R.posts()[0]!.message.includes("'clear'"));
-      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 4);
-    });
+        assert.equal(R.posts().length, 1, 'only new event is posted');
+        assert.ok(R.posts()[0]!.message.includes("'clear'"));
+        assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 4);
+      },
+    );
 
-    it('handles first run when sender has zero events', async () => {
+    it('handles first run when sender has zero events', { timeout: 20000 }, async () => {
       R.sender.events = [];
       const m = await R.manager();
       await m.runCycle();
@@ -384,6 +408,85 @@ describe('vault notes', () => {
       R.sender.events.push(makeEvent(2));
       await m.runCycle(); // posts event 2
       assert.equal(R.posts().length, 1);
+    });
+  });
+
+  describe('hostile or buggy sender', () => {
+    it('rejects a huge cursor and keeps the old one', async () => {
+      const m = await R.manager();
+      await m.runCycle();
+      R.sender.vaultOverride = () => ({ events: [], cursor: 1e300 });
+      await m.runCycle();
+      await m.runCycle();
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 0);
+      assert.equal(R.logs.filter((l) => l.includes('unusable cursor')).length, 1, 'logged once');
+
+      // A sane sender afterwards still works
+      R.sender.vaultOverride = undefined;
+      R.sender.events.push(makeEvent(1));
+      await m.runCycle();
+      assert.equal(R.posts().length, 1);
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 1);
+    });
+
+    it('rejects a backwards cursor', async () => {
+      R.sender.events = [makeEvent(1), makeEvent(2), makeEvent(3)];
+      const m = await R.manager();
+      await m.runCycle();
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 3);
+      R.sender.vaultOverride = () => ({ events: [], cursor: 1 });
+      await m.runCycle();
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 3);
+      assert.ok(R.logs.some((l) => l.includes('unusable cursor')));
+    });
+
+    it('skips events whose id is at or below the cursor, or not a safe integer', async () => {
+      const m = await R.manager();
+      R.sender.events = [makeEvent(5)];
+      await m.runCycle(); // first run: cursor 5
+      R.sender.vaultOverride = () => ({
+        events: [makeEvent(5), makeEvent(2), makeEvent(1e300), makeEvent(Number.NaN), makeEvent(6)],
+        cursor: 6,
+      });
+      await m.runCycle();
+      assert.equal(R.posts().length, 1, 'only id 6 posted');
+      assert.equal(Object.keys(new VaultNotesStore(R.storeFile).state.posted).join(), '6');
+    });
+
+    it('does not finish the first run on an unusable cursor (no replay from 0)', async () => {
+      R.sender.vaultOverride = () => ({ events: [], cursor: 1e300 });
+      const m = await R.manager();
+      await m.runCycle();
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, null);
+    });
+
+    it('bounds the first-run drain against a sender whose cursor keeps changing', { timeout: 20000 }, async () => {
+      let calls = 0;
+      R.sender.vaultOverride = (since) => {
+        calls++;
+        const events = Array.from({ length: 100 }, (_, i) => makeEvent(since + i + 1));
+        return { events, cursor: since + 100 };
+      };
+      const m = await R.manager();
+      await m.runCycle();
+      assert.ok(calls <= 50, `drain made ${calls} calls`);
+      assert.ok(R.logs.some((l) => l.includes('first-run drain stopped')));
+      assert.equal(R.posts().length, 0, 'drain posts nothing');
+      assert.equal(new VaultNotesStore(R.storeFile).state.cursor, 5000);
+    });
+
+    it('stops the first-run drain when the cursor does not increase', { timeout: 20000 }, async () => {
+      let calls = 0;
+      R.sender.vaultOverride = () => {
+        calls++;
+        return {
+          events: Array.from({ length: 100 }, (_, i) => makeEvent(i + 1)),
+          cursor: 0,
+        };
+      };
+      const m = await R.manager();
+      await m.runCycle();
+      assert.ok(calls <= 2, `drain made ${calls} calls`);
     });
   });
 

@@ -1,12 +1,13 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AuditLog } from './audit.js';
+import { cardField } from './outreach.js';
 import { SenderSocketError } from './sender-socket.js';
 import type { SenderSocket, VaultEvent } from './sender-socket.js';
 import type { MattermostPost, VaultNotesConfig } from './types.js';
 
 const MAX_REMEMBERED = 5000;
-const MAX_TEXT_FIELD = 80;
+const MAX_DRAIN_PAGES = 50;
 const VAULT_BATCH = 100;
 const MAX_VAULT_BATCHES = 5;
 
@@ -68,25 +69,15 @@ export function resolveVaultNotes(
   return { channel, pollMs };
 }
 
-// ── escaping & formatting ───────────────────────────────────────────────────
+// ── formatting ──────────────────────────────────────────────────────────────
 
-/**
- * Escape a sender-provided text field so mentions, markdown and links cannot render.
- * Same discipline as outreach card fields.
- */
-export function escapeVaultNoteField(raw: string): string {
-  const oneLine = raw.replace(/\s+/g, ' ').trim();
-  const noAddress = oneLine.replace(/\S+@\S+/g, '(address removed)');
-  const short = noAddress.length > MAX_TEXT_FIELD ? `${noAddress.slice(0, MAX_TEXT_FIELD)}...` : noAddress;
-  return short.replace(/@/g, '@\u200b').replace(/[`[\]<>]/g, ' ');
-}
-
+/** Sender-provided text goes through outreach's `cardField` (one line, short, no mentions, markup or addresses). */
 /** Format a short founder note for one vault event. Never includes key names' values. */
 export function vaultNoteText(ev: VaultEvent): string {
-  const actor = escapeVaultNoteField(ev.actor);
-  const action = escapeVaultNoteField(ev.action);
-  const label = escapeVaultNoteField(ev.label);
-  const at = escapeVaultNoteField(ev.at);
+  const actor = cardField(ev.actor);
+  const action = cardField(ev.action);
+  const label = cardField(ev.label);
+  const at = cardField(ev.at);
   return `Sender vault: ${actor} performed '${action}' on ${label} (${at}).`;
 }
 
@@ -271,14 +262,25 @@ export class VaultNotesManager {
     if (store.state.cursor === null) {
       let cur = 0;
       try {
-        while (true) {
+        let pages = 0;
+        for (;;) {
           const res = await sender.vaultEvents(cur, VAULT_BATCH);
-          if (res.cursor === cur || res.events.length === 0) {
-            cur = res.cursor;
+          const next = this.acceptCursor(res.cursor, cur);
+          // An unusable cursor leaves the first run unfinished (cursor stays null): saving 0 would replay history.
+          if (next === undefined) return;
+          if (next === cur || res.events.length === 0) {
+            cur = next;
             break;
           }
-          cur = res.cursor;
+          cur = next;
           if (res.events.length < VAULT_BATCH) break;
+          if (++pages >= MAX_DRAIN_PAGES) {
+            this.logOnce(
+              'drain',
+              `first-run drain stopped after ${MAX_DRAIN_PAGES} pages; continuing from cursor ${cur}`,
+            );
+            break;
+          }
         }
         this.noteSender(undefined);
         store.state.cursor = cur;
@@ -305,6 +307,10 @@ export class VaultNotesManager {
         const channelId = await this.resolveChannel();
         if (!channelId) return;
         for (const ev of res.events) {
+          if (!Number.isSafeInteger(ev.id) || ev.id <= cur) {
+            this.logOnce('event-id', 'sender sent an event with an unusable id; skipped');
+            continue;
+          }
           const key = String(ev.id);
           if (store.state.posted[key]) continue;
           const text = vaultNoteText(ev);
@@ -321,14 +327,30 @@ export class VaultNotesManager {
         }
       }
 
-      if (res.cursor !== store.state.cursor) {
-        store.state.cursor = res.cursor;
-        cur = res.cursor;
+      const next = this.acceptCursor(res.cursor, cur);
+      if (next === undefined) return;
+      if (next !== store.state.cursor) {
+        store.state.cursor = next;
+        cur = next;
         await store.save();
       }
 
       if (res.events.length < VAULT_BATCH) break;
     }
+  }
+
+  /** A returned cursor is used only if it is a safe integer that does not go backwards; otherwise log once and keep the old one. */
+  private acceptCursor(cursor: unknown, since: number): number | undefined {
+    if (typeof cursor === 'number' && Number.isSafeInteger(cursor) && cursor >= since) return cursor;
+    this.logOnce('cursor', 'sender returned an unusable cursor; keeping the old one');
+    return undefined;
+  }
+
+  private readonly loggedOnce = new Set<string>();
+  private logOnce(key: string, msg: string): void {
+    if (this.loggedOnce.has(key)) return;
+    this.loggedOnce.add(key);
+    this.log(msg);
   }
 
   private noteSender(problem: string | undefined): void {

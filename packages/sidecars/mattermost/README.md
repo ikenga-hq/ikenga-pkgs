@@ -358,9 +358,9 @@ An optional `vaultNotes` block inside `outboxApprovals`, **off unless `enabled` 
 **What each poll does.**
 1. **First run:** On a fresh start with no saved cursor, the bridge reads the current cursor from `vault.events` without replaying historical events.
 2. **Notes per event:** Each subsequent event posts one short note naming who (actor username), action (`set`, `replace`, `clear`), group label, and timestamp. Key values and secret values do not exist in events and are never rendered.
-3. **Escaping:** All text fields go through the same escaping discipline as outreach cards (mentions `@channel` / `@here`, markdown links, HTML brackets, and addresses are defanged).
+3. **Escaping:** All text fields go through the same function as outreach cards (`cardField`) (mentions `@channel` / `@here`, markdown links, HTML brackets, and addresses are defanged).
 4. **Fail soft:** An unreachable sender or `vault_unconfigured` response logs once and retries on the next poll. It never crashes the bridge and never posts an error to the channel.
-5. **State:** Persisted to `<dataDir>/vault-notes-<bot>.json` (mode `0600`, atomic write via temp file and rename). Cursor is preserved across bridge restarts so events are posted exactly once.
+5. **State:** Persisted to `<dataDir>/vault-notes-<bot>.json` (mode `0600`, atomic write via temp file and rename). Cursor is preserved across bridge restarts. Delivery is at least once, deduplicated by event id: a crash between posting a note and saving state can re-post that one note.
 
 ## Safety rails and audit (B5)
 
