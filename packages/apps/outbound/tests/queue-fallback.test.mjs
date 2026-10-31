@@ -76,6 +76,7 @@ const {
 } = await import('../dist/features/outbound/outbound-view.js');
 
 const { queryClient } = await import('../dist/app.js');
+const { hostDbQuery, setBridgeAppForTesting } = await import('../dist/lib/bridge.js');
 
 function setupStandalone() {
   globalThis.window = {};
@@ -379,15 +380,14 @@ test('6. useQuery options: mounted views have enabled:true and NO fixture placeh
 test('7. TanStack QueryClient retry predicate & isPermissionRefusal', () => {
   // Permission refusal cases -> true
   assert.equal(isPermissionRefusal({ reason: 'scope-denied' }), true);
-  assert.equal(isPermissionRefusal({ code: 'E_OWNER_ONLY' }), true);
-  assert.equal(isPermissionRefusal({ code: 'E_SCOPE_DENIED' }), true);
-  assert.equal(isPermissionRefusal({ code: 'E_FORBIDDEN' }), true);
-  assert.equal(isPermissionRefusal(new Error("pkg lacks the 'sqlite' capability")), true);
-  assert.equal(isPermissionRefusal(new Error("table 'pa_action_drafts' is not in pkg declared sqlite_tables")), true);
-  assert.equal(isPermissionRefusal(new Error("permission denied: unauthorized")), true);
-  assert.equal(isPermissionRefusal(new Error("E_OWNER_ONLY")), true);
-  assert.equal(isPermissionRefusal(new Error("owner-only operation")), true);
-  assert.equal(isPermissionRefusal(new Error("access denied")), true);
+  assert.equal(
+    isPermissionRefusal(new Error("host.dbQuery: pkg lacks the 'sqlite' capability")),
+    true
+  );
+  assert.equal(
+    isPermissionRefusal(new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables")),
+    true
+  );
 
   // Non-refusal cases -> false
   assert.equal(isPermissionRefusal(new Error("network timeout")), false);
@@ -399,8 +399,10 @@ test('7. TanStack QueryClient retry predicate & isPermissionRefusal', () => {
   // queryRetry predicate behavior:
   // Immediate abort (0 retries) on permission refusal
   assert.equal(queryRetry(0, { reason: 'scope-denied' }), false);
-  assert.equal(queryRetry(0, { code: 'E_OWNER_ONLY' }), false);
-  assert.equal(queryRetry(0, new Error("table is not in pkg declared sqlite_tables")), false);
+  assert.equal(
+    queryRetry(0, new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables")),
+    false
+  );
   // Other transient errors retry once at failureCount=0, stop at failureCount=1
   assert.equal(queryRetry(0, new Error("network timeout")), true);
   assert.equal(queryRetry(1, new Error("network timeout")), false);
@@ -408,8 +410,39 @@ test('7. TanStack QueryClient retry predicate & isPermissionRefusal', () => {
 
   // queryClient configuration
   assert.equal(queryClient.defaultOptions.queries.retry, queryRetry);
-  assert.equal(queryClient.defaultOptions.queries.retry(0, { code: 'E_OWNER_ONLY' }), false);
+  assert.equal(queryClient.defaultOptions.queries.retry(0, { reason: 'scope-denied' }), false);
   assert.equal(queryClient.defaultOptions.queries.retry(0, new Error("timeout")), true);
+});
+
+test('7b. hostDbQuery propagates reason: "scope-denied" and fast-fails retry predicate', async () => {
+  setBridgeAppForTesting({
+    callServerTool: async () => ({
+      content: [{ type: 'text', text: "host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables" }],
+      isError: true,
+      structuredContent: {
+        ok: false,
+        reason: 'scope-denied',
+        error: "host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables",
+      },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await hostDbQuery('SELECT 1 FROM pa_action_drafts');
+      },
+      (err) => {
+        assert.equal(err.reason, 'scope-denied', 'Error carries reason: "scope-denied"');
+        assert.equal(isPermissionRefusal(err), true, 'isPermissionRefusal detects the error');
+        assert.equal(queryRetry(0, err), false, 'queryRetry returns false (0 retries)');
+        return true;
+      },
+      'hostDbQuery propagates reason and refuses retries'
+    );
+  } finally {
+    setBridgeAppForTesting(null);
+  }
 });
 
 test('8. Secondary query functions error propagation in mounted vs standalone mode', async () => {
@@ -418,20 +451,20 @@ test('8. Secondary query functions error propagation in mounted vs standalone mo
 
   // Simulated permission refusal
   setDbQueryForTesting(() => {
-    const err = new Error("E_OWNER_ONLY: table 'pa_action_drafts' is not in pkg declared sqlite_tables");
-    err.code = 'E_OWNER_ONLY';
+    const err = new Error("host.dbQuery: table 'pa_action_drafts' not in the pkg's declared sqlite.tables");
+    err.reason = 'scope-denied';
     throw err;
   });
 
   await assert.rejects(
     () => fetchNewsletterHistory(),
-    (err) => err.code === 'E_OWNER_ONLY' || /E_OWNER_ONLY/.test(err.message),
+    (err) => err.reason === 'scope-denied' || /sqlite\.tables/.test(err.message),
     'fetchNewsletterHistory propagates permission refusal when mounted'
   );
 
   await assert.rejects(
     () => fetchSocialFanout('test-batch-slug'),
-    (err) => err.code === 'E_OWNER_ONLY' || /E_OWNER_ONLY/.test(err.message),
+    (err) => err.reason === 'scope-denied' || /sqlite\.tables/.test(err.message),
     'fetchSocialFanout propagates permission refusal when mounted'
   );
 
@@ -465,22 +498,22 @@ test('8. Secondary query functions error propagation in mounted vs standalone mo
   assert.deepEqual(socialFanoutStandalone, [], 'Standalone returns empty fanout array without throwing');
 });
 
-test('9. SocialDetail fan-out error renders inline notice and NEVER falls back to default platforms', () => {
-  // A. Mounted with fanout error
-  setupMounted();
-  globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('E_OWNER_ONLY') };
-    }
-    return { data: undefined, isLoading: false, isError: false };
-  };
-
+test('9. SocialDetail fan-out error renders inline notice, and mounted success with 0 rows shows default platforms', () => {
   const samplePost = {
     id: 'post-1',
     slug: 'post-batch-1',
     content: 'Draft content for social',
     scheduled_for: '2026-11-01T12:00:00Z',
     source: 'cmo-agent',
+  };
+
+  // A. Mounted with fanout error
+  setupMounted();
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
+    }
+    return { data: undefined, isLoading: false, isError: false };
   };
 
   const vnodeMountedErr = SocialDetail({ post: samplePost, standalone: false });
@@ -495,7 +528,7 @@ test('9. SocialDetail fan-out error renders inline notice and NEVER falls back t
     strMountedErr.includes('title=\\"Can\'t read this project\'s queue here\\"'),
     'SocialDetail renders tooltip title on fanout error'
   );
-  // Must NOT render table or hallucinated default platform fan-out rows
+  // Must NOT render table or default platform fan-out rows on error
   assert.ok(
     !strMountedErr.includes('so-fanout-table'),
     'SocialDetail does not render fanout table on error'
@@ -505,7 +538,32 @@ test('9. SocialDetail fan-out error renders inline notice and NEVER falls back t
     'SocialDetail fan-out header does not claim positive rows on error'
   );
 
-  // B. Standalone fallback preserved
+  // B. Mounted success with zero rows (Item 1 requirement)
+  setupMounted();
+  globalThis.__mockUseQuery = (options) => {
+    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
+      return { data: [], isLoading: false, isError: false };
+    }
+    return { data: undefined, isLoading: false, isError: false };
+  };
+
+  const vnodeMountedZero = SocialDetail({ post: samplePost, standalone: false });
+  const strMountedZero = JSON.stringify(vnodeMountedZero);
+
+  assert.ok(
+    strMountedZero.includes('so-fanout-table'),
+    'Mounted post with 0 fan-out rows renders default platforms table'
+  );
+  assert.ok(
+    strMountedZero.includes('3 rows'),
+    'Mounted post with 0 fan-out rows shows 3 default platform targets'
+  );
+  assert.ok(
+    !strMountedZero.includes("Can't read this project's queue here."),
+    'Mounted post with 0 fan-out rows does not show error notice'
+  );
+
+  // C. Standalone fallback preserved
   setupStandalone();
   globalThis.__mockUseQuery = (options) => {
     return { data: undefined, isLoading: false, isError: false };
@@ -545,7 +603,7 @@ test('10. NewsletterQueueView history error renders compact indicator in Freshne
   // Mock: queue succeeds, history query fails with isError: true
   globalThis.__mockUseQuery = (options) => {
     if (options.queryKey[0] === 'newsletter' && options.queryKey[1] === 'history') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('E_OWNER_ONLY') };
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
     }
     // Main queue query returns 1 item
     return { data: [mockNewsletterRow], isLoading: false, isError: false };
@@ -633,7 +691,7 @@ test('11. SequenceStepRail & RecipientCohort show neutral "Not available yet" wh
   resetMockQuery();
 });
 
-test('12. Sidebar and tab badges render "—" with tooltip title on counts or agent read errors', () => {
+test('12. Sidebar and tab badges render "—" on counts or agent read errors', () => {
   // A. buildOutboundMenu with countsError and agentsError
   const menuErr = buildOutboundMenu('newsletter', 'queue', { email: 5, newsletter: 2 }, { pa: 3 }, true, true);
   for (const item of menuErr) {
@@ -644,8 +702,8 @@ test('12. Sidebar and tab badges render "—" with tooltip title on counts or ag
     );
     assert.equal(
       item.title,
-      "Can't read this project's queue here",
-      `Menu item ${item.id} has title tooltip on error`
+      undefined,
+      `Menu item ${item.id} has no title field (not supported by PkgMenuItem)`
     );
     if (item.hot !== undefined) {
       assert.equal(item.hot, false, `Menu item ${item.id} hot indicator is false on error`);
@@ -663,7 +721,7 @@ test('12. Sidebar and tab badges render "—" with tooltip title on counts or ag
   setupMounted();
   globalThis.__mockUseQuery = (options) => {
     if (options.queryKey[0] === 'counts' || options.queryKey[0] === 'agents') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('E_OWNER_ONLY') };
+      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
     }
     return { data: [], isLoading: false, isError: false };
   };

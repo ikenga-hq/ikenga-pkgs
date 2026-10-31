@@ -143,6 +143,10 @@ export async function hostDbQuery(sql, params = []) {
   return Array.isArray(sc.rows) ? sc.rows : [];
 }
 
+export function setBridgeAppForTesting(mockApp) {
+  app = mockApp;
+}
+
 /**
  * Write to the local `ikenga.db` via the host's `host.dbExec` verb (write-path WP).
  * INSERT/UPDATE/DELETE only — the shell rejects reads/DDL, gates on the pkg

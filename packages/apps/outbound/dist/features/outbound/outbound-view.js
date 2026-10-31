@@ -171,7 +171,6 @@ function buildOutboundMenu(channel, view, counts = {}, agents = {}, countsError 
       active: ch === channel,
       hot: !countsError && count > 0,
       badge,
-      title: countsError ? "Can't read this project's queue here" : undefined,
     };
   });
 
@@ -187,7 +186,6 @@ function buildOutboundMenu(channel, view, counts = {}, agents = {}, countsError 
       active: false,
       disabled: !isQueueView,
       badge,
-      title: agentsError ? "Can't read this project's queue here" : undefined,
     };
   });
 
@@ -3242,13 +3240,12 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
     queryKey: ['social', 'fanout', post?.slug],
     queryFn: () => fetchSocialFanout(post?.slug),
     enabled: !standalone && !!post?.slug,
-    placeholderData: standalone ? undefined : undefined,
   });
 
   const len = body.length;
   const anyBlocked = SOCIAL_PLATFORMS.some((p) => len > p.cap);
 
-  // Fan-out rows: live siblings if present, otherwise the three standard targets (standalone only).
+  // Fan-out rows: live siblings if present, otherwise the three standard targets.
   const fanRows = (fanout && fanout.length)
     ? fanout.map((r) => ({
         plat: ({ linkedin: 'plat-li', x: 'plat-x', twitter: 'plat-x', bluesky: 'plat-bs', instagram: 'plat-ig' }[r.platform] ?? 'plat-x'),
@@ -3256,9 +3253,7 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
         blocked: (r.content?.length ?? 0) > (PLATFORM_CAPS[r.platform] ?? 280),
         schedule: r.scheduled_for,
       }))
-    : (standalone
-        ? SOCIAL_PLATFORMS.map((p) => ({ plat: p.plat, label: p.sub, blocked: len > p.cap, schedule: post?.scheduled_for }))
-        : []);
+    : SOCIAL_PLATFORMS.map((p) => ({ plat: p.plat, label: p.sub, blocked: len > p.cap, schedule: post?.scheduled_for }));
 
   return html`
     <div class="ob-detail-wrap">
@@ -3321,7 +3316,7 @@ function SocialEditor({ post, standalone, onApprove, approvePending, onReject, r
       </div>
 
       <div class="so-fanout">
-        <div class="so-fanout-head">Per-platform fan-out · ${fanoutError ? '—' : `${fanRows.length} row${fanRows.length > 1 ? 's' : ''}`}</div>
+        <div class="so-fanout-head">Per-platform fan-out · ${fanoutError ? '—' : `${fanRows.length} row${fanRows.length === 1 ? '' : 's'}`}</div>
         ${fanoutError ? html`
           <div class="so-fanout-error" style=${{ padding: '1.25rem', textAlign: 'center', color: 'var(--fg-muted)', fontSize: '13px' }}>
             <span title="Can't read this project's queue here">Can't read this project's queue here.</span>
@@ -4230,15 +4225,11 @@ export function OutboundView({ activeFeature }) {
 export function isPermissionRefusal(error) {
   if (!error) return false;
   if (error.reason === 'scope-denied') return true;
-  if (error.code === 'E_OWNER_ONLY' || error.code === 'E_SCOPE_DENIED' || error.code === 'E_FORBIDDEN') return true;
   const msg = String(error.message || error);
   return (
     /scope-denied/i.test(msg) ||
-    /E_OWNER_ONLY/i.test(msg) ||
-    /owner-only/i.test(msg) ||
-    /lacks the ['"]sqlite['"] capability/i.test(msg) ||
-    /not in pkg declared/i.test(msg) ||
-    /permission refused|permission denied|refusal|access denied/i.test(msg)
+    /pkg lacks the ['"]sqlite['"] capability/i.test(msg) ||
+    /not in the pkg's declared sqlite\.tables/i.test(msg)
   );
 }
 
