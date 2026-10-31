@@ -198,17 +198,24 @@ function buildOutboundMenu(channel, view, counts = {}, agents = {}) {
 const SEL_COLS = `id, batch_id, action_id, status, channel, payload_json, edited_json,
   scheduled_at, created_at, committed_at, sent_at, attempts, error_text, external_id, delivery_status`;
 
-async function loadDrafts(statuses, { limit = 300 } = {}) {
+let dbQueryFn = hostDbQuery;
+export function setDbQueryForTesting(fn) {
+  dbQueryFn = fn;
+}
+
+let navigateFn = hostNavigate;
+export function setNavigateForTesting(fn) {
+  navigateFn = fn;
+}
+
+export async function loadDrafts(statuses, { limit = 300 } = {}) {
+  if (isStandalone()) return [];
   const ph = statuses.map(() => '?').join(',');
-  try {
-    return await hostDbQuery(
-      `SELECT ${SEL_COLS} FROM pa_action_drafts WHERE status IN (${ph})
-       ORDER BY COALESCE(sent_at, scheduled_at, created_at) DESC LIMIT ${limit}`,
-      statuses
-    );
-  } catch {
-    return [];
-  }
+  return await dbQueryFn(
+    `SELECT ${SEL_COLS} FROM pa_action_drafts WHERE status IN (${ph})
+     ORDER BY COALESCE(sent_at, scheduled_at, created_at) DESC LIMIT ${limit}`,
+    statuses
+  );
 }
 
 // Filter loaded rows to one content type + map to the renderer's view shape.
@@ -221,11 +228,13 @@ function pick(rows, ct, mapper) {
 }
 const hasSchedule = (r) => !!r.scheduled_at;
 
-async function fetchChannelCounts() {
+export async function fetchChannelCounts() {
+  if (isStandalone()) return { email: 5, newsletter: 2, sequences: 4, social: 4 };
   return countByContentType(await loadDrafts(QUEUE_STATUSES));
 }
 
-async function fetchAgentCounts(channel) {
+export async function fetchAgentCounts(channel) {
+  if (isStandalone()) return { pa: 4, cmo: 5, cbo: 2 };
   const results = { pa: 0, cmo: 0, cbo: 0 };
   for (const r of await loadDrafts(QUEUE_STATUSES)) {
     const { item, meta } = parseDraft(r);
@@ -237,31 +246,31 @@ async function fetchAgentCounts(channel) {
 }
 
 // ── Email ────────────────────────────────────────────────────────────────────
-async function fetchEmailQueue() {
-  const m = pick(await loadDrafts(QUEUE_STATUSES), 'email', mapEmailQueue);
-  return m.length ? m : FIXTURE_EMAIL_QUEUE;
+export async function fetchEmailQueue() {
+  if (isStandalone()) return FIXTURE_EMAIL_QUEUE;
+  return pick(await loadDrafts(QUEUE_STATUSES), 'email', mapEmailQueue);
 }
 
-async function fetchEmailSchedule() {
+export async function fetchEmailSchedule() {
+  if (isStandalone()) return FIXTURE_EMAIL_SCHEDULE;
   const rows = (await loadDrafts(SCHEDULE_STATUSES)).filter(hasSchedule);
-  const m = pick(rows, 'email', mapEmailQueue);
-  return m.length ? m : FIXTURE_EMAIL_SCHEDULE;
+  return pick(rows, 'email', mapEmailQueue);
 }
 
-async function fetchEmailSent() {
-  const m = pick(await loadDrafts(SENT_STATUSES), 'email', mapEmailSent);
-  return m.length ? m : FIXTURE_EMAIL_SENT;
+export async function fetchEmailSent() {
+  if (isStandalone()) return FIXTURE_EMAIL_SENT;
+  return pick(await loadDrafts(SENT_STATUSES), 'email', mapEmailSent);
 }
 
 // ── Newsletter ────────────────────────────────────────────────────────────────
-async function fetchNewsletterQueue() {
-  const m = pick(await loadDrafts(QUEUE_STATUSES), 'newsletter', mapNewsletterQueue);
-  return m.length ? m : FIXTURE_NL_QUEUE;
+export async function fetchNewsletterQueue() {
+  if (isStandalone()) return FIXTURE_NL_QUEUE;
+  return pick(await loadDrafts(QUEUE_STATUSES), 'newsletter', mapNewsletterQueue);
 }
 
-async function fetchNewsletterSent() {
-  const m = pick(await loadDrafts(SENT_STATUSES), 'newsletter', mapNewsletterSent);
-  return m.length ? m : FIXTURE_NL_SENT;
+export async function fetchNewsletterSent() {
+  if (isStandalone()) return FIXTURE_NL_SENT;
+  return pick(await loadDrafts(SENT_STATUSES), 'newsletter', mapNewsletterSent);
 }
 
 // ── Newsletter sent-history (WP-11) ──────────────────────────────────────────
@@ -358,7 +367,8 @@ function seqGroups(rows) {
   return groups;
 }
 
-async function fetchSequenceDefs() {
+export async function fetchSequenceDefs() {
+  if (isStandalone()) return FIXTURE_SEQ_DEFS;
   const defs = [];
   for (const [name, members] of seqGroups(await loadDrafts([...QUEUE_STATUSES, ...SENT_STATUSES]))) {
     const { r, item } = members[0];
@@ -366,10 +376,11 @@ async function fetchSequenceDefs() {
     defs.push({ id: r.batch_id || r.id, name, slug: r.batch_id || null, segment: item.recipient || null,
                 total_steps: seq.total ?? null, delivery_system: r.channel, status: 'active' });
   }
-  return defs.length ? defs : FIXTURE_SEQ_DEFS;
+  return defs;
 }
 
-async function fetchActiveSequences() {
+export async function fetchActiveSequences() {
+  if (isStandalone()) return FIXTURE_ACTIVE_SEQS;
   const out = [];
   for (const r of await loadDrafts(QUEUE_STATUSES)) {
     const { item } = parseDraft(r);
@@ -380,25 +391,26 @@ async function fetchActiveSequences() {
                next_send_date: r.scheduled_at || null, status: 'active', sent_count: seq.recipients ?? 0,
                sequence_name: seq.name || item.subject, sequence_slug: r.batch_id || null, delivery_system: r.channel });
   }
-  return out.length ? out : FIXTURE_ACTIVE_SEQS;
+  return out;
 }
 
-async function fetchSequenceQueue() {
-  const m = pick(await loadDrafts(QUEUE_STATUSES), 'sequences', mapSequenceQueue);
-  return m.length ? m : FIXTURE_SEQ_QUEUE;
+export async function fetchSequenceQueue() {
+  if (isStandalone()) return FIXTURE_SEQ_QUEUE;
+  return pick(await loadDrafts(QUEUE_STATUSES), 'sequences', mapSequenceQueue);
 }
 
 // Per-step rail + per-recipient cohort are Phase 2 (steps/recipients aren't modeled
 // as distinct rows yet) — return empty so the renderer empty-states honestly.
-async function fetchSequenceSteps(sequenceId) {
+export async function fetchSequenceSteps(sequenceId) {
   return sequenceId ? [] : [];
 }
 
-async function fetchSequenceRecipients(sequenceId) {
+export async function fetchSequenceRecipients(sequenceId) {
   return sequenceId ? [] : [];
 }
 
-async function fetchSentSequences() {
+export async function fetchSentSequences() {
+  if (isStandalone()) return FIXTURE_SENT_SEQS;
   const out = [];
   for (const [name, members] of seqGroups(await loadDrafts(SENT_STATUSES))) {
     const { r, item } = members[0];
@@ -409,7 +421,7 @@ async function fetchSentSequences() {
                total_steps: seq.total ?? null, enrolled, completed: enrolled, replied: 0, bounced,
                sent_total: enrolled, closed_at: r.sent_at || null });
   }
-  return out.length ? out : FIXTURE_SENT_SEQS;
+  return out;
 }
 
 // Relative-age label for the reply-intelligence "last touch" cell.
@@ -566,20 +578,20 @@ async function mapTwentyPersonToReplyIntel(p, email) {
 
 // ─── Social queries ─────────────────────────────────────────────────────────────
 
-async function fetchSocialQueue() {
-  const m = pick(await loadDrafts(QUEUE_STATUSES), 'social', mapSocialQueue);
-  return m.length ? m : FIXTURE_SOCIAL_QUEUE;
+export async function fetchSocialQueue() {
+  if (isStandalone()) return FIXTURE_SOCIAL_QUEUE;
+  return pick(await loadDrafts(QUEUE_STATUSES), 'social', mapSocialQueue);
 }
 
-async function fetchSocialSchedule() {
+export async function fetchSocialSchedule() {
+  if (isStandalone()) return FIXTURE_SOCIAL_SCHEDULE;
   const rows = (await loadDrafts(SCHEDULE_STATUSES)).filter(hasSchedule);
-  const m = pick(rows, 'social', mapSocialQueue);
-  return m.length ? m : FIXTURE_SOCIAL_SCHEDULE;
+  return pick(rows, 'social', mapSocialQueue);
 }
 
-async function fetchSocialSent() {
-  const m = pick(await loadDrafts(SENT_STATUSES), 'social', mapSocialSent);
-  return m.length ? m : FIXTURE_SOCIAL_SENT;
+export async function fetchSocialSent() {
+  if (isStandalone()) return FIXTURE_SOCIAL_SENT;
+  return pick(await loadDrafts(SENT_STATUSES), 'social', mapSocialSent);
 }
 
 // ── Approval mutations — the FOLDED approve-gate write path (WP-04, G-PAACTIONS) ──
@@ -648,8 +660,8 @@ function isPaActionsUnavailable(err) {
 }
 
 // Navigate the focused pane to the shell's native approve-gate. Fire-and-forget.
-function openShellApprovals() {
-  hostNavigate('/outbox/approvals').catch(() => {});
+export function openShellApprovals() {
+  return navigateFn('/outbox/approvals').catch(() => {});
 }
 
 // ── 10-second undo before commit (WP-04) ──────────────────────────────────────
@@ -822,7 +834,7 @@ function EditPanel({ subject, body, onSave, onCancel, pending }) {
 async function fetchSocialFanout(slug) {
   if (!slug) return [];
   try {
-    const rows = await hostDbQuery(
+    const rows = await dbQueryFn(
       `SELECT ${SEL_COLS} FROM pa_action_drafts WHERE batch_id = ? ORDER BY channel ASC`,
       [slug]
     );
@@ -834,7 +846,7 @@ async function fetchSocialFanout(slug) {
 
 // ─── Fixture data (fallback until real rows exist) ──────────────────────────────
 
-const FIXTURE_EMAIL_QUEUE = [
+export const FIXTURE_EMAIL_QUEUE = [
   // ── Replies group (emailGroup: 'reply') ─────────────────────────────────────
   // eq-r1 recipient is keyed into FIXTURE_CRM → drives the full 8-cell ri-grid
   // in standalone. Auto-selected first (rows[0]) so the showcase opens on it.
@@ -938,17 +950,17 @@ const FIXTURE_EMAIL_QUEUE = [
   },
 ];
 
-const FIXTURE_EMAIL_SCHEDULE = [
+export const FIXTURE_EMAIL_SCHEDULE = [
   { id: 'es-1', subject: 'Q2 product roundup · for label admins', channel: 'listmonk', status: 'scheduled', scheduled_for: 'Today 16:00', ux_mode: 'silent' },
   { id: 'es-2', subject: 'Quick check-in · still using Royalti?', channel: 'listmonk', status: 'scheduled', scheduled_for: 'Mon 09:00', ux_mode: 'silent' },
 ];
 
-const FIXTURE_EMAIL_SENT = [
+export const FIXTURE_EMAIL_SENT = [
   { id: 'sent-1', subject: 'Royalti tenant welcome', recipient_email: 'batch', channel: 'resend', delivery_system: 'resend', sent_at: '2026-05-15 10:00', open_rate: 0.68, click_rate: 0.21 },
   { id: 'sent-2', subject: 'Q1 product update', recipient_email: 'label admins', channel: 'listmonk', delivery_system: 'listmonk', sent_at: '2026-04-30 14:00', open_rate: 0.55, click_rate: 0.18 },
 ];
 
-const FIXTURE_NL_QUEUE = [
+export const FIXTURE_NL_QUEUE = [
   { id: 'nl-1', subject: 'You can deliver from Royalti now', subject_b: null, draft_slug: 'royalti-deliver', status: 'cooling', raw_status: 'awaiting', cooling_until: '47m', quality_score: 92, recipient_count: 2104, delivery_system: 'listmonk', drafted_by: 'cmo', has_ab: 0,
     preheader: 'Send DDEX messages from your workspace — no aggregator required.',
     from_line: 'Ruby <ruby@royalti.io>',
@@ -972,43 +984,43 @@ const FIXTURE_NL_QUEUE = [
   },
 ];
 
-const FIXTURE_NL_SENT = [
+export const FIXTURE_NL_SENT = [
   { id: 'ns-1', draft_slug: 'schema-patches-590', edition: 'May 2026', subject: 'Schema patches that unblocked tenant 590', delivery_system: 'listmonk', sent_at: '2026-05-06 10:00', recipient_count: 2104, open_rate: 0.61, click_rate: 0.14 },
   { id: 'ns-2', draft_slug: 'investor-may', edition: 'Investor May 2026', subject: 'Investor Update — May', delivery_system: 'listmonk', sent_at: '2026-05-08 14:00', recipient_count: null, open_rate: null, click_rate: null },
 ];
 
-const FIXTURE_SEQ_DEFS = [
+export const FIXTURE_SEQ_DEFS = [
   { id: 'seq-1', name: 'Cold A&R outreach', slug: 'seq3-universal-pt', segment: 'ar@universalmusic.pt', total_steps: 4, delivery_system: 'smtp', status: 'active' },
   { id: 'seq-2', name: 'Onboarding welcome', slug: 'onboard-welcome', segment: 'new tenants', total_steps: 3, delivery_system: 'resend', status: 'active' },
   { id: 'seq-3', name: 'L5 winback', slug: 'l5-winback', segment: '388 churned', total_steps: 5, delivery_system: 'listmonk', status: 'active' },
   { id: 'seq-4', name: 'Q2 product roundup', slug: 'q2-product-roundup', segment: 'label admins', total_steps: 2, delivery_system: 'listmonk', status: 'active' },
 ];
 
-const FIXTURE_ACTIVE_SEQS = [
+export const FIXTURE_ACTIVE_SEQS = [
   { id: 'os-1', sequence_id: 'seq-1', contact_email: 'ar@universalmusic.pt', segment: 'A&R', current_step: 1, total_steps: 4, next_send_date: '2026-06-07', status: 'active', sent_count: 1, sequence_name: 'Cold A&R outreach', sequence_slug: 'seq3-universal-pt', delivery_system: 'smtp' },
   { id: 'os-2', sequence_id: 'seq-2', contact_email: 'batch', segment: 'new tenants', current_step: 1, total_steps: 3, next_send_date: '2026-06-08', status: 'active', sent_count: 388, sequence_name: 'Onboarding welcome', sequence_slug: 'onboard-welcome', delivery_system: 'resend' },
   { id: 'os-3', sequence_id: 'seq-3', contact_email: 'batch', segment: '388 churned', current_step: 7, total_steps: 5, next_send_date: '2026-06-09', status: 'active', sent_count: 388, sequence_name: 'L5 winback', sequence_slug: 'l5-winback', delivery_system: 'listmonk' },
   { id: 'os-4', sequence_id: 'seq-4', contact_email: 'batch', segment: 'label admins', current_step: 1, total_steps: 2, next_send_date: '2026-06-10', status: 'active', sent_count: 0, sequence_name: 'Q2 product roundup', sequence_slug: 'q2-product-roundup', delivery_system: 'listmonk' },
 ];
 
-const FIXTURE_SEQ_QUEUE = [
+export const FIXTURE_SEQ_QUEUE = [
   { id: 'seq-q1', name: 'distributor-q3', slug: 'distributor-q3', description: 'Cold outbound to 14 distributor leads sourced from Q1 trade-show contacts. 4 steps over 21 days.', segment: 'distributor-leads-q1', total_steps: 4, delivery_system: 'resend', status: 'in_review', raw_status: 'awaiting', created_by: 'vp-sales-agent', created_at: '2026-04-28' },
   { id: 'seq-q2', name: 'label-onboarding-v3', slug: 'label-onboarding-v3', description: 'Replaces v2. New labels get 5 emails over 14 days walking them from signup → first statement ingested.', segment: 'new-labels', total_steps: 5, delivery_system: 'listmonk', status: 'in_review', raw_status: 'awaiting', created_by: 'pa', created_at: '2026-04-27' },
 ];
 
-const FIXTURE_SEQ_STEPS = [
+export const FIXTURE_SEQ_STEPS = [
   { id: 'st-1', step_number: 1, subject: 'Royalti deck for distributor onboarding', body: '"Hi [first name] — saw we connected at [event]. Royalti is the royalty + rights ops layer label/distributor teams use to get statements ingested in seconds, not days…"', delay_value: 0, delay_unit: 'days', channel: 'resend', status: 'active' },
   { id: 'st-2', step_number: 2, subject: 'Following up on the Royalti deck', body: '"Wanted to circle back on the deck I sent — happy to walk you through it on a 15-min call, or send a Loom if async is easier…"', delay_value: 3, delay_unit: 'days', channel: 'resend', status: 'active' },
   { id: 'st-3', step_number: 3, subject: 'A short Royalti customer story', body: '"Quick story from a Lagos label that ingested 880 contracts in a week — the part that surprised them was [insert]…"', delay_value: 7, delay_unit: 'days', channel: 'resend', status: 'active' },
   { id: 'st-4', step_number: 4, subject: 'Closing the loop · last note', body: '"I\'ll stop here so I\'m not crowding the inbox. If you want to pick this up later, the deck and a 15-min slot are at [link]…"', delay_value: 11, delay_unit: 'days', channel: 'resend', status: 'active' },
 ];
 
-const FIXTURE_SENT_SEQS = [
+export const FIXTURE_SENT_SEQS = [
   { sequence_id: 'seq-s1', sequence_name: 'distributor-q2', sequence_slug: 'distributor-q2', total_steps: 4, enrolled: 18, completed: 6, replied: 4, bounced: 1, sent_total: 52, closed_at: '2026-03-30' },
   { sequence_id: 'seq-s2', sequence_name: 'winback-l4', sequence_slug: 'winback-l4', total_steps: 3, enrolled: 240, completed: 88, replied: 31, bounced: 12, sent_total: 612, closed_at: '2026-03-12' },
 ];
 
-const FIXTURE_SEQ_RECIPIENTS = [
+export const FIXTURE_SEQ_RECIPIENTS = [
   { id: 'r1', contact_email: 'a@dist.pt', current_step: 4, total_steps: 4, status: 'completed', last_reply_at: null },
   { id: 'r2', contact_email: 'b@dist.pt', current_step: 2, total_steps: 4, status: 'active', last_reply_at: '2026-04-28' },
   { id: 'r3', contact_email: 'c@dist.pt', current_step: 3, total_steps: 4, status: 'active', last_reply_at: null },
@@ -1025,7 +1037,7 @@ const FIXTURE_SEQ_RECIPIENTS = [
   { id: 'r14', contact_email: 'n@dist.pt', current_step: 1, total_steps: 4, status: 'active', last_reply_at: null },
 ];
 
-const FIXTURE_SOCIAL_QUEUE = [
+export const FIXTURE_SOCIAL_QUEUE = [
   // ── Blog announcement · fan-out batch (LinkedIn + X + Bluesky share blog-01) ──
   // Three siblings collapse to ONE display row carrying all three platform pills.
   { id: 'sq-b1-li', slug: 'blog-01', platform: 'linkedin', account: 'Royalti', source_group: 'blog', blog_slug: 'royalty-calc-overhaul', content: 'The royalty calculator overhaul shipped this week. Statements ingest in ~90s for a 30k-row CSV, and splits recompute live as you edit. #royalti #musicbusiness', status: 'in_review', raw_status: 'awaiting', scheduled_for: '2026-06-10 12:48', source: 'C-07', title: 'Royalty calculator overhaul · launch post', drafted_by: 'pa', thread_index: null, thread_total: null, tone_check: false, media_url: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=1200&h=627&fit=crop', hashtags: ['#royalti', '#musicbusiness', '#labels'], platforms: ['linkedin'], thread: null },
@@ -1043,11 +1055,11 @@ const FIXTURE_SOCIAL_QUEUE = [
   ] },
 ];
 
-const FIXTURE_SOCIAL_SCHEDULE = [
+export const FIXTURE_SOCIAL_SCHEDULE = [
   { id: 'sq-2', platform: 'twitter', account: 'royalti_io', content: 'Thread 1/7: The royalty data problem nobody talks about.', status: 'scheduled', scheduled_for: '2026-06-10 09:00', source: 'C-08' },
 ];
 
-const FIXTURE_SOCIAL_SENT = [
+export const FIXTURE_SOCIAL_SENT = [
   { id: 'sq-0', platform: 'linkedin', account: 'Royalti', content: 'We\'ve built a workspace that puts royalty data, outreach, and reporting in one place.', status: 'posted', scheduled_for: '2026-06-01 09:00', posted_at: '2026-06-01 09:01', source: 'C-06', media_url: 'https://royalti.io/og/workspace-card.jpg', hashtags: ['#royalti', '#musicbusiness'] },
 ];
 
@@ -1476,6 +1488,19 @@ function StateDisplay({ state, message, onRetry }) {
   `;
 }
 
+export function QueueReadErrorState({ onRetry }) {
+  return html`
+    <div class="atelier-state is-error">
+      <${Icon} name="alert-circle" size=${24} />
+      <p style=${{ color: 'var(--fg-muted)', fontSize: '0.825rem', margin: 0 }}>Can't read this project's queue here.</p>
+      <div style=${{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+        <button class="btn btn-sm btn-primary" onClick=${openShellApprovals}>Open Outbox (/outbox/approvals)</button>
+        ${onRetry ? html`<button class="btn btn-sm" onClick=${onRetry}>Retry</button>` : null}
+      </div>
+    </div>
+  `;
+}
+
 // ─── Shared two-week schedule strip (design newsletter/email/social §E) ──────────
 // Label column + 7 weekday columns × 2 week rows, with date numbers, a today
 // marker, and a Lagos-timezone annotation. Pills are placed by parsing each
@@ -1644,7 +1669,7 @@ function EmailQueueView({ standalone }) {
     queryKey: ['email', 'queue'],
     queryFn: fetchEmailQueue,
     enabled: !standalone,
-    placeholderData: FIXTURE_EMAIL_QUEUE,
+    placeholderData: standalone ? FIXTURE_EMAIL_QUEUE : undefined,
   });
 
   const qc = useQueryClient();
@@ -1695,7 +1720,7 @@ function EmailQueueView({ standalone }) {
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading email queue…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load email queue" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No email items awaiting approval" />`;
 
   const rows = data ?? [];
@@ -1907,11 +1932,11 @@ function EmailScheduleView({ standalone }) {
     queryKey: ['email', 'schedule'],
     queryFn: fetchEmailSchedule,
     enabled: !standalone,
-    placeholderData: FIXTURE_EMAIL_SCHEDULE,
+    placeholderData: standalone ? FIXTURE_EMAIL_SCHEDULE : undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading schedule…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load schedule" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No scheduled email" />`;
 
   return html`
@@ -2067,11 +2092,11 @@ function EmailSentView({ standalone }) {
     queryKey: ['email', 'sent'],
     queryFn: fetchEmailSent,
     enabled: !standalone,
-    placeholderData: FIXTURE_EMAIL_SENT,
+    placeholderData: standalone ? FIXTURE_EMAIL_SENT : undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading sent…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load sent log" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
 
   const rows = (data ?? []).filter(r => {
     if (channelFilter !== 'all' && r.delivery_system !== channelFilter) return false;
@@ -2232,7 +2257,7 @@ function NewsletterQueueView({ standalone }) {
     queryKey: ['newsletter', 'queue'],
     queryFn: fetchNewsletterQueue,
     enabled: !standalone,
-    placeholderData: FIXTURE_NL_QUEUE,
+    placeholderData: standalone ? FIXTURE_NL_QUEUE : undefined,
   });
 
   // Sent-history query (WP-11): supplies Freshness + Previously-featured cells.
@@ -2277,7 +2302,7 @@ function NewsletterQueueView({ standalone }) {
   }, [selEarly?.id]);
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading newsletter queue…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load newsletter queue" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No newsletter items awaiting review" />`;
 
   const rows = data ?? [];
@@ -2555,9 +2580,18 @@ function NewsletterQueueView({ standalone }) {
 function NewsletterScheduleView({ standalone }) {
   // Scheduled newsletter sends — single source: pa_action_drafts rows whose
   // derived content type is 'newsletter' and that carry a future scheduled_at.
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['newsletter', 'schedule'],
     queryFn: async () => {
+      if (standalone) {
+        const wk = startOfWeekMon(new Date());
+        const at = (offset, h) => { const d = new Date(wk); d.setDate(wk.getDate() + offset); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+        return [
+          { id: 'ns-cal-1', subject: 'Schema patches that unblocked tenant 590', scheduled_for: at(1, 10), recipient_count: 2104, kind: 'scheduled' },
+          { id: 'ns-cal-2', subject: 'Investor Update — May', scheduled_for: at(3, 14), recipient_count: null, kind: 'investor' },
+          { id: 'ns-cal-3', subject: 'You can deliver from Royalti now', scheduled_for: at(8, 10), recipient_count: 2104, kind: 'cooling' },
+        ];
+      }
       const scheduled = (await loadDrafts(SCHEDULE_STATUSES)).filter(hasSchedule);
       const nl = [];
       for (const r of scheduled) {
@@ -2574,19 +2608,15 @@ function NewsletterScheduleView({ standalone }) {
           kind: 'scheduled',
         });
       }
-      if (nl.length) return nl;
-      // No live scheduled rows → anchor fixtures to the current week so pills land.
-      const wk = startOfWeekMon(new Date());
-      const at = (offset, h) => { const d = new Date(wk); d.setDate(wk.getDate() + offset); d.setHours(h, 0, 0, 0); return d.toISOString(); };
-      return [
-        { id: 'ns-cal-1', subject: 'Schema patches that unblocked tenant 590', scheduled_for: at(1, 10), recipient_count: 2104, kind: 'scheduled' },
-        { id: 'ns-cal-2', subject: 'Investor Update — May', scheduled_for: at(3, 14), recipient_count: null, kind: 'investor' },
-        { id: 'ns-cal-3', subject: 'You can deliver from Royalti now', scheduled_for: at(8, 10), recipient_count: 2104, kind: 'cooling' },
-      ];
+      return nl;
     },
     enabled: !standalone,
-    placeholderData: [],
+    placeholderData: standalone ? undefined : [],
   });
+
+  if (isLoading) return html`<${StateDisplay} state="loading" message="Loading schedule…" />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
+  if (!data?.length) return html`<${StateDisplay} state="empty" message="No scheduled newsletter" />`;
 
   return html`
     <${TwoWeekCalendar}
@@ -2611,10 +2641,14 @@ function NewsletterSentView({ standalone }) {
     queryKey: ['newsletter', 'sent'],
     queryFn: fetchNewsletterSent,
     enabled: !standalone,
-    placeholderData: FIXTURE_NL_SENT,
+    placeholderData: standalone ? FIXTURE_NL_SENT : undefined,
   });
 
-  const allRows = data ?? FIXTURE_NL_SENT;
+  if (isLoading) return html`<${StateDisplay} state="loading" message="Loading sent…" />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
+  if (!data?.length) return html`<${StateDisplay} state="empty" message="No sent newsletters" />`;
+
+  const allRows = data ?? (standalone ? FIXTURE_NL_SENT : []);
   // WP-17 item 5: type + channel filter chips were decorative. Wire them.
   // Type maps the UI 'investor' chip → newsletter_type 'investor_update'.
   const rows = allRows.filter((r) => {
@@ -2699,7 +2733,7 @@ function SequenceStepRail({ sequence, standalone }) {
     queryKey: ['sequences', 'steps', seqId],
     queryFn: () => fetchSequenceSteps(seqId),
     enabled: !standalone && !!seqId,
-    placeholderData: FIXTURE_SEQ_STEPS,
+    placeholderData: standalone ? FIXTURE_SEQ_STEPS : undefined,
   });
 
   const list = steps ?? [];
@@ -2799,11 +2833,11 @@ function SequencesQueueView({ standalone }) {
     queryKey: ['sequences', 'queue'],
     queryFn: fetchSequenceQueue,
     enabled: !standalone,
-    placeholderData: FIXTURE_SEQ_QUEUE,
+    placeholderData: standalone ? FIXTURE_SEQ_QUEUE : undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading sequence approvals…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load sequences" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No sequence items awaiting approval" />`;
 
   const rows = data ?? [];
@@ -2857,10 +2891,10 @@ function RecipientCohort({ sequenceKey, fallback, standalone }) {
     queryKey: ['sequences', 'recipients', sequenceKey],
     queryFn: () => fetchSequenceRecipients(sequenceKey),
     enabled: !standalone && !!sequenceKey,
-    placeholderData: fallback ?? FIXTURE_SEQ_RECIPIENTS,
+    placeholderData: standalone ? (fallback ?? FIXTURE_SEQ_RECIPIENTS) : undefined,
   });
 
-  const list = (recips && recips.length ? recips : fallback) ?? [];
+  const list = (recips && recips.length ? recips : (standalone ? fallback : [])) ?? [];
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading cohort…" />`;
   if (!list.length) return html`<${StateDisplay} state="empty" message="No recipients enrolled" />`;
 
@@ -2919,15 +2953,16 @@ function SequencesActiveView({ standalone }) {
     queryKey: ['sequences', 'active'],
     queryFn: fetchActiveSequences,
     enabled: !standalone,
-    placeholderData: FIXTURE_ACTIVE_SEQS,
+    placeholderData: standalone ? FIXTURE_ACTIVE_SEQS : undefined,
   });
 
   const [selected, setSelected] = useState(null);
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading active sequences…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load sequences" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
+  if (!data?.length) return html`<${StateDisplay} state="empty" message="No active sequences" />`;
 
-  const rows = data ?? FIXTURE_ACTIVE_SEQS;
+  const rows = data ?? (standalone ? FIXTURE_ACTIVE_SEQS : []);
   const sel = selected ?? rows[0];
 
   return html`
@@ -2991,11 +3026,11 @@ function SequencesSentView({ standalone }) {
     queryKey: ['sequences', 'sent'],
     queryFn: fetchSentSequences,
     enabled: !standalone,
-    placeholderData: FIXTURE_SENT_SEQS,
+    placeholderData: standalone ? FIXTURE_SENT_SEQS : undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading sent sequences…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load sent sequences" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No completed sequences yet" />`;
 
   const rows = data ?? [];
@@ -3366,7 +3401,7 @@ function SocialQueueView({ standalone }) {
     queryKey: ['social', 'queue'],
     queryFn: fetchSocialQueue,
     enabled: !standalone,
-    placeholderData: FIXTURE_SOCIAL_QUEUE,
+    placeholderData: standalone ? FIXTURE_SOCIAL_QUEUE : undefined,
   });
 
   const qc = useQueryClient();
@@ -3384,7 +3419,7 @@ function SocialQueueView({ standalone }) {
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading social queue…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load social queue" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
   if (!data?.length) return html`<${StateDisplay} state="empty" message="No social posts awaiting approval" />`;
 
   const rows = data ?? [];
@@ -3496,16 +3531,18 @@ function SocialQueueView({ standalone }) {
 }
 
 function SocialScheduleView({ standalone }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['social', 'schedule'],
     queryFn: fetchSocialSchedule,
     enabled: !standalone,
-    placeholderData: FIXTURE_SOCIAL_SCHEDULE,
+    placeholderData: standalone ? FIXTURE_SOCIAL_SCHEDULE : undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading social schedule…" />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
+  if (!data?.length) return html`<${StateDisplay} state="empty" message="No scheduled social posts" />`;
 
-  const rows = data ?? FIXTURE_SOCIAL_SCHEDULE;
+  const rows = data ?? (standalone ? FIXTURE_SOCIAL_SCHEDULE : []);
 
   return html`
     <${TwoWeekCalendar}
@@ -3527,10 +3564,14 @@ function SocialSentView({ standalone }) {
     queryKey: ['social', 'sent'],
     queryFn: fetchSocialSent,
     enabled: !standalone,
-    placeholderData: FIXTURE_SOCIAL_SENT,
+    placeholderData: standalone ? FIXTURE_SOCIAL_SENT : undefined,
   });
 
-  const rows = data ?? FIXTURE_SOCIAL_SENT;
+  if (isLoading) return html`<${StateDisplay} state="loading" message="Loading sent posts…" />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
+  if (!data?.length) return html`<${StateDisplay} state="empty" message="No sent social posts" />`;
+
+  const rows = data ?? (standalone ? FIXTURE_SOCIAL_SENT : []);
 
   return html`
     <div style=${{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -3583,7 +3624,7 @@ const CT_LABEL = { email: 'Email', newsletter: 'Newsletter', social: 'Social', s
 // the four filter pills; the `edited` row proves the edited-status branch; the
 // `quality` field on the email row is a forward-compat exemplar for verdict-cells
 // (ItemQuality — see derive.js typedef at §G-QUALITY). Live mode never uses this.
-const FIXTURE_APPROVALS = [
+export const FIXTURE_APPROVALS = [
   // ── Email (smtp) — awaiting, carries ItemQuality for verdict-cells WP ──────────
   {
     id: 'ap-em-1',
@@ -3709,7 +3750,8 @@ function mapApprovalRow(row) {
 }
 
 // All in-flight approval rows across every channel (newest first).
-async function fetchAllApprovals() {
+export async function fetchAllApprovals() {
+  if (isStandalone()) return FIXTURE_APPROVALS;
   const rows = await loadDrafts(QUEUE_STATUSES);
   return (rows || []).map(mapApprovalRow);
 }
@@ -3733,7 +3775,7 @@ function CrossChannelApprovalsView({ standalone }) {
     queryFn: fetchAllApprovals,
     enabled: !standalone,
     refetchInterval: 30_000,
-    placeholderData: FIXTURE_APPROVALS,
+    placeholderData: standalone ? FIXTURE_APPROVALS : undefined,
   });
 
   const qc = useQueryClient();
@@ -3782,7 +3824,7 @@ function CrossChannelApprovalsView({ standalone }) {
   }, []);
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading approvals…" />`;
-  if (isError) return html`<${StateDisplay} state="error" message="Couldn't load approvals" onRetry=${refetch} />`;
+  if (isError) return html`<${QueueReadErrorState} onRetry=${refetch} />`;
 
   const all = data ?? [];
   const rows = ctFilter === 'all' ? all : all.filter((r) => r.ct === ctFilter);
@@ -4055,7 +4097,7 @@ export function OutboundView({ activeFeature }) {
     queryFn: fetchChannelCounts,
     enabled: !standalone,
     refetchInterval: 30_000,
-    placeholderData: { email: 5, newsletter: 2, sequences: 4, social: 4 },
+    placeholderData: standalone ? { email: 5, newsletter: 2, sequences: 4, social: 4 } : { email: 0, newsletter: 0, sequences: 0, social: 0 },
   });
 
   // Agent counts for the active channel
@@ -4063,7 +4105,7 @@ export function OutboundView({ activeFeature }) {
     queryKey: ['agents', channel],
     queryFn: () => fetchAgentCounts(channel),
     enabled: !standalone,
-    placeholderData: { pa: 4, cmo: 5, cbo: 2 },
+    placeholderData: standalone ? { pa: 4, cmo: 5, cbo: 2 } : { pa: 0, cmo: 0, cbo: 0 },
   });
 
   // Totals for the in-pane ob-header meta line. The design (F-14) also wanted a
