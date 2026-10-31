@@ -8,6 +8,8 @@ import { ChannelLookupError } from './client.js';
 import { isCompanyUpdateDraft } from './founder-only.js';
 import { isOutreachDraft, resolveOutreach } from './outreach.js';
 import type { ResolvedOutreach } from './outreach.js';
+import { resolveVaultNotes } from './vault-notes.js';
+import type { ResolvedVaultNotes } from './vault-notes.js';
 import { SenderSocketError } from './sender-socket.js';
 import type { SenderSocket } from './sender-socket.js';
 import type { MattermostPost, MattermostReaction, OutboxApprovalsConfig } from './types.js';
@@ -62,9 +64,11 @@ export interface ResolvedOutboxApprovals {
   buttons?: { callbackUrl: string; listenHost: string; listenPort: number; secret: string };
   /** Present only when `outreach.enabled` is true. */
   outreach?: ResolvedOutreach;
+  /** Present only when `vaultNotes.enabled` is true. */
+  vaultNotes?: ResolvedVaultNotes;
 }
 
-const OUTBOX_KEYS = new Set(['channel', 'approvers', 'socketPath', 'pollMs', 'bodyMaxChars', 'requestTimeoutMs', 'outboxUrl', 'buttons', 'outreach']);
+const OUTBOX_KEYS = new Set(['channel', 'approvers', 'socketPath', 'pollMs', 'bodyMaxChars', 'requestTimeoutMs', 'outboxUrl', 'buttons', 'outreach', 'vaultNotes']);
 const BUTTON_KEYS = new Set(['callbackUrl', 'listenHost', 'listenPort', 'secret']);
 
 function httpUrl(v: unknown, what: string): URL {
@@ -144,6 +148,10 @@ export function resolveOutboxApprovals(cfg: OutboxApprovalsConfig, where: string
   if (c.outreach !== undefined) {
     const outreach = resolveOutreach(c.outreach, where, out.pollMs);
     if (outreach) out.outreach = outreach;
+  }
+  if (c.vaultNotes !== undefined) {
+    const vaultNotes = resolveVaultNotes(c.vaultNotes, where, out.channel, out.pollMs);
+    if (vaultNotes) out.vaultNotes = vaultNotes;
   }
   return out;
 }

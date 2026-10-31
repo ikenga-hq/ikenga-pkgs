@@ -21,7 +21,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
-    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts src/approvals.test.ts src/cron.test.ts src/schedules.test.ts src/audit.test.ts src/rails.test.ts src/rails.integration.test.ts src/reconnect.test.ts src/run-cap.test.ts src/draft-hash.test.ts src/outbox-approvals.test.ts src/outreach.test.ts src/founder-only.test.ts src/hygiene.test.ts src/policy.test.ts src/media.test.ts src/upload-socket.test.ts"
+    "test": "node --test --import=tsx src/bridge.test.ts src/sessions.test.ts src/approvals.test.ts src/cron.test.ts src/schedules.test.ts src/audit.test.ts src/rails.test.ts src/rails.integration.test.ts src/reconnect.test.ts src/run-cap.test.ts src/draft-hash.test.ts src/outbox-approvals.test.ts src/outreach.test.ts src/founder-only.test.ts src/hygiene.test.ts src/policy.test.ts src/media.test.ts src/upload-socket.test.ts src/vault-notes.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

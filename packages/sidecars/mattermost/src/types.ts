@@ -139,6 +139,19 @@ export interface OutreachConfig {
 }
 
 /**
+ * Founder notes for sender credential changes (contract r7 section 4.10, decision K-7).
+ * Off unless `enabled` is true. Posts a short note when credentials are set, replaced, or cleared.
+ */
+export interface VaultNotesConfig {
+  /** Default false. A block that is present but not enabled changes nothing. */
+  enabled?: boolean;
+  /** Channel name (with or without `#`) or id to post notes to. Defaults to `outboxApprovals.channel`. */
+  channel?: string;
+  /** How often the sender is asked for vault events, ms. Default: the block's `pollMs`. */
+  pollMs?: number;
+}
+
+/**
  * Outbox approvals (approvals contract v1): the bot posts a card in `channel` for every draft the sender announces, and
  * an approver's 👍 / Approve (or 👎 / Reject) decides it. Deny by default: `approvers` must be non-empty and holds
  * Mattermost USER IDS (never usernames). Separate from `allowedUsers` and from the B3 `approvals` block.
@@ -166,6 +179,8 @@ export interface OutboxApprovalsConfig {
   buttons?: { callbackUrl: string; listenPort: number; listenHost?: string; secret: string };
   /** Box outreach: pause card, reply and bounce cards, daily summary. Optional, off by default. */
   outreach?: OutreachConfig;
+  /** Founder notes for sender credential changes (contract r7 section 4.10). Optional, off by default. */
+  vaultNotes?: VaultNotesConfig;
 }
 
 export interface MattermostBridgeConfig {

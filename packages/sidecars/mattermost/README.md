@@ -9,6 +9,7 @@ Mattermost thread is a **Chi run** on an `ikenga-server` daemon, under the bot's
 - **B4**: scheduled posts. Per-bot cron schedules start a read-only Chi run and post the result in a channel.
 - **Outbox approvals** (optional per bot): Mattermost cards for the sender's drafts, approved by a 👍 or a button; see "Outbox approvals (sender drafts)".
 - **Outreach cards** (optional, inside `outboxApprovals`): pause, reply and bounce cards and a daily summary for the box outreach sender; see "Outreach cards (box sender)".
+- **Vault notes** (optional, inside `outboxApprovals`): founder notes for sender credential updates; see "Vault notes (sender credentials)".
 - **Inbound images** (optional per bot, `media`): a listed user's PNG/JPEG attachments are validated and uploaded to GCS by the bridge, and the Claude prompt gets only the public URL; see "Inbound images (`media`)".
 - **Upload socket** (optional, inside `media`): a local renderer asks the bridge to publish a PNG it just rendered; the bridge alone holds the Google credential; see "Upload socket (`media.uploadSocket`)".
 - **B5** (this): safety rails and audit. A per-bot mode ceiling (`maxMode`), an append-only audit log, and an honest table of what is enforced where. The bridge still has no tool beyond the Chi run.
@@ -331,6 +332,35 @@ never stops the next; a sender that is down or silent (the request timeout is th
 - If the bridge's store file is unreadable it is moved aside and the cursor restarts at 0: replies are posted again once.
 - The daily file is attached as it is on disk when the post goes up. If the sender's export has not run yet the summary goes up without it; there is no second attempt that day.
 - The sender writes its export `0600` for its own user; the bridge runs as another, so it can attach the file only if the box makes it group-readable.
+
+## Vault notes (sender credentials)
+
+An optional `vaultNotes` block inside `outboxApprovals`, **off unless `enabled` is `true`**. It implements founder notification for sender credential updates (plan WP-K / decision K-7, approvals contract r7 section 4.10). When users update mail or API credentials via Settings → Integrations, the sender audits the changes and exposes `vault.events`. The bridge polls these events and posts a concise note to the founder.
+
+```json
+"outboxApprovals": {
+  "channel": "royalti-co",
+  "approvers": ["9s65in45np8h98qeatgx7anuoa"],
+  "vaultNotes": {
+    "enabled": true,
+    "channel": "royalti-co",
+    "pollMs": 30000
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Default `false`. When false or omitted, no vault events are queried or posted |
+| `channel` | Channel name (with or without `#`) or 26-character channel ID. Defaults to `outboxApprovals.channel`. Target channel is used because Mattermost channels and channel IDs are supported cleanly across all bot models by `resolveChannelId` |
+| `pollMs` | Polling interval in ms (1000 to 3 600 000). Defaults to `outboxApprovals.pollMs` |
+
+**What each poll does.**
+1. **First run:** On a fresh start with no saved cursor, the bridge reads the current cursor from `vault.events` without replaying historical events.
+2. **Notes per event:** Each subsequent event posts one short note naming who (actor username), action (`set`, `replace`, `clear`), group label, and timestamp. Key values and secret values do not exist in events and are never rendered.
+3. **Escaping:** All text fields go through the same function as outreach cards (`cardField`) (mentions `@channel` / `@here`, markdown links, HTML brackets, and addresses are defanged).
+4. **Fail soft:** An unreachable sender or `vault_unconfigured` response logs once and retries on the next poll. It never crashes the bridge and never posts an error to the channel.
+5. **State:** Persisted to `<dataDir>/vault-notes-<bot>.json` (mode `0600`, atomic write via temp file and rename). Cursor is preserved across bridge restarts. Delivery is at least once, deduplicated by event id: a crash between posting a note and saving state can re-post that one note.
 
 ## Safety rails and audit (B5)
 
