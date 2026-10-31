@@ -2611,7 +2611,7 @@ function NewsletterScheduleView({ standalone }) {
       return nl;
     },
     enabled: !standalone,
-    placeholderData: standalone ? undefined : [],
+    placeholderData: undefined,
   });
 
   if (isLoading) return html`<${StateDisplay} state="loading" message="Loading schedule…" />`;
@@ -4216,3 +4216,21 @@ export function OutboundView({ activeFeature }) {
     </div>
   `;
 }
+
+export {
+  EmailQueueView,
+  EmailScheduleView,
+  EmailSentView,
+  NewsletterQueueView,
+  NewsletterScheduleView,
+  NewsletterSentView,
+  SequencesQueueView,
+  SequencesActiveView,
+  SequencesSentView,
+  SocialQueueView,
+  SocialScheduleView,
+  SocialSentView,
+  CrossChannelApprovalsView,
+  ViewBody,
+};
+

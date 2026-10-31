@@ -8,6 +8,13 @@ import assert from 'node:assert/strict';
 // Register ESM loader for https://esm.sh/ imports
 register('./test-loader.mjs', import.meta.url);
 
+import {
+  setMockQueryConfig,
+  getQueryCalls,
+  getLastQueryOptions,
+  resetMockQuery,
+} from './test-loader.mjs';
+
 const {
   loadDrafts,
   setDbQueryForTesting,
@@ -29,6 +36,20 @@ const {
   fetchAllApprovals,
   fetchChannelCounts,
   fetchAgentCounts,
+  EmailQueueView,
+  EmailScheduleView,
+  EmailSentView,
+  NewsletterQueueView,
+  NewsletterScheduleView,
+  NewsletterSentView,
+  SequencesQueueView,
+  SequencesActiveView,
+  SequencesSentView,
+  SocialQueueView,
+  SocialScheduleView,
+  SocialSentView,
+  CrossChannelApprovalsView,
+  ViewBody,
   FIXTURE_EMAIL_QUEUE,
   FIXTURE_EMAIL_SCHEDULE,
   FIXTURE_EMAIL_SENT,
@@ -148,6 +169,7 @@ test('2. Mounted in shell + DB read error: throws, never returns fixture rows, s
     ['fetchSocialSent', fetchSocialSent],
     ['fetchAllApprovals', fetchAllApprovals],
     ['fetchChannelCounts', fetchChannelCounts],
+    ['fetchAgentCounts', () => fetchAgentCounts('email')],
   ];
 
   for (const [name, fn] of fetchers) {
@@ -222,3 +244,123 @@ test('3. Mounted in shell + DB read success: returns real rows (or empty array),
   const emptyApprovals = await fetchAllApprovals();
   assert.deepEqual(emptyApprovals, [], 'empty database returns [] for approvals, not fixtures');
 });
+
+test('4. Error-path test for fetchAgentCounts: throws on DB read error when mounted, returns fixtures in standalone', async () => {
+  // A. Standalone: always returns fixture agent counts { pa: 4, cmo: 5, cbo: 2 }
+  setupStandalone();
+  setDbQueryForTesting(() => {
+    throw new Error('DB should never be queried in standalone mode');
+  });
+  for (const ch of ['email', 'newsletter', 'sequences', 'social']) {
+    const counts = await fetchAgentCounts(ch);
+    assert.deepEqual(counts, { pa: 4, cmo: 5, cbo: 2 }, `standalone returns fixture counts for ${ch}`);
+  }
+
+  // B. Mounted in shell + DB error: must throw, never catch and return fixture counts
+  setupMounted();
+  const READ_ERROR = new Error("Database query refused: owner-only read in shared project (E_OWNER_ONLY)");
+  setDbQueryForTesting(() => Promise.reject(READ_ERROR));
+  for (const ch of ['email', 'newsletter', 'sequences', 'social']) {
+    await assert.rejects(
+      () => fetchAgentCounts(ch),
+      /E_OWNER_ONLY/,
+      `fetchAgentCounts('${ch}') propagates DB read error when mounted`
+    );
+  }
+});
+
+const ALL_ERROR_VIEWS = [
+  { name: 'EmailQueueView', component: EmailQueueView, channel: 'email', view: 'queue' },
+  { name: 'EmailScheduleView', component: EmailScheduleView, channel: 'email', view: 'schedule' },
+  { name: 'EmailSentView', component: EmailSentView, channel: 'email', view: 'sent' },
+  { name: 'NewsletterQueueView', component: NewsletterQueueView, channel: 'newsletter', view: 'queue' },
+  { name: 'NewsletterScheduleView', component: NewsletterScheduleView, channel: 'newsletter', view: 'schedule' },
+  { name: 'NewsletterSentView', component: NewsletterSentView, channel: 'newsletter', view: 'sent' },
+  { name: 'SequencesQueueView', component: SequencesQueueView, channel: 'sequences', view: 'queue' },
+  { name: 'SequencesActiveView', component: SequencesActiveView, channel: 'sequences', view: 'schedule' },
+  { name: 'SequencesSentView', component: SequencesSentView, channel: 'sequences', view: 'sent' },
+  { name: 'SocialQueueView', component: SocialQueueView, channel: 'social', view: 'queue' },
+  { name: 'SocialScheduleView', component: SocialScheduleView, channel: 'social', view: 'schedule' },
+  { name: 'SocialSentView', component: SocialSentView, channel: 'social', view: 'sent' },
+  { name: 'CrossChannelApprovalsView', component: CrossChannelApprovalsView, channel: null, view: 'approvals' },
+];
+
+test('5. View wiring when mounted + isError:true renders QueueReadErrorState and no fixture data for all 13 views', () => {
+  setupMounted();
+  setMockQueryConfig({ isError: true });
+
+  for (const { name, component, channel, view } of ALL_ERROR_VIEWS) {
+    // 1. Direct view component rendering
+    const vnode = component({ standalone: false });
+    const vnodeStr = JSON.stringify(vnode);
+
+    assert.ok(
+      vnodeStr.includes("Can't read this project's queue here."),
+      `${name} renders exact error state text when isError:true`
+    );
+    assert.ok(
+      vnodeStr.includes("Open Outbox (/outbox/approvals)"),
+      `${name} renders Open Outbox button in error state`
+    );
+    assert.ok(
+      vnode.values && vnode.values.includes(QueueReadErrorState),
+      `${name} returns QueueReadErrorState element`
+    );
+
+    // Verify NO fixture content leaks into the rendered error view
+    assert.ok(!vnodeStr.includes("Valentim de Carvalho"), `${name} does not leak fixture names`);
+    assert.ok(!vnodeStr.includes("Schema patches that unblocked"), `${name} does not leak fixture subjects`);
+    assert.ok(!vnodeStr.includes("Investor Update"), `${name} does not leak fixture newsletter`);
+    assert.ok(!vnodeStr.includes("Lead Engineer"), `${name} does not leak fixture sequence roles`);
+
+    // 2. ViewBody dispatcher routing
+    const bodyVnode = ViewBody({ channel, view, standalone: false });
+    const bodyStr = JSON.stringify(bodyVnode);
+    assert.ok(
+      bodyStr.includes(name),
+      `ViewBody dispatches to ${name} for channel=${channel}, view=${view}`
+    );
+  }
+});
+
+test('6. useQuery options: mounted views have enabled:true and NO fixture placeholderData; standalone allows fixtures', () => {
+  for (const { name, component } of ALL_ERROR_VIEWS) {
+    // A. Mounted semantics: enabled is true, NO fixture placeholderData
+    setupMounted();
+    setMockQueryConfig({ isError: false });
+    component({ standalone: false });
+    const callsMounted = getQueryCalls();
+    assert.ok(callsMounted.length > 0, `${name} invoked useQuery when mounted`);
+    const primaryMounted = callsMounted[0];
+    assert.equal(
+      primaryMounted.enabled,
+      true,
+      `${name} has enabled=true when mounted`
+    );
+    assert.equal(
+      primaryMounted.placeholderData,
+      undefined,
+      `${name} has NO fixture placeholderData when mounted`
+    );
+
+    // B. Standalone semantics: enabled is false (no host DB calls), fixture placeholderData allowed
+    setupStandalone();
+    setMockQueryConfig({ isError: false });
+    component({ standalone: true });
+    const callsStandalone = getQueryCalls();
+    assert.ok(callsStandalone.length > 0, `${name} invoked useQuery in standalone`);
+    const primaryStandalone = callsStandalone[0];
+    assert.equal(
+      primaryStandalone.enabled,
+      false,
+      `${name} has enabled=false in standalone`
+    );
+    if (name !== 'NewsletterScheduleView') {
+      assert.ok(
+        primaryStandalone.placeholderData !== undefined,
+        `${name} allows fixture placeholderData in standalone`
+      );
+    }
+  }
+});
+
