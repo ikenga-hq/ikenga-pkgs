@@ -1,5 +1,15 @@
 # @ikenga/pkg-outbound
 
+## 0.3.3
+
+### Patch Changes
+
+- [#174](https://github.com/ikenga-hq/ikenga-pkgs/pull/174) [`749b1dc`](https://github.com/ikenga-hq/ikenga-pkgs/commit/749b1dc3cb83f01011d59e4d4f72a75daed4922c) Thanks [@nedjamez](https://github.com/nedjamez)! - Export outbound view subcomponents for test harness and fix NewsletterScheduleView placeholderData to prevent placeholder data leakage when mounted.
+
+- [#173](https://github.com/ikenga-hq/ikenga-pkgs/pull/173) [`732fb2f`](https://github.com/ikenga-hq/ikenga-pkgs/commit/732fb2f724924382a4544a795405e8a8ee22266b) Thanks [@nedjamez](https://github.com/nedjamez)! - Never show fixture/demo data when mounted in the shell and database read fails (e.g. shared project refusing owner-only DB reads). Fixtures are only used in standalone dev (`isStandalone()` true). When mounted and read fails, surface an error state with "Can't read this project's queue here." and an action navigating host to `/outbox/approvals`.
+
+- [#175](https://github.com/ikenga-hq/ikenga-pkgs/pull/175) [`45421c5`](https://github.com/ikenga-hq/ikenga-pkgs/commit/45421c5c889e371eb33e48f13c67ce68af5c963d) Thanks [@nedjamez](https://github.com/nedjamez)! - Surface permission and DB read errors in secondary views, sequence stubs, sidebar badges, and fast-fail QueryClient retry predicate.
+
 ## 0.3.2
 
 ### Patch Changes
