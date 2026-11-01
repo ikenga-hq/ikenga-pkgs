@@ -1,5 +1,11 @@
 # @ikenga/pkg-sales
 
+## 0.5.1
+
+### Patch Changes
+
+- [#176](https://github.com/ikenga-hq/ikenga-pkgs/pull/176) [`f216f70`](https://github.com/ikenga-hq/ikenga-pkgs/commit/f216f704b96d3f783bb3be20b5104f91cc239d36) Thanks [@nedjamez](https://github.com/nedjamez)! - Shared bridge: a refused `host.dbQuery` now throws an error carrying the host's `reason` and `code`, so a pkg can tell a permission refusal from other failures. Also adds a test hook (`setBridgeAppForTesting`). Moves the change made in outbound's vendored copy (#175) into `@ikenga/pkg-runtime`, the source every pkg vendors, which CI's dist drift check requires.
+
 ## 0.5.0
 
 ### Minor Changes
