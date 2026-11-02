@@ -158,6 +158,16 @@ test('attachments: https-only list, names, proposal from images, patch + consequ
   assert.match(consequence(inv, { when: 'now', attachments: 1 }), /\+ 1 attachment · via SMTP/);
 });
 
+test('queue post with a stale round-1 text edit is read-only (shell: stale_edited_body)', () => {
+  const r = fixtureRows(NOW).find((x) => x.id === 'fx-queue-li');
+  const stale = normalizeRow({ ...r, edited_json: JSON.stringify({ body: 'an old edit' }) });
+  assert.equal(stale.staleEdit, true);
+  const c = editCaps(stale);
+  assert.equal(c.body.edit, false);
+  assert.match(c.body.note, /re-queue/);
+  assert.equal(normalizeRow(r).staleEdit, false);
+});
+
 test('queue posts: one image, IG needs one', () => {
   const q = buildInbox(fixtureRows(NOW)).find((i) => i.id === 'fx-queue-li');
   assert.equal(q.sourceBound, true);

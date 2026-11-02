@@ -221,6 +221,9 @@ export function normalizeRow(rawRow) {
     hashtags,
     suggestedTags,
     sourceBound: kind === 'social' && !!item.social && typeof item.social === 'object',
+    // A queue post that still carries an older text edit in edited_json can't be
+    // edited at the source (the shell refuses it: stale_edited_body).
+    staleEdit: kind === 'social' && !!item.social && typeof item.social === 'object' && typeof edited.body === 'string' && edited.body !== item.body,
     recipient: item.recipient ?? null,
     recipientEmail: item.recipientEmail ?? null,
     // A sequence row is ONE step to ONE contact — seq.recipients is the enrolment size, not this send's audience.
@@ -390,6 +393,10 @@ export function editCaps(it) {
       // D-15: edits rewrite the social-queue entry (item.social) and re-derive
       // the post, so the sender's check passes. One image (media_url); X has
       // no first comment; threads aren't editable this round.
+      if (it.staleEdit) {
+        const t = 'This post has an older text edit the queue can\u2019t take — reject it and re-queue to change it.';
+        return { subject: no(), subjectB: no(), preheader: no(), attachments: no(), body: no(t), images: no(t), firstComment: no(t), schedule: no(t), maxImages: 1 };
+      }
       if (thread) {
         const t = 'Thread posts from the social queue aren\u2019t editable here yet.';
         return { subject: no(), subjectB: no(), preheader: no(), attachments: no(), body: no(t), images: no(t), firstComment: no(t), schedule: no(t), maxImages: 1 };
