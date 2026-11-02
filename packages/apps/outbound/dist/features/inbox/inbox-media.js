@@ -108,7 +108,7 @@ export function Lightbox({ images, index = 0, onClose, editable = false, onChang
 
 // ── Media editor (attached images) ───────────────────────────────────────────
 
-export function MediaEditor({ images, onChange, readOnly = false, platforms = [], label = 'Images', onOpen }) {
+export function MediaEditor({ images, onChange, readOnly = false, platforms = [], label = 'Images', onOpen, max }) {
   const [url, setUrl] = useState('');
   const [adding, setAdding] = useState(false);
   const [err, setErr] = useState(null);
@@ -120,6 +120,7 @@ export function MediaEditor({ images, onChange, readOnly = false, platforms = []
     const u = url.trim();
     if (!/^https?:\/\//i.test(u)) { setErr('Use an http(s) image URL'); return; }
     if (images.includes(u)) { setErr('Already attached'); return; }
+    if (max && images.length >= max) { setErr(`At most ${max} image${max === 1 ? '' : 's'} here`); return; }
     onChange([...images, u]);
     setUrl(''); setErr(null); setAdding(false);
   };
@@ -139,7 +140,8 @@ export function MediaEditor({ images, onChange, readOnly = false, platforms = []
         <${Icon} name="image" size=${13} /><span>${label}</span>
         <span class="ibx-muted">${images.length || 'none'}${images.length > 1 ? ' · drag to reorder' : ''}</span>
         <span class="ibx-spacer"></span>
-        ${readOnly ? null : html`<button type="button" class="ibx-btn is-ghost" onClick=${() => setAdding((a) => !a)}><${Icon} name="plus" size=${13} /> Attach URL</button>`}
+        ${max ? html`<span class="ibx-muted">max ${max}</span>` : null}
+        ${readOnly || (max && images.length >= max) ? null : html`<button type="button" class="ibx-btn is-ghost" onClick=${() => setAdding((a) => !a)}><${Icon} name="plus" size=${13} /> Attach URL</button>`}
       </div>
       ${images.length ? html`
         <div class="ibx-media-grid">

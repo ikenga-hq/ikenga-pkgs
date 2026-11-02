@@ -130,6 +130,38 @@ export function allImages(it) {
   return out;
 }
 
+// ── Attachments (D-16) ───────────────────────────────────────────────────────
+
+/** [{url, name?}] → clean list (https only, deduped, ≤20). */
+export function readAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list) {
+    const url = typeof a === 'string' ? a : a?.url;
+    if (typeof url !== 'string' || !/^https:\/\//i.test(url.trim()) || out.some((x) => x.url === url.trim())) continue;
+    const name = typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : undefined;
+    out.push(name ? { url: url.trim(), name } : { url: url.trim() });
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+/** Filename the sender will use: name, else the last URL path segment, else attachment-N. */
+export function attachmentName(a, i = 0) {
+  if (a?.name) return a.name;
+  try {
+    const seg = decodeURIComponent(new URL(a.url).pathname.split('/').filter(Boolean).pop() ?? '');
+    if (seg) return seg;
+  } catch { /* fall through */ }
+  return `attachment-${i + 1}`;
+}
+
+/** What the Outbox proposes to attach: the saved list, else the draft's images (shown, so they go out on approve). */
+export function proposedAttachments(it) {
+  if (it.attachments.length) return it.attachments;
+  return it.media.images.filter((u) => /^https:/i.test(u)).map((url) => ({ url }));
+}
+
 // ── Normalise ────────────────────────────────────────────────────────────────
 
 const KIND_FROM_CT = { email: 'email', newsletter: 'newsletter', social: 'social', sequences: 'sequence' };
@@ -189,6 +221,9 @@ export function normalizeRow(rawRow) {
     hashtags,
     suggestedTags,
     sourceBound: kind === 'social' && !!item.social && typeof item.social === 'object',
+    // A queue post that still carries an older text edit in edited_json can't be
+    // edited at the source (the shell refuses it: stale_edited_body).
+    staleEdit: kind === 'social' && !!item.social && typeof item.social === 'object' && typeof edited.body === 'string' && edited.body !== item.body,
     recipient: item.recipient ?? null,
     recipientEmail: item.recipientEmail ?? null,
     // A sequence row is ONE step to ONE contact — seq.recipients is the enrolment size, not this send's audience.
@@ -221,6 +256,7 @@ export function normalizeRow(rawRow) {
     delivery: row.delivery_status ?? null,
     rejectReason: row.reject_reason ?? null,
     quality: item.quality ?? null,
+    attachments: readAttachments(edited.attachments !== undefined ? edited.attachments : item.attachments),
     media,
     inlineImages: kind === 'social' ? [] : inlineImages(body),
     edited: row.status === 'edited' || (edited && Object.keys(edited).length > 0),
@@ -233,7 +269,7 @@ export function normalizeRow(rawRow) {
     // Original (pre-edit) values, so the editor can show "edited" and build minimal patches.
     original: { subject: item.subject ?? '', body: item.body ?? '' },
   };
-  it.siblings = [{ id: it.id, platform: it.platform, status: it.status, body: it.body, errorText: it.errorText, scheduledAt: it.scheduledAt, host: it.host }];
+  it.siblings = [{ id: it.id, platform: it.platform, status: it.status, body: it.body, errorText: it.errorText, scheduledAt: it.scheduledAt, host: it.host, thread: media.kind === 'thread', sourceBound: it.sourceBound }];
   return it;
 }
 
@@ -305,6 +341,7 @@ export function approveBlockReason(it, live = {}) {
       if (PLATFORM_CAPS[p] && len > PLATFORM_CAPS[p]) return `${PLATFORM_LABEL[p] ?? p} is over its ${PLATFORM_CAPS[p]}-char cap by ${len - PLATFORM_CAPS[p]}`;
       if (p === 'instagram' && !images.length) return 'Instagram needs at least one image';
       if (PLATFORM_MAX_IMAGES[p] && images.length > PLATFORM_MAX_IMAGES[p]) return `${PLATFORM_LABEL[p] ?? p} takes at most ${PLATFORM_MAX_IMAGES[p]} images`;
+      if (s.sourceBound && images.length > 1) return 'Social-queue posts carry one image — remove the extras';
     }
   }
   return null;
@@ -353,24 +390,38 @@ export function editCaps(it) {
   if (it.kind === 'social') {
     const thread = it.media.kind === 'thread';
     if (it.sourceBound) {
-      const fromQueue = 'Comes from the social-queue entry — the sender rejects other changes, so edit it there.';
+      // D-15: edits rewrite the social-queue entry (item.social) and re-derive
+      // the post, so the sender's check passes. One image (media_url); X has
+      // no first comment; threads aren't editable this round.
+      if (it.staleEdit) {
+        const t = 'This post has an older text edit the queue can\u2019t take — reject it and re-queue to change it.';
+        return { subject: no(), subjectB: no(), preheader: no(), attachments: no(), body: no(t), images: no(t), firstComment: no(t), schedule: no(t), maxImages: 1 };
+      }
+      if (thread) {
+        const t = 'Thread posts from the social queue aren\u2019t editable here yet.';
+        return { subject: no(), subjectB: no(), preheader: no(), attachments: no(), body: no(t), images: no(t), firstComment: no(t), schedule: no(t), maxImages: 1 };
+      }
+      const onlyX = it.siblings.every((s) => s.platform === 'x');
       return {
-        subject: no(), subjectB: no(), preheader: no(),
-        body: thread ? no('This post is a thread built from the social-queue entry — edit it there.') : yes,
-        images: no(fromQueue), firstComment: no(fromQueue), schedule: no(fromQueue),
+        subject: no(), subjectB: no(), preheader: no(), attachments: no(),
+        body: yes, images: yes, schedule: yes, maxImages: 1,
+        firstComment: onlyX ? no('X posts have no first comment.') : yes,
+        note: 'Edits update the social-queue entry too.',
       };
     }
     return {
-      subject: no(), subjectB: no(), preheader: no(),
+      subject: no(), subjectB: no(), preheader: no(), attachments: no(),
       body: thread ? no('Thread posts are sent from their thread segments, not this text.') : yes,
       images: thread ? no('Images of a thread live on its posts.') : yes,
       firstComment: yes, schedule: yes,
     };
   }
-  const attachNote = `${PROVIDER_LABEL[it.provider] ?? 'This'} sends don't attach images — shown for reference only.`;
+  const attachable = it.provider === 'smtp' || it.provider === 'resend';
   return {
     subject: yes, body: yes, schedule: yes,
-    images: no(attachNote),
+    // D-16: SMTP/Resend attach exactly the list shown at approve; listmonk can't.
+    attachments: attachable ? yes : no(),
+    images: no(),
     firstComment: no(),
     // A/B subjects were dropped (listmonk has no native A/B test) — never offered.
     subjectB: no(),
@@ -491,13 +542,14 @@ export function audienceCount(it) {
 }
 
 /** Full consequence sentence (never abbreviated — approve-gate business rule). */
-export function consequence(it, { when, undoMs } = {}) {
+export function consequence(it, { when, undoMs, attachments = 0 } = {}) {
   const count = audienceCount(it);
   const who = it.kind === 'social'
     ? `posts to ${it.platforms.map((p) => PLATFORM_LABEL[p] ?? p).join(', ')}`
     : `sends to ${recipientLabel(it)}`;
   const parts = [who];
   if (count != null && it.kind !== 'newsletter') parts.push(`${count} recipient${count === 1 ? '' : 's'}`);
+  if (attachments) parts.push(`+ ${attachments} attachment${attachments === 1 ? '' : 's'}`);
   parts.push(it.kind === 'social' ? 'via Buffer' : `via ${PROVIDER_LABEL[it.provider] ?? it.provider ?? 'provider'}`);
   parts.push(when ?? 'now');
   parts.push(`undo ${Math.round((undoMs ?? it.undoMs ?? 10_000) / 1000)}s`);
@@ -506,6 +558,8 @@ export function consequence(it, { when, undoMs } = {}) {
 
 // ── Edit patches (G-CONTRACT: subject, body, subjectB, preheader, firstComment, hashtags, media, scheduledIso) ──
 
+export const attEq = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length
+  && a.every((x, i) => x.url === b[i].url && (x.name ?? '') === (b[i].name ?? ''));
 const arrEq = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Minimal patch from the editor `draft` vs the item as loaded. Only changed
@@ -522,6 +576,7 @@ export function buildPatch(it, draft) {
     p.media = { kind: draft.images.length > 1 ? 'carousel' : draft.images.length ? 'single' : 'single', imageUrls: draft.images };
     if (it.media.kind === 'thread') p.media.kind = 'thread';
   }
+  if (draft.attachments !== undefined && !attEq(draft.attachments, it.attachments)) p.attachments = draft.attachments;
   if (draft.scheduledAt !== undefined && draft.scheduledAt !== it.scheduledAt) {
     p.scheduledIso = draft.scheduledAt == null ? null : new Date(draft.scheduledAt).toISOString();
   }
@@ -590,6 +645,15 @@ export function fixtureRows(now = Date.now()) {
       recipientsList: [{ name: 'Accounts', email: 'accounts@lagossound.ng' }, { name: 'Tolu Bello', email: 'tolu@lagossound.ng' }], replyTo: 'billing@royalti.io',
       body: 'Hello,\n\nA friendly reminder that invoice #1042 ($1,850) fell due on Oct 28. You can pay from the link in the original invoice.\n\nThanks,\nRuby',
       media: { kind: 'single', imageUrls: [IMG('photo-1554224155-6726b3ff858f', 800, 1000)] },
+      attachments: [{ url: 'https://files.royalti.io/invoices/1042.pdf', name: 'Invoice-1042.pdf' }],
     }, { agent: 'cbo' }),
+    // A social-queue post (item.social): edits rewrite the queue entry (D-15).
+    fx('fx-queue-li', 'awaiting', 'buffer', {
+      kind: 'social', channel: 'buffer', platform: 'linkedin', recipient: 'linkedin:royalti', channelId: 'ch-li',
+      body: 'Royalti now ingests DDEX ERN 4.3 statements natively. No more CSV round-trips for your distributor reports. #royalti',
+      firstComment: 'Docs → royalti.io/docs/ddex',
+      media: { kind: 'single', imageUrls: [IMG('photo-1470225620780-dba8ba36b745')] },
+      social: { platform: 'linkedin', account: 'royalti', content: 'Royalti now ingests DDEX ERN 4.3 statements natively. No more CSV round-trips for your distributor reports. #royalti\n---firstcomment---\nDocs → royalti.io/docs/ddex', media_url: IMG('photo-1470225620780-dba8ba36b745'), scheduled_for: null },
+    }, { agent: 'cmo' }, { at: now + 30 * H }),
   ];
 }

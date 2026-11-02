@@ -6,6 +6,7 @@ import {
   toSnakeRow, normalizeRow, buildInbox, readMedia, inlineImages, allImages,
   urgencyOf, applyFilter, sortItems, sectionize, facetCounts, buildPatch,
   approveBlockReason, consequence, fixtureRows, EMPTY_FILTER, hashtagsIn, addHashtag, removeHashtag, editCaps,
+  readAttachments, attachmentName, proposedAttachments,
 } from '../dist/lib/inbox-model.js';
 
 const NOW = Date.parse('2026-11-02T12:00:00Z');
@@ -71,9 +72,9 @@ test('urgency sections: failed > overdue > today > week > later > unscheduled > 
 test('filter by kind / destination / agent / status / media / search', () => {
   const items = buildInbox(fixtureRows(NOW));
   const c = facetCounts(items, NOW);
-  assert.equal(c.kinds.social, 1);
+  assert.equal(c.kinds.social, 2);
   assert.ok(c.dests.instagram >= 1 && c.dests.smtp >= 2);
-  assert.equal(applyFilter(items, { ...EMPTY_FILTER, kinds: ['social'] }, NOW).length, 1);
+  assert.equal(applyFilter(items, { ...EMPTY_FILTER, kinds: ['social'] }, NOW).length, 2);
   assert.equal(applyFilter(items, { ...EMPTY_FILTER, dests: ['listmonk'] }, NOW)[0].kind, 'newsletter');
   assert.ok(applyFilter(items, { ...EMPTY_FILTER, agents: ['cbo'] }, NOW).every((i) => i.agent === 'cbo'));
   assert.ok(applyFilter(items, { ...EMPTY_FILTER, media: true }, NOW).length >= 3);
@@ -121,7 +122,8 @@ test('editCaps mirror what the sender sends', () => {
   const nl = items.find((i) => i.kind === 'newsletter');
   const so = items.find((i) => i.kind === 'social');
   assert.equal(editCaps(email).body.edit, true);
-  assert.equal(editCaps(email).images.edit, false, 'SMTP attaches no images');
+  assert.equal(editCaps(email).attachments.edit, true, 'SMTP attaches the list shown at approve (D-16)');
+  assert.equal(editCaps(nl).attachments.edit, false, 'listmonk cannot attach');
   assert.equal(editCaps(nl).preheader.edit, true, 'listmonk prepends the preheader to HTML bodies');
   assert.equal(editCaps({ ...nl, bodyFormat: 'text' }).preheader.edit, false, 'no preview line on plain text');
   assert.equal(editCaps(nl).subjectB.edit, false, 'A/B subject dropped');
@@ -132,10 +134,43 @@ test('editCaps mirror what the sender sends', () => {
   const bound = normalizeRow(row({ row: { channel: 'buffer' }, item: { kind: 'social', channel: 'buffer', platform: 'linkedin', body: 'B', social: { platform: 'linkedin', account: 'royalti', content: 'B', media_url: null, scheduled_for: null } } }));
   assert.equal(bound.sourceBound, true);
   const c = editCaps(bound);
+  // D-15: queue posts are edited at the source (item.social) — one image.
   assert.equal(c.body.edit, true);
-  assert.equal(c.images.edit, false);
-  assert.equal(c.firstComment.edit, false);
-  assert.equal(c.schedule.edit, false);
+  assert.equal(c.images.edit, true);
+  assert.equal(c.maxImages, 1);
+  assert.equal(c.firstComment.edit, true);
+  assert.equal(c.schedule.edit, true);
   const thread = normalizeRow(row({ row: { channel: 'buffer' }, item: { kind: 'social', channel: 'buffer', body: 'B', media: { kind: 'thread', thread: [{ text: 'a' }, { text: 'b' }] }, social: { platform: 'x', account: 'royalti', content: 'a b', media_url: null, scheduled_for: null } } }));
   assert.equal(editCaps(thread).body.edit, false, 'a thread post ignores edited body');
+});
+
+test('attachments: https-only list, names, proposal from images, patch + consequence', () => {
+  assert.deepEqual(readAttachments(['https://a/x.pdf', { url: 'http://b/y.pdf' }, { url: 'https://a/x.pdf' }, { url: 'https://c/z.png', name: ' Z ' }]),
+    [{ url: 'https://a/x.pdf' }, { url: 'https://c/z.png', name: 'Z' }]);
+  assert.equal(attachmentName({ url: 'https://h/files/Q3%20statement.pdf' }), 'Q3 statement.pdf');
+  assert.equal(attachmentName({ url: 'https://h/' }, 2), 'attachment-3');
+  const items = buildInbox(fixtureRows(NOW));
+  const inv = items.find((i) => i.id === 'fx-unsched');
+  assert.deepEqual(proposedAttachments(inv), [{ url: 'https://files.royalti.io/invoices/1042.pdf', name: 'Invoice-1042.pdf' }], 'saved list wins');
+  const fail = items.find((i) => i.id === 'fx-fail');
+  assert.deepEqual(proposedAttachments({ ...fail, media: { ...fail.media, images: ['https://cdn/a.jpg'] } }), [{ url: 'https://cdn/a.jpg' }], 'draft images are proposed');
+  assert.deepEqual(buildPatch(inv, { attachments: [] }), { attachments: [] });
+  assert.match(consequence(inv, { when: 'now', attachments: 1 }), /\+ 1 attachment · via SMTP/);
+});
+
+test('queue post with a stale round-1 text edit is read-only (shell: stale_edited_body)', () => {
+  const r = fixtureRows(NOW).find((x) => x.id === 'fx-queue-li');
+  const stale = normalizeRow({ ...r, edited_json: JSON.stringify({ body: 'an old edit' }) });
+  assert.equal(stale.staleEdit, true);
+  const c = editCaps(stale);
+  assert.equal(c.body.edit, false);
+  assert.match(c.body.note, /re-queue/);
+  assert.equal(normalizeRow(r).staleEdit, false);
+});
+
+test('queue posts: one image, IG needs one', () => {
+  const q = buildInbox(fixtureRows(NOW)).find((i) => i.id === 'fx-queue-li');
+  assert.equal(q.sourceBound, true);
+  assert.equal(approveBlockReason(q), null);
+  assert.match(approveBlockReason(q, { images: ['https://a/1.png', 'https://a/2.png'] }), /one image/);
 });

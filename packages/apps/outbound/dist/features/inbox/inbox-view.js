@@ -20,7 +20,7 @@ import { BrandIcon, brandTitle } from '../../lib/brand-icons.js';
 import {
   buildInbox, normalizeRow, applyFilter, sortItems, sectionize, facetCounts, buildPatch, approveBlockReason,
   consequence, recipientLabel, displayStatus, urgencyOf, allImages, destinationsOf, isApprovable,
-  textForPlatform, hashtagsIn, addHashtag, removeHashtag, editCaps, fixtureRows, EMPTY_FILTER, KINDS, KIND_LABEL, PROVIDERS, PROVIDER_LABEL,
+  textForPlatform, hashtagsIn, addHashtag, removeHashtag, editCaps, proposedAttachments, attachmentName, attEq, fixtureRows, EMPTY_FILTER, KINDS, KIND_LABEL, PROVIDERS, PROVIDER_LABEL,
   PLATFORMS, PLATFORM_LABEL, PLATFORM_CAPS, SORTS, ACTIVE_STATUSES,
 } from '../../lib/inbox-model.js';
 import { newsletterHistorySignals } from '../../lib/derive.js';
@@ -415,16 +415,22 @@ function initialDraft(it) {
   return {
     subject: it.subject, body: it.body, bodies, subjectB: it.subjectB ?? '', preheader: it.preheader ?? '',
     firstComment: it.firstComment ?? '', images: it.media.images.slice(), scheduledAt: it.scheduledAt,
+    attachments: proposedAttachments(it),
   };
 }
 
 /** Patches to persist per row id. Social: each sibling gets its own body;
  *  shared fields (hashtags, images, first comment, schedule) go to all. */
-function patchesFor(it, d) {
+function patchesFor(it, d, { approve = false } = {}) {
   const out = {};
   if (it.kind !== 'social') {
     const caps = editCaps(it);
+    // D-16: attachments shown in the Outbox go out on approve; before that they
+    // only count as an edit when the operator changed the proposed list.
+    const att = caps.attachments.edit && (!attEq(d.attachments, proposedAttachments(it)) || (approve && d.attachments.length))
+      ? { attachments: d.attachments } : {};
     const p = buildPatch(it, {
+      ...att,
       subject: d.subject, body: d.body,
       ...(caps.subjectB.edit ? { subjectB: d.subjectB } : {}),
       ...(caps.preheader.edit ? { preheader: d.preheader } : {}),
@@ -442,7 +448,9 @@ function patchesFor(it, d) {
     ...(caps.schedule.edit ? { scheduledAt: d.scheduledAt } : {}),
   });
   for (const s of it.siblings) {
+    if (s.sourceBound && s.thread) continue; // not editable this round (D-15)
     const p = { ...shared };
+    if (s.sourceBound && s.platform === 'x') delete p.firstComment; // X has no first comment
     if (d.bodies[s.id] !== undefined && d.bodies[s.id] !== s.body) p.body = d.bodies[s.id];
     if (Object.keys(p).length) out[s.id] = p;
   }
@@ -466,6 +474,54 @@ function HashtagEditor({ text, onText, suggested = [], readOnly }) {
       onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); add(); } }} onBlur=${() => add()} />`}
     ${!readOnly && sugg.length ? html`<span class="ibx-tag-sugg"><span class="ibx-muted">suggested</span>${sugg.map((t) => html`<button key=${t} type="button" class="ibx-facet" onClick=${() => add(t)}>+ ${t}</button>`)}</span>` : null}
   </div>`;
+}
+
+const IMG_EXT = /\.(png|jpe?g|gif|webp|avif|svg)(\?|#|$)/i;
+
+// D-16 — files attached to an SMTP / Resend email. Whatever this list shows
+// when you approve is exactly what the sender attaches (fetched over https at
+// send time, any type, 10 MB total).
+function AttachmentEditor({ list, onChange, readOnly, openImages }) {
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [err, setErr] = useState(null);
+  const add = () => {
+    const u = url.trim();
+    if (!/^https:\/\//i.test(u)) { setErr('Use an https URL — the sender only fetches https'); return; }
+    if (list.some((a) => a.url === u)) { setErr('Already attached'); return; }
+    if (list.length >= 20) { setErr('At most 20 attachments'); return; }
+    onChange([...list, name.trim() ? { url: u, name: name.trim() } : { url: u }]);
+    setUrl(''); setName(''); setErr(null); setAdding(false);
+  };
+  const imgs = list.filter((a) => IMG_EXT.test(a.url)).map((a) => a.url);
+  return html`<section class="ibx-media">
+    <div class="ibx-section-head"><${Icon} name="link" size=${13} /><span>Attachments</span>
+      <span class="ibx-muted">${list.length ? `${list.length} · sent with the email when you approve · 10 MB total` : 'none'}</span>
+      <span class="ibx-spacer"></span>
+      ${readOnly ? null : html`<button type="button" class="ibx-btn is-ghost" onClick=${() => setAdding((a) => !a)}><${Icon} name="plus" size=${13} /> Attach by URL</button>`}
+    </div>
+    ${list.length ? html`<ul class="ibx-att-list">${list.map((a, i) => html`
+      <li key=${a.url} class="ibx-att">
+        ${IMG_EXT.test(a.url)
+          ? html`<button type="button" class="ibx-att-thumb" onClick=${() => openImages(imgs, imgs.indexOf(a.url))}><${Img} src=${a.url} /></button>`
+          : html`<span class="ibx-att-icon"><${Icon} name="file-text" size=${16} /></span>`}
+        <span class="ibx-att-main">
+          ${readOnly ? html`<b>${attachmentName(a, i)}</b>` : html`<input class="ibx-att-name" value=${a.name ?? ''} placeholder=${attachmentName({ url: a.url }, i)}
+            aria-label="File name" onChange=${(e) => onChange(list.map((x, k) => (k === i ? (e.target.value.trim() ? { url: x.url, name: e.target.value.trim() } : { url: x.url }) : x)))} />`}
+          <span class="ibx-muted" title=${a.url}>${(() => { try { return new URL(a.url).hostname; } catch { return a.url; } })()}</span>
+        </span>
+        ${readOnly ? null : html`<button type="button" class="ibx-btn is-ghost" aria-label=${`Remove ${attachmentName(a, i)}`} onClick=${() => onChange(list.filter((_, k) => k !== i))}><${Icon} name="x" size=${13} /></button>`}
+      </li>`)}</ul>` : html`<div class="ibx-media-empty"><${Icon} name="link" size=${16} /> No attachments${readOnly ? '' : ' — attach any file by https URL'}</div>`}
+    ${adding && !readOnly ? html`<div class="ibx-media-attach">
+      <input type="url" placeholder="https://… (any file)" value=${url} autoFocus onInput=${(e) => { setUrl(e.target.value); setErr(null); }}
+        onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } if (e.key === 'Escape') setAdding(false); }} />
+      <input type="text" placeholder="File name (optional)" value=${name} onInput=${(e) => setName(e.target.value)} style=${{ maxWidth: '200px' }} />
+      <button type="button" class="ibx-btn is-primary" disabled=${!url.trim()} onClick=${add}>Attach</button>
+      <button type="button" class="ibx-btn" onClick=${() => { setAdding(false); setErr(null); }}>Cancel</button>
+      ${err ? html`<div class="ibx-field-err">${err}</div>` : null}
+    </div>` : null}
+  </section>`;
 }
 
 function CapNote({ cap }) {
@@ -513,8 +569,8 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
   const dirty = Object.keys(patches).length > 0;
   const set = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }));
 
-  const save = useCallback(async () => {
-    const ps = patchesFor(loadedRef.current, draft);
+  const save = useCallback(async ({ approve = false } = {}) => {
+    const ps = patchesFor(loadedRef.current, draft, { approve });
     if (!Object.keys(ps).length) return true;
     if (standalone) { setSaveState({ state: 'saved', at: Date.now(), note: 'preview only — not persisted' }); return true; }
     setSaveState({ state: 'saving' });
@@ -537,7 +593,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
 
   const approve = useCallback(async () => {
     if (blocked || undo.isArmed(item.id)) return;
-    if (!(await save())) return;
+    if (!(await save({ approve: true }))) return;
     api.approve(item, activeIds, excludedIds);
   }, [blocked, save, api, item, activeIds.join(','), excludedIds.join(',')]);
 
@@ -642,7 +698,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
               : html`<${BodyEditor} value=${draft.body} onChange=${set('body')} onBlur=${save} editorRef=${editorRef} />`}
           </section>
           <${InlineImages} images=${item.inlineImages} onOpen=${(i) => openImages(item.inlineImages, i)} />
-          ${draft.images.length ? html`<${MediaEditor} label="Images on this draft" images=${draft.images} readOnly=${true} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i)} /><${CapNote} cap=${caps.images} />` : null}
+          ${caps.attachments.edit || draft.attachments.length ? html`<${AttachmentEditor} list=${draft.attachments} onChange=${set('attachments')} readOnly=${readOnly || !caps.attachments.edit} openImages=${openImages} />` : null}
         ` : null}
 
         ${item.kind === 'newsletter' ? html`
@@ -682,6 +738,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
                   </button>`) : null}
               </span>
             </div>
+            ${item.sourceBound && caps.note && isApprovable(item) ? html`<${CapNote} cap=${{ note: caps.note }} />` : null}
             ${scope !== 'all' ? html`<div class="ibx-muted ibx-scope-note">Editing ${PLATFORM_LABEL[item.siblings.find((s) => s.id === scope)?.platform]} only. "All platforms" edits update every platform that still shares the base text.</div>` : customIds.length ? html`<div class="ibx-muted ibx-scope-note">${customIds.map((id) => PLATFORM_LABEL[item.siblings.find((s) => s.id === id).platform]).join(', ')} ${customIds.length === 1 ? 'has' : 'have'} custom text — not changed by base edits.</div>` : null}
             ${readOnly || !caps.body.edit ? html`<div class="ibx-body is-ro">${socialBody}</div><${CapNote} cap=${isApprovable(item) ? caps.body : null} />` : html`<${BodyEditor} value=${socialBody} onChange=${setSocialBody} onBlur=${save} editorRef=${editorRef} minHeight=${140} />`}
             <div class="ibx-caps">
@@ -701,7 +758,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
                 ${isApprovable(item) ? html`<${CapNote} cap=${caps.firstComment} />` : null}
               </${Field}>` : null}
           </section>
-          <${MediaEditor} images=${draft.images} readOnly=${readOnly || !caps.images.edit} platforms=${item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform)} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i, !readOnly && caps.images.edit && set('images'))} />
+          <${MediaEditor} images=${draft.images} max=${caps.maxImages} readOnly=${readOnly || !caps.images.edit} platforms=${item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform)} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i, !readOnly && caps.images.edit && set('images'))} />
           ${isApprovable(item) ? html`<${CapNote} cap=${caps.images} />` : null}
           <section class="ibx-previews">
             <div class="ibx-section-head"><${Icon} name="eye" size=${13} /><span>How it will look</span>
@@ -726,7 +783,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
 
       <footer class="ibx-footer">
         <div class="ibx-consequence" title="What approving does">
-          ${isApprovable(item) && !armed ? html`<${Icon} name="send" size=${12} /> ${consequence({ ...item, platforms: item.kind === 'social' ? item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform) : item.platforms }, { when: draft.scheduledAt == null || draft.scheduledAt < now ? 'now' : fmtWhen(draft.scheduledAt, now) })}`
+          ${isApprovable(item) && !armed ? html`<${Icon} name="send" size=${12} /> ${consequence({ ...item, platforms: item.kind === 'social' ? item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform) : item.platforms }, { when: draft.scheduledAt == null || draft.scheduledAt < now ? 'now' : fmtWhen(draft.scheduledAt, now), attachments: caps.attachments.edit ? draft.attachments.length : 0 })}`
             : armed ? html`<${Icon} name="clock" size=${12} /> Sending in ${undo.state?.left}s — undo from the bar below` : null}
           <span class="ibx-spacer"></span>
           <span class=${cn('ibx-save', `is-${saveState.state}`)}>
