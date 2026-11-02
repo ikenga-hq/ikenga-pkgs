@@ -16,13 +16,6 @@
         "icon": "send",
         "route": "/",
         "pin_on_install": true
-      },
-      {
-        "id": "outbound.approvals",
-        "title": "Approvals",
-        "icon": "check-circle",
-        "route": "/approvals",
-        "pin_on_install": false
       }
     ],
     "routes": [
@@ -55,6 +48,16 @@
         "path": "/approvals",
         "kind": "iframe",
         "source": "dist/index.html"
+      },
+      {
+        "path": "/schedule",
+        "kind": "iframe",
+        "source": "dist/index.html"
+      },
+      {
+        "path": "/sent",
+        "kind": "iframe",
+        "source": "dist/index.html"
       }
     ],
     "csp": {
@@ -76,6 +79,12 @@
       "connect-src": [
         "'self'",
         "https://esm.sh"
+      ],
+      "img-src": [
+        "'self'",
+        "data:",
+        "blob:",
+        "https:"
       ]
     }
   },

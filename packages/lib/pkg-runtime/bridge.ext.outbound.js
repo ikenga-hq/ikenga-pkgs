@@ -54,14 +54,17 @@ async function callPaAction(verb, args) {
   return sc;
 }
 
-/** Commit an approved draft → worker sends it for real. */
-export async function hostPaActionsCommit(draftId) {
-  return callPaAction('commit', { draftId });
+/** Commit an approved draft → worker sends it for real. Inside a share,
+ *  `seen` is the verbatim row the reviewer was shown (from hostPaActionsList);
+ *  the box broker binds the ledger approval to exactly those bytes. */
+export async function hostPaActionsCommit(draftId, seen) {
+  return callPaAction('commit', seen ? { draftId, seen } : { draftId });
 }
 
-/** Reject a draft (will not send). */
-export async function hostPaActionsReject(draftId) {
-  return callPaAction('reject', { draftId });
+/** Reject a draft (will not send). `reason` is stored on the row
+ *  (reject_reason) for the writer-agent training set. */
+export async function hostPaActionsReject(draftId, reason) {
+  return callPaAction('reject', reason ? { draftId, reason } : { draftId });
 }
 
 /** Retry a failed draft (failed → committed; clears claim/error + wakes worker). */
@@ -69,7 +72,19 @@ export async function hostPaActionsRetry(draftId) {
   return callPaAction('retry', { draftId });
 }
 
-/** Edit-in-place: patch a draft's subject/body (writes edited_json, awaiting→edited). */
+/** Edit-in-place. `patch` keys (outbox redesign G-CONTRACT): subject, body,
+ *  subjectB, preheader, firstComment, hashtags[], media{kind,imageUrls[]},
+ *  scheduledIso. The backend shallow-MERGES into edited_json (send only what
+ *  changed); scheduledIso also reschedules the row. awaiting → edited. */
 export async function hostPaActionsUpdate(draftId, patch) {
   return callPaAction('update', { draftId, patch });
+}
+
+/** List drafts through the shell (outbox redesign D-07). Unlike host.dbQuery
+ *  this is routed through the box broker inside a share, so an operator sees
+ *  the OWNER's drafts there. `status` omitted = the active set.
+ *  → { rows: PaActionDraftRow[] (camelCase), inShare: boolean } */
+export async function hostPaActionsList(status) {
+  const sc = await callPaAction('list', status ? { status } : {});
+  return { rows: Array.isArray(sc.rows) ? sc.rows : [], inShare: sc.inShare === true };
 }

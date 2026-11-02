@@ -3,7 +3,7 @@
 // SOURCE OF TRUTH (WP-19). This is the single, byte-identical UI runtime vendored
 // into every no-build app pkg's dist/lib/ui.js. It supersedes the ~80%-shared
 // per-pkg copies; the only thing that used to diverge was each pkg's slice of the
-// icon dictionary, so this file carries the UNION of every pkg's glyphs (57) — a
+// icon dictionary, so this file carries the UNION of every pkg's glyphs (70) — a
 // pkg simply ignores the names it never references. Never hand-edit a vendored
 // copy; edit here and re-run the pkg's scripts/build.mjs.
 //
@@ -48,6 +48,19 @@ export {
 // extra CDN hop (the source apps used lucide-react; we mirror suite's inline
 // pattern instead). WP-19 UNION of every pkg's glyphs; add more as features need.
 const ICONS = {
+  'calendar-clock': "M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5M16 2v4M8 2v4M3 10h5M17.5 17.5 16 16.3V14M22 16a6 6 0 1 1-12 0 6 6 0 0 1 12 0z",
+  'copy': "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+  'external-link': "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3",
+  'grip-vertical': "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
+  'image': "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21",
+  'image-off': "M2 2l20 20M10.41 10.41a2 2 0 1 1-2.83-2.83M13.5 13.5 6 21M18 12l3 3M3.59 3.59A2 2 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.05-.22 1.41-.59M21 15V5a2 2 0 0 0-2-2H9",
+  'keyboard': "M20 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zM6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M8 17h8M10 13h4",
+  'layers': "M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
+  'link': "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  'maximize-2': "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7",
+  'message-square': "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  'rotate-ccw': "M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10",
+  'sliders': "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
   activity: "M22 12h-4l-3 9L9 3l-3 9H2",
   'alert-circle': "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 8v4M12 16h.01",
   'alert-triangle': "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",

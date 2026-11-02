@@ -18,8 +18,6 @@ import {
 const {
   loadDrafts,
   setDbQueryForTesting,
-  setNavigateForTesting,
-  openShellApprovals,
   QueueReadErrorState,
   fetchEmailQueue,
   fetchEmailSchedule,
@@ -33,30 +31,20 @@ const {
   fetchSocialQueue,
   fetchSocialSchedule,
   fetchSocialSent,
-  fetchAllApprovals,
   fetchChannelCounts,
   fetchAgentCounts,
-  EmailQueueView,
   EmailScheduleView,
   EmailSentView,
-  NewsletterQueueView,
   NewsletterScheduleView,
   NewsletterSentView,
-  SequencesQueueView,
   SequencesActiveView,
   SequencesSentView,
-  SocialQueueView,
   SocialScheduleView,
   SocialSentView,
-  CrossChannelApprovalsView,
-  ViewBody,
-  SocialEditor,
-  SocialDetail,
-  SequenceStepRail,
   RecipientCohort,
   fetchNewsletterHistory,
-  fetchSocialFanout,
   buildOutboundMenu,
+  resolveTarget,
   OutboundView,
   isPermissionRefusal,
   queryRetry,
@@ -72,10 +60,10 @@ const {
   FIXTURE_SOCIAL_QUEUE,
   FIXTURE_SOCIAL_SCHEDULE,
   FIXTURE_SOCIAL_SENT,
-  FIXTURE_APPROVALS,
 } = await import('../dist/features/outbound/outbound-view.js');
 
 const { queryClient } = await import('../dist/app.js');
+const { fetchInboxRows, InboxView } = await import('../dist/features/inbox/inbox-view.js');
 const { hostDbQuery, setBridgeAppForTesting } = await import('../dist/lib/bridge.js');
 
 function setupStandalone() {
@@ -144,7 +132,9 @@ test('1. Standalone dev mode: always returns fixtures', async () => {
   assert.deepEqual(await fetchSocialQueue(), FIXTURE_SOCIAL_QUEUE, 'social queue returns fixtures');
   assert.deepEqual(await fetchSocialSchedule(), FIXTURE_SOCIAL_SCHEDULE, 'social schedule returns fixtures');
   assert.deepEqual(await fetchSocialSent(), FIXTURE_SOCIAL_SENT, 'social sent returns fixtures');
-  assert.deepEqual(await fetchAllApprovals(), FIXTURE_APPROVALS, 'cross-channel approvals return fixtures');
+  const inbox = await fetchInboxRows();
+  assert.equal(inbox.source, 'fixture', 'inbox reads demo rows in standalone');
+  assert.ok(inbox.rows.length > 0, 'inbox fixture rows are non-empty');
 
   const counts = await fetchChannelCounts();
   assert.deepEqual(counts, { email: 5, newsletter: 2, sequences: 4, social: 4 }, 'channel counts return fixture numbers');
@@ -180,7 +170,6 @@ test('2. Mounted in shell + DB read error: throws, never returns fixture rows, s
     ['fetchSocialQueue', fetchSocialQueue],
     ['fetchSocialSchedule', fetchSocialSchedule],
     ['fetchSocialSent', fetchSocialSent],
-    ['fetchAllApprovals', fetchAllApprovals],
     ['fetchChannelCounts', fetchChannelCounts],
     ['fetchAgentCounts', () => fetchAgentCounts('email')],
   ];
@@ -200,19 +189,9 @@ test('2. Mounted in shell + DB read error: throws, never returns fixture rows, s
   // Inspect the rendered error state vnode
   const vnodeStr = JSON.stringify(vnode);
   assert.ok(vnodeStr.includes("Can't read this project's queue here."), 'contains exact error message');
-  assert.ok(vnodeStr.includes("Open Outbox (/outbox/approvals)"), 'contains open outbox button/link');
+  assert.ok(!vnodeStr.includes("/outbox/approvals"), 'no longer points at the retired shell approve-gate');
   assert.ok(!vnodeStr.includes("Valentim de Carvalho"), 'does not leak fixture names');
   assert.ok(!vnodeStr.includes("Schema patches that unblocked"), 'does not leak fixture subjects');
-
-  // Verify host navigation to /outbox/approvals
-  let navigatedTo = null;
-  setNavigateForTesting((path) => {
-    navigatedTo = path;
-    return Promise.resolve();
-  });
-
-  await openShellApprovals();
-  assert.equal(navigatedTo, '/outbox/approvals', 'openShellApprovals navigates host to /outbox/approvals');
 });
 
 test('3. Mounted in shell + DB read success: returns real rows (or empty array), never fixtures', async () => {
@@ -253,9 +232,6 @@ test('3. Mounted in shell + DB read success: returns real rows (or empty array),
 
   const emptySeq = await fetchSequenceQueue();
   assert.deepEqual(emptySeq, [], 'empty database returns [] for sequence queue, not fixtures');
-
-  const emptyApprovals = await fetchAllApprovals();
-  assert.deepEqual(emptyApprovals, [], 'empty database returns [] for approvals, not fixtures');
 });
 
 test('4. Error-path test for fetchAgentCounts: throws on DB read error when mounted, returns fixtures in standalone', async () => {
@@ -283,22 +259,17 @@ test('4. Error-path test for fetchAgentCounts: throws on DB read error when moun
 });
 
 const ALL_ERROR_VIEWS = [
-  { name: 'EmailQueueView', component: EmailQueueView, channel: 'email', view: 'queue' },
   { name: 'EmailScheduleView', component: EmailScheduleView, channel: 'email', view: 'schedule' },
   { name: 'EmailSentView', component: EmailSentView, channel: 'email', view: 'sent' },
-  { name: 'NewsletterQueueView', component: NewsletterQueueView, channel: 'newsletter', view: 'queue' },
   { name: 'NewsletterScheduleView', component: NewsletterScheduleView, channel: 'newsletter', view: 'schedule' },
   { name: 'NewsletterSentView', component: NewsletterSentView, channel: 'newsletter', view: 'sent' },
-  { name: 'SequencesQueueView', component: SequencesQueueView, channel: 'sequences', view: 'queue' },
   { name: 'SequencesActiveView', component: SequencesActiveView, channel: 'sequences', view: 'schedule' },
   { name: 'SequencesSentView', component: SequencesSentView, channel: 'sequences', view: 'sent' },
-  { name: 'SocialQueueView', component: SocialQueueView, channel: 'social', view: 'queue' },
   { name: 'SocialScheduleView', component: SocialScheduleView, channel: 'social', view: 'schedule' },
   { name: 'SocialSentView', component: SocialSentView, channel: 'social', view: 'sent' },
-  { name: 'CrossChannelApprovalsView', component: CrossChannelApprovalsView, channel: null, view: 'approvals' },
 ];
 
-test('5. View wiring when mounted + isError:true renders QueueReadErrorState and no fixture data for all 13 views', () => {
+test('5. View wiring when mounted + isError:true renders QueueReadErrorState and no fixture data for every Schedule/Sent view', () => {
   setupMounted();
   setMockQueryConfig({ isError: true });
 
@@ -312,10 +283,6 @@ test('5. View wiring when mounted + isError:true renders QueueReadErrorState and
       `${name} renders exact error state text when isError:true`
     );
     assert.ok(
-      vnodeStr.includes("Open Outbox (/outbox/approvals)"),
-      `${name} renders Open Outbox button in error state`
-    );
-    assert.ok(
       vnode.values && vnode.values.includes(QueueReadErrorState),
       `${name} returns QueueReadErrorState element`
     );
@@ -326,13 +293,6 @@ test('5. View wiring when mounted + isError:true renders QueueReadErrorState and
     assert.ok(!vnodeStr.includes("Investor Update"), `${name} does not leak fixture newsletter`);
     assert.ok(!vnodeStr.includes("Lead Engineer"), `${name} does not leak fixture sequence roles`);
 
-    // 2. ViewBody dispatcher routing
-    const bodyVnode = ViewBody({ channel, view, standalone: false });
-    const bodyStr = JSON.stringify(bodyVnode);
-    assert.ok(
-      bodyStr.includes(name),
-      `ViewBody dispatches to ${name} for channel=${channel}, view=${view}`
-    );
   }
 });
 
@@ -462,11 +422,6 @@ test('8. Secondary query functions error propagation in mounted vs standalone mo
     'fetchNewsletterHistory propagates permission refusal when mounted'
   );
 
-  await assert.rejects(
-    () => fetchSocialFanout('test-batch-slug'),
-    (err) => err.reason === 'scope-denied' || /sqlite\.tables/.test(err.message),
-    'fetchSocialFanout propagates permission refusal when mounted'
-  );
 
   // General DB error propagation
   setDbQueryForTesting(() => {
@@ -479,11 +434,6 @@ test('8. Secondary query functions error propagation in mounted vs standalone mo
     'fetchNewsletterHistory propagates general DB errors when mounted'
   );
 
-  await assert.rejects(
-    () => fetchSocialFanout('test-batch-slug'),
-    /database disk I\/O error/,
-    'fetchSocialFanout propagates general DB errors when mounted'
-  );
 
   // B. Standalone mode: fallback to fixtures/empty without querying DB
   setupStandalone();
@@ -493,178 +443,10 @@ test('8. Secondary query functions error propagation in mounted vs standalone mo
 
   const nlHistoryStandalone = await fetchNewsletterHistory();
   assert.ok(Array.isArray(nlHistoryStandalone) && nlHistoryStandalone.length > 0, 'Standalone returns fixture newsletter history');
-
-  const socialFanoutStandalone = await fetchSocialFanout('test-batch-slug');
-  assert.deepEqual(socialFanoutStandalone, [], 'Standalone returns empty fanout array without throwing');
 });
 
-test('9. SocialDetail fan-out error renders inline notice, and mounted success with 0 rows shows default platforms', () => {
-  const samplePost = {
-    id: 'post-1',
-    slug: 'post-batch-1',
-    content: 'Draft content for social',
-    scheduled_for: '2026-11-01T12:00:00Z',
-    source: 'cmo-agent',
-  };
-
-  // A. Mounted with fanout error
-  setupMounted();
-  globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
-    }
-    return { data: undefined, isLoading: false, isError: false };
-  };
-
-  const vnodeMountedErr = SocialDetail({ post: samplePost, standalone: false });
-  const strMountedErr = JSON.stringify(vnodeMountedErr);
-
-  // Must show inline error message and title
-  assert.ok(
-    strMountedErr.includes("Can't read this project's queue here."),
-    'SocialDetail renders inline error message when fanout query fails'
-  );
-  assert.ok(
-    strMountedErr.includes('title=\\"Can\'t read this project\'s queue here\\"'),
-    'SocialDetail renders tooltip title on fanout error'
-  );
-  // Must NOT render table or default platform fan-out rows on error
-  assert.ok(
-    !strMountedErr.includes('so-fanout-table'),
-    'SocialDetail does not render fanout table on error'
-  );
-  assert.ok(
-    !strMountedErr.includes('3 rows') && !strMountedErr.includes('2 rows') && !strMountedErr.includes('1 row'),
-    'SocialDetail fan-out header does not claim positive rows on error'
-  );
-
-  // B. Mounted success with zero rows (Item 1 requirement)
-  setupMounted();
-  globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'social' && options.queryKey[1] === 'fanout') {
-      return { data: [], isLoading: false, isError: false };
-    }
-    return { data: undefined, isLoading: false, isError: false };
-  };
-
-  const vnodeMountedZero = SocialDetail({ post: samplePost, standalone: false });
-  const strMountedZero = JSON.stringify(vnodeMountedZero);
-
-  assert.ok(
-    strMountedZero.includes('so-fanout-table'),
-    'Mounted post with 0 fan-out rows renders default platforms table'
-  );
-  assert.ok(
-    strMountedZero.includes('3 rows'),
-    'Mounted post with 0 fan-out rows shows 3 default platform targets'
-  );
-  assert.ok(
-    !strMountedZero.includes("Can't read this project's queue here."),
-    'Mounted post with 0 fan-out rows does not show error notice'
-  );
-
-  // C. Standalone fallback preserved
-  setupStandalone();
-  globalThis.__mockUseQuery = (options) => {
-    return { data: undefined, isLoading: false, isError: false };
-  };
-
-  const vnodeStandalone = SocialDetail({ post: samplePost, standalone: true });
-  const strStandalone = JSON.stringify(vnodeStandalone);
-
-  assert.ok(
-    strStandalone.includes('so-fanout-table'),
-    'Standalone renders fallback platform rows table'
-  );
-  assert.ok(
-    !strStandalone.includes("Can't read this project's queue here."),
-    'Standalone does not render error notice'
-  );
-  resetMockQuery();
-});
-
-test('10. NewsletterQueueView history error renders compact indicator in Freshness and Prev. featured', () => {
-  setupMounted();
-
-  const mockNewsletterRow = {
-    id: 'nl-row-1',
-    recipient: 'Subscribers',
-    subject: 'Weekly Dispatch #42',
-    subject_b: 'Alternative Subject',
-    preheader: 'Newsletter preview text',
-    body: 'Hello subscribers, this is the newsletter body.',
-    status: 'pending',
-    channel: 'resend',
-    newsletter_type: 'weekly_roundup',
-    edition: 42,
-    created_at: '2026-10-31T09:00:00Z',
-  };
-
-  // Mock: queue succeeds, history query fails with isError: true
-  globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'newsletter' && options.queryKey[1] === 'history') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
-    }
-    // Main queue query returns 1 item
-    return { data: [mockNewsletterRow], isLoading: false, isError: false };
-  };
-
-  const vnodeErr = NewsletterQueueView({ standalone: false });
-  const strErr = JSON.stringify(vnodeErr);
-
-  // Verify scorecard cells have "Can't read this project's queue here"
-  assert.ok(
-    strErr.includes("Can't read this project's queue here"),
-    'Newsletter quality scorecard renders compact error indicator when history read fails'
-  );
-  assert.ok(
-    strErr.includes('—'),
-    'Newsletter scorecard displays dash value for history metrics on error'
-  );
-
-  // Verify when history query succeeds
-  globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'newsletter' && options.queryKey[1] === 'history') {
-      return { data: [], isLoading: false, isError: false };
-    }
-    return { data: [mockNewsletterRow], isLoading: false, isError: false };
-  };
-
-  const vnodeOk = NewsletterQueueView({ standalone: false });
-  const strOk = JSON.stringify(vnodeOk);
-  assert.ok(
-    !strOk.includes("Can't read this project's queue here"),
-    'Newsletter scorecard does not display error message when history query succeeds'
-  );
-
-  resetMockQuery();
-});
-
-test('11. SequenceStepRail & RecipientCohort show neutral "Not available yet" when mounted', () => {
+test('11. RecipientCohort shows neutral "Not available yet" when mounted', () => {
   const dummySeq = { id: 'seq-1', name: 'Onboarding Sequence', slug: 'onboarding' };
-
-  // A. SequenceStepRail mounted with empty list
-  setupMounted();
-  setMockQueryConfig({ isError: false, data: [] });
-  const railMounted = SequenceStepRail({ sequence: dummySeq, standalone: false });
-  const railMountedStr = JSON.stringify(railMounted);
-  assert.ok(
-    railMountedStr.includes('Not available yet'),
-    'SequenceStepRail renders "Not available yet" when mounted with no steps'
-  );
-  assert.ok(
-    !railMountedStr.includes('No steps defined for this sequence yet'),
-    'SequenceStepRail NEVER claims "No steps defined for this sequence yet" when mounted'
-  );
-
-  // SequenceStepRail standalone
-  setupStandalone();
-  const railStandalone = SequenceStepRail({ sequence: dummySeq, standalone: true });
-  const railStandaloneStr = JSON.stringify(railStandalone);
-  assert.ok(
-    railStandaloneStr.includes('No steps defined for this sequence yet'),
-    'SequenceStepRail preserves "No steps defined for this sequence yet" in standalone'
-  );
 
   // B. RecipientCohort mounted with empty list
   setupMounted();
@@ -691,58 +473,83 @@ test('11. SequenceStepRail & RecipientCohort show neutral "Not available yet" wh
   resetMockQuery();
 });
 
-test('12. Sidebar and tab badges render "—" on counts or agent read errors', () => {
-  // A. buildOutboundMenu with countsError and agentsError
-  const menuErr = buildOutboundMenu('newsletter', 'queue', { email: 5, newsletter: 2 }, { pa: 3 }, true, true);
-  for (const item of menuErr) {
-    assert.equal(
-      item.badge,
-      '—',
-      `Menu item ${item.id} has badge "—" on countsError/agentsError`
-    );
-    assert.equal(
-      item.title,
-      undefined,
-      `Menu item ${item.id} has no title field (not supported by PkgMenuItem)`
-    );
-    if (item.hot !== undefined) {
-      assert.equal(item.hot, false, `Menu item ${item.id} hot indicator is false on error`);
-    }
+test('12. Sidebar + Inbox tab render "—" on a counts read error', () => {
+  const counts = { total: 6, kinds: { email: 3, newsletter: 1, social: 1, sequence: 1 }, agents: { pa: 3, cmo: 2, cbo: 1 } };
+  const menuErr = buildOutboundMenu('inbox', counts, null, true);
+  for (const item of menuErr.filter((i) => i.section !== 'Outbox' || i.id === 'v:inbox')) {
+    assert.equal(item.badge, '—', `Menu item ${item.id} has badge "—" on countsError`);
+    assert.equal(item.title, undefined, `Menu item ${item.id} has no title field (not supported by PkgMenuItem)`);
+    if (item.hot !== undefined) assert.equal(item.hot, false, `Menu item ${item.id} hot indicator is false on error`);
   }
-
-  // Healthy menu
-  const menuOk = buildOutboundMenu('newsletter', 'queue', { email: 5, newsletter: 2 }, { pa: 3 }, false, false);
+  const menuOk = buildOutboundMenu('inbox', counts, { kinds: ['email'], agents: [] }, false);
   const emailItem = menuOk.find((i) => i.id === 'ch:email');
-  assert.equal(emailItem.badge, 5);
-  assert.equal(emailItem.title, undefined);
-  assert.equal(emailItem.hot, true);
+  assert.equal(emailItem.badge, 3);
+  assert.equal(emailItem.active, true, 'channel item is active when the inbox is faceted to it');
+  assert.equal(menuOk.find((i) => i.id === 'v:inbox').active, false, 'plain Inbox is not active while faceted');
+  assert.equal(menuOk.find((i) => i.id === 'f:cmo').badge, 2);
 
-  // B. OutboundView rendering with counts query error
   setupMounted();
   globalThis.__mockUseQuery = (options) => {
-    if (options.queryKey[0] === 'counts' || options.queryKey[0] === 'agents') {
-      return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
-    }
+    if (options.queryKey[0] === 'inbox') return { data: undefined, isLoading: false, isError: true, error: new Error('scope-denied') };
     return { data: [], isLoading: false, isError: false };
   };
-
-  const obView = OutboundView({ activeFeature: 'v:newsletter' });
-  const obStr = JSON.stringify(obView);
-
-  assert.ok(
-    obStr.includes('title=\\"Can\'t read this project\'s queue here\\"'),
-    'OutboundView renders tooltip title when counts error'
-  );
-  assert.ok(
-    obStr.includes('— awaiting · — sequences active'),
-    'OutboundView header displays "— awaiting · — sequences active" on counts error'
-  );
-  assert.ok(
-    obStr.includes('nl-tab-count') && obStr.includes('—'),
-    'OutboundView inner tabs render "—" badge on counts error'
-  );
-
+  const obStr = JSON.stringify(OutboundView({ activeFeature: 'v:newsletter' }));
+  assert.ok(obStr.includes('title=\\"Can\'t read this project\'s queue here\\"'), 'Inbox tab badge carries the read-error title');
   resetMockQuery();
 });
 
+test('13. Deep-link + sidebar tokens resolve to tab + inbox facets', () => {
+  assert.deepEqual(resolveTarget('v:approvals'), { tab: 'inbox', preset: { kinds: [], agents: [] } });
+  assert.deepEqual(resolveTarget('newsletter'), { tab: 'inbox', preset: { kinds: ['newsletter'], agents: [] }, channel: 'newsletter' });
+  assert.deepEqual(resolveTarget('ch:sequences').preset.kinds, ['sequence']);
+  assert.deepEqual(resolveTarget('f:CMO').preset.agents, ['cmo']);
+  assert.deepEqual(resolveTarget('v:sent'), { tab: 'sent' });
+  assert.deepEqual(resolveTarget('v:schedule'), { tab: 'schedule' });
+  assert.equal(resolveTarget('v:nonsense'), null);
+  assert.equal(resolveTarget(undefined), null);
+});
 
+test('14. Inbox reads through host.paActions.list; falls back to host.dbQuery only on an old shell', async () => {
+  setupMounted();
+  const row = sampleDbRow({ id: 'r-host' });
+  const camel = { id: row.id, batchId: row.batch_id, status: row.status, channel: row.channel, payloadJson: row.payload_json, editedJson: null };
+  const calls = [];
+  setBridgeAppForTesting({
+    callServerTool: async ({ name, arguments: args }) => {
+      calls.push([name, args]);
+      return { structuredContent: { ok: true, rows: [camel], inShare: true } };
+    },
+  });
+  try {
+    const res = await fetchInboxRows();
+    assert.equal(res.source, 'host');
+    assert.equal(res.inShare, true, 'share flag carried through');
+    assert.equal(res.rows[0].id, 'r-host');
+    assert.equal(calls[0][0], 'host.paActions.list');
+
+    // A real refusal propagates (no silent DB fallback that would bypass the broker).
+    setBridgeAppForTesting({ callServerTool: async () => ({ isError: true, structuredContent: { ok: false, error: 'not an Operator in this share' } }) });
+    await assert.rejects(() => fetchInboxRows(), /not an Operator/);
+
+    // Old shell: unknown verb → local DB read.
+    setBridgeAppForTesting({
+      callServerTool: async ({ name }) => (name === 'host.paActions.list'
+        ? { isError: true, content: [{ type: 'text', text: 'unknown host tool: host.paActions.list' }] }
+        : { structuredContent: { ok: true, rows: [row] } }),
+    });
+    const legacy = await fetchInboxRows();
+    assert.equal(legacy.source, 'db');
+    assert.equal(legacy.inShare, false);
+  } finally {
+    setBridgeAppForTesting(null);
+  }
+});
+
+test('15. InboxView mounted + read error renders an error state, never fixture rows', () => {
+  setupMounted();
+  setMockQueryConfig({ isError: true });
+  const str = JSON.stringify(InboxView({ standalone: false }));
+  assert.ok(str.includes("Can't read the outbox queue here."), 'renders error copy');
+  assert.ok(!str.includes('Valentim'), 'no fixture leakage');
+  resetMockQuery();
+});

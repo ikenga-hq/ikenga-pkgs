@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/derive.test.mjs tests/queue-fallback.test.mjs"
+    "test": "node --test tests/derive.test.mjs tests/queue-fallback.test.mjs tests/inbox-model.test.mjs"
   },
   "devDependencies": {
     "@ikenga/tokens": "^0.3.0"
