@@ -8,7 +8,7 @@
 //
 // Plan: plans/outbox-redesign/01-plan.md (meta-repo).
 
-import { parseDraft, deriveContentType, deriveHashtags, socialPlatforms, socialSourceGroup, deriveNewsletterType } from './derive.js';
+import { parseDraft, deriveContentType, socialPlatforms, socialSourceGroup, deriveNewsletterType } from './derive.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -157,9 +157,12 @@ export function normalizeRow(rawRow) {
   const scheduledIso = edited.scheduledIso !== undefined ? edited.scheduledIso : null;
   const scheduledAt = scheduledIso !== null ? toEpoch(scheduledIso) : toEpoch(row.scheduled_at) ?? toEpoch(item.scheduledIso);
   const media = readMedia(item, edited);
-  const hashtags = kind === 'social'
-    ? deriveHashtags(edited.hashtags !== undefined ? { hashtags: edited.hashtags, body: '' } : item)
-    : (Array.isArray(item.hashtags) ? item.hashtags : []);
+  // Hashtags only post when they are IN the text (the Buffer adapter sends the
+  // body verbatim), so the text is their single source. Producer-stamped tags
+  // that aren't in it are offered as suggestions, never shown as if they post.
+  const hashtags = hashtagsIn(body);
+  const stamped = Array.isArray(item.hashtags) ? item.hashtags.map((t) => (String(t).startsWith('#') ? String(t) : `#${t}`)) : [];
+  const suggestedTags = stamped.filter((t) => !hashtags.includes(t));
   const seq = item.sequence && typeof item.sequence === 'object' ? item.sequence : null;
   const recipientsList = Array.isArray(item.recipientsList)
     ? item.recipientsList.filter(Boolean).map((r) => (typeof r === 'string' ? { name: null, email: r } : { name: r.name ?? null, email: r.email ?? null }))
@@ -184,6 +187,8 @@ export function normalizeRow(rawRow) {
     preheader: edited.preheader ?? item.preheader ?? null,
     firstComment: edited.firstComment ?? item.firstComment ?? null,
     hashtags,
+    suggestedTags,
+    sourceBound: kind === 'social' && !!item.social && typeof item.social === 'object',
     recipient: item.recipient ?? null,
     recipientEmail: item.recipientEmail ?? null,
     // A sequence row is ONE step to ONE contact — seq.recipients is the enrolment size, not this send's audience.
@@ -296,7 +301,7 @@ export function approveBlockReason(it, live = {}) {
     if (!active.length) return 'Every platform is excluded';
     for (const s of active) {
       const p = s.platform;
-      const len = textForPlatform(live.bodies?.[s.id] ?? s.body, live.hashtags ?? it.hashtags).length;
+      const len = textForPlatform(live.bodies?.[s.id] ?? s.body).length;
       if (PLATFORM_CAPS[p] && len > PLATFORM_CAPS[p]) return `${PLATFORM_LABEL[p] ?? p} is over its ${PLATFORM_CAPS[p]}-char cap by ${len - PLATFORM_CAPS[p]}`;
       if (p === 'instagram' && !images.length) return 'Instagram needs at least one image';
       if (PLATFORM_MAX_IMAGES[p] && images.length > PLATFORM_MAX_IMAGES[p]) return `${PLATFORM_LABEL[p] ?? p} takes at most ${PLATFORM_MAX_IMAGES[p]} images`;
@@ -305,11 +310,70 @@ export function approveBlockReason(it, live = {}) {
   return null;
 }
 
-/** The text a platform actually posts: body + hashtags not already in it. */
-export function textForPlatform(body, hashtags = []) {
-  const b = String(body ?? '');
-  const extra = (hashtags || []).filter((h) => !b.includes(h));
-  return extra.length ? `${b}${b ? ' ' : ''}${extra.join(' ')}` : b;
+/** The text a platform actually posts — the body, verbatim (hashtags included only if they're in it). */
+export function textForPlatform(body) {
+  return String(body ?? '');
+}
+
+/** '#tags' in a text, in order, deduped. */
+export function hashtagsIn(text) {
+  return [...new Set(String(text ?? '').match(/#[\p{L}\p{N}_]+/gu) ?? [])];
+}
+
+/** Add a hashtag to the end of a text (no-op when present). */
+export function addHashtag(text, tag) {
+  const t = String(tag).startsWith('#') ? String(tag) : `#${tag}`;
+  const b = String(text ?? '');
+  if (hashtagsIn(b).includes(t)) return b;
+  return `${b.replace(/\s+$/, '')}${b.trim() ? ' ' : ''}${t}`;
+}
+
+/** Remove every occurrence of a hashtag from a text, tidying the spaces. */
+export function removeHashtag(text, tag) {
+  const esc = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return String(text ?? '').replace(new RegExp(`[ \\t]?${esc}(?![\\p{L}\\p{N}_])`, 'gu'), '').replace(/[ \t]+$/gm, '');
+}
+
+/**
+ * What the send path actually honours, per draft — so the editor never offers
+ * an edit that won't go out. Mirrors the deployed sender (ikenga-sender):
+ *   - smtp / resend / listmonk adapters send `subject` + `body` (edited wins);
+ *     they attach no images; listmonk uses no A/B subject or preheader.
+ *   - buffer sends `body` (edited wins) and `media` / `firstComment` from the
+ *     payload — the shell folds edits into the payload on approve.
+ *   - a SOURCE-BOUND social draft (`item.social`, built from a social_queue row)
+ *     has every adapter field re-derived from item.social; only `edited.body`
+ *     is honoured (and not on a thread), anything else makes the post refuse.
+ * Each cap: { edit: boolean, note?: string }.
+ */
+export function editCaps(it) {
+  const yes = { edit: true };
+  const no = (note) => ({ edit: false, note });
+  if (it.kind === 'social') {
+    const thread = it.media.kind === 'thread';
+    if (it.sourceBound) {
+      const fromQueue = 'Comes from the social-queue entry — the sender rejects other changes, so edit it there.';
+      return {
+        subject: no(), subjectB: no(), preheader: no(),
+        body: thread ? no('This post is a thread built from the social-queue entry — edit it there.') : yes,
+        images: no(fromQueue), firstComment: no(fromQueue), schedule: no(fromQueue),
+      };
+    }
+    return {
+      subject: no(), subjectB: no(), preheader: no(),
+      body: thread ? no('Thread posts are sent from their thread segments, not this text.') : yes,
+      images: thread ? no('Images of a thread live on its posts.') : yes,
+      firstComment: yes, schedule: yes,
+    };
+  }
+  const attachNote = `${PROVIDER_LABEL[it.provider] ?? 'This'} sends don't attach images — shown for reference only.`;
+  return {
+    subject: yes, body: yes, schedule: yes,
+    images: no(attachNote),
+    firstComment: no(),
+    subjectB: it.provider === 'listmonk' ? no('Saved, but the listmonk sender doesn\u2019t send an A/B subject yet.') : no(),
+    preheader: it.provider === 'listmonk' ? no('Saved, but the listmonk sender doesn\u2019t send a preheader yet.') : no(),
+  };
 }
 
 function startOfDay(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -481,8 +545,8 @@ const IMG = (id, w = 1200, h = 627) => globalThis.__OUTBOX_DEMO_IMG?.(id) ?? `ht
 export function fixtureRows(now = Date.now()) {
   const social = {
     kind: 'social', channel: 'buffer', subject: 'Royalty calculator overhaul · launch post',
-    body: 'The royalty calculator overhaul shipped this week. Statements ingest in ~90s for a 30k-row CSV (was ~6 min), and splits recompute live as you edit.',
-    hashtags: ['#royalti', '#musicbusiness'], blogSlug: 'royalty-calc-overhaul', sourceGroup: 'blog',
+    body: 'The royalty calculator overhaul shipped this week. Statements ingest in ~90s for a 30k-row CSV (was ~6 min), and splits recompute live as you edit. #royalti',
+    hashtags: ['#royalti', '#musicbusiness', '#labels'], blogSlug: 'royalty-calc-overhaul', sourceGroup: 'blog',
     media: { kind: 'carousel', imageUrls: [IMG('photo-1511671782779-c97d3d27a1d4'), IMG('photo-1493225457124-a3eb161ffa5f'), IMG('photo-1470225620780-dba8ba36b745')] },
     firstComment: 'Full breakdown → royalti.io/blog/royalty-calc-overhaul',
   };

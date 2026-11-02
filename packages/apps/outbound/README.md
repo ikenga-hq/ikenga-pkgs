@@ -30,7 +30,11 @@ A single list of every draft that needs a decision, across all channels.
 - **Actions.**
   - Approve (⌘↵) with a 10 s undo window; bulk approve shares one window.
   - Reject with saved reasons, Retry for failed sends, Reschedule, and Send to chat.
-  - All edits persist (`host.paActions.update` merges into `edited_json`). The shell folds them into the payload at commit, so the worker sends what you saw.
+  - **Only what the sender sends is editable** (`editCaps` in `inbox-model.js`, mirroring the deployed `ikenga-sender`):
+    - Email, sequence and newsletter drafts: subject, body and schedule. SMTP, Resend and listmonk attach no images, and listmonk sends no A/B subject or preheader, so those fields are shown read-only with a note.
+    - Social: body, images and first comment. Hashtags are part of the text, because only tags in the text are posted.
+    - Social drafts built from the social queue (`item.social`): only the body (and not on threads). Every other field comes from the queue entry, and the sender refuses a post whose fields disagree with it.
+  - Edits persist through `host.paActions.update`, which merges them into `edited_json`. On approve, the shell folds them into the payload, except for queue-built social drafts.
 - **Keyboard.** J/K move, X selects, / searches, E edits, ⌘S saves, ⌘↵ approves, R rejects, U undoes, ? shows the shortcut sheet.
 - **Share mode.** Reads go through `host.paActions.list`, which the box broker answers inside a share. Commits carry the reviewed row (`seen`), and broker refusals appear on the draft.
 

@@ -20,6 +20,11 @@ Redesign the Outbox as one unified triage inbox.
   - Faithful per-platform previews: LinkedIn and Facebook feed grids, X and Bluesky tile grids and threads, the Instagram square carousel, and first comments.
   - Images inline in email and newsletter bodies are surfaced too.
 - **Social fan-out is approved as a whole.** Every platform row commits, not just the first. Each platform can be excluded or edited on its own, and caps, Instagram's image requirement and per-platform image limits block Approve.
-- **Every edit persists.** Media, hashtags, A/B subject, preheader, first comment and schedule are saved, as are reject reasons. A new Sent → Rejected view lists drafts with their reasons.
+- **The editor only offers what the sender actually sends** (`editCaps`).
+  - Hashtags live in the text.
+  - SMTP and Resend attach no images.
+  - listmonk sends no A/B subject or preheader; those fields are shown read-only with a note.
+  - Queue-built social posts (`item.social`) take body edits only.
+- **Reject reasons are saved.** A new Sent → Rejected view lists drafts with their reasons.
 - **Reads go through `host.paActions.list`**, so the inbox works inside a share: commits carry the `seen` row, and broker refusals show on the draft. Shells without the verb fall back to `host.dbQuery`.
 - **Manifest:** `img-src https:` so remote media renders; the separate Approvals view is removed (`/approvals` still deep-links to the inbox); `/schedule` and `/sent` routes added.

@@ -20,7 +20,7 @@ import { BrandIcon, brandTitle } from '../../lib/brand-icons.js';
 import {
   buildInbox, normalizeRow, applyFilter, sortItems, sectionize, facetCounts, buildPatch, approveBlockReason,
   consequence, recipientLabel, displayStatus, urgencyOf, allImages, destinationsOf, isApprovable,
-  textForPlatform, fixtureRows, EMPTY_FILTER, KINDS, KIND_LABEL, PROVIDERS, PROVIDER_LABEL,
+  textForPlatform, hashtagsIn, addHashtag, removeHashtag, editCaps, fixtureRows, EMPTY_FILTER, KINDS, KIND_LABEL, PROVIDERS, PROVIDER_LABEL,
   PLATFORMS, PLATFORM_LABEL, PLATFORM_CAPS, SORTS, ACTIVE_STATUSES,
 } from '../../lib/inbox-model.js';
 import { newsletterHistorySignals } from '../../lib/derive.js';
@@ -414,7 +414,7 @@ function initialDraft(it) {
   for (const s of it.siblings) bodies[s.id] = s.body;
   return {
     subject: it.subject, body: it.body, bodies, subjectB: it.subjectB ?? '', preheader: it.preheader ?? '',
-    firstComment: it.firstComment ?? '', hashtags: it.hashtags.slice(), images: it.media.images.slice(), scheduledAt: it.scheduledAt,
+    firstComment: it.firstComment ?? '', images: it.media.images.slice(), scheduledAt: it.scheduledAt,
   };
 }
 
@@ -423,11 +423,24 @@ function initialDraft(it) {
 function patchesFor(it, d) {
   const out = {};
   if (it.kind !== 'social') {
-    const p = buildPatch(it, d);
+    const caps = editCaps(it);
+    const p = buildPatch(it, {
+      subject: d.subject, body: d.body,
+      ...(caps.subjectB.edit ? { subjectB: d.subjectB } : {}),
+      ...(caps.preheader.edit ? { preheader: d.preheader } : {}),
+      ...(caps.images.edit ? { images: d.images } : {}),
+      ...(caps.schedule.edit ? { scheduledAt: d.scheduledAt } : {}),
+    });
     if (Object.keys(p).length) out[it.id] = p;
     return out;
   }
-  const shared = buildPatch(it, { hashtags: d.hashtags, images: d.images, firstComment: d.firstComment, scheduledAt: d.scheduledAt });
+  // Only fields the send path honours for this draft (editCaps) are ever sent.
+  const caps = editCaps(it);
+  const shared = buildPatch(it, {
+    ...(caps.images.edit ? { images: d.images } : {}),
+    ...(caps.firstComment.edit ? { firstComment: d.firstComment } : {}),
+    ...(caps.schedule.edit ? { scheduledAt: d.scheduledAt } : {}),
+  });
   for (const s of it.siblings) {
     const p = { ...shared };
     if (d.bodies[s.id] !== undefined && d.bodies[s.id] !== s.body) p.body = d.bodies[s.id];
@@ -436,20 +449,27 @@ function patchesFor(it, d) {
   return out;
 }
 
-function HashtagEditor({ tags, onChange, readOnly }) {
+// Hashtags are part of the text (that is the only way they post), so this
+// edits the text: adding appends "#tag", removing strips it.
+function HashtagEditor({ text, onText, suggested = [], readOnly }) {
   const [val, setVal] = useState('');
-  const add = () => {
-    const raw = val.trim().replace(/\s+/g, '');
-    if (!raw) return;
-    const t = raw.startsWith('#') ? raw : `#${raw}`;
-    if (!tags.includes(t)) onChange([...tags, t]);
+  const tags = hashtagsIn(text);
+  const add = (raw = val) => {
+    const t = String(raw).trim().replace(/\s+/g, '');
+    if (t && t !== '#') onText(addHashtag(text, t));
     setVal('');
   };
+  const sugg = suggested.filter((t) => !tags.includes(t));
   return html`<div class="ibx-tags">
-    ${tags.map((t) => html`<span key=${t} class="ibx-tag">${t}${readOnly ? null : html`<button type="button" aria-label=${`Remove ${t}`} onClick=${() => onChange(tags.filter((x) => x !== t))}>×</button>`}</span>`)}
-    ${readOnly ? null : html`<input class="ibx-tag-input" placeholder="+ #tag" value=${val} onInput=${(e) => setVal(e.target.value)}
-      onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); add(); } if (e.key === 'Backspace' && !val && tags.length) onChange(tags.slice(0, -1)); }} onBlur=${add} />`}
+    ${tags.map((t) => html`<span key=${t} class="ibx-tag">${t}${readOnly ? null : html`<button type="button" aria-label=${`Remove ${t}`} onClick=${() => onText(removeHashtag(text, t))}>×</button>`}</span>`)}
+    ${readOnly ? (tags.length ? null : html`<span class="ibx-muted">none in the text</span>`) : html`<input class="ibx-tag-input" placeholder="+ #tag" value=${val} onInput=${(e) => setVal(e.target.value)}
+      onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); add(); } }} onBlur=${() => add()} />`}
+    ${!readOnly && sugg.length ? html`<span class="ibx-tag-sugg"><span class="ibx-muted">suggested</span>${sugg.map((t) => html`<button key=${t} type="button" class="ibx-facet" onClick=${() => add(t)}>+ ${t}</button>`)}</span>` : null}
   </div>`;
+}
+
+function CapNote({ cap }) {
+  return cap?.note ? html`<div class="ibx-cap-note"><${Icon} name="alert-circle" size=${12} />${cap.note}</div>` : null;
 }
 
 function Field({ label, children, hint }) {
@@ -509,7 +529,8 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
     }
   }, [draft, standalone, api]);
 
-  const socialLive = { bodies: draft.bodies, hashtags: draft.hashtags, images: draft.images, excluded };
+  const caps = editCaps(item);
+  const socialLive = { bodies: draft.bodies, images: draft.images, excluded };
   const blocked = approveBlockReason(item, socialLive);
   const activeIds = item.kind === 'social' ? item.siblings.filter((s) => !excluded.has(s.id) && isApprovable({ ...item, status: s.status })).map((s) => s.id) : [item.id];
   const excludedIds = item.kind === 'social' ? item.siblings.filter((s) => excluded.has(s.id)).map((s) => s.id) : [];
@@ -594,7 +615,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
             ${item.cold ? html` <${Chip} tone="warn" title="This sender domain is used for cold outreach — reputational risk">cold sender</${Chip}>` : null}
           </dd>` : html`<dt>Via</dt><dd><span class="ibx-via"><${BrandIcon} name="buffer" size=${12} /> Buffer</span>${item.blogSlug ? html` <${Chip} icon="link">/${item.blogSlug}</${Chip}>` : null}</dd>`}
           ${item.replyTo ? html`<dt>Reply-to</dt><dd>${item.replyTo}</dd>` : null}
-          <dt>When</dt><dd><${WhenField} item=${item} value=${draft.scheduledAt} onChange=${set('scheduledAt')} readOnly=${readOnly} now=${now} /></dd>
+          <dt>When</dt><dd><${WhenField} item=${item} value=${draft.scheduledAt} onChange=${set('scheduledAt')} readOnly=${readOnly || !caps.schedule.edit} now=${now} />${isApprovable(item) && !caps.schedule.edit && caps.schedule.note ? html`<span class="ibx-muted" title=${caps.schedule.note}>· set in the social queue</span>` : null}</dd>
           <dt>Drafted by</dt><dd><b>${AGENT_LABEL(item.agent)}</b>${item.model ? html` <span class="ibx-muted">· ${item.model}</span>` : null}${item.actionName ? html` <span class="ibx-muted">· ${item.actionName}</span>` : null}${item.createdAt ? html` <span class="ibx-muted">· ${fmtRel(item.createdAt, now)}</span>` : null}</dd>
           ${item.deal || item.threadCount || item.topic ? html`<dt>Context</dt><dd>
             ${item.deal ? html`<${Chip} icon="tag">${item.deal}</${Chip}>` : null}
@@ -621,7 +642,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
               : html`<${BodyEditor} value=${draft.body} onChange=${set('body')} onBlur=${save} editorRef=${editorRef} />`}
           </section>
           <${InlineImages} images=${item.inlineImages} onOpen=${(i) => openImages(item.inlineImages, i)} />
-          <${MediaEditor} label="Attachments" images=${draft.images} readOnly=${readOnly} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i, !readOnly && set('images'))} />
+          ${draft.images.length ? html`<${MediaEditor} label="Images on this draft" images=${draft.images} readOnly=${true} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i)} /><${CapNote} cap=${caps.images} />` : null}
         ` : null}
 
         ${item.kind === 'newsletter' ? html`
@@ -629,13 +650,16 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
             <${Field} label="Subject" hint=${`${draft.subject.length} chars`}>
               <input class="ibx-input is-subject" value=${draft.subject} readOnly=${readOnly} onInput=${(e) => set('subject')(e.target.value)} onBlur=${save} />
             </${Field}>
-            ${item.newsletterType !== 'investor_update' ? html`
-              <${Field} label="A/B subject" hint=${draft.subjectB ? `${draft.subjectB.length} chars · 50/50 split` : 'optional'}>
-                <input class="ibx-input" value=${draft.subjectB} placeholder="No alternate subject" readOnly=${readOnly} onInput=${(e) => set('subjectB')(e.target.value)} onBlur=${save} />
+            ${item.newsletterType !== 'investor_update' && (caps.subjectB.edit || draft.subjectB) ? html`
+              <${Field} label="A/B subject" hint=${draft.subjectB ? `${draft.subjectB.length} chars` : 'optional'}>
+                <input class="ibx-input" value=${draft.subjectB} placeholder="No alternate subject" readOnly=${readOnly || !caps.subjectB.edit} onInput=${(e) => set('subjectB')(e.target.value)} onBlur=${save} />
+                <${CapNote} cap=${caps.subjectB} />
               </${Field}>` : null}
-            <${Field} label="Preheader" hint=${draft.preheader ? `${draft.preheader.length} chars` : 'shown after the subject in most inboxes'}>
-              <input class="ibx-input" value=${draft.preheader} placeholder="—" readOnly=${readOnly} onInput=${(e) => set('preheader')(e.target.value)} onBlur=${save} />
-            </${Field}>
+            ${caps.preheader.edit || draft.preheader ? html`
+              <${Field} label="Preheader" hint=${draft.preheader ? `${draft.preheader.length} chars` : 'shown after the subject in most inboxes'}>
+                <input class="ibx-input" value=${draft.preheader} placeholder="—" readOnly=${readOnly || !caps.preheader.edit} onInput=${(e) => set('preheader')(e.target.value)} onBlur=${save} />
+                <${CapNote} cap=${caps.preheader} />
+              </${Field}>` : null}
             <div class="ibx-inbox-pv" aria-label="Inbox preview">
               <span class="ibx-inbox-pv-from">${item.sender ?? 'Royalti'}</span>
               <span class="ibx-inbox-pv-subj">${draft.subject || '(no subject)'}</span>
@@ -664,10 +688,10 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
               </span>
             </div>
             ${scope !== 'all' ? html`<div class="ibx-muted ibx-scope-note">Editing ${PLATFORM_LABEL[item.siblings.find((s) => s.id === scope)?.platform]} only. "All platforms" edits update every platform that still shares the base text.</div>` : customIds.length ? html`<div class="ibx-muted ibx-scope-note">${customIds.map((id) => PLATFORM_LABEL[item.siblings.find((s) => s.id === id).platform]).join(', ')} ${customIds.length === 1 ? 'has' : 'have'} custom text — not changed by base edits.</div>` : null}
-            ${readOnly ? html`<div class="ibx-body is-ro">${socialBody}</div>` : html`<${BodyEditor} value=${socialBody} onChange=${setSocialBody} onBlur=${save} editorRef=${editorRef} minHeight=${140} />`}
+            ${readOnly || !caps.body.edit ? html`<div class="ibx-body is-ro">${socialBody}</div><${CapNote} cap=${isApprovable(item) ? caps.body : null} />` : html`<${BodyEditor} value=${socialBody} onChange=${setSocialBody} onBlur=${save} editorRef=${editorRef} minHeight=${140} />`}
             <div class="ibx-caps">
               ${item.siblings.filter((s) => !excluded.has(s.id)).map((s) => {
-                const len = textForPlatform(draft.bodies[s.id], draft.hashtags).length;
+                const len = textForPlatform(draft.bodies[s.id]).length;
                 const cap = PLATFORM_CAPS[s.platform];
                 const pct = cap ? Math.min(100, (len / cap) * 100) : 0;
                 return html`<div key=${s.id} class=${cn('ibx-cap', { 'is-bad': cap && len > cap, 'is-warn': cap && len <= cap && len > cap * 0.9 })}>
@@ -675,13 +699,15 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
                 </div>`;
               })}
             </div>
-            <${Field} label="Hashtags" hint="appended when not already in the text"><${HashtagEditor} tags=${draft.hashtags} onChange=${set('hashtags')} readOnly=${readOnly} /></${Field}>
-            ${item.siblings.some((s) => ['linkedin', 'instagram', 'facebook'].includes(s.platform)) ? html`
+            <${Field} label="Hashtags" hint="part of the text — only tags in the text are posted"><${HashtagEditor} text=${socialBody} onText=${setSocialBody} suggested=${item.suggestedTags} readOnly=${readOnly || !caps.body.edit} /></${Field}>
+            ${item.siblings.some((s) => ['linkedin', 'instagram', 'facebook'].includes(s.platform)) && (caps.firstComment.edit || draft.firstComment) ? html`
               <${Field} label="First comment" hint="LinkedIn · Instagram · Facebook">
-                <input class="ibx-input" value=${draft.firstComment} placeholder="Optional — e.g. the link, to keep reach up" readOnly=${readOnly} onInput=${(e) => set('firstComment')(e.target.value)} onBlur=${save} />
+                <input class="ibx-input" value=${draft.firstComment} placeholder="Optional — e.g. the link, to keep reach up" readOnly=${readOnly || !caps.firstComment.edit} onInput=${(e) => set('firstComment')(e.target.value)} onBlur=${save} />
+                ${isApprovable(item) ? html`<${CapNote} cap=${caps.firstComment} />` : null}
               </${Field}>` : null}
           </section>
-          <${MediaEditor} images=${draft.images} readOnly=${readOnly} platforms=${item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform)} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i, !readOnly && set('images'))} />
+          <${MediaEditor} images=${draft.images} readOnly=${readOnly || !caps.images.edit} platforms=${item.siblings.filter((s) => !excluded.has(s.id)).map((s) => s.platform)} onChange=${set('images')} onOpen=${(i) => openImages(draft.images, i, !readOnly && caps.images.edit && set('images'))} />
+          ${isApprovable(item) ? html`<${CapNote} cap=${caps.images} />` : null}
           <section class="ibx-previews">
             <div class="ibx-section-head"><${Icon} name="eye" size=${13} /><span>How it will look</span>
               <span class="ibx-spacer"></span>
@@ -691,7 +717,7 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
               </span>
             </div>
             <div class=${cn('ibx-pv-list', { 'is-single': shownPv.length === 1 })}>
-              ${shownPv.map((s) => html`<${PlatformPreview} key=${s.id} platform=${s.platform} body=${draft.bodies[s.id]} hashtags=${draft.hashtags}
+              ${shownPv.map((s) => html`<${PlatformPreview} key=${s.id} platform=${s.platform} body=${draft.bodies[s.id]}
                 images=${draft.images} thread=${item.media.thread} firstComment=${draft.firstComment} excluded=${excluded.has(s.id)}
                 onOpen=${(i) => openImages(draft.images, i)} />`)}
             </div>

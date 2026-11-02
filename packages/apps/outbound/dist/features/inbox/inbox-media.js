@@ -231,9 +231,9 @@ const DEFAULT_HANDLES = {
   facebook: { name: 'Royalti', sub: 'Page' },
 };
 
-export function PlatformPreview({ platform, body, hashtags, images, thread = [], firstComment, handles, onOpen, excluded }) {
+export function PlatformPreview({ platform, body, images, thread = [], firstComment, handles, onOpen, excluded }) {
   const id = { ...DEFAULT_HANDLES[platform], ...(handles?.[platform] ?? {}) };
-  const text = textForPlatform(body, hashtags);
+  const text = textForPlatform(body);
   const cap = PLATFORM_CAPS[platform];
   const over = cap ? text.length - cap : 0;
   const head = html`

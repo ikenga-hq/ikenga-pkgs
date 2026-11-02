@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   toSnakeRow, normalizeRow, buildInbox, readMedia, inlineImages, allImages,
   urgencyOf, applyFilter, sortItems, sectionize, facetCounts, buildPatch,
-  approveBlockReason, consequence, fixtureRows, EMPTY_FILTER, textForPlatform,
+  approveBlockReason, consequence, fixtureRows, EMPTY_FILTER, hashtagsIn, addHashtag, removeHashtag, editCaps,
 } from '../dist/lib/inbox-model.js';
 
 const NOW = Date.parse('2026-11-02T12:00:00Z');
@@ -83,8 +83,8 @@ test('filter by kind / destination / agent / status / media / search', () => {
 });
 
 test('buildPatch sends only changed contract keys', () => {
-  const it = normalizeRow(row({ item: { kind: 'social', channel: 'buffer', body: 'B', hashtags: ['#a'], media: { imageUrls: ['https://a/1.png'] } }, row: { channel: 'buffer' } }));
-  assert.deepEqual(buildPatch(it, { body: 'B', hashtags: ['#a'], images: ['https://a/1.png'] }), {});
+  const it = normalizeRow(row({ item: { kind: 'social', channel: 'buffer', body: 'B #a', hashtags: ['#a'], media: { imageUrls: ['https://a/1.png'] } }, row: { channel: 'buffer' } }));
+  assert.deepEqual(buildPatch(it, { body: 'B #a', hashtags: ['#a'], images: ['https://a/1.png'] }), {});
   const p = buildPatch(it, { body: 'C', hashtags: ['#a', '#b'], images: ['https://a/2.png', 'https://a/1.png'], scheduledAt: Date.parse('2026-11-04T10:00:00Z') });
   assert.deepEqual(p, { body: 'C', hashtags: ['#a', '#b'], media: { kind: 'carousel', imageUrls: ['https://a/2.png', 'https://a/1.png'] }, scheduledIso: '2026-11-04T10:00:00.000Z' });
 });
@@ -98,10 +98,42 @@ test('approve block reasons: caps, instagram image, excluded platforms, ledger',
   assert.match(approveBlockReason(so, { bodies: { [xId]: 'y'.repeat(300) } }), /X is over its 280-char cap/);
   assert.equal(approveBlockReason(so, { bodies: { [xId]: 'y'.repeat(300) }, excluded: new Set([xId]) }), null);
   assert.match(approveBlockReason({ ...items[1], ledgerApproval: { at: 'x' } }), /ledger/);
-  assert.equal(textForPlatform('Hello #a', ['#a', '#b']), 'Hello #a #b');
 });
 
 test('consequence line names recipients, count, provider, time and undo', () => {
   const it = normalizeRow(row({ item: { recipientsList: [{ name: 'A', email: 'a@x' }, { name: 'B', email: 'b@x' }] } }));
   assert.equal(consequence(it, { when: 'today 17:00' }), 'sends to A +1 · 2 recipients · via SMTP · today 17:00 · undo 10s');
+});
+
+test('hashtags live in the text: parse, add, remove; stamped extras become suggestions', () => {
+  assert.deepEqual(hashtagsIn('Hi #a and #b_c! #a'), ['#a', '#b_c']);
+  assert.equal(addHashtag('Hi there ', 'x'), 'Hi there #x');
+  assert.equal(addHashtag('Hi #x', '#x'), 'Hi #x');
+  assert.equal(removeHashtag('Hi #a world #ab #a', '#a'), 'Hi world #ab');
+  const so = buildInbox(fixtureRows(NOW)).find((i) => i.kind === 'social');
+  assert.deepEqual(so.hashtags, ['#royalti']);
+  assert.deepEqual(so.suggestedTags, ['#musicbusiness', '#labels']);
+});
+
+test('editCaps mirror what the sender sends', () => {
+  const items = buildInbox(fixtureRows(NOW));
+  const email = items.find((i) => i.provider === 'smtp');
+  const nl = items.find((i) => i.kind === 'newsletter');
+  const so = items.find((i) => i.kind === 'social');
+  assert.equal(editCaps(email).body.edit, true);
+  assert.equal(editCaps(email).images.edit, false, 'SMTP attaches no images');
+  assert.equal(editCaps(nl).preheader.edit, false, 'listmonk sends no preheader');
+  assert.equal(editCaps(nl).subjectB.edit, false, 'listmonk sends no A/B subject');
+  assert.equal(editCaps(so).images.edit, true);
+  assert.equal(editCaps(so).firstComment.edit, true);
+  // Source-bound social draft: only the body is honoured by the sender.
+  const bound = normalizeRow(row({ row: { channel: 'buffer' }, item: { kind: 'social', channel: 'buffer', platform: 'linkedin', body: 'B', social: { platform: 'linkedin', account: 'royalti', content: 'B', media_url: null, scheduled_for: null } } }));
+  assert.equal(bound.sourceBound, true);
+  const c = editCaps(bound);
+  assert.equal(c.body.edit, true);
+  assert.equal(c.images.edit, false);
+  assert.equal(c.firstComment.edit, false);
+  assert.equal(c.schedule.edit, false);
+  const thread = normalizeRow(row({ row: { channel: 'buffer' }, item: { kind: 'social', channel: 'buffer', body: 'B', media: { kind: 'thread', thread: [{ text: 'a' }, { text: 'b' }] }, social: { platform: 'x', account: 'royalti', content: 'a b', media_url: null, scheduled_for: null } } }));
+  assert.equal(editCaps(thread).body.edit, false, 'a thread post ignores edited body');
 });
