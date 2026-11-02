@@ -338,7 +338,8 @@ export function removeHashtag(text, tag) {
  * What the send path actually honours, per draft — so the editor never offers
  * an edit that won't go out. Mirrors the deployed sender (ikenga-sender):
  *   - smtp / resend / listmonk adapters send `subject` + `body` (edited wins);
- *     they attach no images; listmonk uses no A/B subject or preheader.
+ *     they attach no images; listmonk prepends `preheader` to HTML bodies
+ *     (royalti-co #108); there is no A/B subject (dropped — no native A/B).
  *   - buffer sends `body` (edited wins) and `media` / `firstComment` from the
  *     payload — the shell folds edits into the payload on approve.
  *   - a SOURCE-BOUND social draft (`item.social`, built from a social_queue row)
@@ -371,8 +372,12 @@ export function editCaps(it) {
     subject: yes, body: yes, schedule: yes,
     images: no(attachNote),
     firstComment: no(),
-    subjectB: it.provider === 'listmonk' ? no('Saved, but the listmonk sender doesn\u2019t send an A/B subject yet.') : no(),
-    preheader: it.provider === 'listmonk' ? no('Saved, but the listmonk sender doesn\u2019t send a preheader yet.') : no(),
+    // A/B subjects were dropped (listmonk has no native A/B test) — never offered.
+    subjectB: no(),
+    // listmonk prepends the preheader as a hidden block — HTML bodies only.
+    preheader: it.provider !== 'listmonk' ? no()
+      : it.bodyFormat === 'text' ? no('Plain-text newsletters have no preview line — switch the body to HTML to use one.')
+      : yes,
   };
 }
 
@@ -566,7 +571,7 @@ export function fixtureRows(now = Date.now()) {
     fx('fx-so-bs', 'awaiting', 'buffer', { ...social, platform: 'bluesky' }, { agent: 'cmo' }, { batch_id: 'blog-01', at: now + 3 * H }),
     fx('fx-so-ig', 'awaiting', 'buffer', { ...social, platform: 'instagram' }, { agent: 'cmo' }, { batch_id: 'blog-01', at: now + 3 * H }),
     fx('fx-nl', 'edited', 'listmonk', {
-      kind: 'newsletter', subject: 'You can deliver from Royalti now', subjectB: 'DDEX delivery, straight from your workspace', preheader: 'No aggregator account needed for the first batch.',
+      kind: 'newsletter', subject: 'You can deliver from Royalti now', preheader: 'No aggregator account needed for the first batch.',
       recipients: 2104, fromLine: 'Ruby <ruby@royalti.io>',
       body: '<h2>Delivery is here</h2><p>Royalti now ships a full delivery pipeline. Send DDEX ERN4 messages directly to DSPs that accept DDEX.</p><img src="' + IMG('photo-1516280440614-37939bbacd81', 1200, 600) + '" alt="Delivery"/><h2>What it costs</h2><p>It is a paid add-on — a revolutionary change for small labels.</p><p><a href="https://royalti.io/deliver">See how it works</a></p>',
     }, { agent: 'cmo' }, { at: now + 26 * H, edited: { preheader: 'No aggregator account needed for the first batch.' } }),

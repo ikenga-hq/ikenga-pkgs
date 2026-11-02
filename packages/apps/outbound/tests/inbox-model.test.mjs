@@ -122,8 +122,10 @@ test('editCaps mirror what the sender sends', () => {
   const so = items.find((i) => i.kind === 'social');
   assert.equal(editCaps(email).body.edit, true);
   assert.equal(editCaps(email).images.edit, false, 'SMTP attaches no images');
-  assert.equal(editCaps(nl).preheader.edit, false, 'listmonk sends no preheader');
-  assert.equal(editCaps(nl).subjectB.edit, false, 'listmonk sends no A/B subject');
+  assert.equal(editCaps(nl).preheader.edit, true, 'listmonk prepends the preheader to HTML bodies');
+  assert.equal(editCaps({ ...nl, bodyFormat: 'text' }).preheader.edit, false, 'no preview line on plain text');
+  assert.equal(editCaps(nl).subjectB.edit, false, 'A/B subject dropped');
+  assert.equal(editCaps(email).preheader.edit, false, 'SMTP has no preheader support');
   assert.equal(editCaps(so).images.edit, true);
   assert.equal(editCaps(so).firstComment.edit, true);
   // Source-bound social draft: only the body is honoured by the sender.

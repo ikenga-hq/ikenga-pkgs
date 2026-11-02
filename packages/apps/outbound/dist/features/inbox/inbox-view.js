@@ -650,13 +650,8 @@ function InboxDetail({ item, pos, total, onNav, ctl, now, standalone, inShare, e
             <${Field} label="Subject" hint=${`${draft.subject.length} chars`}>
               <input class="ibx-input is-subject" value=${draft.subject} readOnly=${readOnly} onInput=${(e) => set('subject')(e.target.value)} onBlur=${save} />
             </${Field}>
-            ${item.newsletterType !== 'investor_update' && (caps.subjectB.edit || draft.subjectB) ? html`
-              <${Field} label="A/B subject" hint=${draft.subjectB ? `${draft.subjectB.length} chars` : 'optional'}>
-                <input class="ibx-input" value=${draft.subjectB} placeholder="No alternate subject" readOnly=${readOnly || !caps.subjectB.edit} onInput=${(e) => set('subjectB')(e.target.value)} onBlur=${save} />
-                <${CapNote} cap=${caps.subjectB} />
-              </${Field}>` : null}
             ${caps.preheader.edit || draft.preheader ? html`
-              <${Field} label="Preheader" hint=${draft.preheader ? `${draft.preheader.length} chars` : 'shown after the subject in most inboxes'}>
+              <${Field} label="Preheader" hint=${draft.preheader ? `${draft.preheader.length} chars · aim for 40–90` : 'the preview line shown after the subject in most inboxes'}>
                 <input class="ibx-input" value=${draft.preheader} placeholder="—" readOnly=${readOnly || !caps.preheader.edit} onInput=${(e) => set('preheader')(e.target.value)} onBlur=${save} />
                 <${CapNote} cap=${caps.preheader} />
               </${Field}>` : null}

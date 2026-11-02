@@ -21,7 +21,7 @@ A single list of every draft that needs a decision, across all channels.
 - **Rows.** Kind mark, recipient, relative send time, subject, snippet, destination marks, chips, and an image thumbnail strip.
 - **Adaptive detail.** It changes with the draft's kind:
   - **Email / sequence:** subject, body (rendered or edited for HTML), attachments, images in the body, quality checks, CRM reply intelligence and the sequence step rail.
-  - **Newsletter:** subject, A/B subject, preheader, inbox-line preview, Review/Edit body with anti-pattern "fix in chat", the 8-cell scorecard and Skip cycle.
+  - **Newsletter:** subject, preheader (HTML bodies), inbox-line preview, Review/Edit body with anti-pattern "fix in chat", the 8-cell scorecard and Skip cycle.
   - **Social:** a fan-out of platform rows treated as one post.
     - Include or exclude each platform, and edit all platforms at once or each one alone.
     - Character caps, hashtags, first comment and the media editor.
@@ -31,7 +31,7 @@ A single list of every draft that needs a decision, across all channels.
   - Approve (⌘↵) with a 10 s undo window; bulk approve shares one window.
   - Reject with saved reasons, Retry for failed sends, Reschedule, and Send to chat.
   - **Only what the sender sends is editable** (`editCaps` in `inbox-model.js`, mirroring the deployed `ikenga-sender`):
-    - Email, sequence and newsletter drafts: subject, body and schedule. SMTP, Resend and listmonk attach no images, and listmonk sends no A/B subject or preheader, so those fields are shown read-only with a note.
+    - Email, sequence and newsletter drafts: subject, body and schedule. SMTP and Resend attach no images (shown read-only with a note). listmonk sends the preheader as a hidden preview block on HTML bodies. There is no A/B subject (listmonk has no native A/B test).
     - Social: body, images and first comment. Hashtags are part of the text, because only tags in the text are posted.
     - Social drafts built from the social queue (`item.social`): only the body (and not on threads). Every other field comes from the queue entry, and the sender refuses a post whose fields disagree with it.
   - Edits persist through `host.paActions.update`, which merges them into `edited_json`. On approve, the shell folds them into the payload, except for queue-built social drafts.
