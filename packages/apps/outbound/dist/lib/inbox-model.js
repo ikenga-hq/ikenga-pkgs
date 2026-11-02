@@ -474,7 +474,9 @@ function fx(id, status, channel, item, meta, extra = {}) {
   };
 }
 
-const IMG = (id, w = 1200, h = 627) => `https://images.unsplash.com/${id}?w=${w}&h=${h}&fit=crop&auto=format`;
+// A demo host (demo/index.html) can map fixture images to local copies — the
+// Ikenga viewer's CSP blocks remote images.
+const IMG = (id, w = 1200, h = 627) => globalThis.__OUTBOX_DEMO_IMG?.(id) ?? `https://images.unsplash.com/${id}?w=${w}&h=${h}&fit=crop&auto=format`;
 
 export function fixtureRows(now = Date.now()) {
   const social = {

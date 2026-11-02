@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Outbox · unified inbox (demo)</title>
+    <!-- Design preview of com.ikenga.outbound on demo rows — open in an Ikenga
+         viewer pane or any browser. Not published (outside package.json `files`).
+         Loads the REAL pkg build from ../dist; nothing here is a mock-up. -->
+    <style>
+      html, body, #root { height: 100%; overflow: hidden; margin: 0; }
+      #root > .boot { padding: 1rem 1.25rem; font: 13px system-ui; opacity: .7; }
+    </style>
+  </head>
+  <body>
+    <div id="root"><div class="boot">Loading outbox demo…</div></div>
+    <script>
+      // A viewer pane frames this page; pretend to be top-level so the pkg runs
+      // standalone on its demo rows instead of waiting for a host bridge.
+      try { window.parent = window; } catch (e) {}
+      // The viewer CSP blocks remote images — serve the fixture images locally.
+      window.__OUTBOX_DEMO_IMG = (id) => new URL('img/' + id + '.jpg', document.baseURI).href;
+    </script>
+    <script type="module">
+      try {
+        await import(new URL('../dist/app.js', document.baseURI).href);
+      } catch (e) {
+        document.getElementById('root').innerHTML = '<div class="boot">Failed to load: ' + (e.message || e) + '</div>';
+        throw e;
+      }
+    </script>
+  </body>
+</html>
