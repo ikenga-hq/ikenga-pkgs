@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import type { Budget, PendingSpend } from '../schema/akuko-project.ts';
 import type { Job } from '../providers/contract.ts';
-import { parseProviderConfig } from '../providers/config.ts';
+import { loadProviderConfig, parseProviderConfig } from '../providers/config.ts';
 import { createFakeHost, tinyProject } from '../providers/__fixtures__/fake-host.ts';
 import { SETUP_POINTER, createSpendGate } from '../spend/gate.ts';
 import { FAKE_PAID_ID, FAKE_PRICE, createFakePaid, testConfig } from '../spend/__fixtures__/fake-paid.ts';
@@ -262,5 +262,38 @@ describe('the public skill ships no brand values', () => {
     }
     assert.deepEqual(hits, []);
     assert.ok(existsSync(join(ROOT, 'LICENSE')));
+  });
+});
+
+describe('setup: key names come from providers/config.json', () => {
+  const real = loadProviderConfig();
+  const paid = Object.entries(real.providers).filter(([, p]) => p.billing !== 'free' && !p.example);
+
+  it('every paid, non-example provider names its key variable', () => {
+    assert.ok(paid.length >= 2);
+    for (const [id, p] of paid) assert.match(p.key_env ?? '', /^[A-Za-z_][A-Za-z0-9_]*$/, id);
+    assert.equal(real.providers['gemini-image']?.key_env, 'GEMINI_API_KEY');
+    assert.equal(real.providers.fal?.key_env, 'FAL_KEY');
+  });
+
+  it('reports a key present when exactly that variable is set, and never returns its value', () => {
+    for (const [id, p] of paid) {
+      const name = p.key_env as string;
+      const r = keyPresence(real, { [name]: SECRET });
+      assert.deepEqual(r[id], { env: name, present: true });
+      assert.equal(JSON.stringify(r).includes(SECRET), false);
+      // a differently named guess is not what is read
+      if (defaultKeyEnvName(id) !== name) assert.equal(keyPresence(real, { [defaultKeyEnvName(id)]: SECRET })[id]?.present, false);
+    }
+  });
+
+  it('an answer still overrides the configured name', () => {
+    assert.deepEqual(keyPresence(real, { MINE: 'v' }, { fal: 'MINE' }).fal, { env: 'MINE', present: true });
+  });
+
+  it('rejects a key_env that is not a variable name', () => {
+    const bad = JSON.parse(JSON.stringify(real));
+    bad.providers.fal.key_env = 'FAL KEY=x';
+    assert.throws(() => parseProviderConfig(bad));
   });
 });

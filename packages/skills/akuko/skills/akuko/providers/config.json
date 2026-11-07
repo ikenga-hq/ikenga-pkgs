@@ -22,6 +22,7 @@
       "label": "Gemini image (Nano Banana) — your Gemini API key",
       "billing": "direct-api",
       "example": false,
+      "key_env": "GEMINI_API_KEY",
       "default_model": "gemini-nano-banana-2.1",
       "models": {
         "gemini-nano-banana-2.1": {
@@ -45,6 +46,7 @@
       "label": "fal image (Nano Banana 2 on fal) — your fal key",
       "billing": "direct-api",
       "example": false,
+      "key_env": "FAL_KEY",
       "default_model": "fal-ai/nano-banana-2",
       "models": {
         "fal-ai/nano-banana-2": {

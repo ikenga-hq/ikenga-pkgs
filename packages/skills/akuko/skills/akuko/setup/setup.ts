@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs';
 import type { AkukoProject } from '../schema/akuko-project.ts';
 import type { HostAdapter } from '../hosts/types.ts';
 import type { AkukoProviderConfig } from '../providers/config.ts';
-import { loadProviderConfig } from '../providers/config.ts';
+import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
 import { committedFromLedger } from '../spend/ledger.ts';
 import {
   BrandSchema,
@@ -42,7 +42,7 @@ export interface SetupAnswers {
   defaults?: { aspect_ratio?: AspectRatio; runtime_s?: number };
   /** Palette, fonts, logo — from the person only. Omit / null for none. */
   brand?: BrandInput | null;
-  /** Provider id → env var name, where the default `<ID>_API_KEY` is wrong. */
+  /** Provider id → env var name, that override the config's `key_env`. */
   keyEnvNames?: Record<string, string>;
 }
 
@@ -72,7 +72,7 @@ export interface SetupResult {
   browser: BrowserAdvice;
 }
 
-/** Env var name that holds a provider's key unless the answers say otherwise. */
+/** Fallback env var name when neither the answers nor the provider's `key_env` in config.json name one. */
 export function defaultKeyEnvName(providerId: string): string {
   return `${providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`;
 }
@@ -95,7 +95,7 @@ export function keyPresence(
 ): Record<string, { env: string; present: boolean }> {
   const out: Record<string, { env: string; present: boolean }> = {};
   for (const id of providersNeedingKeys(config)) {
-    const name = names[id] ?? defaultKeyEnvName(id);
+    const name = names[id] ?? providerKeyEnv(config, id) ?? defaultKeyEnvName(id);
     out[id] = { env: name, present: (env[name] ?? '') !== '' };
   }
   return out;

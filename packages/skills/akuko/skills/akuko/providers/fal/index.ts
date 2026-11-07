@@ -23,7 +23,7 @@
 
 import type { Asset, AssetKind } from '../../schema/akuko-project.ts';
 import type { AkukoProviderConfig } from '../config.ts';
-import { estimateFromConfig, loadProviderConfig, providerConfig } from '../config.ts';
+import { estimateFromConfig, loadProviderConfig, providerConfig, providerKeyEnv } from '../config.ts';
 import type { Cost, Job, JobHandle, JobItem, JobStatus, Provider, WaveOneHost } from '../contract.ts';
 import { sealProvider } from '../../spend/gate.ts';
 import type { FetchLike, RefLoader } from '../gemini-image/image-common.ts';
@@ -46,7 +46,7 @@ const ASPECTS = ['auto', '21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4
 
 export interface FalImageOptions {
   config?: AkukoProviderConfig;
-  /** The user's key, or a function that returns it. Defaults to the FAL_KEY environment variable. */
+  /** The user's key, or a function that returns it. Defaults to the environment variable named by `key_env` in providers/config.json. */
   apiKey?: string | (() => string | undefined);
   fetch?: FetchLike;
   loadRef?: RefLoader;
@@ -87,9 +87,10 @@ export function createFalImageProvider(host: WaveOneHost, opts: FalImageOptions 
   const loadRef = opts.loadRef ?? defaultRefLoader(opts.fetch);
   const stored = new Map<string, Asset[]>();
 
+  const keyEnv = providerKeyEnv(config, FAL_PROVIDER_ID);
   const key = (): string => {
-    const k = typeof opts.apiKey === 'function' ? opts.apiKey() : (opts.apiKey ?? process.env.FAL_KEY);
-    if (!k) throw new FalImageError('No fal API key: set FAL_KEY (or pass apiKey). Nothing was sent.');
+    const k = typeof opts.apiKey === 'function' ? opts.apiKey() : (opts.apiKey ?? (keyEnv ? process.env[keyEnv] : undefined));
+    if (!k) throw new FalImageError(`No fal API key: set ${keyEnv ?? 'the key variable named by key_env in providers/config.json'} (or pass apiKey). Nothing was sent.`);
     return k;
   };
   const headers = (json: boolean): Record<string, string> => ({

@@ -157,18 +157,43 @@ describe('doctor, node half', () => {
     }
   });
 
+  it('reports a key as set when exactly the configured variable is set', () => {
+    const keep = { ...process.env };
+    for (const k of ['FAL_KEY', 'FAL_API_KEY', 'GEMINI_API_KEY']) delete process.env[k];
+    try {
+      const read = (): string => {
+        const l: string[] = [];
+        run([tmpdir()], (x) => l.push(x));
+        return l.join('\n');
+      };
+      assert.match(read(), /fal\s+FAL_KEY: not set/);
+      process.env.FAL_API_KEY = 'x';
+      assert.match(read(), /fal\s+FAL_KEY: not set/);
+      process.env.FAL_KEY = 'x';
+      process.env.GEMINI_API_KEY = 'x';
+      const out = read();
+      assert.match(out, /fal\s+FAL_KEY: set/);
+      assert.match(out, /gemini-image\s+GEMINI_API_KEY: set/);
+    } finally {
+      for (const k of ['FAL_KEY', 'FAL_API_KEY', 'GEMINI_API_KEY']) {
+        if (keep[k] === undefined) delete process.env[k];
+        else process.env[k] = keep[k];
+      }
+    }
+  });
+
   it('never prints a key value', () => {
     const secret = 'sk-test-SENTINEL-doctor-0123456789';
     const keep = { ...process.env };
     process.env.ACME_IMAGES_API_KEY = secret;
-    process.env.FAL_API_KEY = secret;
+    process.env.FAL_KEY = secret;
     process.env.GEMINI_API_KEY = secret;
     try {
       const lines: string[] = [];
       run([tmpdir()], (l) => lines.push(l));
       assert.equal(lines.join('\n').includes(secret), false);
     } finally {
-      for (const k of ['ACME_IMAGES_API_KEY', 'FAL_API_KEY', 'GEMINI_API_KEY']) {
+      for (const k of ['ACME_IMAGES_API_KEY', 'FAL_KEY', 'GEMINI_API_KEY']) {
         if (keep[k] === undefined) delete process.env[k];
         else process.env[k] = keep[k];
       }
