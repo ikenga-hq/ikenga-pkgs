@@ -1,7 +1,7 @@
 // Host detection + adapters, against simulated hosts (G-HOST).
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -16,11 +16,12 @@ import {
   normalizeCapabilities,
   parseCliArgs,
   probeNode,
+  shellBinaryPath,
   toHostRecord,
   type NodeProbeDeps,
 } from './detect.ts';
 import { createNodeHost, IkengaHost } from './ikenga.ts';
-import { createLocalHost, LocalHost, PROJECT_FILE, serializeProject } from './local.ts';
+import { createLocalHost, LocalHost, PROJECT_FILE, serializeProject, writeFileAtomic } from './local.ts';
 import { NotImplementedError } from './shared.ts';
 import type { AssetInput, HostAdapter, WaveOneHost } from './types.ts';
 
@@ -194,6 +195,40 @@ describe('detect() — simulated hosts', () => {
     assert.equal(d.capabilities.codeExec, true);
   });
 
+  // SHELL / ComSpec unset (Claude Code in Docker, a bare CI container): G-HOST review condition 1.
+  it('SHELL/ComSpec unset + a Bash tool → B', async () => {
+    const d = await detectWith(sim({ env: {} }), ['Bash', 'Read', 'Write']);
+    assert.equal(d.level, 'B');
+    assert.equal(d.capabilities.shell, true);
+  });
+
+  it('SHELL/ComSpec unset + a PowerShell tool on Windows → B', async () => {
+    const d = await detectWith(sim({ platform: 'win32', home: 'C:\\Users\\u', env: {} }), ['PowerShell', 'Read']);
+    assert.equal(d.level, 'B');
+  });
+
+  it('SHELL/ComSpec unset, no tool list, /bin/sh present (bare container script) → B', async () => {
+    const d = await detectWith(sim({ env: {}, files: { '/bin/sh': '' } }));
+    assert.equal(d.level, 'B');
+  });
+
+  it('SHELL/ComSpec unset, no tool list, cmd.exe present on Windows → B', async () => {
+    const files = { 'D:\\Win\\System32\\cmd.exe': '' };
+    const d = await detectWith(sim({ platform: 'win32', home: 'C:\\Users\\u', env: { SystemRoot: 'D:\\Win' }, files }));
+    assert.equal(d.level, 'B');
+    assert.equal(shellBinaryPath({ platform: 'win32', env: {} }), 'C:\\Windows\\System32\\cmd.exe');
+  });
+
+  it('a tool list without a shell tool keeps a sandbox with /bin/sh at A (claude.ai code tool)', async () => {
+    const d = await detectWith(sim({ env: {}, files: { '/bin/sh': '' } }), ['bash_tool', 'create_file', 'view']);
+    assert.equal(d.level, 'A');
+    assert.equal(d.capabilities.shell, false);
+  });
+
+  it('SHELL/ComSpec unset, no tools, no shell binary → A', async () => {
+    assert.equal((await detectWith(sim({ env: {} }))).level, 'A');
+  });
+
   it('AKUKO_HOST=B keeps a local run out of a running Ikenga', async () => {
     const d = await detectWith(sim({ env: { SHELL: '/bin/bash', AKUKO_HOST: 'B' }, files: { [LINUX_CONTROL]: control(1) }, alive: [1] }));
     assert.equal(d.level, 'B');
@@ -281,6 +316,42 @@ describe('LocalHost state + assets', () => {
     await assert.rejects(host.storeAsset({ ...png(), id: 'bad id!' }));
   });
 
+  it('storing the same file name twice gives two distinct ids from the final names', async () => {
+    const dir = tmpProject(false);
+    const host = createLocalHost({ projectDir: dir });
+    const a = await host.storeAsset(png(1));
+    const b = await host.storeAsset(png(2));
+    const c = await host.storeAsset(png(3));
+    assert.deepEqual([a.id, b.id, c.id], ['sc1_sh2-keyframe', 'sc1_sh2-keyframe-2', 'sc1_sh2-keyframe-3']);
+    assert.deepEqual([a.file?.uri, b.file?.uri, c.file?.uri], [
+      'board/panels/sc1_sh2-keyframe.png', 'board/panels/sc1_sh2-keyframe-2.png', 'board/panels/sc1_sh2-keyframe-3.png',
+    ]);
+  });
+
+  it('a requested id is honoured even when the file name is de-duplicated', async () => {
+    const dir = tmpProject(false);
+    const host = createLocalHost({ projectDir: dir });
+    await host.storeAsset({ ...png(1), id: 'kf_v1' });
+    const second = await host.storeAsset({ ...png(2), id: 'kf_v2' });
+    assert.equal(second.id, 'kf_v2');
+    assert.equal(second.file?.uri, 'board/panels/sc1_sh2-keyframe-2.png');
+  });
+
+  it('a bad id or owner is refused before anything is written', async () => {
+    const dir = tmpProject(false);
+    const host = createLocalHost({ projectDir: dir });
+    await assert.rejects(host.storeAsset({ ...png(), id: 'bad id!' }), /invalid asset id/);
+    await assert.rejects(host.storeAsset({ ...png(), owner: 'bad owner!' }));
+    assert.deepEqual(readdirSync(dir), [], 'no file and no folder was created');
+  });
+
+  it('writeFileAtomic removes its temp file when the write fails', async () => {
+    const dir = tmpProject(false);
+    mkdirSync(join(dir, 'target.json')); // rename onto a directory fails
+    await assert.rejects(writeFileAtomic(join(dir, 'target.json'), '{}'));
+    assert.deepEqual(readdirSync(dir), ['target.json']);
+  });
+
   it('publishView writes views/<name>.html', async () => {
     const dir = tmpProject(false);
     const r = await createLocalHost({ projectDir: dir }).publishView({ name: 'default-board', html: '<!doctype html><title>b</title>' });
@@ -331,6 +402,18 @@ describe('ClaudeArtifactHost', () => {
     assert.equal(a.file?.uri, '/_blob/a1');
     assert.equal(AssetSchema.safeParse(a).success, true);
     assert.deepEqual(f.uploads, [{ filename: 'sc1_sh2-keyframe.png', mime: 'image/png', data: png().data }]);
+  });
+
+  it('storeAsset ids are unique per upload unless an id is requested; bad input never uploads', async () => {
+    const f = fakeBindings();
+    const host = createClaudeArtifactHost(f.b);
+    const a = await host.storeAsset(png(1));
+    const b = await host.storeAsset(png(2));
+    assert.deepEqual([a.id, b.id], ['sc1_sh2-keyframe-a1', 'sc1_sh2-keyframe-a2']);
+    assert.equal((await host.storeAsset({ ...png(3), id: 'kf_v3' })).id, 'kf_v3');
+    await assert.rejects(host.storeAsset({ ...png(), id: 'bad id!' }));
+    await assert.rejects(host.storeAsset({ ...png(), owner: 'bad owner!' }));
+    assert.equal(f.uploads.length, 3, 'rejected inputs were not uploaded');
   });
 
   it('publishView returns the artifact url', async () => {

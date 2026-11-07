@@ -181,12 +181,49 @@ export function ikengaShellRunning(d: NodeProbeDeps): boolean {
   }
 }
 
+/**
+ * Claude Code's shell tools. Exact names only: claude.ai's chat tools are
+ * named differently (unverified — lib/hosts.md §Manual host check A2), so a
+ * near-miss like `bash_tool` must not count.
+ */
+export const SHELL_TOOLS: readonly string[] = ['Bash', 'PowerShell'];
+
+export function hasShellTool(toolNames: readonly string[]): boolean {
+  return toolNames.some((t) => SHELL_TOOLS.includes(t));
+}
+
+/** A shell binary that exists on any normal machine of that platform. */
+export function shellBinaryPath(d: Pick<NodeProbeDeps, 'env' | 'platform'>): string {
+  if (d.platform === 'win32') {
+    return win32.join(d.env.SystemRoot ?? d.env.windir ?? 'C:\\Windows', 'System32', 'cmd.exe');
+  }
+  return '/bin/sh';
+}
+
+/**
+ * Can the agent run shell commands? Signals, strongest first:
+ *   1. a `Bash` / `PowerShell` tool in the agent's tool list;
+ *   2. `SHELL` / `ComSpec` in the environment;
+ *   3. a shell binary on disk (`/bin/sh`, `%SystemRoot%\System32\cmd.exe`) — used
+ *      ONLY when no tool list was passed (a script or CI run with no agent,
+ *      e.g. a bare Docker container with no `SHELL`). When a tool list is
+ *      passed and has no shell tool, a binary on disk is not evidence the
+ *      agent can use it: a claude.ai code sandbox may well contain `/bin/sh`
+ *      (to be confirmed by §Manual host check A2), and it must stay host A.
+ */
+export function detectShell(hints: ProbeHints, deps: NodeProbeDeps): boolean {
+  const tools = hints.toolNames ?? [];
+  if (hasShellTool(tools)) return true;
+  if (deps.env.SHELL || deps.env.ComSpec || deps.env.COMSPEC) return true;
+  if (tools.length > 0) return false;
+  return deps.exists(shellBinaryPath(deps));
+}
+
 /** Capabilities of the Node process this code runs in. */
 export function probeNode(hints: ProbeHints = {}, deps: NodeProbeDeps = defaultNodeDeps()): Capabilities {
   const tools = hints.toolNames ?? [];
-  const shell = Boolean(deps.env.SHELL || deps.env.ComSpec || deps.env.COMSPEC);
   return normalizeCapabilities({
-    shell,
+    shell: detectShell(hints, deps),
     fs: true,       // node:fs is loaded, or this module would not have imported
     codeExec: true, // this code is running
     artifactDb: hasArtifactDbTool(tools),

@@ -12,7 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
@@ -42,8 +42,13 @@ export function serializeProject(p: AkukoProject): string {
 export async function writeFileAtomic(path: string, data: string | Uint8Array): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, data);
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true });
+    throw err;
+  }
 }
 
 /** First free `<stem>[-n]<ext>` in `dir`. Existing files are never overwritten. */
@@ -96,11 +101,16 @@ export class LocalHost implements HostAdapter {
   async storeAsset(a: AssetInput): Promise<Asset> {
     const rel = assetDir(a);
     const dir = join(this.projectDir, ...rel.split('/'));
-    await mkdir(dir, { recursive: true });
+    // Everything that can fail validation happens before anything touches disk.
     const name = freeName(dir, safeBasename(a.filename));
-    await writeFile(join(dir, name), a.data, { flag: 'wx' });
+    // A requested id is honoured as given; otherwise the id comes from the
+    // FINAL (de-duplicated) file name, so two stores never share an id.
+    const id = assetId({ id: a.id, filename: name });
     const hash = createHash('sha256').update(a.data).digest('hex');
-    return buildAsset(a, { uri: `${rel}/${name}`, hash }, assetId(a), this.now());
+    const asset = buildAsset(a, { uri: `${rel}/${name}`, hash }, id, this.now());
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, name), a.data, { flag: 'wx' });
+    return asset;
   }
 
   /** Write the view to `<project>/views/<name>.html` and return its path. */

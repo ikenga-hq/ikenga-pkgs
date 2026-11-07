@@ -82,9 +82,15 @@ export class ClaudeArtifactHost implements HostAdapter {
 
   /** Upload bytes to the artifact's asset store; `file.uri` is the returned url. Not added to the project. */
   async storeAsset(a: AssetInput): Promise<Asset> {
-    const up = await this.b.uploadAsset({ filename: safeBasename(a.filename), mime: a.mime, data: a.data });
+    // Validate the id and the record before uploading, so a bad input never leaves an orphaned asset.
+    const base = assetId({ id: a.id, filename: a.filename });
     const now = (this.b.now ?? (() => new Date()))();
-    return buildAsset(a, { uri: up.url }, a.id ?? assetId({ filename: a.filename }), now);
+    buildAsset(a, { uri: 'pending' }, base, now);
+    const up = await this.b.uploadAsset({ filename: safeBasename(a.filename), mime: a.mime, data: a.data });
+    // A requested id is honoured; otherwise the store's unique id is appended so
+    // two uploads of the same file name never share an akuko id.
+    const id = a.id ?? `${base}-${up.id.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+    return buildAsset(a, { uri: up.url }, id, now);
   }
 
   /** Publish the view as a Claude artifact (writing views need the `db` capability — WP-07a/07c). */
