@@ -102,9 +102,67 @@ Hard rules:
 
 ## Decision folding
 
-*Owner: **WP-07a** — fills this section (folding order, idempotence by decision id, `undo`, `approve-spend` / `decline-spend` → `pending_spend`, comment author, "since" cursor per host store).*
+*Owner: **WP-07a**. Code: `../decisions/fold.ts` (`foldDecisions`). Stores: `../decisions/{artifact-db,jsonl,ikenga}.ts`. View side: `../views/contract.md`.*
 
-Until it lands, `readDecisions()` throws `NotImplementedError` on every host. Actions catch it, skip folding, tell the person that decisions from a review surface can't be read yet, and must not invent a folding scheme.
+Every action starts by folding: `readDecisions(since?)` through the host adapter, then `foldDecisions(project, decisions, {conformed})`, then `writeState()` if `report.changed`. Then tell the person what the report says, including every `rejected` entry and every invalid record. Without code (host A), or from the shell, use `../decisions/cli.ts` (`fold` on B/C, `fold-file` on A; `actions/review.md`).
+
+**What folds into what**
+
+| Decision | Effect (when accepted) |
+|---|---|
+| `approve` | unit → `approved` (+ the person's comment if it has text) |
+| `request-changes` | unit → `needs-rework` + the person's comment |
+| `note` | the person's comment; status unchanged |
+| `approve-spend` | `pending_spend[].status = 'approved'`, `.decision = <id>`; only if `canApprove(project, job, decision)` passes (budget, cap, **amount shown ≥ the job's bound**: `../views/contract.md` §7) |
+| `decline-spend` | `pending_spend[].status = 'declined'`, `.decision = <id>` |
+| `undo` | reverses exactly the decision named in `undoes` |
+
+- **Comments.** A person's comment is `{ts: at, stage, author: by, text, decision: id}`.
+  - Every status change folding makes also leaves a trail comment, `{author: 'agent', text: 'Status: <was> → <now>', decision: id}`. The trail is how `undo` knows the status the unit had just before that decision, even if an action revised it in between. Don't edit or delete trail comments.
+  - Actions add their own "Revised: …" comments without a `decision` id, as before.
+- **Stages.** When a stage's last unit is approved, the stage becomes `approved`. The next stage unlocks (`locked → not-started`) and `current_stage` moves on. If an undo un-approves a unit, its stage goes back to `in-review`.
+- **Time.** `updated_at` on a unit and the project follow the decisions' `at`, never the clock.
+
+**Properties**
+
+- **Idempotent by decision id.** Pass everything the store holds every time if you like. Ids already in `decisions[]` are skipped, and a re-fold changes nothing.
+- **Order-independent.** Decisions apply in one total order: `at` as an instant, then `id`. `decisions[]` is kept in that order. A decision that arrives late is slotted into its place: an older decision never overrides a later one on the same unit or job. The arrival order and the batching do not change the result.
+- **`undo`.**
+  - Reverses the named decision: its status change (back to the trail's `<was>`, repairing the trail if it was not the latest) and its comment.
+  - An undo of an undo re-applies the original.
+  - An undo must be later than its target and on the same unit.
+  - An undo whose target hasn't arrived is not stored. It is reported as `unknown-target` and tried again on the next read. **Don't advance a `since` cursor past a read that reported `unknown-target`.**
+  - An undo of a decision on a stage the unit has left, or of an approval whose job has run, is refused.
+- **Only a person approves (R-12).** `approve`, `approve-spend` and `undo` count only when both hold:
+  - `by` is not an agent name (`fold.ts#AGENT_AUTHOR`);
+  - `view` is on the conformed-views list (`../decisions/conformed.ts`), or is `chat@1` with text quoting the person's reply (`approve …`).
+
+  Notes, requests for changes and declines are accepted from any view. No action, and nothing folding writes for itself, ever sets `approved`.
+- **Rejected decisions stay visible.**
+  - They stay in `decisions[]` (apart from unknown units and early undos, which integrity forbids storing).
+  - They are listed in `report.rejected` with a reason. Tell the person.
+  - Their unit gets a `Not applied: …` agent comment.
+  - A rejected unit decision stays rejected. A refused `approve-spend` is visible as a waiting job whose latest decision is that approval. The person approves again.
+- **Stale decisions.** A unit decision for a stage the unit has left (`stale-stage`), or on a unit with nothing produced yet (`not-reviewable`), is refused, with a notice.
+
+**Cursors (`since`)** are per store. They only save reading; correctness never depends on them, and none is stored in `akuko.json`.
+
+| Host | Store | Cursor |
+|---|---|---|
+| A | DB collection `decisions`, one row per decision | `db:<updatedAt>` of the newest row (rows at or after it are re-read) |
+| B | `<project>/decisions.jsonl` | `jsonl:<byte offset>` after the last complete line (a half-written last line is left for next time) |
+| C | `iyke iframe-state` → mirrored into `decisions.jsonl` | the mirror's `jsonl:<offset>`. Always mirror before reading: a pane reload clears the iframe state |
+
+**Decision-driven status rows** (adds to §Status transitions)
+
+| From | To | Who | When |
+|---|---|---|---|
+| `pending-review` / `needs-rework` / `approved` | `approved` | person | `approve` folded |
+| `pending-review` / `needs-rework` / `approved` | `needs-rework` | person | `request-changes` folded |
+| any | the trail's `<was>` | person | `undo` of that decision folded |
+| `pending_spend` `awaiting-approval` / `declined` | `approved` | person | `approve-spend` folded and `canApprove` passed |
+| `pending_spend` `awaiting-approval` / `approved` | `declined` | person | `decline-spend` folded (not after the job ran) |
+| `pending_spend` `approved` / `declined` | `awaiting-approval` | person | `undo` of the spend decision folded (not after the job ran) |
 
 ## Open questions
 
