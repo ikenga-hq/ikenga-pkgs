@@ -28,6 +28,8 @@ export const ProviderConfigSchema = z.object({
   label: z.string().min(1),
   billing: z.enum(['free', 'direct-api', 'connected-mcp']),
   example: z.boolean().default(false),
+  key_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'key_env must be an environment variable name').optional()
+    .describe('Environment variable that holds the key for this provider. The one place the name lives: providers, setup and doctor all read it.'),
   default_model: z.string().min(1),
   models: z.record(ModelConfigSchema),
 }).strict().superRefine((p, ctx) => {
@@ -70,6 +72,11 @@ export function providerConfig(config: AkukoProviderConfig, providerId: string):
   const entry = config.providers[providerId];
   if (!entry) throw new ProviderConfigError(`provider "${providerId}" has no entry in providers/config.json`);
   return entry;
+}
+
+/** The env var a provider's key is read from, when the config names one. */
+export function providerKeyEnv(config: AkukoProviderConfig, providerId: string): string | undefined {
+  return config.providers[providerId]?.key_env;
 }
 
 export interface ResolvedPrice {

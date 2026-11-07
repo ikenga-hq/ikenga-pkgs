@@ -53,10 +53,23 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 | 8 | export | `export` | WP-15 |
 
 ### 0 intake
-*WP-04 fills this.*
+*Action: `actions/intake.md`; code `../breakdown/intake.ts`. Free.*
+
+- Produces `script/source.md` (the story as given) and, unless the person chose "break it down directly", `script/screenplay.fountain`. Both are recorded as assets (`script-source`, `script-screenplay`; stage `intake`, kind `other`) at `pending-review`, and `script.source` / `script.screenplay` point at them.
+- Stage state: `in-progress` while working, `in-review` once the files are recorded. Intake is `approved` when a person approves every intake asset (assets are units like any other, so decision folding handles them; folding then unlocks breakdown).
+- For prose the person chooses **each time**: adapt to a screenplay first (`adapt`), or break the prose down directly (`direct`). The choice is not stored; `script.screenplay` is absent on the direct route.
+- Recording is idempotent: re-running `completeIntake()` with the same files adds no second asset.
+- Never re-adapts: once `shots[]` is not empty, the action stops and does not replace the source (a rule of `actions/intake.md`, not enforced in code).
 
 ### 1 breakdown
-*WP-04 fills this.*
+*Action: `actions/breakdown.md`; film rules `../profiles/film/breakdown.md`; code `../breakdown/`. Free.*
+
+- Opens when intake is `approved`.
+- Produces `scenes[]` (`sc<N>`), `script.beats[]` (`sc<N>_b<K>`), `shots[]` (`sc<N>_sh<M>`, at most 10 s and 2 principals) and a bible checklist (`bible.characters|locations|styles[]`, ids `char_*` / `loc_*` / `style_*`). All are stage `breakdown`, status `pending-review`; the stage is `in-review`.
+- Writes `[[sc<N>_sh<M>]]` notes into `script/screenplay.fountain` (or `script/source.md` on the direct route).
+- Ids are allocated by code, never by the agent; numbers are never reused; a shot inserted later takes a letter (`sc3_sh2A`).
+- Idempotent: if `scenes[]` or `shots[]` is not empty, nothing is created and only missing tags are added. Lint errors (over 10 s, over 2 principals, no duration, no action, no scene) stop the write; a shot under 5 s or a non-canonical id is only a warning.
+- Hand-off: the checklist entries are units of stage `breakdown`, so the breakdown is `approved` only when every shot **and** every checklist entry is approved. The bible stage (WP-05, not built yet) then starts from the approved entries; the sketch board reads `shots[]`.
 
 ### 2 sketch
 *WP-21 fills this.*

@@ -1,9 +1,10 @@
 /**
  * akuko — decision store for host C (Ikenga), mirrored to `decisions.jsonl`.
  *
- * What the G-HOST manual check found (C4(b), C5): `art.state` is iframe
- * localStorage the agent can't read, and `art.publishState` is undefined in
- * an Ikenga pane. So a view posts the raw bridge message
+ * What the G-HOST manual check established (C4(b), C5): `art.state` is iframe
+ * localStorage the agent can't read, and `art.publishState` is absent per the
+ * shell's source (C4(a) was not exercised at runtime; `views/contract.md` §5).
+ * So a view posts the raw bridge message
  *
  *   window.parent.postMessage({ __iyke: true, kind: 'state',
  *     payload: { key: 'akuko.decisions', value: [ ...every decision this page holds ] } }, '*')

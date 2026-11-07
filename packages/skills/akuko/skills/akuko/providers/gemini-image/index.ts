@@ -23,7 +23,7 @@
 
 import type { Asset } from '../../schema/akuko-project.ts';
 import type { AkukoProviderConfig } from '../config.ts';
-import { estimateFromConfig, loadProviderConfig, priceFor, providerConfig } from '../config.ts';
+import { estimateFromConfig, loadProviderConfig, priceFor, providerConfig, providerKeyEnv } from '../config.ts';
 import type { Cost, Job, JobHandle, JobItem, JobStatus, Provider, WaveOneHost } from '../contract.ts';
 import { sealProvider } from '../../spend/gate.ts';
 import type { FetchLike, RefLoader } from './image-common.ts';
@@ -46,7 +46,7 @@ const API_REVISION = '2026-05-20';
 
 export interface GeminiImageOptions {
   config?: AkukoProviderConfig;
-  /** The user's key, or a function that returns it. Defaults to the GEMINI_API_KEY environment variable. */
+  /** The user's key, or a function that returns it. Defaults to the environment variable named by `key_env` in providers/config.json. */
   apiKey?: string | (() => string | undefined);
   fetch?: FetchLike;
   loadRef?: RefLoader;
@@ -92,9 +92,10 @@ export function createGeminiImageProvider(host: WaveOneHost, opts: GeminiImageOp
   const revision = opts.apiRevision ?? API_REVISION;
   const held = new Map<string, Held>();
 
+  const keyEnv = providerKeyEnv(config, GEMINI_PROVIDER_ID);
   const key = (): string => {
-    const k = typeof opts.apiKey === 'function' ? opts.apiKey() : (opts.apiKey ?? process.env.GEMINI_API_KEY);
-    if (!k) throw new GeminiImageError('No Gemini API key: set GEMINI_API_KEY (or pass apiKey). Nothing was sent.');
+    const k = typeof opts.apiKey === 'function' ? opts.apiKey() : (opts.apiKey ?? (keyEnv ? process.env[keyEnv] : undefined));
+    if (!k) throw new GeminiImageError(`No Gemini API key: set ${keyEnv ?? 'the key variable named by key_env in providers/config.json'} (or pass apiKey). Nothing was sent.`);
     return k;
   };
 
