@@ -136,5 +136,27 @@ describe('fixtures and helpers', () => {
     const list = parseConformedFile(JSON.parse(readFileSync(out, 'utf8')));
     assert.deepEqual(list.views.map((v) => [v.view, v.checker]), [['test-board@1', 'check-view@1']]);
     assert.equal(isConformedHtml(list, 'test-board@1', readFileSync(file, 'utf8')), true);
+    // G-VIEW C3: the same id@version for different HTML is refused, and the record is kept.
+    const changed = join(dir, 'tiny-changed.html');
+    writeFileSync(changed, readFileSync(file, 'utf8').replace('<title>akuko · minimal review board</title>', '<title>akuko · minimal review board (edited)</title>'));
+    const second = await new Promise<{ code: number; stderr: string }>((resolve) => execFile(process.execPath, [CLI, changed, '--record', out], { timeout: 110_000 }, (e, _o, stderr) => resolve({ code: e ? Number((e as { code: number }).code) : 0, stderr })));
+    assert.equal(second.code, 1);
+    assert.match(second.stderr, /NOT RECORDED .*test-board@1 is already recorded for different HTML.*bump "version"/);
+    assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), JSON.parse(JSON.stringify(list)), 'the existing record is untouched');
+  });
+
+  it('money with more than four decimals: exact means "as the spend gate prints it" (G-VIEW C2)', { timeout: 200_000 }, async () => {
+    const p = JSON.parse(readFileSync(join(SKILL, 'fixtures', 'the-beating', 'akuko.json'), 'utf8'));
+    const dir = mkdtempSync(join(tmpdir(), 'akuko-c2-'));
+    tmp.push(dir);
+    const runs = [0.41254, 1.23e-5].map((estimate, i) => {
+      const f = join(dir, `p${i}.json`);
+      writeFileSync(f, JSON.stringify({ ...p, pending_spend: [{ ...p.pending_spend[0], estimate }] }));
+      return run([join(FX, 'tiny-board.html'), '--project', f]);
+    });
+    for (const { code, results } of await Promise.all(runs)) {
+      assert.deepEqual(results[0]!.failures, []);
+      assert.equal(code, 0);
+    }
   });
 });

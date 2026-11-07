@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { Ajv } from 'ajv';
 import addFormatsModule from 'ajv-formats';
 import { JSDOM, VirtualConsole } from 'jsdom';
-import { STAGE_IDS, approveSpendText, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
+import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
@@ -319,9 +319,10 @@ function checkStructure(page, p, fail, label) {
       if (!shown) { fail('R2', field === 'estimate' ? 'hidden-estimate' : 'hidden-money', `${what} is in the page but hidden (${hiddenReason(w, els[0])})${tag}`); return; }
       const n = firstNumber(text(shown));
       if (n === null) fail('R2', 'missing-money', `${what} shows no amount ("${text(shown)}")${tag}`);
-      else if (Math.abs(n - want) > EPS) {
-        const rounded = Math.abs(n - want) < 0.05 && String(n).length < String(Number(want.toFixed(4))).length;
-        fail('R2', rounded ? 'rounded-money' : 'wrong-money', `${what} shows ${text(shown)}, exactly ${Number(want.toFixed(4))} expected${rounded ? ' (rounded)' : ''}${tag}`);
+      else if (Math.abs(n - Number(gateMoney(want))) > EPS) {
+        // Exact = as the spend gate prints it (four decimals at most), never rounded further.
+        const rounded = Math.abs(n - want) < 0.05 && String(n).length < gateMoney(want).length;
+        fail('R2', rounded ? 'rounded-money' : 'wrong-money', `${what} shows ${text(shown)}, exactly ${gateMoney(want)} expected${rounded ? ' (rounded)' : ''}${tag}`);
       }
     };
     const jobs = p.pending_spend.length ? need('spend-gate', 'job') : [];
@@ -345,7 +346,7 @@ function checkStructure(page, p, fail, label) {
     const rows = p.ledger.length ? need('ledger', 'ledger-entry') : fieldsIn(views.ledger, 'ledger-entry');
     if (rows.length !== p.ledger.length) fail('contract', 'wrong-value', `the ledger shows ${rows.length} entries, the project has ${p.ledger.length}${tag}`);
     const tot = need('ledger', 'ledger-total');
-    if (tot.length && Math.abs((firstNumber(text(tot[0])) ?? NaN) - m.ledgerTotal) > EPS) fail('R2', 'wrong-money', `the ledger total shows ${text(tot[0])}, exactly ${Number(m.ledgerTotal.toFixed(4))} expected${tag}`);
+    if (tot.length && Math.abs((firstNumber(text(tot[0])) ?? NaN) - Number(gateMoney(m.ledgerTotal))) > EPS) fail('R2', 'wrong-money', `the ledger total shows ${text(tot[0])}, exactly ${gateMoney(m.ledgerTotal)} expected${tag}`);
   }
   // script link
   if (views['script-link'].length) {

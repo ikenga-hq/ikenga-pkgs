@@ -60,6 +60,9 @@ export const AGENT_AUTHOR = /^(agent|akuko|claude|assistant|system|ai|bot|llm)(?
 
 export const isAgentAuthor = (by: string): boolean => AGENT_AUTHOR.test(by.trim());
 
+/** The only words a chat spend approval may carry: the spend gate's own reply line (spend/gate.ts#confirmationLine). */
+const CHAT_SPEND_WORDS = /^approve \d+(?:\.\d+)? [A-Z]{3}$/;
+
 const TRAIL = /^Status: (pending|draft|pending-review|needs-rework|approved) → (pending|draft|pending-review|needs-rework|approved)$/;
 const NOTICE_PREFIX = 'Not applied: ';
 
@@ -73,7 +76,8 @@ const SPEND_ACTIONS: ReadonlySet<Decision['action']> = new Set(['approve-spend',
 export type RejectCode =
   | 'not-a-person'        // an approval / undo authored by an agent
   | 'view-not-conformed'  // an approval / undo from a view that has not passed check-view
-  | 'chat-without-words'  // a chat approval that does not quote the person's "approve …"
+  | 'chat-without-words'  // a chat approval not in the exact words akuko asked for
+  | 'chat-undo'           // an undo from chat (only a checked view can undo)
   | 'unknown-unit'        // names no unit or job in the project (not stored)
   | 'unknown-target'      // an undo of a decision akuko has not seen (not stored; retried next fold)
   | 'bad-undo'            // undoes a later decision, or one on another unit
@@ -145,8 +149,19 @@ function provenance(d: Decision, conformed: Set<string>): Verdict | Refused {
   if (!conformed.has(d.view)) {
     return { ok: false, code: 'view-not-conformed', reason: `it came from "${d.view}", a view that has not passed the conformance check. Approve again on the board.` };
   }
-  if (d.view === CHAT_VIEW && d.action !== 'undo' && !/^approve\b/i.test((d.text ?? '').trim())) {
-    return { ok: false, code: 'chat-without-words', reason: 'a chat approval must quote what the person wrote ("approve …").' };
+  if (d.view === CHAT_VIEW) {
+    // A chat reply written down by the agent counts only in the exact words akuko asked for.
+    const said = (d.text ?? '').trim();
+    const words = said.slice(0, 7).toLowerCase() + said.slice(7);
+    if (d.action === 'undo') {
+      return { ok: false, code: 'chat-undo', reason: 'an undo can only come from a checked view, never from chat.' };
+    }
+    if (d.action === 'approve' && words !== `approve ${d.unit}`) {
+      return { ok: false, code: 'chat-without-words', reason: `a chat approval of ${d.unit} must quote the person's reply "approve ${d.unit}" exactly.` };
+    }
+    if (d.action === 'approve-spend' && !CHAT_SPEND_WORDS.test(words)) {
+      return { ok: false, code: 'chat-without-words', reason: 'a chat spend approval must quote the person\'s reply "approve <amount> <CURRENCY>" exactly.' };
+    }
   }
   return { ok: true };
 }
@@ -238,8 +253,14 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
     report.read++;
     const known = prior.get(d.id) ?? fresh.get(d.id);
     if (known) {
-      if (!sameRecord(known, d)) report.rejected.push({ id: d.id, action: d.action, unit: d.unit, code: 'conflict', reason: 'another decision with this id is already recorded; this copy was ignored.' });
-      else report.duplicates.push(d.id);
+      if (sameRecord(known, d)) report.duplicates.push(d.id);
+      else {
+        // Two new copies of one id that differ: keep the same one whatever order they came in.
+        const keepNew = !prior.has(d.id) && JSON.stringify(d) < JSON.stringify(known);
+        if (keepNew) fresh.set(d.id, d);
+        const dropped = keepNew ? known : d;
+        report.rejected.push({ id: d.id, action: dropped.action, unit: dropped.unit, code: 'conflict', reason: 'another decision with this id is already recorded; this copy was ignored.' });
+      }
       continue;
     }
     fresh.set(d.id, d);

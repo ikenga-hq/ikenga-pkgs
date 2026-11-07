@@ -42,12 +42,17 @@ Detect the host first (`../lib/hosts.md`). Then:
 
 Hosts with code can also call `readDecisions()` + `foldDecisions()` (`../decisions/fold.ts`) directly, then `writeState()`.
 
-**Approvals typed in chat.** When the person answers the spend gate's line in chat (`approve 0.36 USD`), or approves a unit in plain words, record exactly one decision in the host's store:
+**Approvals typed in chat.** Only two replies count, and only in these exact words (the first word may be any case):
+
+- `approve <amount> <CURRENCY>`, in answer to the spend gate's line (e.g. `approve 0.36 USD`): one `approve-spend` for that job;
+- `approve <unit id>` (e.g. `approve sc2_sh4`): one `approve` for that one unit. Approving several units takes one reply per unit.
+
+For each such reply, record exactly one decision in the host's store:
 
 - `view: "chat@1"`, `by: "you"`, `text` = their reply verbatim, `at` = now, and a new uuid;
 - B/C: `decisions/cli.ts append`; A: one row in `decisions`.
 
-Then fold. Never record an approval the person did not write.
+Then fold. **Never infer an approval** from "yes", "ok", "go ahead", "looks good" or "approve all". Answer with the exact words to type instead. Never record an undo from chat (folding refuses it; undo on the board), and never record an approval the person did not write.
 
 ## 2. Tell the person what happened
 

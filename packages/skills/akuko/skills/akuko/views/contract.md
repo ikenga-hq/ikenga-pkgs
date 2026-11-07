@@ -123,7 +123,7 @@ Inline `scripts/check-view/decision-writer.js` verbatim, then call `akukoDecisio
 - The shell keeps only the latest value per key, so the page posts its whole outbox every time, and again on load.
 - A pane reload clears that state, so the agent mirrors to `decisions.jsonl` on every read. The mirror is the durable store.
 
-Approvals typed in chat: on any host, when the person replies in chat (the spend gate's line asks for `approve 0.36 USD`), the agent records it in that host's store with `view: "chat@1"`, `by: "you"` and `text` quoting the reply. See §6 for what folding accepts from that source.
+Approvals typed in chat: on any host, the person can reply in chat with exactly `approve <amount> <CURRENCY>` (the spend gate's line asks for it, e.g. `approve 0.36 USD`) or exactly `approve <unit id>` (one unit per reply). The agent records that one reply in the host's store with `view: "chat@1"`, `by: "you"` and `text` = the reply. It never infers an approval from "yes", "go ahead" or "approve all". See §8 for what folding accepts from that source.
 
 ## 6. Renderer rules
 
@@ -157,7 +157,9 @@ The amount is the job's bound: `approved_max` when set, else `estimate`. Folding
 
 - the text has no amount;
 - the text names another currency;
-- the text names **less** than the job's current bound. This catches a stale approval after `quote()` raised the estimate.
+- the text names **less** than the job's current bound *as printed* (`money(bound)`, the very words the gate asked for, so an estimate of 0.41254 is approved by `approve 0.4125 USD`). This catches a stale approval after `quote()` raised the estimate.
+
+The first word may be any case (`Approve 0.36 USD`); the currency code may not.
 
 The person then sees the new amount and approves again. Approving more than the bound is fine: the gate still never runs above the bound.
 
@@ -172,7 +174,12 @@ The person then sees the new amount and approves again. Approving more than the 
   - `by` is not an agent name (`agent`, `akuko`, `claude`, `assistant`, `system`, `ai`, `bot`, `llm`, alone or as a prefix like `claude-code` / `agent:x`).
 
   `note`, `request-changes` and `decline-spend` are accepted from any view: they never approve anything.
-- **`chat@1`** is a person's chat reply written down by the agent. It counts only when its `text` quotes the reply (`approve …`). This rests on the agent being honest about what the person typed, exactly as anything in chat does. It is the one approval path that doesn't come from a page.
+- **`chat@1`** is a person's chat reply written down by the agent. It is accepted only in the exact words akuko asks for (the first word in any case):
+  - for `approve-spend`, the text is exactly `approve <amount> <CURRENCY>`, and `canApprove` then binds the amount;
+  - for `approve`, the text is exactly `approve <that decision's unit id>`, one record per unit;
+  - **`undo` is never accepted from chat** (`chat-undo`): only a checked view can undo.
+
+  This rests on the agent being honest about what the person typed, exactly as anything in chat does. It is the one approval path that doesn't come from a page.
 - **Rejected decisions stay visible.**
   - They stay in `akuko.json.decisions[]`.
   - They are listed in the fold report, which `review` tells the person.

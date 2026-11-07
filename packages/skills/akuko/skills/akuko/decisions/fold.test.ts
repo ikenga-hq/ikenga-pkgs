@@ -283,6 +283,39 @@ describe('provenance (R-12)', () => {
     assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: 'approve sc2_sh4' })]).project.shots.find((s) => s.id === 'sc2_sh4')!.status, 'approved');
   });
 
+  it('chat@1 (G-VIEW C1): exact words only, one unit per record, keyword case-insensitive, never an undo', () => {
+    const chat = { view: CHAT_VIEW };
+    // unit approvals: exactly "approve <that unit>"
+    for (const text of ['approve sc2_sh4', 'Approve sc2_sh4', 'APPROVE sc2_sh4']) {
+      assert.equal(unit(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { ...chat, text })]).project, 'sc2_sh4').status, 'approved', text);
+    }
+    for (const text of ['yes', 'go ahead', 'approve', 'approve all', 'approve sc2_sh4 and sc4_sh2', 'approve sc4_sh2', 'approve sc2_sh4 please', 'approve SC2_SH4']) {
+      const r = fold(fixture(), [dec('approve', 'sc2_sh4', 1, { ...chat, text })]);
+      assert.equal(unit(r.project, 'sc2_sh4').status, 'pending-review', text);
+      assert.equal(r.report.rejected[0]?.code, 'chat-without-words', text);
+    }
+    // spend approvals: exactly the gate's reply words
+    for (const text of ['approve 0.36 USD', 'Approve 0.36 USD']) assert.equal(job(fold(fixture(), [dec('approve-spend', 'job_kf_sc1', 1, { ...chat, text })]).project).status, 'approved', text);
+    for (const text of ['yes', 'approve', 'approve all', 'approve 0.36 USD and the next one', 'ok approve 0.36 USD']) {
+      assert.equal(job(fold(fixture(), [dec('approve-spend', 'job_kf_sc1', 1, { ...chat, text })]).project).status, 'awaiting-approval', text);
+    }
+    // undo: never from chat (the reviewer's probe: a text-less chat undo flipped needs-rework → approved)
+    const ap = dec('approve', 'sc2_sh3', 1);
+    const rc = dec('request-changes', 'sc2_sh3', 2, { text: 'no' });
+    const p = fold(fixture(), [ap, rc]).project;
+    assert.equal(unit(p, 'sc2_sh3').status, 'needs-rework');
+    const r = fold(p, [dec('undo', 'sc2_sh3', 3, { ...chat, undoes: rc.id })]);
+    assert.equal(unit(r.project, 'sc2_sh3').status, 'needs-rework');
+    assert.equal(r.report.rejected[0]?.code, 'chat-undo');
+  });
+
+  it('two different new copies of one id resolve the same way in either order', () => {
+    const a = dec('note', 'sc2_sh4', 1, { text: 'real' });
+    const b = { ...a, text: 'forged' } as Decision;
+    assert.equal(bytes(fold(fixture(), [a, b]).project), bytes(fold(fixture(), [b, a]).project));
+    assert.equal(fold(fixture(), [a, b]).report.rejected[0]?.code, 'conflict');
+  });
+
   it('no folded project gains an approved unit without a person\'s approval behind it', () => {
     const before = new Set([...fixture().shots, ...fixture().assets].filter((u) => u.status === 'approved').map((u) => u.id));
     for (let seed = 1; seed <= 10; seed++) {

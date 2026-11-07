@@ -39,12 +39,20 @@ function record(path, results) {
   const list = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { format: 'akuko-conformed-views', version: 1, views: [] };
   if (list.format !== 'akuko-conformed-views' || !Array.isArray(list.views)) throw new Error(`${path} is not a conformed-views file`);
   const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const refused = [];
   for (const r of results) {
     if (!r.ok || !r.view) continue;
+    const had = list.views.find((v) => v.view === r.view);
+    if (had && had.sha256 && had.sha256 !== r.sha256) {
+      // One id@version is one exact page: a changed page needs a new version.
+      refused.push(`${r.file}: ${r.view} is already recorded for different HTML (sha256 ${had.sha256.slice(0, 12)}…); bump "version" in its akuko-view manifest and check it again`);
+      continue;
+    }
     list.views = list.views.filter((v) => v.view !== r.view);
     list.views.push({ view: r.view, sha256: r.sha256, checked_at: at, checker: CHECKER });
   }
   writeFileSync(path, `${JSON.stringify(list, null, 2)}\n`);
+  return refused;
 }
 
 export async function main(argv) {
@@ -63,9 +71,10 @@ export async function main(argv) {
       for (const f of r.failures) console.log(`  ${f.rule} ${f.code}: ${f.message}`);
     }
   }
-  if (args.record) record(args.record, results);
+  const refused = args.record ? record(args.record, results) : [];
+  for (const m of refused) console.error(`NOT RECORDED ${m}`);
   if (args.json) console.log(JSON.stringify(results, null, 2));
-  return results.every((r) => r.ok) ? 0 : 1;
+  return results.every((r) => r.ok) && refused.length === 0 ? 0 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

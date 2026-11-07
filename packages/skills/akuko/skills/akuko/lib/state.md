@@ -135,7 +135,7 @@ Every action starts by folding: `readDecisions(since?)` through the host adapter
   - An undo of a decision on a stage the unit has left, or of an approval whose job has run, is refused.
 - **Only a person approves (R-12).** `approve`, `approve-spend` and `undo` count only when both hold:
   - `by` is not an agent name (`fold.ts#AGENT_AUTHOR`);
-  - `view` is on the conformed-views list (`../decisions/conformed.ts`), or is `chat@1` with text quoting the person's reply (`approve …`).
+  - `view` is on the conformed-views list (`../decisions/conformed.ts`), or is `chat@1` in the exact words akuko asked for: `approve <amount> <CURRENCY>` for a spend, `approve <unit id>` for one unit (first word any case). A chat `undo` is always refused (`chat-undo`).
 
   Notes, requests for changes and declines are accepted from any view. No action, and nothing folding writes for itself, ever sets `approved`.
 - **Rejected decisions stay visible.**

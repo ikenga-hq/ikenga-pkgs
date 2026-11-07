@@ -47,6 +47,26 @@ describe('canApprove() amount binding', () => {
     assert.equal(canApprove(p, JOB, { text: quoted }), null);
   });
 
+  it('the keyword is case-insensitive, the currency is not', () => {
+    assert.equal(canApprove(fixture(), JOB, { text: 'Approve 0.36 USD' }), null);
+    assert.equal(canApprove(fixture(), JOB, { text: 'APPROVE 0.36 USD' }), null);
+    assert.equal(canApprove(fixture(), JOB, { text: 'Approve 0.36 usd' })?.code, 'approval-mismatch');
+  });
+
+  it('accepts the exact words the gate asks for when the estimate has more than four decimals (G-VIEW C2)', () => {
+    for (const estimate of [0.41254, 1.23e-5, 2.99996]) {
+      const p = fixture();
+      p.pending_spend[0]!.estimate = estimate;
+      const job = { id: JOB, stage: 'keyframes' as const, kind: 'image' as const, provider: 'x', label: 'kf', items: [{ unit: 'sc1_sh1', prompt: 'p' }] };
+      const line = confirmationLine(p, job as never, { amount: estimate, currency: 'USD', per_unit: {} } as never);
+      const asked = /Reply "([^"]+)"/.exec(line)![1]!;
+      assert.equal(canApprove(p, JOB, { text: asked }), null, `${estimate}: the gate asked for "${asked}"`);
+    }
+    const p = fixture();
+    p.pending_spend[0]!.estimate = 0.41254;
+    assert.equal(canApprove(p, JOB, { text: 'approve 0.4124 USD' })?.code, 'approval-mismatch', 'less than the printed bound still fails');
+  });
+
   it('without an approval it checks the budget only (unchanged behaviour)', () => {
     assert.equal(canApprove(fixture(), JOB), null);
     const p = fixture();

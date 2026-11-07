@@ -208,10 +208,12 @@ const sameSet = (a: string[], b: string[]): boolean =>
  * Conforming views must emit exactly that text (views/contract.md, checked
  * by scripts/check-view.mjs). When `approval` is passed, the approval is
  * refused with `approval-mismatch` if the text carries no amount, names
- * another currency, or names less than the job's current bound, so a stale
+ * another currency, or names less than the job's current bound AS PRINTED
+ * (`money(bound)`, the words the person was asked to reply with), so a stale
  * approval cannot fold onto a higher estimate after `quote()` rewrites it.
- * Approving more than the bound is fine (the gate still never runs above the
- * bound). Folding always passes the decision; calling without `approval`
+ * The keyword is case-insensitive (`Approve 0.36 USD`); the currency code is
+ * not. Approving more than the bound is fine (the gate still never runs above
+ * the bound). Folding always passes the decision; calling without `approval`
  * checks the budget only.
  */
 export function canApprove(p: AkukoProject, jobId: string, approval?: { text?: string }): Refusal | null {
@@ -221,7 +223,8 @@ export function canApprove(p: AkukoProject, jobId: string, approval?: { text?: s
   const bound = entry.approved_max ?? entry.estimate;
   if (approval) {
     const cur = p.budget.currency;
-    const m = /^approve (\d+(?:\.\d+)?) ([A-Z]{3})(?![A-Za-z0-9])/.exec((approval.text ?? '').trim());
+    const said = (approval.text ?? '').trim();
+    const m = /^approve (\d+(?:\.\d+)?) ([A-Z]{3})(?![A-Za-z0-9])/.exec(said.slice(0, 7).toLowerCase() + said.slice(7));
     if (!m) {
       return refuse('approval-mismatch', `the approval for "${entry.label}" does not say the amount you were shown; approve it again on the board ("approve ${money(bound)} ${cur}").`);
     }
@@ -229,7 +232,7 @@ export function canApprove(p: AkukoProject, jobId: string, approval?: { text?: s
     if (m[2] !== cur) {
       return refuse('approval-mismatch', `the approval for "${entry.label}" was in ${m[2]}, the budget is in ${cur}; approve it again.`);
     }
-    if (shown + MONEY_EPSILON < bound) {
+    if (shown + MONEY_EPSILON < Number(money(bound))) {
       return refuse('approval-mismatch', `you approved ${money(shown)} ${cur} for "${entry.label}", but it may now cost up to ${money(bound)} ${cur}; approve the new amount if you still want it.`);
     }
   }
