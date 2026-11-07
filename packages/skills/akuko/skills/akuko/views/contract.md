@@ -130,11 +130,11 @@ Approvals typed in chat: on any host, the person can reply in chat with exactly 
 
 | Rule | What it says | What check-view enforces |
 |---|---|---|
-| **R1** Only a person approves | No auto-approve, pre-tick or batch approval; one explicit action per unit | Nothing is written while the page loads and idles (`auto-approve`); no `data-akuko-action` control without a single `data-akuko-unit` (`batch-approve`); one click writes exactly one decision, for that unit (`batch-approve`); no approval checkbox ticked at load (`pre-ticked`); no decision signed with an agent name (`signed-by-agent`) |
-| **R2** Money is never hidden or rounded | Every paid job shows its estimate, the cap, what is spent, what is left if you approve | Each amount is present, visible (not `hidden`, `display:none`, `aria-hidden`, visually hidden, …) and exactly equal to the data (`hidden-estimate`, `hidden-money`, `rounded-money`, `wrong-money`); the spend gate is visible while a job waits; `approve-spend` text names the amount shown (`spend-amount-not-bound`) |
+| **R1** Only a person approves | No auto-approve, pre-tick or batch approval; one explicit action per unit | Nothing is written while the page opens and idles: the page's timers are fast-forwarded ten minutes, and pointer moves, scrolls, focus, tab hide/show and common key presses must write nothing. The check runs with a browser user agent, so a page cannot behave differently under it (`auto-approve`, `decision-without-action`). **Every** clickable element is clicked, one at a time: one not marked `data-akuko-action` writes nothing (`unmarked-control-writes`; a composer's `[data-akuko-submit]` may write the one decision it was opened for); a marked one writes at most one decision, for its own unit, with its own action (`writes-other-unit`, `batch-approve`, `wrong-action`). No `data-akuko-action` control without a single `data-akuko-unit` (`batch-approve`); no approval checkbox ticked at load (`pre-ticked`); no decision signed with an agent name (`signed-by-agent`) |
+| **R2** Money is never hidden or rounded | Every paid job shows its estimate, the cap, what is spent, what is left if you approve | Each amount is present, visible and exactly equal to the data as the spend gate prints it, to at most four decimals (`hidden-estimate`, `hidden-money`, `rounded-money`, `wrong-money`). Hidden means any of: `hidden`, `aria-hidden`, `inert`, a closed `<details>`, `display:none`, `visibility:hidden`, opacity ≈ 0, visually-hidden 1px boxes, off-screen positioning (≤ −999px, or `text-indent`), `clip`/`clip-path` that removes it, `transform: scale(0)`, zero height or width with overflow hidden on it or any ancestor, `font-size` 0, or transparent text colour. The spend gate is visible while a job waits (`hidden-spend-gate`); `approve-spend` text names the amount shown (`spend-amount-not-bound`) |
 | **R3** A "your move" summary is always visible, derived from data | | The view exists (`no-your-move`) and is visible (`hidden-your-move`); its counts equal the data on the fixture **and** on a changed copy of it, and drop after an approval (`your-move-not-derived`) |
 | **R4** Decisions only through the decision format | Never edit `akuko.json` from the view | The fake host records every write: any DB write outside `decisions/<id>`, any non-GET `fetch`/XHR, a bridge post under another key, or an artifact self-publish fails (`writes-project`); a static scan catches `writeState(`, file writes and `"akuko/project"` writes |
-| **R5** Readability floor and keyboard access (`designs/_spec.md`) | Body ≥ 14px, labels ≥ 12px, contrast ≥ 4.5:1; every control keyboard-reachable and focus-visible; reduced motion respected | No `font-size` under 12px (`text-below-floor`); every decision control focusable (`not-keyboard-reachable`); a `:focus-visible` style (`no-focus-style`); `prefers-reduced-motion` when the page animates (`no-reduced-motion`). **By eye:** contrast and the 14px body |
+| **R5** Readability floor and keyboard access (`designs/_spec.md`) | Body ≥ 14px, labels ≥ 12px, contrast ≥ 4.5:1; every control keyboard-reachable and focus-visible; reduced motion respected | No text under 12px in style sheets, inline styles or style strings in scripts, in any unit (px, pt, em, rem, %, vw, vh, keywords, unitless 0, the `font:` shorthand) (`text-below-floor`). SVG text is exempt: rules for `svg`/`text`/`tspan`, or a class the page puts on an `<svg>`, are sized in viewBox units. Every decision control focusable (`not-keyboard-reachable`); a `:focus-visible` style (`no-focus-style`); `prefers-reduced-motion` when the page animates (`no-reduced-motion`). **By eye:** contrast and the 14px body |
 
 It also checks the contract itself:
 
@@ -170,6 +170,8 @@ The person then sees the new amount and approves again. Approving more than the 
   - on B/C in `<project>/views/conformed.json`, plus the skill's own `views/conformed.json` for shipped views (the default board, WP-07b);
   - on A in the DB doc `akuko/conformed`, written by the owner only.
 - **Before publishing** a view that writes decisions: check it, record it, and publish only HTML whose hash is on the list (`decisions/conformed.ts#isConformedHtml`). Change the page → bump `version` → check again.
+- **One id@version, one page.** `--record` refuses to replace an `id@version` already recorded for different HTML: bump `version`. check-view fails a page with `id-collision` if it reuses, for different HTML, the id of a view the skill ships (`views/conformed.json`) or of its fixtures (`test-board@1`, `board-b-instrumented@0.1`), or claims `default-board`.
+- **Which lists folding reads.** `decisions/cli.ts` always reads the skill's shipped `views/conformed.json`, plus `--conformed` (default `<project>/views/conformed.json`). A missing file counts as an empty list and is named in the output's `warnings`.
 - **Folding** (`decisions/fold.ts`) accepts `approve`, `approve-spend` and `undo` only when:
   - `view` is on the conformed list (or is the built-in `chat@1`);
   - `by` is not an agent name (`agent`, `akuko`, `claude`, `assistant`, `system`, `ai`, `bot`, `llm`, alone or as a prefix like `claude-code` / `agent:x`).
@@ -217,6 +219,15 @@ Exit code 0 only if every file passes. `scripts/check-view.test.ts` pins:
 | `bad-rounded-money.html` | R2 | `rounded-money` |
 | `bad-typed-summary.html` | R3 | `your-move-not-derived` (on the changed project) |
 | `bad-signed-by-agent.html` | R1 / R-12 | `signed-by-agent` |
+| `bad-transparent-estimate.html` · `bad-offscreen-estimate.html` · `bad-zero-font-estimate.html` · `bad-scaled-estimate.html` | R2 | `hidden-estimate` (transparent ink; `left: -9999px`; `font-size: 0`, also `text-below-floor`; `scale(0)`) |
+| `bad-clipped-spend-gate.html` · `bad-collapsed-spend-gate.html` | R2 | `hidden-spend-gate` (`clip-path: inset(100%)`; height 0 + overflow hidden) |
+| `bad-tiny-text.html` | R5 | `text-below-floor` (6pt, 0.5vw) |
+| `bad-timer-auto-approve.html` · `bad-mousemove-auto-approve.html` · `bad-microtask-auto-approve.html` · `bad-keyboard-approve-all.html` · `bad-ua-sniff-auto-approve.html` | R1 | `auto-approve` (after 1.5 s; on pointer/scroll/focus; in a microtask; on the `a` key; unless the user agent says jsdom) |
+| `bad-unmarked-approve-all.html` · `bad-select-approves.html` | R1 | `unmarked-control-writes` |
+| `bad-decline-approves-spend.html` | R1 / R2 | `wrong-action` ("Not now" writes an approve-spend) |
+| `bad-approves-other-unit.html` | R1 | `writes-other-unit` |
+
+The last sixteen are the G-VIEW reviewer's variants of `tiny-board.html`, kept so the check can never lose them. Every bad fixture has its own view id.
 
 ---
 
