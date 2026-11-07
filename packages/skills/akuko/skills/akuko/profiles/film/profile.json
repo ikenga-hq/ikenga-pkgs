@@ -1,0 +1,32 @@
+{
+  "name": "film",
+  "label": "Short film",
+  "description": "A short story, treatment or screenplay to a finished short film: screenplay, breakdown, sketch board, bibles, key frames, motion, sound, assembly and export.",
+  "profile_version": 1,
+  "defaults": {
+    "aspect_ratio": "16:9",
+    "shot_seconds": { "min": 5, "max": 10 },
+    "shot_id_pattern": "sc<N>_sh<M>"
+  },
+  "stages": [
+    { "id": "intake", "n": 0, "paid": false, "action": "intake", "review_gate": true },
+    { "id": "breakdown", "n": 1, "paid": false, "action": "breakdown", "review_gate": true },
+    { "id": "sketch", "n": 2, "paid": false, "action": "board", "review_gate": true },
+    { "id": "bible", "n": 3, "paid": true, "action": "bible", "review_gate": true },
+    { "id": "keyframes", "n": 4, "paid": true, "action": "keyframes", "review_gate": true },
+    { "id": "motion", "n": 5, "paid": true, "action": "motion", "review_gate": true },
+    { "id": "sound", "n": 6, "paid": true, "action": "sound", "review_gate": true },
+    { "id": "assemble", "n": 7, "paid": false, "action": "assemble", "review_gate": true },
+    { "id": "export", "n": 8, "paid": false, "action": "export", "review_gate": true }
+  ],
+  "units": {
+    "shot": "one shot of the film, sized to a model clip limit",
+    "character": "bible entry with portrait, sheet and turnaround refs",
+    "location": "bible entry with plate refs",
+    "style": "bible entry with lookbook refs"
+  },
+  "extensions": {
+    "breakdown": "profiles/film/breakdown.md (WP-04)",
+    "bible_templates": "profiles/film/templates/{character,location,style}.md (WP-05)"
+  }
+}
