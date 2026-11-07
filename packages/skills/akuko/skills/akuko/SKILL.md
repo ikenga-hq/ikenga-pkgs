@@ -83,7 +83,7 @@ These hold on every host and in every action and view:
 
 ## Hosts in one line each
 
-- **A — claude-artifact (claude.ai):** no shell. The project lives in the board artifact's database; the agent reads and writes it with tool calls. Generation through connected MCPs (e.g. Canva) and manual prompt packages; MP4 renders locally.
+- **A — claude-artifact (claude.ai):** Bash and files only in a remote workspace that lasts one chat, so no durable project folder. The project lives in the board artifact's database; the agent reads and writes it with tool calls. Generation through connected MCPs (e.g. Canva) and manual prompt packages; MP4 renders locally.
 - **B — local (Claude Code):** `akuko.json` on disk, files in the project folder, all providers via env keys, HyperFrames + FFmpeg.
 - **C — ikenga:** B plus the Ikenga bridge (and Studio when its MCP is connected); Studio owns render state.
 
