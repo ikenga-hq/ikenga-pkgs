@@ -335,6 +335,11 @@
         },
         "text": {
           "type": "string"
+        },
+        "decision": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the Decision this comment was folded from, so an undo can find it."
         }
       },
       "required": [
@@ -764,6 +769,10 @@
         "estimate": {
           "$ref": "#/definitions/Money"
         },
+        "approved_max": {
+          "$ref": "#/definitions/Money",
+          "description": "Most the person allowed this job to cost, if it may run over the estimate."
+        },
         "status": {
           "type": "string",
           "enum": [
@@ -771,6 +780,14 @@
             "approved",
             "declined"
           ]
+        },
+        "decision": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the Decision that approved or declined the job."
+        },
+        "created_at": {
+          "$ref": "#/definitions/Timestamp"
         }
       },
       "required": [
@@ -787,6 +804,11 @@
     "LedgerEntry": {
       "type": "object",
       "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable id for one provider call, so an entry can be followed from submitted to done or failed across retries."
+        },
         "ts": {
           "$ref": "#/definitions/Timestamp"
         },
@@ -1149,12 +1171,48 @@
         "reference_layer": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AssetRef"
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "hash": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "uri"
+            ],
+            "additionalProperties": false
           },
           "default": []
         },
         "audio_cue": {
-          "$ref": "#/definitions/AssetRef"
+          "type": "object",
+          "properties": {
+            "uri": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+            },
+            "mime": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+            },
+            "hash": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+            },
+            "duration_ms": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "additionalProperties": false
         },
         "block_id": {
           "type": "string"
@@ -1194,10 +1252,46 @@
                 ]
               },
               "output": {
-                "$ref": "#/definitions/AssetRef"
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                  },
+                  "mime": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                  },
+                  "hash": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                  },
+                  "duration_ms": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                  }
+                },
+                "required": [
+                  "uri"
+                ],
+                "additionalProperties": false
               },
               "preview": {
-                "$ref": "#/definitions/AssetRef"
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                  },
+                  "mime": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                  },
+                  "hash": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                  },
+                  "duration_ms": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                  }
+                },
+                "required": [
+                  "uri"
+                ],
+                "additionalProperties": false
               },
               "cost_estimate": {
                 "type": "number",
@@ -1230,7 +1324,8 @@
             ],
             "additionalProperties": true
           },
-          "default": []
+          "default": [],
+          "description": "Studio render records. These stay open to unknown keys, as in Studio; their nested file refs are strict."
         },
         "metadata": {
           "type": "object",
@@ -1467,16 +1562,16 @@
       "type": "object",
       "properties": {
         "uri": {
-          "type": "string"
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
         },
         "mime": {
-          "type": "string"
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
         },
         "hash": {
-          "type": "string"
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
         },
         "duration_ms": {
-          "type": "number"
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
         }
       },
       "required": [
@@ -1618,7 +1713,25 @@
                   "type": "object",
                   "properties": {
                     "audio": {
-                      "$ref": "#/definitions/AssetRef"
+                      "type": "object",
+                      "properties": {
+                        "uri": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                        },
+                        "mime": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                        },
+                        "hash": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                        },
+                        "duration_ms": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                        }
+                      },
+                      "required": [
+                        "uri"
+                      ],
+                      "additionalProperties": false
                     },
                     "words": {
                       "type": "array",
@@ -1702,7 +1815,25 @@
                   "default": []
                 },
                 "source": {
-                  "$ref": "#/definitions/AssetRef"
+                  "type": "object",
+                  "properties": {
+                    "uri": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                    },
+                    "mime": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                    },
+                    "hash": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                    },
+                    "duration_ms": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                    }
+                  },
+                  "required": [
+                    "uri"
+                  ],
+                  "additionalProperties": false
                 },
                 "analysed_at": {
                   "type": "string"

@@ -68,13 +68,21 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
     if (a.owner !== undefined && !unitIds.has(a.owner)) add(`assets[${i}].owner`, `unknown owner "${a.owner}"`);
   });
 
-  p.pending_spend.forEach((j, i) =>
+  p.pending_spend.forEach((j, i) => {
     j.units.forEach((u, k) => {
       if (!unitIds.has(u)) add(`pending_spend[${i}].units[${k}]`, `unknown unit "${u}"`);
-    }),
-  );
+    });
+    if (j.approved_max !== undefined && j.approved_max < j.estimate) {
+      add(`pending_spend[${i}].approved_max`, `approved_max ${j.approved_max} is below the estimate ${j.estimate}`);
+    }
+  });
 
+  const ledgerIds = new Set<string>();
   p.ledger.forEach((e, i) => {
+    if (e.id !== undefined) {
+      if (ledgerIds.has(e.id)) add(`ledger[${i}].id`, `ledger id "${e.id}" is used twice`);
+      ledgerIds.add(e.id);
+    }
     if (!unitIds.has(e.unit)) add(`ledger[${i}].unit`, `unknown unit "${e.unit}"`);
     if (e.job !== undefined && !jobIds.has(e.job)) add(`ledger[${i}].job`, `unknown job "${e.job}"`);
   });

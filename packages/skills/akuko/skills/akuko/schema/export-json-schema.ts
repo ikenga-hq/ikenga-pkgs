@@ -11,9 +11,8 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { AssetRefSchema } from '@ikenga/studio-schema';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { AKUKO_SCHEMA_VERSION, AkukoProjectSchema, Schemas } from './akuko-project.ts';
+import { AKUKO_SCHEMA_VERSION, AkukoProjectSchema, AssetRefSchema, Schemas } from './akuko-project.ts';
 
 export const JSON_SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), 'akuko-project.schema.json');
 

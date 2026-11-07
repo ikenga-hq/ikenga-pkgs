@@ -14,10 +14,20 @@
  * this format; `convert/freeform.ts` imports the older freeform storyboard.
  *
  * Design rules
- *   - akuko-owned objects are `.strict()`: unknown keys are an error, never
- *     silently kept. Fields that only exist so another format can round-trip
- *     live in explicit, typed slots (`studio`, `freeform`), never in a
- *     catch-all at the top level.
+ *   - Every object is strict: unknown keys are an error, never silently kept
+ *     or silently dropped. akuko's own objects use `.strict()`; Studio objects
+ *     composed in go through `strictDeep` (Studio's are mostly "strip"
+ *     objects). So Zod rejects exactly what the exported JSON Schema rejects.
+ *     Fields that only exist so another format can round-trip live in
+ *     explicit, typed slots (`studio`, `freeform`), never in a catch-all at
+ *     the top level.
+ *   - One imported Studio cell is one shot, and `shot.beat` is the Studio
+ *     beat id. Studio keeps several cells under one beat (the same moment at
+ *     different rungs, or variants such as start and end key frames, e.g.
+ *     `sc1_sh1_kf_start` / `sc1_sh1_kf_end`). Shots that share a `beat` are
+ *     alternative or successive renderings of the same story moment, not
+ *     distinct shots of the film: group by `beat` before counting shots,
+ *     timing the cut or budgeting a stage.
  *   - `format` + `schema_version` are literals so future migrations can tell
  *     versions apart.
  *   - The Zod schema is structural and is exported 1:1 as JSON Schema
@@ -35,17 +45,18 @@ import { z } from 'zod';
 import {
   AnchorSchema,
   AspectRatioSchema,
-  AssetRefSchema,
-  AudioAnalysisSchema,
+  AssetRefSchema as StudioAssetRefSchema,
+  AudioAnalysisSchema as StudioAudioAnalysisSchema,
   CameraMoveSchema,
   CellSchema,
-  NarrationBlockSchema,
+  NarrationBlockSchema as StudioNarrationBlockSchema,
   ProjectModeSchema,
   ProjectSchema,
-  ScriptBeatSchema,
+  ScriptBeatSchema as StudioScriptBeatSchema,
   ScriptSchema,
   ShotTypeSchema,
 } from '@ikenga/studio-schema';
+import { strictDeep } from './strict-deep.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Format identity
@@ -90,6 +101,16 @@ export const CurrencySchema = z.string().regex(/^[A-Z]{3}$/, 'currency must be a
 
 /** Open bag of JSON values, for typed extension slots only. */
 const JsonBagSchema = z.record(z.unknown());
+
+// ─────────────────────────────────────────────────────────────────────────
+// Studio shapes, made strict for akuko
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Studio AssetRef (`uri` + optional mime / hash / duration), rejecting unknown keys. */
+export const AssetRefSchema = strictDeep(StudioAssetRefSchema);
+export type AssetRef = z.infer<typeof AssetRefSchema>;
+const NarrationBlockSchema = strictDeep(StudioNarrationBlockSchema);
+const AudioAnalysisSchema = strictDeep(StudioAudioAnalysisSchema);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Stages
@@ -175,6 +196,7 @@ export const CommentSchema = z.object({
   stage: StageIdSchema,
   author: z.string().min(1),
   text: z.string(),
+  decision: z.string().uuid().optional().describe('Id of the Decision this comment was folded from, so an undo can find it.'),
 }).strict();
 export type Comment = z.infer<typeof CommentSchema>;
 
@@ -240,14 +262,14 @@ export type Blocking = z.infer<typeof BlockingSchema>;
  */
 export const StudioShotExtSchema = z.object({
   index: CellSchema.shape.index,
-  time: CellSchema.shape.time,
-  frames: CellSchema.shape.frames,
+  time: strictDeep(CellSchema.shape.time),
+  frames: strictDeep(CellSchema.shape.frames),
   renderer: CellSchema.shape.renderer,
   content_path: CellSchema.shape.content_path,
-  reference_layer: CellSchema.shape.reference_layer,
-  audio_cue: CellSchema.shape.audio_cue,
+  reference_layer: strictDeep(CellSchema.shape.reference_layer),
+  audio_cue: strictDeep(CellSchema.shape.audio_cue),
   block_id: CellSchema.shape.block_id,
-  renders: CellSchema.shape.renders,
+  renders: strictDeep(CellSchema.shape.renders).describe('Studio render records. These stay open to unknown keys, as in Studio; their nested file refs are strict.'),
   metadata: CellSchema.shape.metadata,
   extra: JsonBagSchema.optional().describe('Unknown keys the Studio cell carried (Studio keeps them across version skew).'),
 }).strict();
@@ -365,8 +387,8 @@ export const SceneSchema = z.object({
 }).strict();
 export type Scene = z.infer<typeof SceneSchema>;
 
-/** Script beats reuse Studio's ScriptBeat shape unchanged. */
-export const BeatSchema = ScriptBeatSchema;
+/** Script beats reuse Studio's ScriptBeat shape, made strict. */
+export const BeatSchema = strictDeep(StudioScriptBeatSchema);
 export type Beat = z.infer<typeof BeatSchema>;
 
 export const ScriptSchemaAkuko = z.object({
@@ -410,12 +432,16 @@ export const PendingSpendSchema = z.object({
   model: z.string().optional(),
   kind: ProviderKindSchema.optional(),
   estimate: MoneySchema,
+  approved_max: MoneySchema.optional().describe('Most the person allowed this job to cost, if it may run over the estimate.'),
   status: z.enum(['awaiting-approval', 'approved', 'declined']),
+  decision: z.string().uuid().optional().describe('Id of the Decision that approved or declined the job.'),
+  created_at: TimestampSchema.optional(),
 }).strict();
 export type PendingSpend = z.infer<typeof PendingSpendSchema>;
 
 /** One paid provider call. Append-only. Amounts are in the budget currency. */
 export const LedgerEntrySchema = z.object({
+  id: z.string().min(1).optional().describe('Stable id for one provider call, so an entry can be followed from submitted to done or failed across retries.'),
   ts: TimestampSchema,
   provider: z.string(),
   model: z.string().optional(),
@@ -475,7 +501,7 @@ export const ProjectMetaSchema = z.object({
   source: z.string().optional().describe('Credit line for the source work, e.g. an adaptation note.'),
   runtime_s: z.number().nonnegative().optional().describe('Target runtime in seconds.'),
   aspect_ratio: AspectRatioSchema.default('16:9'),
-  resolution: ProjectSchema.shape.resolution,
+  resolution: strictDeep(ProjectSchema.shape.resolution),
   profile: IdSchema.describe('Pipeline profile, e.g. "film".'),
   created_at: TimestampSchema,
   updated_at: TimestampSchema.optional(),
@@ -489,9 +515,9 @@ export const StudioProjectExtSchema = z.object({
   archetype_id: z.string(),
   approved: z.boolean(),
   metadata: JsonBagSchema,
-  selected_concepts: ProjectSchema.shape.selected_concepts,
+  selected_concepts: strictDeep(ProjectSchema.shape.selected_concepts),
   selected_concepts_note: ProjectSchema.shape.selected_concepts_note,
-  script: ScriptSchema.omit({ schema_version: true, beats: true }).strict().nullable()
+  script: strictDeep(ScriptSchema.omit({ schema_version: true, beats: true })).nullable()
     .describe('Studio script header; null when the Studio project had no script.'),
   extra: JsonBagSchema.optional().describe('Unknown keys the Studio project carried.'),
 }).strict();

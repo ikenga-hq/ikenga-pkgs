@@ -79,8 +79,25 @@ describe('Studio → akuko field mapping', () => {
     assert.equal(p.project.profile, 'film', 'the narrative archetype is the film profile');
     assert.equal(p.project.aspect_ratio, '9:16');
     assert.equal(p.current_stage, 'keyframes', 'current_rung 2 is the key-frames stage');
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(p.stages).map(([k, v]) => [k, v.state])),
+      {
+        intake: 'not-started', breakdown: 'in-progress', sketch: 'in-review', bible: 'not-started',
+        keyframes: 'approved', motion: 'not-started', sound: 'not-started', assemble: 'not-started', export: 'not-started',
+      },
+      'rung stages take their state from the shots at that stage',
+    );
     assert.equal(p.studio?.archetype_id, 'narrative');
     assert.deepEqual(p.studio?.extra, { studio_ui: { zoom: 1.5, panels: ['timeline'] } });
+  });
+
+  it('keeps one shot per cell; cells under one beat share shot.beat', () => {
+    assert.equal(p.shots.length, 3);
+    assert.deepEqual(p.shots.map((s) => [s.id, s.beat]), [
+      ['keeper-climb', 'b1'], ['lamp-eye', 'b1'], ['orphan_1', 'b-orphan'],
+    ]);
+    const s = fromStudio(sample);
+    assert.deepEqual(s.shots.map((x) => x.beat), ['beat-hello', 'beat-hello', 'beat-hello']);
   });
 
   it('turns script scene ids into scenes and links shots to them through their beat', () => {

@@ -171,6 +171,23 @@ describe('units and integrity', () => {
     assert.deepEqual(checkIntegrity(project), []);
   });
 
+  it('accepts the optional ledger id, comment decision and spend approval fields', () => {
+    const q = structuredClone(project);
+    q.ledger[0]!.id = 'call-1';
+    q.shots[0]!.comments.push({ ts: '2026-11-06T21:12:00Z', stage: 'sketch', author: 'you', text: 'Lower.', decision: randomUUID() });
+    Object.assign(q.pending_spend[0]!, { approved_max: 0.2, decision: randomUUID(), created_at: '2026-11-06T21:00:00Z' });
+    assert.ok(AkukoProjectSchema.safeParse(q).success);
+    assert.deepEqual(checkIntegrity(AkukoProjectSchema.parse(q)), []);
+  });
+
+  it('reports a repeated ledger id and an approved_max below the estimate', () => {
+    const q = structuredClone(project);
+    q.ledger[0]!.id = 'call-1';
+    q.ledger.push({ ...q.ledger[0]!, actual: 0, status: 'failed' });
+    q.pending_spend[0]!.approved_max = 0.05;
+    assert.deepEqual(checkIntegrity(q).map((i) => i.path), ['pending_spend[0].approved_max', 'ledger[1].id']);
+  });
+
   it('reports dangling references, duplicate ids and a budget that disagrees with the ledger', () => {
     const broken = structuredClone(project);
     broken.shots[0]!.scene = 'sc9';

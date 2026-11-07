@@ -1,6 +1,14 @@
 /**
  * Studio `storyboard.json` ⇄ `akuko.json`.
  *
+ * One Studio cell becomes one akuko shot (id = cell uid), and `shot.beat`
+ * carries the Studio beat id. Studio keeps several cells under one beat: the
+ * same moment at different rungs (lo-fi and hi-fi), or variants such as start
+ * and end key frames (`sc1_sh1_kf_start`, `sc1_sh1_kf_end`). Those cells stay
+ * separate shots here so nothing is merged or lost, but they are renderings
+ * of one story moment, not distinct shots of the film. Group by `beat` before
+ * counting shots, timing the cut or budgeting a stage.
+ *
  * fromStudio — lossless. Every Studio field lands either in a first-class
  * akuko field or in the typed `studio` slot on the project / shot / asset, so
  * `toStudio(fromStudio(x))` deep-equals the Studio-normalised `x`
@@ -13,6 +21,7 @@
  *     resolution
  *   archetype_id                   project.profile (narrative → film) + studio.archetype_id
  *   current_rung 0 / 1 / 2         current_stage breakdown / sketch / keyframes
+ *   (cell statuses)                stages{breakdown, sketch, keyframes} (see stageStatesFromShots)
  *   anchors[]                      assets[] (kind "reference", studio.anchor keeps kind + metadata)
  *   script.beats[]                 script.beats[] (same shape); scene_ids → scenes[]
  *   script (header fields)         studio.script
@@ -82,6 +91,7 @@ import type {
   Comment,
   Shot,
   StageId,
+  Stages,
   UnitStatus,
 } from '../akuko-project.ts';
 
@@ -259,6 +269,27 @@ function shotFromCell(cell: Cell, sceneOfBeat: Map<string, string>): Shot {
   };
 }
 
+/**
+ * Stage states derived from the imported shots. A Studio cell only exists at a
+ * rung once work was produced there, so for each of the three rung stages:
+ * no shots → "not-started"; every shot approved → "approved"; any shot waiting
+ * for a person → "in-review"; otherwise "in-progress". The other six stages
+ * have no Studio equivalent and stay "not-started". `toStudio` never reads
+ * stage states for a Studio-born project, so this does not affect the round
+ * trip.
+ */
+function stageStatesFromShots(shots: Shot[]): Stages {
+  const stages = defaultStages('not-started');
+  for (const stage of Object.values(RUNG_STAGE)) {
+    const statuses = shots.filter((s) => s.stage === stage).map((s) => s.status);
+    if (statuses.length === 0) continue;
+    if (statuses.every((s) => s === 'approved')) stages[stage] = { state: 'approved' };
+    else if (statuses.includes('pending-review')) stages[stage] = { state: 'in-review' };
+    else stages[stage] = { state: 'in-progress' };
+  }
+  return stages;
+}
+
 function assetFromAnchor(a: Anchor): Asset {
   return {
     id: a.id,
@@ -296,6 +327,8 @@ export function fromStudio(input: unknown): AkukoProject {
     ? (({ schema_version: _v, beats: _b, ...rest }: StudioScript) => rest)(sp.script)
     : null;
 
+  const shots = sp.cells.map((c) => shotFromCell(c, sceneOfBeat));
+
   const draft = {
     format: AKUKO_FORMAT,
     schema_version: AKUKO_SCHEMA_VERSION,
@@ -308,11 +341,11 @@ export function fromStudio(input: unknown): AkukoProject {
       created_at: sp.created_at,
       updated_at: sp.updated_at,
     },
-    stages: defaultStages('not-started'),
+    stages: stageStatesFromShots(shots),
     current_stage: RUNG_STAGE[rungFromNumber(sp.current_rung)],
     script: { beats },
     scenes: sceneIds.map((id) => ({ id })),
-    shots: sp.cells.map((c) => shotFromCell(c, sceneOfBeat)),
+    shots,
     assets: sp.anchors.map(assetFromAnchor),
     audio: { narration: sp.narration, analysis: sp.audio_analysis },
     studio: {
