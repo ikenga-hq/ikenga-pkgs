@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/skill-akuko",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "akuko — agent skill that takes a short story or film script through breakdown, bibles, storyboard, generation and assembly to an MP4. This package holds the akuko.json project format (Zod schema + exported JSON Schema) and converters.",
   "keywords": [
