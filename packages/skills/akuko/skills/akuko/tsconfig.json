@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["schema/**/*.ts", "fixtures/**/*.ts"]
+  "include": ["schema/**/*.ts", "fixtures/**/*.ts", "actions/**/*.ts", "hosts/**/*.ts", "providers/**/*.ts", "spend/**/*.ts"]
 }
