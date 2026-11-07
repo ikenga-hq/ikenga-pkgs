@@ -1,0 +1,50 @@
+{
+  "name": "@ikenga/skill-akuko",
+  "version": "0.0.0",
+  "private": true,
+  "description": "akuko — agent skill that takes a short story or film script through breakdown, bibles, storyboard, generation and assembly to an MP4. This package holds the akuko.json project format (Zod schema + exported JSON Schema) and converters.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agent-skills",
+    "skills",
+    "ikenga",
+    "akuko",
+    "film",
+    "storyboard"
+  ],
+  "homepage": "https://ikenga.dev",
+  "bugs": {
+    "url": "https://github.com/ikenga-hq/ikenga-pkgs/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikenga-hq/ikenga-pkgs.git",
+    "directory": "packages/skills/akuko"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "files": [
+    "skills"
+  ],
+  "scripts": {
+    "build": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/schema/export-json-schema.ts",
+    "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning \"skills/akuko/schema/*.test.ts\"",
+    "typecheck": "tsc -p skills/akuko/tsconfig.json",
+    "convert:fixture": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/fixtures/convert-fixture.ts"
+  },
+  "dependencies": {
+    "@ikenga/studio-schema": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.4.0",
+    "zod-to-json-schema": "^3.25.2"
+  }
+}
