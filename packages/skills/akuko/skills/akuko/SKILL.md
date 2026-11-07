@@ -33,7 +33,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 
 ## Every action starts the same way
 
-1. **Detect the host** (`lib/hosts.md` §Detection): A claude-artifact · B local · C ikenga. Record it in `akuko.json.host`.
+1. **Detect the host** (`lib/hosts.md` §Detection): A claude-artifact · B local · C ikenga. Run `node --experimental-strip-types hosts/detect.ts --tools <your FULL tool list — every loaded and deferred tool name>`. If the output has a `warning`, or you are in any doubt, treat the host as **A** (artifact DB) and never create a project folder. Record the result in `akuko.json.host`.
 2. **Read the project** through the host adapter (`readState()`); if there is none, route to `intake` (or `setup` if the person wants to configure first).
 3. **Fold decisions** people made since the last run (`readDecisions()` → `lib/state.md` §Decision folding) before doing anything else.
 4. Load the action file and follow it. Write the project only through `writeState()`; store files only through `storeAsset()`.
