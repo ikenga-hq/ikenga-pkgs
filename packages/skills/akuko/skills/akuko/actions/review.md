@@ -35,6 +35,8 @@ Detect the host first (`../lib/hosts.md`). Then:
 - **A (claude.ai).** The decisions are rows in the board artifact's `decisions` collection.
   1. **Load the ArtifactData tool** with ToolSearch. It is often deferred, and its name can differ between chats. If no such tool exists, say you can't read the board's decisions here, and stop.
   2. ArtifactData `get` `akuko/project` (note its `version`) and `akuko/conformed`; ArtifactData `list` the `decisions` collection. Save all three as JSON files in your workspace.
+     - If `akuko/conformed` doesn't exist, leave `--conformed` out. Folding then counts approvals only from the views the skill ships (`views/conformed.json`) and exact chat replies.
+     - If the board is a freehand view, first run `scripts/check-view.mjs <its html> --record conformed.json` and, if it passes, write that list to `akuko/conformed` (owner only). Otherwise its approvals come back rejected (`view-not-conformed`), which the report shows.
   3. Run `node --experimental-strip-types decisions/cli.ts fold-file --project <project.json> --rows <list.json> --conformed <conformed.json> --out folded.json`.
   4. If the report says `changed`, ArtifactData `set` `akuko/project` to `folded.json` **with `if_version`** set to the version from step 2. If the write is refused as stale, start again from step 2.
 

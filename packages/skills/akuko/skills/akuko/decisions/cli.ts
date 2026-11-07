@@ -20,11 +20,11 @@
  *       Host B. Validates decision lines a person copied from a local view
  *       ("Copy decisions for akuko") and appends the new ones to decisions.jsonl.
  *
- * Conformed views default to the skill's views/conformed.json plus
- * <projectDir>/views/conformed.json (either may be missing).
+ * Conformed views: always the skill's shipped views/conformed.json, plus each --conformed file
+ * (default <projectDir>/views/conformed.json). Missing files count as empty, listed in `warnings`.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AkukoProjectSchema } from '../schema/akuko-project.ts';
@@ -54,11 +54,27 @@ function args(argv: string[]) {
 }
 const takesValue = (a: string) => a !== '--dry-run';
 
-function conformedFrom(files: string[] | undefined, projectDir?: string): ConformedView[] {
-  const list = files && files.length > 0
-    ? files.map((f) => parseConformedFile(JSON.parse(readFileSync(f, 'utf8'))))
-    : [loadConformedFile(join(SKILL, 'views', 'conformed.json')), ...(projectDir ? [loadConformedFile(join(projectDir, 'views', 'conformed.json'))] : [])];
-  return list.flatMap((f) => f.views);
+/**
+ * The conformed views folding accepts approvals from: ALWAYS the skill's
+ * shipped views/conformed.json, plus each --conformed file (or, without one,
+ * <projectDir>/views/conformed.json). A file that doesn't exist counts as an
+ * empty list and is reported in `warnings`; a malformed one is an error.
+ */
+export function conformedFrom(files: string[] | undefined, projectDir: string | undefined, warnings: string[]): ConformedView[] {
+  const read = (f: string): ConformedView[] => {
+    if (!existsSync(f)) {
+      warnings.push(`conformed-views file ${f} not found: treated as an empty list (approvals from unlisted views will be rejected)`);
+      return [];
+    }
+    try {
+      return parseConformedFile(JSON.parse(readFileSync(f, 'utf8'))).views;
+    } catch (e) {
+      throw new Error(`conformed-views file ${f}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const shipped = loadConformedFile(join(SKILL, 'views', 'conformed.json')).views;
+  const extra = files && files.length > 0 ? files.flatMap(read) : projectDir ? loadConformedFile(join(projectDir, 'views', 'conformed.json')).views : [];
+  return [...shipped, ...extra];
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -72,9 +88,10 @@ export async function main(argv: string[]): Promise<number> {
       ? await readIkengaStore({ projectDir: dir, iframeState: readInput(iframe) })
       : await readJsonlStore(dir);
     const host = iframe !== undefined ? createIkengaHost({ projectDir: dir }) : createLocalHost({ projectDir: dir });
-    const { project, report } = foldDecisions(await host.readState(), read.decisions, { conformed: conformedFrom(opt.conformed, dir) });
+    const warnings: string[] = [];
+    const { project, report } = foldDecisions(await host.readState(), read.decisions, { conformed: conformedFrom(opt.conformed, dir, warnings) });
     if (report.changed && !opt['dry-run']) await host.writeState(project);
-    console.log(JSON.stringify({ report, invalid: read.invalid, cursor: read.cursor, wrote: report.changed && !opt['dry-run'] }, null, 2));
+    console.log(JSON.stringify({ report, invalid: read.invalid, cursor: read.cursor, wrote: report.changed && !opt['dry-run'], warnings }, null, 2));
     return 0;
   }
   if (cmd === 'fold-file') {
@@ -82,9 +99,10 @@ export async function main(argv: string[]): Promise<number> {
     if (!pf || !rf || !out) throw new Error('usage: fold-file --project <akuko.json> --rows <list.json> --out <file>');
     const p = AkukoProjectSchema.parse(JSON.parse(readInput(pf)));
     const read = parseArtifactRows(readInput(rf));
-    const { project, report } = foldDecisions(p, read.decisions, { conformed: opt.conformed ? conformedFrom(opt.conformed) : conformedFrom(undefined) });
+    const warnings: string[] = [];
+    const { project, report } = foldDecisions(p, read.decisions, { conformed: conformedFrom(opt.conformed, undefined, warnings) });
     writeFileSync(out, `${JSON.stringify(project, null, 2)}\n`);
-    console.log(JSON.stringify({ report, invalid: read.invalid, cursor: read.cursor, out }, null, 2));
+    console.log(JSON.stringify({ report, invalid: read.invalid, cursor: read.cursor, out, warnings }, null, 2));
     return 0;
   }
   if (cmd === 'append') {

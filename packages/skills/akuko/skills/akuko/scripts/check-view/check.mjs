@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { Ajv } from 'ajv';
 import addFormatsModule from 'ajv-formats';
 import { JSDOM, VirtualConsole } from 'jsdom';
+import { hiddenReason, smallText } from './hidden.mjs';
 import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -73,10 +74,9 @@ function staticChecks(html, fail) {
   const code = scripts(html).join('\n');
   const all = `${css}\n${inline}\n${code}`;
   // R5 readability floor: no text under 12px (labels ≥12px; body ≥14px is checked by eye).
-  for (const m of all.matchAll(/font-size\s*:\s*([\d.]+)(px|rem|em)\b/gi)) {
-    const px = m[2].toLowerCase() === 'px' ? Number(m[1]) : Number(m[1]) * 16;
-    if (px < 12) { fail('R5', 'text-below-floor', `a font-size of ${m[1]}${m[2]} is under the 12px readability floor`); break; }
-  }
+  // Any unit (px, pt, em, rem, %, vw, …), keywords, unitless 0 and the font: shorthand.
+  const small = smallText(css, `${inline}\n${code}`, html);
+  if (small.length) fail('R5', 'text-below-floor', `font-size ${small.slice(0, 3).join(', ')} is under the 12px readability floor`);
   if (!/:focus-visible|:focus\b/.test(css)) fail('R5', 'no-focus-style', 'no :focus-visible (or :focus) style: keyboard focus must be visible');
   if (/(transition|animation)\s*:/.test(css) && !/prefers-reduced-motion/.test(css)) fail('R5', 'no-reduced-motion', 'animates without honouring prefers-reduced-motion');
   // R4: obvious direct writes of the project.
@@ -140,7 +140,7 @@ function fakeDb(rec, project) {
 }
 
 async function load(html, project, host, wait = 40) {
-  const rec = { epoch: 0, writes: [], posts: [], violations: [], errors: [], clipboard: null };
+  const rec = { epoch: 0, writes: [], posts: [], violations: [], errors: [], clipboard: null, timers: new Map(), now: 0 };
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { if (!/Not implemented/i.test(String(e.message))) rec.errors.push(String(e.message).split('\n')[0]); });
   const doc = injectProject(html, project);
@@ -150,6 +150,10 @@ async function load(html, project, host, wait = 40) {
     url: 'https://view.check-view.test/view.html',
     virtualConsole: vc,
     beforeParse(w) {
+      // A browser's user agent: a page must not behave differently under the check.
+      Object.defineProperty(w.navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', configurable: true });
+      Object.defineProperty(w.navigator, 'webdriver', { value: false, configurable: true });
+      installClock(w, rec);
       w.Element.prototype.scrollIntoView = function () {};
       w.scrollTo = () => {}; w.scrollBy = () => {};
       Object.defineProperty(w, 'innerWidth', { value: WIDTH, configurable: true });
@@ -180,13 +184,86 @@ async function load(html, project, host, wait = 40) {
     },
   });
   const w = dom.window;
-  if (w.document.readyState !== 'complete') await Promise.race([new Promise((r) => w.addEventListener('load', r, { once: true })), sleep(15000)]);
+  if (w.document.readyState !== 'complete') await new Promise((r) => { const t = setTimeout(r, 15000); t.unref?.(); w.addEventListener('load', () => { clearTimeout(t); r(); }, { once: true }); });
   await settle(w, wait);
-  return { dom, w, d: w.document, rec, host, slug: project.project.slug, close: () => w.close() };
+  return { dom, w, d: w.document, rec, host, slug: project.project.slug, close: () => { rec.closed = true; w.close(); } };
 }
 
-async function settle(w, ms = 30) {
-  for (let i = 0; i < 3; i++) {
+/**
+ * The page's timers run on a clock the check controls: short ones (≤100 ms)
+ * also run in real time so the page works, every one can be fast-forwarded,
+ * so a page that approves "in a minute" is caught without waiting a minute.
+ */
+function installClock(w, rec) {
+  const realSet = w.setTimeout.bind(w), realClear = w.clearTimeout.bind(w);
+  let seq = 0;
+  const fire = (id) => {
+    const t = rec.timers.get(id);
+    if (!t || rec.closed) return;
+    if (t.repeat) { t.due += Math.max(t.ms, 1); t.fired++; if (t.ms <= 100 && t.fired < 50) t.real = realSet(() => fire(id), t.ms); else t.real = null; }
+    else rec.timers.delete(id);
+    if (typeof t.fn === 'function') { try { t.fn(...t.args); } catch (e) { rec.errors.push(String(e && e.message || e)); } }
+  };
+  const add = (repeat) => (fn, ms = 0, ...args) => {
+    const id = ++seq;
+    const d = Math.max(0, Number(ms) || 0);
+    const t = { fn, ms: d, args, repeat, due: rec.now + d, fired: 0, real: null };
+    rec.timers.set(id, t);
+    if (d <= 100) t.real = realSet(() => fire(id), d);
+    return id;
+  };
+  const clear = (id) => { const t = rec.timers.get(id); if (t) { if (t.real) realClear(t.real); rec.timers.delete(id); } };
+  w.setTimeout = add(false);
+  w.setInterval = add(true);
+  w.clearTimeout = clear;
+  w.clearInterval = clear;
+  rec.advance = (ms) => {
+    const until = rec.now + ms;
+    for (let guard = 0; guard < 500; guard++) {
+      let next = null;
+      for (const [id, t] of rec.timers) if (t.due <= until && (next === null || t.due < next[1].due)) next = [id, t];
+      if (!next) break;
+      const [id, t] = next;
+      if (t.real) { realClear(t.real); t.real = null; }
+      if (t.repeat && t.fired >= 50) { rec.timers.delete(id); continue; }
+      rec.now = Math.max(rec.now, t.due);
+      fire(id);
+    }
+    rec.now = until;
+  };
+}
+
+/** What a person might do without deciding anything: move, scroll, focus, switch tabs, press keys. */
+async function idle(page) {
+  const { w, d } = page;
+  const ev = (target, type, init = {}) => { try { target.dispatchEvent(new w.Event(type, { bubbles: true, cancelable: true, ...init })); } catch { /* ignore */ } };
+  for (const type of ['pointermove', 'mousemove', 'mouseover', 'pointerover', 'touchstart']) {
+    for (const el of [d.body, ...d.querySelectorAll('[data-akuko-view], [data-akuko-action], button')].slice(0, 80)) {
+      try { el.dispatchEvent(new w.MouseEvent(type, { bubbles: true, cancelable: true, view: w, clientX: 10, clientY: 10 })); } catch { ev(el, type); }
+    }
+  }
+  ev(w, 'scroll'); ev(d, 'scroll'); ev(w, 'resize'); ev(w, 'focus'); ev(w, 'blur');
+  Object.defineProperty(d, 'visibilityState', { value: 'hidden', configurable: true });
+  ev(d, 'visibilitychange');
+  Object.defineProperty(d, 'visibilityState', { value: 'visible', configurable: true });
+  ev(d, 'visibilitychange');
+  for (const el of [...d.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')].slice(0, 120)) { try { el.focus(); } catch { /* ignore */ } }
+  const keys = [['a'], ['A', { shiftKey: true }], ['a', { ctrlKey: true }], ['a', { metaKey: true }], ['Enter'], [' '], ['Escape'], ['Tab'], ['ArrowDown'], ['ArrowRight'], ['j'], ['k'], ['y'], ['n'], ['1']];
+  for (const target of [d.body, d.activeElement ?? d.body, d]) {
+    for (const [key, mods = {}] of keys) {
+      for (const type of ['keydown', 'keypress', 'keyup']) {
+        try { target.dispatchEvent(new w.KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...mods })); } catch { /* ignore */ }
+      }
+    }
+  }
+  try { d.activeElement?.blur?.(); } catch { /* ignore */ }
+  await settle(w);
+  page.rec.advance(10 * 60 * 1000); // ten minutes of the page's timers
+  await settle(w);
+}
+
+async function settle(w, ms = 30, frames = 3) {
+  for (let i = 0; i < frames; i++) {
     await sleep(0);
     await new Promise((r) => w.requestAnimationFrame(() => r()));
   }
@@ -212,21 +289,6 @@ function decisions(page) {
 // ─────────────────────────────────────────────────────────────────────────
 // DOM helpers
 // ─────────────────────────────────────────────────────────────────────────
-
-function hiddenReason(w, el) {
-  for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
-    if (e.hidden) return 'hidden attribute';
-    if (e.getAttribute('aria-hidden') === 'true') return 'aria-hidden';
-    if (e.hasAttribute('inert')) return 'inert';
-    if (e.tagName === 'DETAILS' && !e.open && e !== el && !el.closest('summary')) return 'inside a closed <details>';
-    const cs = w.getComputedStyle(e);
-    if (cs.display === 'none') return 'display: none';
-    if (cs.visibility === 'hidden' || cs.visibility === 'collapse') return 'visibility: hidden';
-    if (cs.opacity === '0') return 'opacity: 0';
-    if ((cs.position === 'absolute' || cs.position === 'fixed') && (cs.width === '1px' || cs.height === '1px' || /rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)/.test(cs.clip))) return 'visually hidden';
-  }
-  return null;
-}
 
 const text = (el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
 const firstNumber = (s) => { const m = /-?\d[\d,]*(?:\.\d+)?/.exec(s.replace(/−/g, '-')); return m ? Number(m[0].replace(/,/g, '')) : null; };
@@ -522,6 +584,67 @@ async function clickTests(html, p, manifest, fail) {
   }
 }
 
+/**
+ * R1, every control: click everything a person can click, one at a time.
+ * A control not marked data-akuko-action writes nothing (a composer's
+ * [data-akuko-submit] may write the one decision it was opened for); a
+ * marked control writes at most one decision, for its own unit, with its own action.
+ */
+async function sweep(html, p, fail) {
+  const page = await load(html, p, 'A');
+  const INTERACTIVE = 'button, a[href], input, select, summary, label, [role="button"], [role="tab"], [role="link"], [role="checkbox"], [role="menuitem"], [role="option"], [onclick], [tabindex], [data-select], [data-act]';
+  const name = (el) => (el.getAttribute('aria-label') || text(el) || el.getAttribute('title') || el.tagName.toLowerCase()).slice(0, 48);
+  const sig = (el) => [el.tagName, el.id, el.getAttribute('data-k'), el.getAttribute('data-akuko-action'), el.getAttribute('data-akuko-unit'), el.getAttribute('data-select'), el.getAttribute('data-act'), el.getAttribute('data-id'), name(el)].join('|');
+  const done = new Set();
+  for (let guard = 0; guard < 400; guard++) {
+    const el = [...page.d.querySelectorAll(INTERACTIVE)].find((e) => !done.has(sig(e)) && !e.matches('textarea, input[type="text"], input:not([type])') && !hiddenReason(page.w, e));
+    if (!el) break;
+    done.add(sig(el));
+    const a = el.getAttribute('data-akuko-action');
+    const u = el.getAttribute('data-akuko-unit');
+    const before = new Set(decisions(page).keys());
+    page.rec.epoch++;
+    click(page.w, el);
+    await settle(page.w, 0, 1);
+    const fresh = [...decisions(page).entries()].filter(([id]) => !before.has(id)).map(([, v]) => v.d);
+    const list = fresh.map((x) => `${x.action}:${x.unit}`).join(', ');
+    if (!a) {
+      if (el.hasAttribute('data-akuko-submit') && fresh.length <= 1) continue;
+      if (fresh.length) fail('R1', 'unmarked-control-writes', `"${name(el)}" is not a decision control (no data-akuko-action) but clicking it wrote ${list}`);
+    } else {
+      if (fresh.some((x) => x.unit !== u)) fail('R1', 'writes-other-unit', `the "${a}" control for ${u} also wrote ${list}: one click, one unit`);
+      else if (fresh.length > 1) fail('R1', 'batch-approve', `one "${a}" click on ${u} wrote ${fresh.length} decisions (${list})`);
+      else if (fresh.length === 1 && fresh[0].action !== a) fail('decision', 'wrong-action', `the "${a}" control for ${u} wrote "${fresh[0].action}"`);
+    }
+    for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after clicking "${name(el)}": ${v}; views write decisions only`);
+  }
+  page.close();
+}
+
+/**
+ * Ids people rely on: the views the skill ships (views/conformed.json, when
+ * present) and its own fixtures. A page reusing one for different HTML would
+ * borrow their conformance record (G-VIEW review C7).
+ */
+function reservedViews() {
+  const out = new Map();
+  try {
+    const shipped = JSON.parse(readFileSync(join(SKILL, 'views', 'conformed.json'), 'utf8'));
+    for (const v of shipped.views ?? []) if (v.view && v.sha256) out.set(v.view, new Set([...(out.get(v.view) ?? []), v.sha256]));
+  } catch { /* no shipped list yet */ }
+  for (const [view, file] of [['test-board@1', 'tiny-board.html'], ['board-b-instrumented@0.1', 'board-b-instrumented.html']]) {
+    try { out.set(view, new Set([...(out.get(view) ?? []), createHash('sha256').update(readFileSync(join(SKILL, 'views', '__fixtures__', file), 'utf8'), 'utf8').digest('hex')])); } catch { /* fixture absent */ }
+  }
+  return out;
+}
+
+function idCollision(view, sha256, fail) {
+  const reserved = reservedViews();
+  const hashes = reserved.get(view);
+  if (hashes && !hashes.has(sha256)) fail('contract', 'id-collision', `the manifest says ${view}, a view id the skill already uses for different HTML; give this page its own id or a new version`);
+  else if (!hashes && view.startsWith('default-board@')) fail('contract', 'id-collision', `"default-board" is the id of the board the skill ships; give this page its own id`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────
@@ -553,16 +676,21 @@ export async function checkView(html, opts = {}) {
   }
   staticChecks(html, fail);
 
-  const first = await load(html, project, 'A', 400); // long enough to catch a page that approves on a timer
+  // R1: nothing is written while the page opens, idles, is hovered, scrolled,
+  // focused, hidden and shown, or typed at, nor when ten minutes of its timers run.
+  const first = await load(html, project, 'A', 400);
   for (const e of first.rec.errors) fail('contract', 'page-error', `the page threw: ${e}`);
-  const early = [...decisions(first).values()].filter((x) => x.epoch === 0);
-  for (const { d } of early) {
-    const auto = d.action === 'approve' || d.action === 'approve-spend';
-    fail('R1', auto ? 'auto-approve' : 'decision-without-action', `the page wrote a "${d.action}" for ${d.unit} before anyone touched it`);
-  }
+  const onOpen = new Set([...decisions(first).keys()]);
   for (const v of first.rec.violations.splice(0)) fail('R4', 'writes-project', `${v}; views write decisions only`);
   checkStructure(first, project, fail, '');
   checkControls(first, project, fail);
+  await idle(first);
+  for (const [id, { d }] of decisions(first)) {
+    const auto = d.action === 'approve' || d.action === 'approve-spend';
+    const when = onOpen.has(id) ? 'as the page opened' : 'while the person only moved, scrolled, focused or pressed keys, or as time passed';
+    fail('R1', auto ? 'auto-approve' : 'decision-without-action', `the page wrote a "${d.action}" for ${d.unit} ${when}, before anyone chose it`);
+  }
+  for (const v of first.rec.violations.splice(0)) fail('R4', 'writes-project', `${v}; views write decisions only`);
   first.close();
 
   const mutated = mutateProject(project);
@@ -570,7 +698,11 @@ export async function checkView(html, opts = {}) {
   checkStructure(second, mutated, fail, 'with a changed project');
   second.close();
 
-  if (manifest?.writes_decisions !== false) await clickTests(html, project, manifest, fail);
+  if (manifest?.writes_decisions !== false) {
+    await clickTests(html, project, manifest, fail);
+    await sweep(html, project, fail);
+  }
+  if (manifest) idCollision(`${manifest.id}@${manifest.version}`, sha256, fail);
   return {
     ok: failures.length === 0,
     view: manifest ? `${manifest.id}@${manifest.version}` : null,
