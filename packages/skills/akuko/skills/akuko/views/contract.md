@@ -237,9 +237,9 @@ The last sixteen are the G-VIEW reviewer's variants of `tiny-board.html`, kept s
 
 ### A — claude.ai (artifact database)
 
-Every file is pinned to commit `__PINSHA__` of the public repo, so the check runs against exactly the code that was reviewed. Steps 1–2 happen on claude.ai. Steps 3–5 run from **Claude Code with the ArtifactData tool** (the desktop app has it; G-HOST check B4), in a checkout of `ikenga-hq/ikenga-pkgs` at `__PINSHA__` or later. That is the main path, because folding needs the whole skill and its dependencies.
+Every file is pinned to commit `071189ff52fd0c753875de3a30580e548a95c6e0` of the public repo, so the check runs against exactly the code that was reviewed. Steps 1–2 happen on claude.ai. Steps 3–5 run from **Claude Code with the ArtifactData tool** (the desktop app has it; G-HOST check B4), in a checkout of `ikenga-hq/ikenga-pkgs` at `071189ff52fd0c753875de3a30580e548a95c6e0` or later. That is the main path, because folding needs the whole skill and its dependencies.
 
-1. In a claude.ai chat, ask: *"Fetch `https://raw.githubusercontent.com/ikenga-hq/ikenga-pkgs/__PINSHA__/packages/skills/akuko/skills/akuko/views/__fixtures__/tiny-board.html` and publish it unchanged as an artifact named akuko-store-check, with capabilities `{db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`."*
+1. In a claude.ai chat, ask: *"Fetch `https://raw.githubusercontent.com/ikenga-hq/ikenga-pkgs/071189ff52fd0c753875de3a30580e548a95c6e0/packages/skills/akuko/skills/akuko/views/__fixtures__/tiny-board.html` and publish it unchanged as an artifact named akuko-store-check, with capabilities `{db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`."*
    Expected: an artifact link. The page shows "Your move: 2 shots waiting for you · 1 spend decisions · 2 bible items".
    Observed: ______
 2. Open the artifact, signed in. Click **Approve sc2_sh4**. Then click **Add a note**, type `store check`, and press **Send**. Then click **Undo note** (the Undo control reverses the latest decision on sc2_sh4).
