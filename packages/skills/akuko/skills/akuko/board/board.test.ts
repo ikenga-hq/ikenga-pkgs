@@ -30,6 +30,7 @@ const FIX = here('./__fixtures__/');
 const T0 = () => new Date('2026-11-07T10:00:00Z');
 const beating = (): AkukoProject => AkukoProjectSchema.parse(JSON.parse(readFileSync(here('../fixtures/the-beating/akuko.json'), 'utf8')));
 const proposal = JSON.parse(readFileSync(here('../breakdown/__fixtures__/proposal-adapt.json'), 'utf8')) as unknown;
+const lf = (t: string): string => t.split(String.fromCharCode(13)).join(''); // golden files may be checked out with CRLF
 const tmp: string[] = [];
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 
@@ -122,7 +123,7 @@ describe('panels: every fixture shot', () => {
       const file = join(FIX, 'panels', panelFileName(s.id));
       const want = panelSvg(s, { aspect: p.project.aspect_ratio });
       if (process.env.AKUKO_UPDATE_GOLDEN === '1') { mkdirSync(join(FIX, 'panels'), { recursive: true }); writeFileSync(file, want); }
-      assert.equal(readFileSync(file, 'utf8'), want, `${s.id}: regenerate with AKUKO_UPDATE_GOLDEN=1`);
+      assert.equal(lf(readFileSync(file, 'utf8')), want, `${s.id}: regenerate with AKUKO_UPDATE_GOLDEN=1`);
     }
     assert.equal(readdirSync(join(FIX, 'panels')).length, p.shots.length);
   });
@@ -224,7 +225,7 @@ describe('beat boards', () => {
     const sample = a.find((x) => x.file === 'beatboard-sc2.html')!;
     const file = join(FIX, 'beatboards', sample.file);
     if (process.env.AKUKO_UPDATE_GOLDEN === '1') { mkdirSync(join(FIX, 'beatboards'), { recursive: true }); writeFileSync(file, sample.html); }
-    assert.equal(readFileSync(file, 'utf8'), sample.html, 'regenerate with AKUKO_UPDATE_GOLDEN=1');
+    assert.equal(lf(readFileSync(file, 'utf8')), sample.html, 'regenerate with AKUKO_UPDATE_GOLDEN=1');
   });
 });
 
