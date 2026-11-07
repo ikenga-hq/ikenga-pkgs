@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/schema/export-json-schema.ts",
-    "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning \"skills/akuko/schema/*.test.ts\"",
+    "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning \"skills/akuko/**/*.test.ts\"",
     "typecheck": "tsc -p skills/akuko/tsconfig.json",
     "convert:fixture": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/fixtures/convert-fixture.ts"
   },
