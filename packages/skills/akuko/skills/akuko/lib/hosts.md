@@ -23,20 +23,17 @@ How to detect, per host:
 
 - **B / C (a shell exists):** run
   `node --experimental-strip-types --disable-warning=ExperimentalWarning <skill>/hosts/detect.ts --tools <your tool names, comma-separated>`
-  and use its `level` and `capabilities`. Pass every tool name you have (at least `Bash` / `PowerShell`, every `mcp__*` name, and `ArtifactData` if present) — the script can't see your tool list. `detect.ts` has no dependencies, so it runs from an installed skill.
+  and use its `level` and `capabilities`. Pass your **full** tool list — it must include `Bash` (or `PowerShell`), plus every `mcp__*` name and `ArtifactData` if present. The script can't see your tool list, and **a tool list without a shell tool is read as "this agent has no shell" → level A**. `detect.ts` has no dependencies, so it runs from an installed skill.
 - **A (no shell):** decide by inspection — no Bash / filesystem tools and no Studio MCP tools → A. Capabilities: `shell: false, fs: false, codeExec: false` (unless §Manual host check A2 says otherwise), `artifactDb: true` once the board artifact with the `db` capability exists, `connectedMcps` = the connectors you can see (e.g. Canva).
 
 Write the result to `akuko.json.host` (`toHostRecord(level, capabilities)`).
 
 ### How `shell` is decided (`detectShell`)
 
-Strongest signal first:
+- **A `--tools` list was passed → it decides.** `shell` is true if and only if the list contains `Bash` or `PowerShell` (Claude Code's exact tool names; near misses such as `bash_tool` don't count). The environment and the disk are not consulted.
+- **No `--tools` list** (a script or CI job with no agent) → `SHELL` / `ComSpec` in the environment, else a shell binary on disk — `/bin/sh`, or `%SystemRoot%\System32\cmd.exe` on Windows (e.g. a bare Docker container where `SHELL` is unset).
 
-1. A `Bash` or `PowerShell` tool in `--tools` — Claude Code's exact tool names. Near misses such as `bash_tool` don't count.
-2. `SHELL` or `ComSpec` in the environment.
-3. A shell binary on disk — `/bin/sh`, or `%SystemRoot%\System32\cmd.exe` on Windows. **Used only when no `--tools` list is passed** (a script or CI job with no agent, e.g. Claude Code's tooling in a bare Docker container where `SHELL` is unset).
-
-Why the binary is not enough on its own once a tool list is given: a claude.ai code sandbox could contain `/bin/sh` too (and might even set `SHELL`), and an agent there must stay host A — its files don't persist and the project lives in the artifact database. So when the agent passes a tool list with no shell tool, the binary is ignored. **To be confirmed by §Manual host check A2**: if code runs in claude.ai, A2 also runs `detect.ts` there and must report level A.
+Why the tool list wins: a claude.ai code sandbox could contain `/bin/sh` and set `SHELL`, and an agent there must stay host A — its files don't persist and the project lives in the artifact database. Only the agent's own tools say whether *it* can run commands. The flip side: a Claude Code or Ikenga agent that passes `--tools` without `Bash` / `PowerShell` is classified A. **To be confirmed by §Manual host check A2**: if code runs in claude.ai, A2 also runs `detect.ts` there and must report level A.
 
 ## Adapter, per host
 
@@ -91,7 +88,7 @@ What each host can actually do for the artifact database and files, recorded 202
 - **Process-side signal:** a running shell writes `control.json` (`{port, token, pid, …}`) to `<data_local_dir>/app.ikenga/` — `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share` on Linux (verified-from-source: `ikenga/iyke-cli/src/control.rs#control_path`). `detect.ts` treats a control file with a live pid as `ikengaBridge: true`.
 - **`art.state` is NOT readable by the agent.** In the shell's bridge it is `localStorage` inside the iframe (verified-from-source: `ikenga/shell/src/lib/artifact/bridge.ts` `stateHandle`, ~lines 838–851), even though the artifact-builder skill describes it as "host-mediated SQLite". So "decisions land in `art.state`" (01 §Host levels) does not reach akuko as written.
 - **What the agent can read:** a `postMessage` to the parent of the shape `{__iyke: true, kind: 'state', payload: {key, value}}`. The shell's iframe-registry listener stores `reg.state[key] = value` for the registered iframe (verified-from-source: `ikenga/shell/src/lib/iyke/iframe-registry.ts`, `case 'state'`), readable with `iyke iframe-state <pane>` / `GET /iyke/iframe-state` (verified-from-source: `ikenga/shell/src-tauri/src/iyke/server.rs`, route `/iyke/iframe-state`). Artifact panes register with that registry in `ikenga/shell/src/viewer/renderers/html-frame.tsx` (~line 182, kind `html-frame`); `pkg-iframe-host.tsx` is the separate registration for pkg iframes. It is latest-value-only, per mounted pane, so decisions sent this way must be **mirrored to `decisions.jsonl`** by the agent on read. **Flag for WP-07a** (`decisions/ikenga.ts`).
-- **Who defines `publishState` — and the caveat.** `art.publishState(key, value)` exists only in the artifact-builder's *inline* polyfill (verified-from-source: `ikenga-artifact-builder/skills/ikenga-artifact-builder/references/hello-world.html` ~line 185) and on the handle returned by the pkg-side `mountIykeIframeBridge()` (`ikenga/shell/src/lib/iyke/iframe-bridge.ts`, which the viewer server injects but never exposes as a global). The `art` object the **shell** injects into artifact panes has no `publishState` (verified-from-source: `ikenga/shell/src/lib/artifact/bridge.ts`, the object returned from `init()`, ~lines 906–923), and because the shell's polyfill is installed before the page's and the inline polyfill only fills `window.__ikenga_bridge_polyfill__` when it is empty, inside Ikenga the page gets the shell's `art` — **so `art.publishState` is most likely undefined in an Ikenga pane even for a page that carries the inline polyfill** (load order from the `bridge.ts` header comment; to be confirmed by §Manual host check C4). **A board must therefore post `{__iyke: true, kind: 'state', payload: {key, value}}` to `window.parent` itself** (call `art.publishState` when it exists, else post directly).
+- **Who defines `publishState` — and the caveat.** `art.publishState(key, value)` exists only in the artifact-builder's *inline* polyfill (verified-from-source: `ikenga-artifact-builder/skills/ikenga-artifact-builder/references/hello-world.html` ~line 185) and on the handle returned by the pkg-side `mountIykeIframeBridge()` (`ikenga/shell/src/lib/iyke/iframe-bridge.ts`, which the viewer server injects but never exposes as a global). The `art` object the **shell** injects into artifact panes has no `publishState` (verified-from-source: `ikenga/shell/src/lib/artifact/bridge.ts`, the object returned from `init()`, ~lines 906–923). It wins over the page's own polyfill: the viewer server injects the shell bridge as a synchronous classic `<script>` right after `<head>` (verified-from-source: `ikenga/shell/src-tauri/src/viewer_server/mod.rs` ~lines 405–418), that script sets `window.__ikenga_bridge_polyfill__` (`bridge.ts` ~line 927), and the inline polyfill only fills it when it is empty (`hello-world.html` ~line 101). **So `art.publishState` is undefined in an Ikenga pane, even for a page that carries the inline polyfill.** §Manual host check C4 still checks it on a real shell. **A board must therefore post `{__iyke: true, kind: 'state', payload: {key, value}}` to `window.parent` itself** (call `art.publishState` when it exists, else post directly).
 - **Studio MCP:** the Studio pkg `com.ikenga.studio` declares an MCP server named `studio` (verified-from-source: `ikenga-pkgs/packages/apps/studio/manifest.json`). How its tools are named in the engine's tool list is **unverified** (C2); `isStudioServer()` accepts `studio`, `*-studio`, `*.studio`.
 - `IKENGA_PROJECT_ROOT` / `IKENGA_PROJECT_ID` are set for pkg MCP servers and sidecars (verified-from-source: `ikenga/shell/src-tauri/src/commands/pkg_mcp.rs`, `pkg/lifecycle.rs`), not shown to reach the engine's chat session, so detection does not use them.
 
@@ -135,8 +132,8 @@ Run from the akuko skill folder (`packages/skills/akuko/skills/akuko/` in a chec
 2. With Ikenga closed: `node --experimental-strip-types --disable-warning=ExperimentalWarning hosts/detect.ts`
    Expected: `"level": "B"`, `shell`, `fs`, `codeExec` true; `ikengaBridge` false.
    Observed: ______
-3. Ask Claude Code: *"List your tool names that start with `mcp__`, and say whether you have the ArtifactData and Artifact tools."* Re-run step 2 adding `--tools <those names, comma-separated>`.
-   Expected: `connectedMcps` lists the servers; `artifactDb` is true only if ArtifactData was listed. Note whether you ran the desktop app or the terminal CLI.
+3. Ask Claude Code: *"List **all** your tool names, comma-separated (including Bash or PowerShell, every `mcp__` tool, and ArtifactData / Artifact if you have them)."* Re-run step 2 adding `--tools <that full list>`.
+   Expected: `"level": "B"`, `shell` true; `connectedMcps` lists the servers; `artifactDb` is true only if ArtifactData was listed. If the list you pass leaves out `Bash` / `PowerShell`, the result is `"level": "A"` — that is by design; re-run with the full list. Note whether you ran the desktop app or the terminal CLI.
    Observed: ______
 4. If step 3 showed ArtifactData: repeat A3 from Claude Code.
    Expected: same result as A3.
@@ -147,8 +144,8 @@ Run from the akuko skill folder (`packages/skills/akuko/skills/akuko/` in a chec
 1. Start Ikenga. In its engine chat (or a terminal on the same machine) run step B2.
    Expected: `"level": "C"`, `ikengaBridge` true; `ikengaControlFile` points at an existing file.
    Observed: ______
-2. With the Studio pkg installed and running, ask the Ikenga agent for its `mcp__` tool names; run B2 with `--tools …`.
-   Expected: `studioMcp` true. **Write down the exact server segment** (e.g. `studio`).
+2. With the Studio pkg installed and running, ask the Ikenga agent for **all** its tool names (including Bash or PowerShell and every `mcp__` tool); run B2 with `--tools <that full list>`.
+   Expected: `"level": "C"`, `studioMcp` true, `shell` true. **Write down the exact server segment** (e.g. `studio`). Leaving `Bash` / `PowerShell` out makes `shell` false — and without the Studio MCP or a running shell it would classify as A.
    Observed: ______
 3. In a terminal: `iyke state`
    Expected: JSON describing the shell (the bridge is reachable).

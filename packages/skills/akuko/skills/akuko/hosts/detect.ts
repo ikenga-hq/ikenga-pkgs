@@ -201,21 +201,20 @@ export function shellBinaryPath(d: Pick<NodeProbeDeps, 'env' | 'platform'>): str
 }
 
 /**
- * Can the agent run shell commands? Signals, strongest first:
- *   1. a `Bash` / `PowerShell` tool in the agent's tool list;
- *   2. `SHELL` / `ComSpec` in the environment;
- *   3. a shell binary on disk (`/bin/sh`, `%SystemRoot%\System32\cmd.exe`) — used
- *      ONLY when no tool list was passed (a script or CI run with no agent,
- *      e.g. a bare Docker container with no `SHELL`). When a tool list is
- *      passed and has no shell tool, a binary on disk is not evidence the
- *      agent can use it: a claude.ai code sandbox may well contain `/bin/sh`
- *      (to be confirmed by §Manual host check A2), and it must stay host A.
+ * Can the agent run shell commands?
+ *   - A tool list was passed → it decides: true iff it contains `Bash` or
+ *     `PowerShell`. Nothing else is consulted, because a claude.ai code
+ *     sandbox may set `SHELL` and contain `/bin/sh` and must stay host A
+ *     (to be confirmed by §Manual host check A2).
+ *   - No tool list (a script or CI run with no agent) → fall back to:
+ *   1. `SHELL` / `ComSpec` in the environment;
+ *   2. a shell binary on disk (`/bin/sh`, `%SystemRoot%\System32\cmd.exe`),
+ *      e.g. a bare Docker container with no `SHELL`.
  */
 export function detectShell(hints: ProbeHints, deps: NodeProbeDeps): boolean {
   const tools = hints.toolNames ?? [];
-  if (hasShellTool(tools)) return true;
+  if (tools.length > 0) return hasShellTool(tools);
   if (deps.env.SHELL || deps.env.ComSpec || deps.env.COMSPEC) return true;
-  if (tools.length > 0) return false;
   return deps.exists(shellBinaryPath(deps));
 }
 

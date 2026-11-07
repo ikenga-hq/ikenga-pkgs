@@ -225,6 +225,18 @@ describe('detect() — simulated hosts', () => {
     assert.equal(d.capabilities.shell, false);
   });
 
+  it('SHELL set + tool list without a shell tool → A', async () => {
+    const d = await detectWith(sim({ env: { SHELL: '/bin/bash' }, files: { '/bin/sh': '' } }), ['ArtifactData']);
+    assert.equal(d.level, 'A');
+    assert.equal(d.capabilities.shell, false);
+    assert.equal(d.capabilities.artifactDb, true);
+  });
+
+  it('ComSpec set + tool list with only mcp__ names → A (the full list must include the shell tool)', async () => {
+    const d = await detectWith(sim({ platform: 'win32', home: 'C:\\Users\\u', env: { ComSpec: 'C:\\Windows\\system32\\cmd.exe' } }), ['mcp__claude-in-chrome__navigate']);
+    assert.equal(d.level, 'A');
+  });
+
   it('SHELL/ComSpec unset, no tools, no shell binary → A', async () => {
     assert.equal((await detectWith(sim({ env: {} }))).level, 'A');
   });
