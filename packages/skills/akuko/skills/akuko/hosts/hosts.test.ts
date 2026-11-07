@@ -22,7 +22,6 @@ import {
 } from './detect.ts';
 import { createIkengaHost, createNodeHost, IkengaHost } from './ikenga.ts';
 import { createLocalHost, LocalHost, PROJECT_FILE, serializeProject, writeFileAtomic } from './local.ts';
-import { NotImplementedError } from './shared.ts';
 import type { AssetInput, HostAdapter, WaveOneHost } from './types.ts';
 
 const FIXTURE = fileURLToPath(new URL('../fixtures/the-beating/akuko.json', import.meta.url));
@@ -517,13 +516,9 @@ describe('readDecisions (WP-07a)', () => {
   const recordedIds = readFileSync(join(DEC_FX, 'decisions.jsonl'), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { id: string }).id).sort();
   const idsOf = (ds: { id: string }[]) => ds.map((d) => d.id).sort();
 
-  it('no host throws NotImplementedError any more', async () => {
+  it('B and C read an empty store as no decisions', async () => {
     const hosts: HostAdapter[] = [createLocalHost({ projectDir: tmpProject(false) }), new IkengaHost({ projectDir: tmpProject(false) })];
-    for (const h of hosts) {
-      const r = await h.readDecisions().then((x) => x, (e: unknown) => e);
-      assert.ok(!(r instanceof NotImplementedError));
-      assert.deepEqual(r, []);
-    }
+    for (const h of hosts) assert.deepEqual(await h.readDecisions(), []);
   });
 
   it('B reads <project>/decisions.jsonl (decisions/jsonl.ts), honouring a cursor', async () => {

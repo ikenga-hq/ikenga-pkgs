@@ -100,21 +100,30 @@ the estimate, which is the honest figure to plan against.
 
 ### Approving (for decision folding)
 
-> **Provisional.** `canApprove()` is not part of the G-ADAPTER freeze. WP-07a
-> owns it and may change its signature.
+> `canApprove()` is not part of the G-ADAPTER freeze; WP-07a owns it
+> (decision folding, `decisions/fold.ts`).
 
 An `approve-spend` decision folds to `status: 'approved'` only when
-`canApprove(project, jobId)` returns `null`. That means a budget exists and
-the approved bound (`approved_max`, else `estimate`) fits in cap −
-committed. Approvals come from people only. Folding rejects agent-authored
-approvals and approvals from views that are not on the conformed-views list
-(R-12, WP-07a).
+`canApprove(project, jobId, decision)` returns `null`. That means:
 
-**Known gap, for WP-07a:** an `approve-spend` Decision carries no amount yet,
-and `quote()` rewrites an awaiting entry's estimate in place. A stale
-approval could therefore fold onto a higher estimate than the one the person
-saw. WP-07a must bind each approval to the amount shown (a schema follow-up
-on `Decision`).
+- a budget exists;
+- the decision's `text` is the gate's own reply words, `approve <amount>
+  <CURRENCY>` (first word any case), in the budget currency;
+- that amount is at least the job's bound (`approved_max`, else `estimate`)
+  **as printed** by `money()`, so the exact words the confirmation line asks
+  for always pass;
+- the bound fits in cap − committed.
+
+This binds every approval to the amount the person was shown. `quote()`
+rewrites an awaiting entry's estimate in place, so a stale approval for a
+lower amount is refused with `approval-mismatch` and the person approves the
+new amount. The `Decision` schema is unchanged: the amount travels in `text`
+(views/contract.md §7).
+
+Approvals come from people only. Folding rejects agent-authored approvals and
+approvals from views that are not on the conformed-views list (R-12). A chat
+reply counts only in those exact words (`view: "chat@1"`, lib/state.md
+§Decision folding).
 
 ## The ledger rule
 

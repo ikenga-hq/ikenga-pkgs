@@ -70,7 +70,7 @@ So a run with no tool list falls back to B/C rules and prints a `warning`. **Unv
 
 On host A, Node code may run in the workspace, but `createNodeHost()` refuses level A: use `ClaudeArtifactHost`, so the project never lands in a folder that vanishes with the chat.
 
-All three `readDecisions` currently throw `NotImplementedError` naming WP-07a. `writeState` is never called by a view. `storeAsset` returns an `Asset` with status `pending-review` and does not touch `akuko.json`.
+`readDecisions(since?)` delegates to `decisions/<store>.ts` on every host (A `artifact-db.ts`, B `jsonl.ts`, C `ikenga.ts`; `views/contract.md` §5). `writeState` is never called by a view. `storeAsset` returns an `Asset` with status `pending-review` and does not touch `akuko.json`.
 
 ---
 

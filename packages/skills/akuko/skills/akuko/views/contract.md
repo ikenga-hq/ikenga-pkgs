@@ -119,7 +119,8 @@ Inline `scripts/check-view/decision-writer.js` verbatim, then call `akukoDecisio
 
 **Host C.**
 
-- `art.state` is **not** the store. It is iframe localStorage the agent can't read, and `art.publishState` is undefined in an Ikenga pane (G-HOST manual check C4/C5). The plan's "decisions land in `art.state`" is replaced by the raw bridge post above.
+- `art.state` is **not** the store. Per the shell's source (`shell/src/lib/artifact/bridge.ts`), it is iframe localStorage the agent can't read, and the shell's injected `art` has no `publishState`. Both facts come from source: the runtime checks for them (G-HOST C4(a)/(c)) were not run.
+- What *was* observed: a raw bridge post reaches `iyke iframe-state` (C4(b)), and a pane reload clears it (C5). The plan's "decisions land in `art.state`" is replaced by the raw bridge post above.
 - The shell keeps only the latest value per key, so the page posts its whole outbox every time, and again on load.
 - A pane reload clears that state, so the agent mirrors to `decisions.jsonl` on every read. The mirror is the durable store.
 
@@ -225,24 +226,27 @@ Exit code 0 only if every file passes. `scripts/check-view.test.ts` pins:
 
 ### A — claude.ai (artifact database)
 
-1. In a claude.ai chat with the akuko skill, ask: *"Publish `views/__fixtures__/tiny-board.html` from the akuko skill as an artifact named akuko-store-check, with capabilities `{db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`."*
+Every file is pinned to commit `__PINSHA__` of the public repo, so the check runs against exactly the code that was reviewed. Steps 1–2 happen on claude.ai. Steps 3–5 run from **Claude Code with the ArtifactData tool** (the desktop app has it; G-HOST check B4), in a checkout of `ikenga-hq/ikenga-pkgs` at `__PINSHA__` or later. That is the main path, because folding needs the whole skill and its dependencies.
+
+1. In a claude.ai chat, ask: *"Fetch `https://raw.githubusercontent.com/ikenga-hq/ikenga-pkgs/__PINSHA__/packages/skills/akuko/skills/akuko/views/__fixtures__/tiny-board.html` and publish it unchanged as an artifact named akuko-store-check, with capabilities `{db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`."*
    Expected: an artifact link. The page shows "Your move: 2 shots waiting for you · 1 spend decisions · 2 bible items".
    Observed: ______
 2. Open the artifact, signed in. Click **Approve sc2_sh4**. Then click **Add a note**, type `store check`, and press **Send**. Then click **Undo note** (the Undo control reverses the latest decision on sc2_sh4).
    Expected: "Your move" drops to 1 shot waiting after the approval; the note appears in the thread, then disappears; no error.
    Observed: ______
-3. Ask: *"Load your ArtifactData tool (use ToolSearch if it is deferred), list the `decisions` collection of that artifact, and save the result to a file in your workspace."*
+3. In Claude Code, ask: *"Load your ArtifactData tool (use ToolSearch if it is deferred), list the `decisions` collection of <the artifact link>, and save the result as rows.json."*
    Expected: three rows, each `{id, data, version, updatedAt}`. `data` is an approve, a note (`store check`), and an undo whose `undoes` is the note's id. Each has `view: "test-board@1"` and `by` your viewer id (`u_…`).
    Observed: ______
-4. Ask: *"Fetch the akuko skill's `decisions/` folder and `fixtures/the-beating/akuko.json` into your workspace. Write a conformed list `{"format":"akuko-conformed-views","version":1,"views":[{"view":"test-board@1"}]}`. Run `node --experimental-strip-types decisions/cli.ts fold-file --project fixtures/the-beating/akuko.json --rows <the saved list> --conformed <that list> --out folded.json` and show me the report and shot sc2_sh4 from folded.json."*
+4. In the checkout, from `packages/skills/akuko/skills/akuko/`, write `conformed.json` = `{"format":"akuko-conformed-views","version":1,"views":[{"view":"test-board@1"}]}`. Then run `node --experimental-strip-types decisions/cli.ts fold-file --project fixtures/the-beating/akuko.json --rows rows.json --conformed conformed.json --out folded.json` and look at the report and shot `sc2_sh4` in folded.json.
    Expected:
    - the report lists 3 new decisions; `applied` is the approve alone (the note was undone in the same batch, so it never lands); `rejected` is empty;
    - `sc2_sh4` is `approved`, with one trail comment `Status: pending-review → approved` and **no** `store check` comment.
    Observed: ______
-   If the claude.ai workspace can't install the package's dependencies (`zod`, `@ikenga/studio-schema`; bundling is WP-20), save the list from step 3 and run step 4 from Claude Code in this repo instead. Claude Code also has ArtifactData (G-HOST check B4).
-5. Ask the agent to fold again with the same list.
+5. Run the same command again with `--project folded.json --out folded2.json`.
    Expected: `"changed": false`; nothing new.
    Observed: ______
+
+**Optional: steps 3–5 on claude.ai itself.** Step 3 works there: load ArtifactData with ToolSearch and list the collection. That alone shows the agent can read the board's rows on host A. Folding there needs the **whole skill** fetched into the workspace (`decisions/`, `schema/`, `spend/`, `providers/`, `hosts/`, `views/`, `fixtures/`), plus its npm dependencies `zod` and `@ikenga/studio-schema`. The latter is not yet published outside the monorepo; bundling is WP-20. Fetching `decisions/` alone does not run.
 
 ### C — Ikenga (bridge post + jsonl mirror)
 

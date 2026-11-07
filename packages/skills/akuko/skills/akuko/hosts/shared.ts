@@ -117,12 +117,3 @@ export const DECISION_STORE = {
   B: 'decisions/jsonl.ts',
   C: 'decisions/ikenga.ts',
 } as const;
-
-/** Thrown by every `readDecisions` until WP-07a lands `decisions/<store>.ts`. */
-export class NotImplementedError extends Error {
-  override readonly name = 'NotImplementedError';
-}
-
-export function decisionsNotImplemented(level: keyof typeof DECISION_STORE): never {
-  throw new NotImplementedError(`akuko: readDecisions not implemented — WP-07a (${DECISION_STORE[level]})`);
-}
