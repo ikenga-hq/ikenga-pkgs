@@ -26,8 +26,6 @@ requires_capabilities:
 
 # action: `intake` — bring in a story, treatment or screenplay and produce a Fountain screenplay
 
-<!-- Stub (WP-02): replaced by WP-04. This action is built; the marker stays only because actions.test.ts looks for it. -->
-
 **Loaded when**: the user starts a project from a source text, or runs `/akuko intake`.
 
 **Reads first**: `../lib/state.md`, `../lib/hosts.md`. Film rules: `../profiles/film/breakdown.md`.

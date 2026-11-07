@@ -18,8 +18,6 @@ requires_capabilities:
 
 # action: `breakdown` — break the screenplay into scenes, beats and shots sized to clip limits
 
-<!-- Stub (WP-02): replaced by WP-04. This action is built; the marker stays only because actions.test.ts looks for it. -->
-
 **Loaded when**: intake is approved and the user runs `/akuko breakdown`.
 
 **Reads first**: `../lib/state.md`, `../lib/hosts.md`, and **`../profiles/film/breakdown.md`** (the film rules: shot sizing, shot vocabulary, what goes on the checklist).
