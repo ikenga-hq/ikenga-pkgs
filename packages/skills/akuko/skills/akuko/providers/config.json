@@ -1,0 +1,48 @@
+{
+  "format": "akuko-provider-config",
+  "version": 1,
+  "currency": "USD",
+  "stale_after_days": 30,
+  "notes": "The only place akuko keeps model ids and prices (plan R-2). Every model carries a last_verified date; `doctor` flags entries older than stale_after_days. billing: free = costs akuko nothing; direct-api = akuko calls a paid HTTP API with the user's key (never on host A in v0.x); connected-mcp = a paid generation tool on a connected MCP server (needs the confirmation line on host A). Entries with example: true are placeholders for tests and for WP-06 to replace: their prices are illustrative, not quotes, and the gate refuses them outside tests.",
+  "providers": {
+    "manual": {
+      "label": "Manual — you run the generator",
+      "billing": "free",
+      "example": false,
+      "default_model": "manual-handoff",
+      "models": {
+        "manual-handoff": {
+          "price": { "amount": 0, "per": "job" },
+          "last_verified": "2026-11-07",
+          "source": "No cost to akuko: you paste the prompt package into a tool of your choice. Any spend you report when handing the file back is recorded in the ledger."
+        }
+      }
+    },
+    "example-direct-image": {
+      "label": "EXAMPLE — paid direct image API (placeholder, replaced in WP-06)",
+      "billing": "direct-api",
+      "example": true,
+      "default_model": "example-image-v1",
+      "models": {
+        "example-image-v1": {
+          "price": { "amount": 0.05, "per": "image" },
+          "last_verified": "2026-11-07",
+          "source": "Illustrative placeholder, not a real price. WP-06 replaces this entry from the provider's own pricing page."
+        }
+      }
+    },
+    "example-connected-mcp": {
+      "label": "EXAMPLE — paid generation tool on a connected MCP (placeholder)",
+      "billing": "connected-mcp",
+      "example": true,
+      "default_model": "example-mcp-video-v1",
+      "models": {
+        "example-mcp-video-v1": {
+          "price": { "amount": 0.1, "per": "second" },
+          "last_verified": "2026-11-07",
+          "source": "Illustrative placeholder, not a real price."
+        }
+      }
+    }
+  }
+}
