@@ -1,0 +1,1900 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "akuko project",
+  "description": "akuko.json project format, schema_version 1. Generated from akuko-project.ts; do not edit by hand.",
+  "$ref": "#/definitions/AkukoProject",
+  "definitions": {
+    "Id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "Money": {
+      "type": "number",
+      "minimum": 0
+    },
+    "Currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "StageId": {
+      "type": "string",
+      "enum": [
+        "intake",
+        "breakdown",
+        "sketch",
+        "bible",
+        "keyframes",
+        "motion",
+        "sound",
+        "assemble",
+        "export"
+      ]
+    },
+    "StageState": {
+      "type": "string",
+      "enum": [
+        "locked",
+        "not-started",
+        "in-progress",
+        "waiting-spend",
+        "in-review",
+        "approved"
+      ]
+    },
+    "UnitStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "draft",
+        "pending-review",
+        "needs-rework",
+        "approved"
+      ]
+    },
+    "AssetKind": {
+      "type": "string",
+      "enum": [
+        "reference",
+        "sheet",
+        "portrait",
+        "turnaround",
+        "plate",
+        "lookbook",
+        "panel",
+        "keyframe",
+        "clip",
+        "scene",
+        "vo",
+        "music",
+        "sfx",
+        "timeline",
+        "export",
+        "other"
+      ]
+    },
+    "ProjectMeta": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Matches the project folder name."
+        },
+        "title": {
+          "type": "string"
+        },
+        "logline": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "Credit line for the source work, e.g. an adaptation note."
+        },
+        "runtime_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Target runtime in seconds."
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "enum": [
+            "16:9",
+            "9:16",
+            "1:1"
+          ],
+          "default": "16:9"
+        },
+        "resolution": {
+          "type": "object",
+          "properties": {
+            "w": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "h": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "w",
+            "h"
+          ],
+          "additionalProperties": false
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Pipeline profile, e.g. \"film\"."
+        },
+        "created_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "title",
+        "profile",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "Host": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "boolean",
+              "number",
+              "string"
+            ]
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "Stages": {
+      "type": "object",
+      "properties": {
+        "intake": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "breakdown": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "sketch": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "bible": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "keyframes": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "motion": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "sound": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "assemble": {
+          "$ref": "#/definitions/StageRecord"
+        },
+        "export": {
+          "$ref": "#/definitions/StageRecord"
+        }
+      },
+      "required": [
+        "intake",
+        "breakdown",
+        "sketch",
+        "bible",
+        "keyframes",
+        "motion",
+        "sound",
+        "assemble",
+        "export"
+      ],
+      "additionalProperties": false
+    },
+    "StageRecord": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/definitions/StageState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "Unit": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "status": {
+          "$ref": "#/definitions/UnitStatus"
+        },
+        "comments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Comment"
+          },
+          "default": []
+        },
+        "by_stage": {
+          "type": "object",
+          "properties": {
+            "intake": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "breakdown": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "sketch": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "bible": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "keyframes": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "motion": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "sound": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "assemble": {
+              "$ref": "#/definitions/UnitStageRecord"
+            },
+            "export": {
+              "$ref": "#/definitions/UnitStageRecord"
+            }
+          },
+          "additionalProperties": false
+        },
+        "updated_at": {
+          "$ref": "#/definitions/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "UnitStageRecord": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/UnitStatus"
+        },
+        "content": {
+          "type": "string",
+          "description": "Text output of the stage (e.g. a beat-sheet entry)."
+        },
+        "output": {
+          "$ref": "#/definitions/AssetRef",
+          "description": "File the stage produced for this unit (panel, frame, clip)."
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Comment": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the Decision this comment was folded from, so an undo can find it."
+        }
+      },
+      "required": [
+        "ts",
+        "stage",
+        "author",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "Shot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "status": {
+          "$ref": "#/definitions/UnitStatus"
+        },
+        "comments": {
+          "$ref": "#/definitions/Unit/properties/comments"
+        },
+        "by_stage": {
+          "$ref": "#/definitions/Unit/properties/by_stage"
+        },
+        "updated_at": {
+          "$ref": "#/definitions/Unit/properties/updated_at"
+        },
+        "scene": {
+          "$ref": "#/definitions/Id",
+          "description": "Scene id (scenes[].id)."
+        },
+        "beat": {
+          "type": "string",
+          "description": "Script beat id (script.beats[].id)."
+        },
+        "label": {
+          "type": "string"
+        },
+        "shot_type": {
+          "type": "string",
+          "enum": [
+            "ews",
+            "ws",
+            "ls",
+            "fs",
+            "ms",
+            "cu",
+            "ecu",
+            "ots",
+            "pov",
+            "insert",
+            "aerial",
+            "unset",
+            "overhead"
+          ],
+          "default": "unset"
+        },
+        "camera": {
+          "type": "string",
+          "description": "Free-text camera note, e.g. \"Static, low angle\"."
+        },
+        "camera_move": {
+          "type": "string",
+          "enum": [
+            "static",
+            "pan",
+            "tilt",
+            "dolly",
+            "truck",
+            "crane",
+            "handheld",
+            "zoom-in",
+            "zoom-out",
+            "orbit",
+            "unset",
+            "push-in",
+            "pull-out",
+            "whip-pan"
+          ],
+          "default": "unset"
+        },
+        "action": {
+          "type": "string",
+          "description": "What happens in frame."
+        },
+        "duration_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Generation prompt."
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          },
+          "default": [],
+          "description": "Bible entry ids or asset ids this shot must stay consistent with."
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "script_line": {
+          "type": "string",
+          "description": "The screenplay or story text this shot covers."
+        },
+        "narration": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Voice-over / narration text spoken over the shot."
+        },
+        "intent": {
+          "type": "string",
+          "description": "Why the shot exists; treatment note."
+        },
+        "notes": {
+          "type": "string"
+        },
+        "blocking": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Blocking"
+          },
+          "default": []
+        },
+        "studio": {
+          "$ref": "#/definitions/StudioShotExt"
+        },
+        "freeform": {
+          "$ref": "#/definitions/FreeformShotExt"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Blocking": {
+      "type": "object",
+      "properties": {
+        "who": {
+          "type": "string"
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "rect",
+            "ellipse"
+          ]
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "w": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "h": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "who",
+        "shape",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "additionalProperties": false
+    },
+    "BibleEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "status": {
+          "$ref": "#/definitions/UnitStatus"
+        },
+        "comments": {
+          "$ref": "#/definitions/Unit/properties/comments"
+        },
+        "by_stage": {
+          "$ref": "#/definitions/Unit/properties/by_stage"
+        },
+        "updated_at": {
+          "$ref": "#/definitions/Unit/properties/updated_at"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "description": "e.g. \"Principal\", \"Supporting\"."
+        },
+        "description": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "status",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "Asset": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "status": {
+          "$ref": "#/definitions/UnitStatus"
+        },
+        "comments": {
+          "$ref": "#/definitions/Unit/properties/comments"
+        },
+        "by_stage": {
+          "$ref": "#/definitions/Unit/properties/by_stage"
+        },
+        "updated_at": {
+          "$ref": "#/definitions/Unit/properties/updated_at"
+        },
+        "kind": {
+          "$ref": "#/definitions/AssetKind"
+        },
+        "owner": {
+          "$ref": "#/definitions/Id",
+          "description": "Bible entry or shot this asset belongs to."
+        },
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "$ref": "#/definitions/AssetRef"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "provider": {
+          "type": "string",
+          "description": "Provider that generated it, when generated."
+        },
+        "model": {
+          "type": "string"
+        },
+        "studio": {
+          "$ref": "#/definitions/StudioAssetExt"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "status",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "Scene": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "heading": {
+          "type": "string",
+          "description": "Scene heading, e.g. \"INT. HALLWAY — NIGHT\"."
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "Beat": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scene_id": {
+          "type": "string"
+        },
+        "shot_id": {
+          "type": "string"
+        },
+        "vo": {
+          "type": "string",
+          "default": ""
+        },
+        "on_screen_text": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sfx": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "transition": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {},
+          "default": {}
+        }
+      },
+      "required": [
+        "id",
+        "duration_ms"
+      ],
+      "additionalProperties": false
+    },
+    "Budget": {
+      "type": "object",
+      "properties": {
+        "cap": {
+          "$ref": "#/definitions/Money"
+        },
+        "currency": {
+          "$ref": "#/definitions/Currency"
+        },
+        "spent": {
+          "$ref": "#/definitions/Money"
+        }
+      },
+      "required": [
+        "cap",
+        "currency",
+        "spent"
+      ],
+      "additionalProperties": false
+    },
+    "PendingSpend": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "label": {
+          "type": "string"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          },
+          "description": "Units the job produces output for."
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "image",
+            "video",
+            "audio",
+            "layout"
+          ]
+        },
+        "estimate": {
+          "$ref": "#/definitions/Money"
+        },
+        "approved_max": {
+          "$ref": "#/definitions/Money",
+          "description": "Most the person allowed this job to cost, if it may run over the estimate."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "awaiting-approval",
+            "approved",
+            "declined"
+          ]
+        },
+        "decision": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the Decision that approved or declined the job."
+        },
+        "created_at": {
+          "$ref": "#/definitions/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "label",
+        "units",
+        "provider",
+        "estimate",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable id for one provider call, so an entry can be followed from submitted to done or failed across retries."
+        },
+        "ts": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Unit the call produced output for."
+        },
+        "job": {
+          "$ref": "#/definitions/Id",
+          "description": "pending_spend id the call ran under."
+        },
+        "estimate": {
+          "$ref": "#/definitions/Money"
+        },
+        "actual": {
+          "$ref": "#/definitions/Money"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "submitted",
+            "done",
+            "failed",
+            "cancelled"
+          ]
+        }
+      },
+      "required": [
+        "ts",
+        "provider",
+        "unit",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Decision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "unit": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "description": "Shot, bible entry, asset or job id."
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Viewer identity when the host knows it, else \"you\"."
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Renderer that wrote it, e.g. \"default-board@0.1\"."
+            },
+            "action": {
+              "type": "string",
+              "const": "approve"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "request-changes"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "note"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "approve-spend"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "decline-spend"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "undo"
+            },
+            "undoes": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "undoes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "StudioShotExt": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "time": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "number"
+            },
+            "end": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        "frames": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "end": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        "renderer": {
+          "type": "string",
+          "enum": [
+            "hyperframes",
+            "remotion",
+            "excalidraw",
+            "blender",
+            "fal",
+            "veo",
+            "kling",
+            "runway",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "content_path": {
+          "type": "string"
+        },
+        "reference_layer": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "hash": {
+                "type": "string"
+              },
+              "duration_ms": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "uri"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "audio_cue": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+            },
+            "mime": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+            },
+            "hash": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+            },
+            "duration_ms": {
+              "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "block_id": {
+          "type": "string"
+        },
+        "renders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "cell_uid": {
+                "type": "string"
+              },
+              "engine": {
+                "type": "string"
+              },
+              "engine_version": {
+                "type": "string"
+              },
+              "model_id": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string",
+                "default": "default"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "queued",
+                  "running",
+                  "done",
+                  "failed",
+                  "cancelled"
+                ]
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                  },
+                  "mime": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                  },
+                  "hash": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                  },
+                  "duration_ms": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                  }
+                },
+                "required": [
+                  "uri"
+                ],
+                "additionalProperties": false
+              },
+              "preview": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                  },
+                  "mime": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                  },
+                  "hash": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                  },
+                  "duration_ms": {
+                    "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                  }
+                },
+                "required": [
+                  "uri"
+                ],
+                "additionalProperties": false
+              },
+              "cost_estimate": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cost_actual": {
+                "type": "number",
+                "minimum": 0
+              },
+              "started_at": {
+                "type": "string"
+              },
+              "finished_at": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {},
+                "default": {}
+              }
+            },
+            "required": [
+              "id",
+              "cell_uid",
+              "engine",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "default": [],
+          "description": "Studio render records. These stay open to unknown keys, as in Studio; their nested file refs are strict."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {},
+          "default": {}
+        },
+        "extra": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Unknown keys the Studio cell carried (Studio keeps them across version skew)."
+        }
+      },
+      "required": [
+        "index",
+        "time",
+        "frames",
+        "content_path"
+      ],
+      "additionalProperties": false
+    },
+    "StudioAssetExt": {
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "image",
+                "video",
+                "audio",
+                "style",
+                "character",
+                "location",
+                "sketch"
+              ]
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {},
+              "default": {}
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "anchor"
+      ],
+      "additionalProperties": false
+    },
+    "StudioProjectExt": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "studio",
+            "watch",
+            "oneshot"
+          ]
+        },
+        "archetype_id": {
+          "type": "string"
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/definitions/StudioShotExt/properties/extra"
+        },
+        "selected_concepts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "filename": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "filename"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "selected_concepts_note": {
+          "type": "string"
+        },
+        "script": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "archetype": {
+                  "type": "string",
+                  "enum": [
+                    "explainer",
+                    "product",
+                    "ai_short",
+                    "narrative",
+                    "montage",
+                    "tutorial",
+                    "music_video",
+                    "custom"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "style_anchors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": []
+                },
+                "music_preset": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "default": {}
+                }
+              },
+              "required": [
+                "archetype",
+                "title",
+                "duration_ms"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Studio script header; null when the Studio project had no script."
+        },
+        "extra": {
+          "$ref": "#/definitions/StudioShotExt/properties/extra",
+          "description": "Unknown keys the Studio project carried."
+        }
+      },
+      "required": [
+        "mode",
+        "archetype_id",
+        "approved",
+        "metadata",
+        "script"
+      ],
+      "additionalProperties": false
+    },
+    "FreeformShotExt": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "number"
+            },
+            "end": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        "frames": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "end": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "additionalProperties": false
+        },
+        "rung_extra": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/StudioShotExt/properties/extra"
+          },
+          "description": "Leftover keys per freeform rung (e.g. tsx_anchor), keyed by rung name."
+        },
+        "extra": {
+          "$ref": "#/definitions/StudioShotExt/properties/extra",
+          "description": "Unknown keys the freeform beat carried."
+        }
+      },
+      "required": [
+        "time"
+      ],
+      "additionalProperties": false
+    },
+    "FreeformProjectExt": {
+      "type": "object",
+      "properties": {
+        "extra": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/StudioShotExt/properties/extra/additionalProperties"
+          },
+          "description": "Top-level keys of the freeform storyboard that were not mapped."
+        }
+      },
+      "required": [
+        "extra"
+      ],
+      "additionalProperties": false
+    },
+    "AssetRef": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+        },
+        "mime": {
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+        },
+        "hash": {
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+        },
+        "duration_ms": {
+          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "additionalProperties": false
+    },
+    "AkukoProject": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "akuko"
+        },
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "project": {
+          "$ref": "#/definitions/ProjectMeta"
+        },
+        "host": {
+          "$ref": "#/definitions/Host",
+          "description": "Written by host detection at the start of every action."
+        },
+        "stages": {
+          "$ref": "#/definitions/Stages",
+          "default": {
+            "intake": {
+              "state": "not-started"
+            },
+            "breakdown": {
+              "state": "not-started"
+            },
+            "sketch": {
+              "state": "not-started"
+            },
+            "bible": {
+              "state": "not-started"
+            },
+            "keyframes": {
+              "state": "not-started"
+            },
+            "motion": {
+              "state": "not-started"
+            },
+            "sound": {
+              "state": "not-started"
+            },
+            "assemble": {
+              "state": "not-started"
+            },
+            "export": {
+              "state": "not-started"
+            }
+          }
+        },
+        "current_stage": {
+          "$ref": "#/definitions/StageId",
+          "default": "intake"
+        },
+        "script": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "Path of the source story / treatment, relative to the project."
+            },
+            "screenplay": {
+              "type": "string",
+              "description": "Path of the Fountain screenplay, relative to the project."
+            },
+            "beats": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Beat"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Scene"
+          },
+          "default": []
+        },
+        "shots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Shot"
+          },
+          "default": []
+        },
+        "bible": {
+          "type": "object",
+          "properties": {
+            "characters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BibleEntry"
+              },
+              "default": []
+            },
+            "locations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BibleEntry"
+              },
+              "default": []
+            },
+            "styles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BibleEntry"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Asset"
+          },
+          "default": []
+        },
+        "audio": {
+          "type": "object",
+          "properties": {
+            "narration": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "audio": {
+                      "type": "object",
+                      "properties": {
+                        "uri": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                        },
+                        "mime": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                        },
+                        "hash": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                        },
+                        "duration_ms": {
+                          "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                        }
+                      },
+                      "required": [
+                        "uri"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "words": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "word": {
+                            "type": "string"
+                          },
+                          "start_ms": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "end_ms": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "word",
+                          "start_ms",
+                          "end_ms"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "voice_id": {
+                      "type": "string"
+                    },
+                    "duration_ms": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "generated_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "audio",
+                    "words",
+                    "duration_ms",
+                    "generated_at"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Voice-over audio with word timings (ms)."
+            },
+            "analysis": {
+              "type": "object",
+              "properties": {
+                "bpm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "downbeats": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "default": []
+                },
+                "beats": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "default": []
+                },
+                "onsets": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "default": []
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "uri": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/uri"
+                    },
+                    "mime": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/mime"
+                    },
+                    "hash": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/hash"
+                    },
+                    "duration_ms": {
+                      "$ref": "#/definitions/StudioShotExt/properties/reference_layer/items/properties/duration_ms"
+                    }
+                  },
+                  "required": [
+                    "uri"
+                  ],
+                  "additionalProperties": false
+                },
+                "analysed_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "bpm"
+              ],
+              "additionalProperties": false,
+              "description": "Beat map of the music track (ms)."
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Budget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "null until setup sets a cap; the spend gate refuses paid jobs without one."
+        },
+        "pending_spend": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PendingSpend"
+          },
+          "default": []
+        },
+        "ledger": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LedgerEntry"
+          },
+          "default": []
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Decision"
+          },
+          "default": []
+        },
+        "studio": {
+          "$ref": "#/definitions/StudioProjectExt"
+        },
+        "freeform": {
+          "$ref": "#/definitions/FreeformProjectExt"
+        }
+      },
+      "required": [
+        "format",
+        "schema_version",
+        "project"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
