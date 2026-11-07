@@ -104,7 +104,12 @@ function submitTouches(code: string): string[] {
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => /\bsubmit\b/.test(l))
-    .filter((l) => !/^(async\s+)?submit\s*\(/.test(l));
+    .filter((l) => {
+      // A bare declaration is exempt only if nothing after the name touches `submit` again,
+      // so a one-line wrapper like `async submit(job) { return impl.submit(job); }` is caught.
+      const decl = /^(async\s+)?submit\s*\(/.exec(l);
+      return !decl || /\bsubmit\b/.test(l.slice(decl[0].length));
+    });
 }
 
 /** The only lines allowed to touch `submit`, per file. */
@@ -132,6 +137,8 @@ describe('structural guarantee: submit() is reachable only through gate.run()', 
       "Reflect.apply(impl.submit, impl, [job]);",
       'const s = provider.submit;',
       'await provider.submit (job);',
+      'async submit(job) { return impl.submit(job); }',
+      'submit(job) { return other.submit(job); }',
     ];
     for (const line of sneaky) assert.deepEqual(submitTouches(line), [line.trim()], line);
     for (const ok of ['async submit(job) {', 'submit(job: Job): Promise<JobHandle>;', "status: 'submitted'", '// provider.submit(job)', '/* impl.submit(x) */']) {

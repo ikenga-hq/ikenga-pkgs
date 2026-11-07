@@ -18,6 +18,42 @@
         }
       }
     },
+    "gemini-image": {
+      "label": "Gemini image (Nano Banana) — your Gemini API key",
+      "billing": "direct-api",
+      "example": false,
+      "default_model": "gemini-nano-banana-2.1",
+      "models": {
+        "gemini-nano-banana-2.1": {
+          "price": { "amount": 0.0336, "per": "image" },
+          "last_verified": "2026-11-07",
+          "source": "https://ai.google.dev/gemini-api/docs/pricing (served from https://aistudio.google.com/docs/pricing), Standard tier, 1K output, read 2026-11-07. Image output only: reference images are also billed as input tokens. Reference limits: https://ai.google.dev/gemini-api/docs/image-generation (read 2026-11-07). Up to 14 reference images (10 object + 4 character)."
+        },
+        "gemini-3.1-flash-image": {
+          "price": { "amount": 0.067, "per": "image" },
+          "last_verified": "2026-11-07",
+          "source": "https://ai.google.dev/gemini-api/docs/pricing (served from https://aistudio.google.com/docs/pricing), Standard tier, 1K output, read 2026-11-07. Image output only: reference images are also billed as input tokens. Reference limits: https://ai.google.dev/gemini-api/docs/image-generation (read 2026-11-07). Up to 14 reference images (10 object + 4 character)."
+        },
+        "gemini-3-pro-image": {
+          "price": { "amount": 0.134, "per": "image" },
+          "last_verified": "2026-11-07",
+          "source": "https://ai.google.dev/gemini-api/docs/pricing (served from https://aistudio.google.com/docs/pricing), Standard tier, 1K output, read 2026-11-07. Image output only: reference images are also billed as input tokens. Reference limits: https://ai.google.dev/gemini-api/docs/image-generation (read 2026-11-07). Up to 14 reference images (6 object + 5 character + 3 style)."
+        }
+      }
+    },
+    "fal": {
+      "label": "fal image (Nano Banana 2 on fal) — your fal key",
+      "billing": "direct-api",
+      "example": false,
+      "default_model": "fal-ai/nano-banana-2",
+      "models": {
+        "fal-ai/nano-banana-2": {
+          "price": { "amount": 0.08, "per": "image" },
+          "last_verified": "2026-11-07",
+          "source": "https://fal.ai/pricing lists fal-ai/nano-banana-2 and fal-ai/nano-banana-2/edit (used when a unit has references) at $0.08 per image; the model pages carry no price. Input/limits: https://fal.ai/models/fal-ai/nano-banana-2/edit/api (14-reference total, resolution 0.5K-4K; akuko requests the 1K default), read 2026-11-07. Queue API: https://fal.ai/docs/model-apis/model-endpoints/queue. fal does not say whether 2K/4K cost more; akuko does not request them."
+        }
+      }
+    },
     "example-direct-image": {
       "label": "EXAMPLE â€” paid direct image API (placeholder, replaced in WP-06)",
       "billing": "direct-api",
