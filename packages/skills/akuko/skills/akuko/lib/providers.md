@@ -60,7 +60,9 @@ models older than `stale_after_days` (`staleModels()`).
 2. Write a `ProviderImpl` under `providers/<id>/` and wrap it with
    `sealProvider(impl)` from `spend/gate.ts`. The seal reads `billing` from
    config and makes `submit()` refuse anything that did not come through
-   `gate.run()`. Never export the unsealed impl.
+   `gate.run()`. Never export the unsealed impl. The id `manual` is
+   reserved: only `providers/manual` may seal it, and config may mark only
+   `manual` as free.
 3. `estimate()` must not call a paid endpoint or write state.
 4. `fetch()` writes files through `host.storeAsset()`. Give each file an
    `owner` (its unit). The gate records the outputs: the asset goes into

@@ -9,16 +9,19 @@
  *      copy of the job that only `gate.run()` mints, and only after the checks
  *      below. The ticket set and the minting function are private to this
  *      module.
- *   2. `gate.run()` is the only code that calls `submit()` (a test scans every
- *      non-test source file for `.submit(` to keep it that way).
+ *   2. `gate.run()` is the only code that reaches `submit()` (a test scans
+ *      every non-test source file, fixtures included, for any way of
+ *      reaching it and allows only the lines here).
  *
- * Before minting a ticket, `run()` always calls `provider.estimate(job)` and,
+ * `run()` works on a deep-frozen snapshot of the job, and its read, check,
+ * reserve and write steps run under a per-gate lock. Before minting a ticket
+ * it always calls `provider.estimate(job)` and,
  * for a paid provider (billing ≠ free in config.json), requires:
  *   - a recorded budget cap (`akuko.json.budget`; null → refused, pointing to setup);
  *   - a `pending_spend` entry for the job with status `approved`, for the same
  *     provider, stage and units;
  *   - the fresh estimate ≤ the approved bound (`approved_max`, else the
- *     approved estimate) and ≤ cap − spent − reserved;
+ *     approved estimate) and ≤ cap − spent − sunk − reserved;
  *   - no earlier attempt of the job still in flight or done;
  *   - on host A, no paid direct API (R-11).
  * Free providers (the manual provider) skip the money checks but still go
@@ -66,15 +69,40 @@ const sealed = new WeakSet<Provider>();
 /** One-shot tickets: frozen job copies minted by `run()` for exactly one submit. */
 const tickets = new WeakSet<Job>();
 
+/** Deep-freeze a plain-data value (jobs are JSON-shaped). */
+function deepFreeze<T>(v: T): T {
+  if (v && typeof v === 'object' && !Object.isFrozen(v)) {
+    Object.freeze(v);
+    for (const k of Object.keys(v)) deepFreeze((v as Record<string, unknown>)[k]);
+  }
+  return v;
+}
+
+/** A private, deep-frozen copy of a job: what the gate estimates, checks and submits. */
+const snapshot = (job: Job): Job => deepFreeze(structuredClone(job));
+
 function mintTicket(job: Job): Job {
-  const ticket = Object.freeze(structuredClone(job));
+  const ticket = snapshot(job);
   tickets.add(ticket);
   return ticket;
 }
 
+/** The one provider id config may mark free (P8). */
+export const MANUAL_PROVIDER_ID = 'manual';
+
+/**
+ * Key that `providers/manual/index.ts`, and only it, passes to seal the
+ * manual provider (a test scans for any other user). Sealing id `manual`
+ * without it throws, so a paid implementation cannot borrow the manual
+ * provider's free billing and run with no budget.
+ */
+export const MANUAL_SEAL: unique symbol = Symbol('akuko.manual-seal');
+
 export interface SealOptions {
   /** Config to read billing from. Defaults to the committed providers/config.json. */
   config?: AkukoProviderConfig;
+  /** Only the manual provider passes this. */
+  manual?: typeof MANUAL_SEAL;
 }
 
 /**
@@ -84,6 +112,14 @@ export interface SealOptions {
  */
 export function sealProvider(impl: ProviderImpl, opts: SealOptions = {}): Provider {
   const billing: ProviderBilling = providerConfig(opts.config ?? loadProviderConfig(), impl.id).billing;
+  if (impl.id === MANUAL_PROVIDER_ID) {
+    if (opts.manual !== MANUAL_SEAL) {
+      throw new SpendGateBypassError(`only providers/manual may be sealed as "${MANUAL_PROVIDER_ID}"`);
+    }
+    if (billing !== 'free') throw new SpendGateBypassError(`config must mark "${MANUAL_PROVIDER_ID}" free, not ${billing}`);
+  } else if (billing === 'free') {
+    throw new SpendGateBypassError(`only the manual provider may be free; "${impl.id}" is marked free in config`);
+  }
   const provider: Provider = Object.freeze({
     id: impl.id,
     kinds: Object.freeze([...impl.kinds]) as Provider['kinds'],
@@ -94,7 +130,7 @@ export function sealProvider(impl: ProviderImpl, opts: SealOptions = {}): Provid
     submit: async (job: Job): Promise<JobHandle> => {
       if (!tickets.has(job)) {
         throw new SpendGateBypassError(
-          `${impl.id}.submit() was called outside the spend gate. Run the job through gate.run(), which estimates it and checks the budget and approval first.`,
+          `${impl.id}: a job was sent to the provider outside the spend gate. Run it through gate.run(), which estimates it and checks the budget and approval first.`,
         );
       }
       tickets.delete(job);
@@ -157,10 +193,18 @@ const sameSet = (a: string[], b: string[]): boolean =>
   a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
 
 /**
+ * PROVISIONAL: not part of the G-ADAPTER freeze. Owned by WP-07a, which may
+ * change its signature.
+ *
  * Can a pending spend be approved right now? For decision folding (WP-07a):
  * an `approve-spend` decision folds to `status: 'approved'` only when this
  * returns null. Checks the budget exists and the approved bound
- * (`approved_max`, else the estimate) fits in cap − spent − reserved.
+ * (`approved_max`, else the estimate) fits in what is left under the cap.
+ *
+ * Known gap: an `approve-spend` Decision carries no amount yet, and
+ * `quote()` rewrites an awaiting entry's estimate in place, so a stale
+ * approval could fold onto a higher estimate. WP-07a must bind each approval
+ * to the amount the person was shown.
  */
 export function canApprove(p: AkukoProject, jobId: string): Refusal | null {
   if (!p.budget) return refuse('no-budget', SETUP_POINTER);
@@ -212,7 +256,7 @@ export function confirmationLine(p: AkukoProject, job: Job, cost: Cost, provider
   const head = `Spend check — ${job.label}: ${providerLabel}${cost.model ? ` (${cost.model})` : ''}, ${n} unit${n === 1 ? '' : 's'}, estimate ${money(cost.amount)} ${cur}.`;
   if (s.cap === null) return `${head} ${SETUP_POINTER}`;
   const after = (s.remaining ?? 0) - cost.amount;
-  return `${head} Budget ${money(s.cap)} ${cur}: spent ${money(s.spent)}, in flight ${money(s.reserved)}, left after this ${money(after)}. Reply "approve ${money(cost.amount)} ${cur}" to run it; anything else stops it.`;
+  return `${head} Budget ${money(s.cap)} ${cur}: spent ${money(s.spent + s.sunk)}, in flight ${money(s.reserved)}, left after this ${money(after)}. Reply "approve ${money(cost.amount)} ${cur}" to run it; anything else stops it.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -263,7 +307,20 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
   const registry = new Map<string, Provider>();
   for (const p of opts.providers) {
     if (!sealed.has(p)) throw new SpendGateBypassError(`provider "${p.id}" is not sealed; build it with sealProvider()`);
+    if (registry.has(p.id)) throw new SpendGateBypassError(`two providers share the id "${p.id}"`);
     registry.set(p.id, p);
+  }
+
+  // Every read -> check -> reserve -> write runs under this lock, so
+  // concurrent run() / quote() / collect() calls on one gate see each other's
+  // reservations. It does not cover other processes or other gates on the
+  // same project: a host-level compare-and-swap on writeState is a WP-02
+  // follow-up (lib/spend.md).
+  let tail: Promise<unknown> = Promise.resolve();
+  function locked<T>(fn: () => Promise<T>): Promise<T> {
+    const result = tail.then(fn, fn);
+    tail = result.catch(() => undefined);
+    return result;
   }
 
   /** Checks that need no estimate. */
@@ -344,7 +401,12 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     return { project, pending };
   }
 
-  async function quote(job: Job): Promise<QuoteResult> {
+  function quote(input: Job): Promise<QuoteResult> {
+    const job = snapshot(input);
+    return locked(() => quoteLocked(job));
+  }
+
+  async function quoteLocked(job: Job): Promise<QuoteResult> {
     const p = await host.readState();
     const pre = precheck(p, job);
     if ('refusal' in pre) {
@@ -371,61 +433,73 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     return { cost, billing: provider.billing, paid: true, pending, confirmation, ...(refusal ? { refusal } : {}) };
   }
 
-  async function run(job: Job): Promise<RunResult> {
+  type Prepared =
+    | { go: false; result: RunResult }
+    | { go: true; provider: Provider; cost: Cost; ledgerIds: string[]; confirmation?: string };
+
+  /** Steps 1-5, under the lock: estimate, check, reserve. */
+  async function prepare(job: Job): Promise<Prepared> {
     let p = await host.readState();
     const pre = precheck(p, job);
-    if ('refusal' in pre) return { status: 'refused', refusal: pre.refusal };
+    if ('refusal' in pre) return { go: false, result: { status: 'refused', refusal: pre.refusal } };
     const { provider } = pre;
 
     // 1. Always estimate first.
     const est = await estimate(provider, job);
-    if ('refusal' in est) return { status: 'refused', refusal: est.refusal };
+    if ('refusal' in est) return { go: false, result: { status: 'refused', refusal: est.refusal } };
     const { cost } = est;
+    if (!isPaid(provider.billing)) return { go: true, provider, cost, ledgerIds: [] };
 
-    let ledgerIds: string[] = [];
-    let confirmation: string | undefined;
+    // 2. A recorded cap, in the estimate's currency.
+    if (!p.budget) return { go: false, result: { status: 'refused', refusal: refuse('no-budget', SETUP_POINTER), cost } };
+    if (p.budget.currency !== cost.currency) {
+      return { go: false, result: { status: 'refused', refusal: refuse('currency-mismatch', `estimate is in ${cost.currency}, the budget in ${p.budget.currency}`), cost } };
+    }
+    const confirmation = confirmationLine(p, job, cost, provider.id);
 
-    if (isPaid(provider.billing)) {
-      // 2. A recorded cap, in the estimate's currency.
-      if (!p.budget) return { status: 'refused', refusal: refuse('no-budget', SETUP_POINTER), cost };
-      if (p.budget.currency !== cost.currency) {
-        return { status: 'refused', refusal: refuse('currency-mismatch', `estimate is in ${cost.currency}, the budget in ${p.budget.currency}`), cost };
-      }
-      confirmation = confirmationLine(p, job, cost, provider.id);
-
-      // 3. An approved pending entry; create one (awaiting approval) if missing.
-      const entry = p.pending_spend.find((j) => j.id === job.id);
-      if (!entry) {
-        const { pending } = await upsertPending(p, job, cost);
-        return { status: 'awaiting-approval', pending, cost, confirmation };
-      }
-
-      // 4. Approval, bound and cap.
-      const refusal = checkPaid(p, job, cost, p.budget, entry);
-      if (refusal) return { status: 'refused', refusal, cost };
-
-      // 5. Reserve: open ledger entries before the provider is called.
-      const opened = openEntries(p, {
-        job: job.id,
-        provider: provider.id,
-        ts: now(),
-        units: jobUnits(job).map((unit) => ({ unit, estimate: cost.per_unit[unit] ?? 0 })),
-        ...(cost.model !== undefined ? { model: cost.model } : {}),
-      });
-      p = assertValidProject(opened.project);
-      ledgerIds = opened.ids;
-      await host.writeState(p);
+    // 3. An approved pending entry; create one (awaiting approval) if missing.
+    const entry = p.pending_spend.find((j) => j.id === job.id);
+    if (!entry) {
+      const { pending } = await upsertPending(p, job, cost);
+      return { go: false, result: { status: 'awaiting-approval', pending, cost, confirmation } };
     }
 
-    // 6. Submit with a one-shot ticket.
+    // 4. Approval, bound and cap.
+    const refusal = checkPaid(p, job, cost, p.budget, entry);
+    if (refusal) return { go: false, result: { status: 'refused', refusal, cost } };
+
+    // 5. Reserve: open ledger entries before the provider is called.
+    const opened = openEntries(p, {
+      job: job.id,
+      provider: provider.id,
+      ts: now(),
+      units: jobUnits(job).map((unit) => ({ unit, estimate: cost.per_unit[unit] ?? 0 })),
+      ...(cost.model !== undefined ? { model: cost.model } : {}),
+    });
+    p = assertValidProject(opened.project);
+    await host.writeState(p);
+    return { go: true, provider, cost, ledgerIds: opened.ids, confirmation };
+  }
+
+  async function run(input: Job): Promise<RunResult> {
+    // The caller keeps its object; the gate estimates, checks and submits only this frozen copy (P3).
+    const job = snapshot(input);
+    const prep = await locked(() => prepare(job));
+    if (!prep.go) return prep.result;
+    const { provider, cost, ledgerIds, confirmation } = prep;
+
+    // 6. Submit with a one-shot ticket minted from the same snapshot. The
+    //    reservation is already written, so the lock is not held here.
     let handle: JobHandle;
     try {
       handle = await provider.submit(mintTicket(job));
     } catch (err) {
       if (ledgerIds.length) {
-        let q = await host.readState();
-        for (const id of ledgerIds) q = settleEntry(q, id, { status: 'failed', ts: now() });
-        await host.writeState(assertValidProject(q));
+        await locked(async () => {
+          let q = await host.readState();
+          for (const id of ledgerIds) q = settleEntry(q, id, { status: 'failed', ts: now() });
+          await host.writeState(assertValidProject(q));
+        });
       }
       return { status: 'failed', error: err instanceof Error ? err.message : String(err), cost };
     }
@@ -440,6 +514,10 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     if (!isTerminal(status.state)) return { status, assets: [] };
 
     const fetched = status.state === 'done' ? await provider.fetch(handle) : [];
+    return locked(() => record(provider, handle, status, fetched));
+  }
+
+  async function record(provider: Provider, handle: JobHandle, status: JobStatus, fetched: Asset[]): Promise<CollectResult> {
     let p = await host.readState();
     const ts = now();
     const recorded: Asset[] = [];
@@ -463,7 +541,8 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     const outcome = status.state === 'done' ? 'done' : status.state === 'failed' ? 'failed' : 'cancelled';
     for (const id of handle.ledger) {
       const entry = p.ledger.find((e) => e.id === id);
-      if (!entry || entry.status !== 'submitted') continue;
+      // Only this job's own open entries: a stale or forged handle cannot release another job's reservation (P6).
+      if (!entry || entry.status !== 'submitted' || entry.job !== handle.job || entry.provider !== provider.id) continue;
       const actual = status.actual?.[entry.unit];
       p = settleEntry(p, id, { status: outcome, ts, ...(actual !== undefined ? { actual } : {}) });
     }

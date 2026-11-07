@@ -11,6 +11,13 @@
  * deleted and their ids are never reused, so a retry opens a new entry with
  * the next attempt number. `budget.spent` is always recomputed from the
  * entries, never adjusted by hand.
+ *
+ * Money a failed or cancelled call really cost (its `actual`) is "sunk": it
+ * counts against the cap exactly like spent money (P5). It is kept out of
+ * `budget.spent` only because the WP-01 schema and integrity check define
+ * that field as the sum over done entries; the cap check uses
+ * `committedFromLedger()` (spent + sunk + reserved), never `budget.spent`
+ * alone.
  */
 
 import type { AkukoProject, LedgerEntry } from '../schema/akuko-project.ts';
@@ -23,6 +30,16 @@ export function spentFromLedger(p: AkukoProject): number {
   return p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + (e.actual ?? 0) : sum), 0);
 }
 
+/** Sum of `actual` over failed and cancelled entries: money a call cost although it produced nothing. */
+export function sunkFromLedger(p: AkukoProject): number {
+  return p.ledger.reduce((sum, e) => (e.status === 'failed' || e.status === 'cancelled' ? sum + (e.actual ?? 0) : sum), 0);
+}
+
+/** Everything that counts against the cap: spent + sunk + reserved. */
+export function committedFromLedger(p: AkukoProject): number {
+  return spentFromLedger(p) + sunkFromLedger(p) + reservedFromLedger(p);
+}
+
 /** Sum of `estimate` over entries still `submitted`: money in flight, not yet settled. */
 export function reservedFromLedger(p: AkukoProject): number {
   return p.ledger.reduce((sum, e) => (e.status === 'submitted' ? sum + (e.estimate ?? 0) : sum), 0);
@@ -31,27 +48,30 @@ export function reservedFromLedger(p: AkukoProject): number {
 export interface LedgerSummary {
   cap: number | null;            // null until setup records one
   currency: string | null;
-  spent: number;                 // settled (done)
+  spent: number;                 // settled (done) — equals budget.spent
+  sunk: number;                  // actual cost of failed / cancelled calls
   reserved: number;              // submitted, at estimate
-  remaining: number | null;      // cap − spent − reserved; null without a cap
+  remaining: number | null;      // cap − spent − sunk − reserved; null without a cap
   entries: LedgerEntry[];        // newest first
 }
 
 /** What the board shows for money. */
 export function ledgerSummary(p: AkukoProject): LedgerSummary {
   const spent = spentFromLedger(p);
+  const sunk = sunkFromLedger(p);
   const reserved = reservedFromLedger(p);
   return {
     cap: p.budget?.cap ?? null,
     currency: p.budget?.currency ?? null,
     spent,
+    sunk,
     reserved,
-    remaining: p.budget ? p.budget.cap - spent - reserved : null,
+    remaining: p.budget ? p.budget.cap - spent - sunk - reserved : null,
     entries: [...p.ledger].reverse(),
   };
 }
 
-/** Money still free under the cap (cap − spent − reserved), or null without a budget. */
+/** Money still free under the cap (cap − spent − sunk − reserved), or null without a budget. */
 export function remainingBudget(p: AkukoProject): number | null {
   return ledgerSummary(p).remaining;
 }

@@ -11,12 +11,14 @@ import { describe, it } from 'node:test';
 
 import type { AkukoProject, Budget, PendingSpend } from '../schema/akuko-project.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
-import type { Job, ProviderImpl } from '../providers/contract.ts';
+import type { Job, JobHandle, ProviderImpl } from '../providers/contract.ts';
+import { parseProviderConfig } from '../providers/config.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { createFakeHost, tinyProject } from '../providers/__fixtures__/fake-host.ts';
 import {
   SETUP_POINTER,
   SpendGateBypassError,
+  MANUAL_SEAL,
   SpendGateError,
   canApprove,
   confirmationLine,
@@ -70,12 +72,13 @@ const submits = (log: string[]) => log.filter((l) => l.startsWith('submit:')).le
 
 const AKUKO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
+/** Every non-test .ts file under the skill, fixtures included (P7). */
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) {
-      if (name === 'node_modules' || name === '__fixtures__') continue;
+      if (name === 'node_modules') continue;
       out.push(...sourceFiles(full));
     } else if (name.endsWith('.ts') && !name.endsWith('.test.ts')) {
       out.push(full);
@@ -84,35 +87,104 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
+const stripComments = (code: string): string =>
+  code
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\s\/\/\s.*$/gm, '');
+
+/**
+ * Lines that touch the word `submit` in any way other than declaring a
+ * method named submit (an object-literal method or an interface member).
+ * Catches `.submit(`, `.submit.call/.apply/.bind`, `const { submit } = …`,
+ * `x['submit']`, `Reflect.get(x, 'submit')`, `const s = x.submit` …
+ */
+function submitTouches(code: string): string[] {
+  return stripComments(code)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /\bsubmit\b/.test(l))
+    .filter((l) => !/^(async\s+)?submit\s*\(/.test(l));
+}
+
+/** The only lines allowed to touch `submit`, per file. */
+const ALLOWED_SUBMIT_LINES: Record<string, string[]> = {
+  'spend/gate.ts': [
+    'submit: async (job: Job): Promise<JobHandle> => {',   // the sealed wrapper itself
+    'return impl.submit(job);',                             // the wrapper, after the ticket check
+    'handle = await provider.submit(mintTicket(job));',     // run(), after prepare()
+  ],
+  'spend/__fixtures__/fake-paid.ts': ['log.push(`submit:${job.id}`);'], // a log label, not a call
+};
+
 describe('structural guarantee: submit() is reachable only through gate.run()', () => {
-  it('no non-test source file outside spend/gate.ts calls .submit(', () => {
-    const callers: string[] = [];
-    const pattern = /\.submit\s*\(|\[\s*['"`]submit['"`]\s*\]/;
-    for (const file of sourceFiles(AKUKO_ROOT)) {
-      const rel = relative(AKUKO_ROOT, file).split(sep).join('/');
-      const code = readFileSync(file, 'utf8')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/^\s*\/\/.*$/gm, '');
-      if (pattern.test(code)) callers.push(rel);
+  it('the scanner catches every way of reaching submit (P7)', () => {
+    const sneaky = [
+      'impl.submit(job);',
+      'impl.submit.call(impl, job);',
+      'p.submit.apply(p, [job]);',
+      'const go = impl.submit.bind(impl);',
+      'const { submit } = impl;',
+      'const { estimate, submit: s } = provider;',
+      "impl['submit'](job);",
+      'impl[`submit`](job);',
+      "Reflect.get(impl, 'submit')(job);",
+      "Reflect.apply(impl.submit, impl, [job]);",
+      'const s = provider.submit;',
+      'await provider.submit (job);',
+    ];
+    for (const line of sneaky) assert.deepEqual(submitTouches(line), [line.trim()], line);
+    for (const ok of ['async submit(job) {', 'submit(job: Job): Promise<JobHandle>;', "status: 'submitted'", '// provider.submit(job)', '/* impl.submit(x) */']) {
+      assert.deepEqual(submitTouches(ok), [], ok);
     }
-    assert.deepEqual(callers, ['spend/gate.ts']);
   });
 
-  it('inside gate.ts, submit() is called once by the seal and once by run() — after the checks', () => {
+  it('no non-test source file, fixtures included, touches submit outside the allow-listed lines', () => {
+    const found: Record<string, string[]> = {};
+    for (const file of sourceFiles(AKUKO_ROOT)) {
+      const rel = relative(AKUKO_ROOT, file).split(sep).join('/');
+      const touches = submitTouches(readFileSync(file, 'utf8'));
+      if (touches.length) found[rel] = touches;
+    }
+    assert.ok(Object.keys(found).some((f) => f.startsWith('spend/__fixtures__/')), 'fixtures are scanned');
+    assert.deepEqual(found, ALLOWED_SUBMIT_LINES);
+  });
+
+  it('only providers/manual/index.ts uses the manual seal key (P8)', () => {
+    const users = sourceFiles(AKUKO_ROOT)
+      .filter((f) => /\bMANUAL_SEAL\b/.test(stripComments(readFileSync(f, 'utf8'))))
+      .map((f) => relative(AKUKO_ROOT, f).split(sep).join('/'))
+      .sort();
+    assert.deepEqual(users, ['providers/manual/index.ts', 'spend/gate.ts']);
+  });
+
+  it('in gate.ts, submit() runs only after prepare() has estimated, checked and reserved — on the snapshot', () => {
     const code = readFileSync(new URL('./gate.ts', import.meta.url), 'utf8');
     const calls = [...code.matchAll(/(\w+)\.submit\s*\(/g)].map((m) => m[1]);
     assert.deepEqual(calls, ['impl', 'provider']);
-    const run = code.slice(code.indexOf('async function run('), code.indexOf('async function collect('));
-    const at = (s: string) => {
+    const slice = (from: string, to: string) => {
+      const a = code.indexOf(from);
+      const b = code.indexOf(to, a);
+      assert.ok(a >= 0 && b > a, `${from} … ${to}`);
+      return code.slice(a, b);
+    };
+    const prepare = slice('async function prepare(', 'async function run(');
+    const at = (s: string, i = prepare.indexOf(s)) => (assert.ok(i >= 0, `prepare() contains ${s}`), i);
+    const estimateAt = at('await estimate(provider, job)');
+    assert.ok(estimateAt < at("refuse('no-budget'"), 'estimate before the budget check');
+    assert.ok(at("refuse('no-budget'") < at('checkPaid(p, job, cost, p.budget, entry)'), 'budget before approval + cap');
+    assert.ok(at('checkPaid(p, job, cost, p.budget, entry)') < at('openEntries('), 'approval + cap before the reservation');
+    assert.ok(at('openEntries(') < at('await host.writeState(p)'), 'the reservation is written');
+
+    const run = slice('async function run(', 'async function collect(');
+    const r = (s: string) => {
       const i = run.indexOf(s);
       assert.ok(i >= 0, `run() contains ${s}`);
       return i;
     };
-    const submitAt = at('provider.submit(mintTicket(job))');
-    assert.ok(at('await estimate(provider, job)') < submitAt, 'estimate before submit');
-    assert.ok(at("refuse('no-budget'") < submitAt, 'budget check before submit');
-    assert.ok(at('checkPaid(p, job, cost, p.budget, entry)') < submitAt, 'approval + cap check before submit');
-    assert.ok(at('openEntries(') < submitAt, 'ledger reserved before submit');
+    assert.ok(r('const job = snapshot(input)') < r('locked(() => prepare(job))'), 'snapshot first (P3)');
+    assert.ok(r('locked(() => prepare(job))') < r('if (!prep.go) return prep.result'));
+    assert.ok(r('if (!prep.go) return prep.result') < r('provider.submit(mintTicket(job))'), 'submit only when prepare() said go');
   });
 
   it('a sealed provider refuses a direct submit(), a copy of a ticket, and a reused ticket', async () => {
@@ -387,5 +459,129 @@ describe('confirmationLine()', () => {
   it('points to setup when there is no cap', () => {
     const line = confirmationLine(tinyProject(), job(), { amount: 0.1, currency: 'USD', per_unit: { sc1_sh1: 0.05, sc1_sh2: 0.05 }, basis: '' });
     assert.ok(line.endsWith(SETUP_POINTER));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 5. G-ADAPTER review regressions (P1–P10)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('G-ADAPTER review regressions', () => {
+  it('P1: concurrent runs of one approved job submit once', async () => {
+    const { gate, fake, host } = setup({ ...tinyProject(), budget: budget(), pending_spend: [pending('approved')] });
+    const results = await Promise.all([gate.run(job()), gate.run(job()), gate.run(job())]);
+    assert.equal(results.filter((r) => r.status === 'submitted').length, 1);
+    assert.ok(results.filter((r) => r.status !== 'submitted').every((r) => r.status === 'refused' && r.refusal.code === 'already-submitted'));
+    assert.equal(submits(fake.log), 1);
+    assert.deepEqual(host.peek().ledger.map((e) => e.id), [`${JOB_ID}.sc1_sh1.1`, `${JOB_ID}.sc1_sh2.1`]);
+    assert.deepEqual(checkIntegrity(host.peek()), []);
+  });
+
+  it('P2: two approved jobs run concurrently cannot overrun the cap together, and no reservation is lost', async () => {
+    const p: AkukoProject = {
+      ...tinyProject(),
+      budget: budget(0.15),
+      pending_spend: [pending('approved', { id: 'job_a' }), pending('approved', { id: 'job_b' })],
+    };
+    const { gate, fake, host } = setup(p);
+    const [a, b] = await Promise.all([gate.run(job({ id: 'job_a' })), gate.run(job({ id: 'job_b' }))]);
+    const statuses = [a.status, b.status].sort();
+    assert.deepEqual(statuses, ['refused', 'submitted']);
+    const loser = a.status === 'refused' ? a : b;
+    assert.ok(loser.status === 'refused' && loser.refusal.code === 'over-cap');
+    assert.equal(submits(fake.log), 1);
+    const winner = a.status === 'submitted' ? a : b.status === 'submitted' ? b : undefined;
+    assert.ok(winner && winner.status === 'submitted');
+    assert.equal(host.peek().ledger.length, 2, "the winner's entries are all there");
+    assert.ok(host.peek().ledger.every((e) => e.job === winner.handle.job && e.status === 'submitted'));
+    await gate.collect(winner.handle);
+    const done = host.peek();
+    assert.ok(done.ledger.every((e) => e.status === 'done'));
+    assert.ok(Math.abs((done.budget?.spent ?? 0) - ESTIMATE) < 1e-9, 'the spend is counted');
+    assert.deepEqual(checkIntegrity(done), []);
+  });
+
+  it("P3: mutating the caller's job while run() is in flight does not change what is submitted", async () => {
+    const { gate, fake, host } = setup({ ...tinyProject(), budget: budget(), pending_spend: [pending('approved')] });
+    const live = job();
+    const write = host.writeState.bind(host);
+    host.writeState = async (p) => {
+      const first = live.items[0];
+      if (first) first.count = 50;
+      live.items.push({ unit: 'char_n', prompt: 'extra', output: 'portrait' });
+      return write(p);
+    };
+    const r = await gate.run(live);
+    assert.equal(r.status, 'submitted');
+    const sent = fake.submitted[0];
+    assert.equal(sent?.items.length, 2);
+    assert.equal(sent?.items[0]?.count, undefined, 'the provider got the job as estimated and approved');
+    assert.deepEqual(host.peek().ledger.map((e) => e.estimate), [FAKE_PRICE, FAKE_PRICE]);
+  });
+
+  it('P3: the snapshot handed to estimate() is frozen, so a provider cannot change the job either', async () => {
+    const host = createFakeHost({ ...tinyProject(), budget: budget(), pending_spend: [pending('approved')] });
+    const cfg = testConfig('direct-api');
+    const sneaky = sealProvider({
+      id: FAKE_PAID_ID, kinds: ['image'], hosts: ['B'], capabilities: {},
+      async estimate(j) { (j.items[0] as { count?: number }).count = 50; return { amount: 0, currency: 'USD', per_unit: {}, basis: '' }; },
+      async submit() { throw new Error('unreachable'); },
+      async poll() { return { state: 'done' }; },
+      async fetch() { return []; },
+    }, { config: cfg });
+    const gate = createSpendGate({ host, providers: [sneaky], level: 'B', now: () => NOW });
+    await assert.rejects(gate.run(job()), TypeError);
+    assert.deepEqual(host.peek().ledger, []);
+  });
+
+  it("P6: collect() with a stale or forged handle cannot release another job's reservation", async () => {
+    const { gate, fake, host } = setup({ ...tinyProject(), budget: budget(), pending_spend: [pending('approved')] });
+    const r = await gate.run(job());
+    if (r.status !== 'submitted') return assert.fail(JSON.stringify(r));
+    fake.setOutcome('failed');
+    const forged: JobHandle = { ...r.handle, job: 'job_other' };
+    await gate.collect(forged);
+    assert.ok(host.peek().ledger.every((e) => e.status === 'submitted'), "job_kf_sc1's reservation still holds");
+    fake.setOutcome('done');
+    await gate.collect(r.handle);
+    assert.ok(host.peek().ledger.every((e) => e.status === 'done'));
+  });
+
+  it('P10: createSpendGate refuses two providers with the same id', () => {
+    const host = createFakeHost(tinyProject());
+    const a = createFakePaid(host).provider;
+    const b = createFakePaid(host).provider;
+    assert.throws(() => createSpendGate({ host, providers: [a, b] }), /share the id "fake-paid"/);
+  });
+
+  it('P5: the actual cost of a failed or cancelled call counts against the cap', async () => {
+    const p: AkukoProject = {
+      ...tinyProject(),
+      budget: budget(0.15),
+      pending_spend: [pending('approved'), pending('approved', { id: 'job_old', units: ['sc1_sh1'], estimate: 0.1 })],
+      ledger: [{ id: 'job_old.sc1_sh1.1', ts: NOW, provider: FAKE_PAID_ID, unit: 'sc1_sh1', job: 'job_old', estimate: 0.1, actual: 0.1, status: 'failed' }],
+    };
+    const { gate, fake } = setup(p);
+    const r = await gate.run(job());
+    assert.ok(r.status === 'refused' && r.refusal.code === 'over-cap', JSON.stringify(r));
+    assert.equal(submits(fake.log), 0);
+    assert.equal(canApprove(p, JOB_ID)?.code, 'over-cap');
+  });
+
+  it('P8: only providers/manual can seal the free manual id', () => {
+    const paid = {
+      id: 'manual', kinds: ['image'], hosts: ['A', 'B', 'C'], capabilities: {},
+      async estimate() { return { amount: 0, currency: 'USD', per_unit: {}, basis: '' }; },
+      async submit() { throw new Error('would spend'); },
+      async poll() { return { state: 'done' }; },
+      async fetch() { return []; },
+    } as ProviderImpl;
+    assert.throws(() => sealProvider(paid), /only providers\/manual may be sealed/);
+    const raw = JSON.parse(readFileSync(new URL('../providers/config.json', import.meta.url), 'utf8'));
+    const paidManual = parseProviderConfig({ ...raw, providers: { ...raw.providers, manual: { ...raw.providers.manual, billing: 'direct-api' } } });
+    assert.throws(() => sealProvider(paid, { config: paidManual, manual: MANUAL_SEAL }), /must mark "manual" free/);
+    const freeOther = parseProviderConfig({ ...raw, providers: { ...raw.providers, other: { ...raw.providers.manual } } });
+    assert.throws(() => sealProvider({ ...paid, id: 'other' }, { config: freeOther }), /only the manual provider may be free/);
+    assert.equal(createManualProvider(createFakeHost(tinyProject())).provider.billing, 'free');
   });
 });

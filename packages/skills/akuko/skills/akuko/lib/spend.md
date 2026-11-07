@@ -36,8 +36,19 @@ provider's own code:
 
 `gate.run(job)` is the only code that calls a provider's `submit()`. Every
 provider is sealed (`sealProvider()`), so calling `submit()` directly throws
-`SpendGateBypassError`. A test scans the source to make sure nothing else
-calls it. For each job the gate:
+`SpendGateBypassError`. A test scans every non-test source file, fixtures
+included, for any way of reaching `submit`: a call, `.call` / `.apply` /
+`.bind`, destructuring, `['submit']`, `Reflect.get`. Only an allow-listed
+set of lines may touch it.
+
+Only `providers/manual` may seal a provider with the id `manual`, using a
+key it alone imports. Config must mark `manual` as free, and no other id may
+be free. This stops a paid implementation from borrowing the manual
+provider's free billing and running with no budget.
+
+The gate first takes a **deep-frozen copy of the job**. It estimates, checks
+and submits that copy only, so changing the caller's object afterwards
+changes nothing. Then, for each job, it:
 
 1. Checks the job is well formed, the provider is registered, makes this
    kind, and runs on this host level.
@@ -58,26 +69,52 @@ calls it. For each job the gate:
       (`approved_max` if set, else the approved `estimate`). If it is more,
       the approval no longer covers the job; `quote()` sends it back to
       `awaiting-approval` at the new estimate.
-   6. The fresh estimate must fit in **cap − spent − reserved**, where
-      reserved is the sum of estimates still `submitted`.
+   6. The fresh estimate must fit in **cap − committed**, where committed =
+      spent + sunk + reserved. Sunk is the `actual` cost of failed or
+      cancelled calls. Reserved is the sum of estimates still `submitted`.
    7. The gate opens one `submitted` ledger entry per unit (the reservation)
       and writes state **before** calling the provider.
-5. Mints a one-shot ticket and calls `submit()`. If `submit()` throws, the
-   reservation is settled `failed`.
+5. Mints a one-shot ticket from the same frozen copy and calls `submit()`.
+   If `submit()` throws, the reservation is settled `failed`.
+
+Steps 1–4, from the read of state through the check to the reservation
+write, run under a lock held by the gate instance. Concurrent `run()` /
+`quote()` / `collect()` calls on one gate are serialised, so two runs of one
+job submit once, and two jobs cannot overrun the cap together. The lock is
+not held during `submit()`, because the reservation is already written by
+then.
+
+**What the lock does not cover:** other processes, other gate instances on
+the same project, and the manual provider's `ingest()`, which writes state
+on its own. Making those safe needs a host-level compare-and-swap on
+`writeState`. That is a WP-02 follow-up. Until it lands, run one gate per
+project at a time.
 
 `gate.collect(handle)` polls. When the job finishes it records the outputs
-(see below) and settles the job's ledger entries. A done entry takes the
+(see below) and settles the job's ledger entries. It only touches
+entries that are still `submitted` and whose `job` and `provider` match the
+handle, so a stale or forged handle cannot release another job's
+reservation. A done entry takes the
 provider's reported actual cost; if the provider reports none, it settles at
 the estimate, which is the honest figure to plan against.
 
 ### Approving (for decision folding)
 
+> **Provisional.** `canApprove()` is not part of the G-ADAPTER freeze. WP-07a
+> owns it and may change its signature.
+
 An `approve-spend` decision folds to `status: 'approved'` only when
 `canApprove(project, jobId)` returns `null`. That means a budget exists and
-the approved bound (`approved_max`, else `estimate`) fits in cap − spent −
-reserved. Approvals come from people only. Folding rejects agent-authored
+the approved bound (`approved_max`, else `estimate`) fits in cap −
+committed. Approvals come from people only. Folding rejects agent-authored
 approvals and approvals from views that are not on the conformed-views list
 (R-12, WP-07a).
+
+**Known gap, for WP-07a:** an `approve-spend` Decision carries no amount yet,
+and `quote()` rewrites an awaiting entry's estimate in place. A stale
+approval could therefore fold onto a higher estimate than the one the person
+saw. WP-07a must bind each approval to the amount shown (a schema follow-up
+on `Decision`).
 
 ## The ledger rule
 
@@ -91,15 +128,20 @@ The schema doc calls the ledger "append-only". The real rule is narrower:
   repeated ids.
 - Entries are never deleted, and ids are never reused. A retry opens new
   entries with the next attempt number.
-- `budget.spent` always equals the sum of `actual` over `done` entries.
-  Every ledger change recomputes it.
+- `budget.spent` always equals the sum of `actual` over `done` entries,
+  which is how the WP-01 schema and integrity check define it. Every ledger
+  change recomputes it.
+- A `failed` or `cancelled` entry can still carry a real `actual`: a call
+  that cost money and produced nothing. That money is **sunk**. It is not in
+  `budget.spent`, but it counts against the cap exactly like spent money
+  (`committedFromLedger()`, `remainingBudget()`), and the board shows it.
 - If a person reports what a manual job cost them (credits on a tool they
   ran themselves), that amount is recorded as one `done` entry with no `job`.
   This needs a budget. Without one, the amount is not recorded and the person
   is pointed to setup.
 
-The board shows `ledgerSummary(project)`: cap, spent, reserved, remaining,
-and the entries, newest first.
+The board shows `ledgerSummary(project)`: cap, spent, sunk, reserved,
+remaining (cap − spent − sunk − reserved), and the entries, newest first.
 
 ## Outputs
 

@@ -9,6 +9,7 @@ import { checkIntegrity } from '../schema/integrity.ts';
 import { tinyProject } from '../providers/__fixtures__/fake-host.ts';
 import {
   LedgerError,
+  committedFromLedger,
   ledgerSummary,
   nextLedgerId,
   openEntries,
@@ -63,6 +64,19 @@ describe('ledger', () => {
     assert.equal(p.budget?.spent, 0.3);
     assert.deepEqual(checkIntegrity(p), []);
     assert.throws(() => recordDone(tinyProject(), { provider: 'manual', unit: 'sc1_sh1', actual: 0.3, ts: TS, prefix: 'x' }), /setup/);
+  });
+
+  it('P5: counts the actual cost of failed and cancelled calls against the cap, outside budget.spent', () => {
+    let { project: p } = openEntries(base(), { job: 'job1', provider: 'p', ts: TS, units: [{ unit: 'sc1_sh1', estimate: 0.1 }, { unit: 'sc1_sh2', estimate: 0.1 }] });
+    p = settleEntry(p, 'job1.sc1_sh1.1', { status: 'failed', actual: 0.08 });
+    p = settleEntry(p, 'job1.sc1_sh2.1', { status: 'cancelled', actual: 0.02 });
+    const s = ledgerSummary(p);
+    assert.equal(s.spent, 0);
+    assert.ok(Math.abs(s.sunk - 0.1) < 1e-9);
+    assert.ok(Math.abs((s.remaining ?? 0) - 0.9) < 1e-9);
+    assert.ok(Math.abs(committedFromLedger(p) - 0.1) < 1e-9);
+    assert.equal(p.budget?.spent, 0, 'budget.spent keeps the schema meaning (done only)');
+    assert.deepEqual(checkIntegrity(p), [], 'and the WP-01 integrity check still passes');
   });
 
   it('agrees with the reference fixture: spent = sum of done actuals', () => {

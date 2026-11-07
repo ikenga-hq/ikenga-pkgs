@@ -22,12 +22,12 @@ import { jobProblems } from '../contract.ts';
 import type { AkukoProviderConfig } from '../config.ts';
 import { estimateFromConfig, loadProviderConfig } from '../config.ts';
 import { assertValidProject, jobTag, planAssetId, recordOutput } from '../outputs.ts';
-import { SETUP_POINTER, sealProvider } from '../../spend/gate.ts';
+import { MANUAL_PROVIDER_ID, MANUAL_SEAL, SETUP_POINTER, sealProvider } from '../../spend/gate.ts';
 import { recordDone } from '../../spend/ledger.ts';
 import type { ManualPlatform, PromptPackage } from './package.ts';
 import { ACCEPT, EXT_BY_MIME, buildPromptPackage, expectedFilename, renderPromptPackage } from './package.ts';
 
-export const MANUAL_PROVIDER_ID = 'manual';
+export { MANUAL_PROVIDER_ID };
 
 export class ManualIngestError extends Error {
   override name = 'ManualIngestError';
@@ -118,7 +118,7 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
         return h.units.flatMap((u) => got.get(u) ?? []);
       },
     },
-    { config },
+    { config, manual: MANUAL_SEAL },
   );
 
   async function ingest(input: IngestInput): Promise<IngestResult> {

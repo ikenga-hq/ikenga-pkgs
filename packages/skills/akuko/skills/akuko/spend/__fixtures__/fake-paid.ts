@@ -33,6 +33,8 @@ export function testConfig(billing: ProviderBilling = 'direct-api'): AkukoProvid
 export interface FakePaid {
   provider: Provider;
   log: string[];
+  /** Copies of every job the provider was asked to run, as it received them. */
+  submitted: Job[];
   /** Make the next submit throw. */
   failNextSubmit(): void;
   /** Override what estimate returns (e.g. to simulate a price rise). */
@@ -50,6 +52,7 @@ export function createFakePaid(
   const billing = opts.billing ?? 'direct-api';
   const config = testConfig(billing);
   const log: string[] = [];
+  const submitted: Job[] = [];
   let failNext = false;
   let multiplier = 1;
   let actual: Record<string, number> | undefined;
@@ -69,6 +72,7 @@ export function createFakePaid(
       },
       async submit(job: Job): Promise<JobHandle> {
         log.push(`submit:${job.id}`);
+        submitted.push(structuredClone(job));
         if (failNext) {
           failNext = false;
           throw new Error('provider rejected the request');
@@ -108,6 +112,7 @@ export function createFakePaid(
   return {
     provider,
     log,
+    submitted,
     failNextSubmit: () => { failNext = true; },
     setMultiplier: (m) => { multiplier = m; },
     setActual: (a) => { actual = a; },
