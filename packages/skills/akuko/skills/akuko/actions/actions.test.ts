@@ -213,7 +213,7 @@ describe('action stubs', () => {
       assert.ok(result.success, `${file}: ${result.success ? '' : JSON.stringify(result.error.issues)}`);
       assert.equal(result.data.name, file.replace(/\.md$/, ''), 'name matches the file name');
       assert.match(parts.body, new RegExp(`^# action: \`${result.data.name}\``, 'm'));
-      assert.match(parts.body, /Stub \(WP-02\)/, 'stub says it is a stub and who fills it');
+      assert.match(parts.body, /Stub \(WP-02\)|\*\*Loaded when\*\*/, 'stub or filled');
     });
   }
 
