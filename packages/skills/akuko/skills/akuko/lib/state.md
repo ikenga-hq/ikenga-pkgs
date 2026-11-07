@@ -72,7 +72,14 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - Hand-off: the checklist entries are units of stage `breakdown`, so the breakdown is `approved` only when every shot **and** every checklist entry is approved. The bible stage (WP-05, not built yet) then starts from the approved entries; the sketch board reads `shots[]`.
 
 ### 2 sketch
-*WP-21 fills this.*
+*Action: `actions/board.md`; code `../board/`. Free.*
+
+- Opens when breakdown is `approved`. Produces one framing-diagram panel per shot (plain SVG drawn from the shot's `blocking`, `shot_type`, `camera`, `camera_move`, `duration_s`; thirds grid, labelled boxes, move arrow; no figures or faces) and 9-panel beat boards (`board/beatboards/beatboard-<scene>[-<n>].html`).
+- **The review unit is the shot at stage `sketch`**, not a panel asset. Each drawn shot becomes `stage: sketch`, `status: pending-review`, with `by_stage.sketch.output` pointing at the stored file (`board/panels/<shot>-sketch.svg`, via `storeAsset`, kind `panel`; the SVG is not a PNG). The panel is **not** added to `assets[]`: a second unit per panel would need its own approval, and the stage could never reach `approved` from the shot decisions the boards write. The stage is `in-review`; it is `approved` when a person approves every shot. Decisions fold unchanged.
+- Deterministic and free: the same shot gives the same bytes; no provider, no spend gate, no network. All text from the script is escaped.
+- Blocking is never invented. A shot with none still gets a panel (grid, camera note, "NO BLOCKING") and lint warns. Blocking enters the project only through `applyBlocking` (a proposal the agent writes from what the script says; rect `x`/`y` = top-left, ellipse `x`/`y` = centre, all 0-1 of the frame). It is refused for a panel under review or approved: a person sends it back first.
+- Idempotent: a second run draws and stores nothing. A shot sent back (`needs-rework`) is redrawn only if its panel would differ (new blocking or camera); it then returns to `pending-review` with a "Revised: ..." comment. If nothing changed it stays sent back and the run says so.
+- Beat boards group by scene (a scene with more than nine shots spills to a second board), are derived and regenerated each run, and show no review status.
 
 ### 3 bible
 *WP-05 fills this.*
