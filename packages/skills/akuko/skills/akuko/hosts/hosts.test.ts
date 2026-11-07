@@ -20,7 +20,7 @@ import {
   toHostRecord,
   type NodeProbeDeps,
 } from './detect.ts';
-import { createNodeHost, IkengaHost } from './ikenga.ts';
+import { createIkengaHost, createNodeHost, IkengaHost } from './ikenga.ts';
 import { createLocalHost, LocalHost, PROJECT_FILE, serializeProject, writeFileAtomic } from './local.ts';
 import { NotImplementedError } from './shared.ts';
 import type { AssetInput, HostAdapter, WaveOneHost } from './types.ts';
@@ -509,20 +509,53 @@ describe('ClaudeArtifactHost', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// readDecisions is a signature until WP-07a
+// readDecisions delegates to decisions/<store>.ts (WP-07a)
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('readDecisions (WP-07a)', () => {
-  const cases: [string, HostAdapter, RegExp][] = [
-    ['A', createClaudeArtifactHost(fakeBindings().b), /WP-07a \(decisions\/artifact-db\.ts\)/],
-    ['B', createLocalHost({ projectDir: '/p' }), /WP-07a \(decisions\/jsonl\.ts\)/],
-    ['C', new IkengaHost({ projectDir: '/p' }), /WP-07a \(decisions\/ikenga\.ts\)/],
-  ];
-  for (const [level, host, msg] of cases) {
-    it(`host ${level} rejects with a clear not-implemented error`, async () => {
-      await assert.rejects(host.readDecisions(), (e: unknown) => e instanceof NotImplementedError && msg.test(e.message));
-    });
-  }
+  const DEC_FX = fileURLToPath(new URL('../decisions/__fixtures__/', import.meta.url));
+  const recordedIds = readFileSync(join(DEC_FX, 'decisions.jsonl'), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { id: string }).id).sort();
+  const idsOf = (ds: { id: string }[]) => ds.map((d) => d.id).sort();
+
+  it('no host throws NotImplementedError any more', async () => {
+    const hosts: HostAdapter[] = [createLocalHost({ projectDir: tmpProject(false) }), new IkengaHost({ projectDir: tmpProject(false) })];
+    for (const h of hosts) {
+      const r = await h.readDecisions().then((x) => x, (e: unknown) => e);
+      assert.ok(!(r instanceof NotImplementedError));
+      assert.deepEqual(r, []);
+    }
+  });
+
+  it('B reads <project>/decisions.jsonl (decisions/jsonl.ts), honouring a cursor', async () => {
+    const dir = tmpProject(false);
+    writeFileSync(join(dir, 'decisions.jsonl'), readFileSync(join(DEC_FX, 'decisions.jsonl')));
+    const host = createLocalHost({ projectDir: dir });
+    assert.deepEqual(idsOf(await host.readDecisions()), recordedIds);
+    assert.deepEqual(await host.readDecisions(`jsonl:${readFileSync(join(dir, 'decisions.jsonl')).length}`), []);
+  });
+
+  it('C mirrors iframe-state into decisions.jsonl, then reads the mirror (decisions/ikenga.ts)', async () => {
+    const dir = tmpProject(false);
+    writeFileSync(join(dir, 'decisions.jsonl'), readFileSync(join(DEC_FX, 'ikenga-mirror.jsonl')));
+    const state = readFileSync(join(DEC_FX, 'iframe-state.txt'), 'utf8');
+    const host = createIkengaHost({ projectDir: dir, readIframeState: async () => state });
+    assert.deepEqual(idsOf(await host.readDecisions()), recordedIds);
+    // the pane reloaded: its state is gone, the mirror is not
+    const after = createIkengaHost({ projectDir: dir, readIframeState: async () => undefined });
+    assert.deepEqual(idsOf(await after.readDecisions()), recordedIds);
+  });
+
+  it('A lists the `decisions` collection through the binding (decisions/artifact-db.ts)', async () => {
+    const rows = JSON.parse(readFileSync(join(DEC_FX, 'artifact-db-list.json'), 'utf8'));
+    const asked: string[] = [];
+    const host = createClaudeArtifactHost({ ...fakeBindings().b, listCollection: async (c: string) => { asked.push(c); return rows; } });
+    assert.deepEqual(idsOf(await host.readDecisions()), recordedIds);
+    assert.deepEqual(asked, ['decisions']);
+  });
+
+  it('A without a list binding says how to read the store with ArtifactData', async () => {
+    await assert.rejects(createClaudeArtifactHost(fakeBindings().b).readDecisions(), /ArtifactData/);
+  });
 });
 
 // Compile-time: every adapter satisfies the wave-1 subset WP-03 codes against.

@@ -193,24 +193,46 @@ const sameSet = (a: string[], b: string[]): boolean =>
   a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
 
 /**
- * PROVISIONAL: not part of the G-ADAPTER freeze. Owned by WP-07a, which may
- * change its signature.
+ * PROVISIONAL: not part of the G-ADAPTER freeze. Owned by WP-07a (decision
+ * folding, `decisions/fold.ts`).
  *
- * Can a pending spend be approved right now? For decision folding (WP-07a):
- * an `approve-spend` decision folds to `status: 'approved'` only when this
- * returns null. Checks the budget exists and the approved bound
- * (`approved_max`, else the estimate) fits in what is left under the cap.
+ * Can a pending spend be approved right now? An `approve-spend` decision
+ * folds to `status: 'approved'` only when this returns null. It checks that
+ * a budget exists and that the approved bound (`approved_max`, else the
+ * estimate) fits in what is left under the cap.
  *
- * Known gap: an `approve-spend` Decision carries no amount yet, and
- * `quote()` rewrites an awaiting entry's estimate in place, so a stale
- * approval could fold onto a higher estimate. WP-07a must bind each approval
- * to the amount the person was shown.
+ * Binding to the amount shown (WP-07a): the frozen `Decision` has no amount
+ * field, so the amount travels in `text`, in the same words the spend gate's
+ * confirmation line asks for: `approve <amount> <CURRENCY>`, e.g.
+ * `approve 0.36 USD` (amount as `money()` prints it, at most four decimals).
+ * Conforming views must emit exactly that text (views/contract.md, checked
+ * by scripts/check-view.mjs). When `approval` is passed, the approval is
+ * refused with `approval-mismatch` if the text carries no amount, names
+ * another currency, or names less than the job's current bound, so a stale
+ * approval cannot fold onto a higher estimate after `quote()` rewrites it.
+ * Approving more than the bound is fine (the gate still never runs above the
+ * bound). Folding always passes the decision; calling without `approval`
+ * checks the budget only.
  */
-export function canApprove(p: AkukoProject, jobId: string): Refusal | null {
+export function canApprove(p: AkukoProject, jobId: string, approval?: { text?: string }): Refusal | null {
   if (!p.budget) return refuse('no-budget', SETUP_POINTER);
   const entry = p.pending_spend.find((j) => j.id === jobId);
   if (!entry) return refuse('unknown-job', `no pending spend "${jobId}"`);
   const bound = entry.approved_max ?? entry.estimate;
+  if (approval) {
+    const cur = p.budget.currency;
+    const m = /^approve (\d+(?:\.\d+)?) ([A-Z]{3})(?![A-Za-z0-9])/.exec((approval.text ?? '').trim());
+    if (!m) {
+      return refuse('approval-mismatch', `the approval for "${entry.label}" does not say the amount you were shown; approve it again on the board ("approve ${money(bound)} ${cur}").`);
+    }
+    const shown = Number(m[1]);
+    if (m[2] !== cur) {
+      return refuse('approval-mismatch', `the approval for "${entry.label}" was in ${m[2]}, the budget is in ${cur}; approve it again.`);
+    }
+    if (shown + MONEY_EPSILON < bound) {
+      return refuse('approval-mismatch', `you approved ${money(shown)} ${cur} for "${entry.label}", but it may now cost up to ${money(bound)} ${cur}; approve the new amount if you still want it.`);
+    }
+  }
   const left = remainingBudget(p) ?? 0;
   if (bound > left + MONEY_EPSILON) {
     return refuse(

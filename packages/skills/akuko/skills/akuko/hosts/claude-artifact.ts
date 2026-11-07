@@ -26,7 +26,8 @@
 
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, normalizeCapabilities } from './detect.ts';
-import { assetId, buildAsset, decisionsNotImplemented, safeBasename } from './shared.ts';
+import { readArtifactDbStore } from '../decisions/artifact-db.ts';
+import { assetId, buildAsset, safeBasename } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 
 /** Doc path that holds the project (collection `akuko`, doc `project`). */
@@ -46,6 +47,8 @@ export interface ArtifactBindings {
   uploadAsset(a: { filename: string; mime: string; data: Uint8Array }): Promise<{ id: string; url: string }>;
   /** Artifact `publish` { file_path } of the view's HTML (new or same path) → `{ url }`. */
   publish(v: ViewArtifact): Promise<{ url: string }>;
+  /** ArtifactData `list` { url, collection } → the tool's result (rows `{id, data, version, updatedAt}`). Needed by `readDecisions`. */
+  listCollection?(collection: string): Promise<unknown>;
   /** What the runtime can do (normally `detect.ts --tools` output). Defaults: the DB plus code execution, no durable fs (claude.ai, A2 2026-11-07). */
   capabilities?: Partial<Capabilities>;
   /** Clock for `updated_at`. */
@@ -103,9 +106,18 @@ export class ClaudeArtifactHost implements HostAdapter {
     return { url };
   }
 
-  /** Delegates to `decisions/artifact-db.ts` (ArtifactData list of `decisions`) — WP-07a. */
-  async readDecisions(_since?: string): Promise<Decision[]> {
-    return decisionsNotImplemented('A');
+  /**
+   * Delegates to `decisions/artifact-db.ts`: ArtifactData `list` of the
+   * `decisions` collection, one row per decision. `since` is a `db:<updatedAt>`
+   * cursor. On claude.ai the agent makes the list call itself and folds with
+   * `decisions/cli.ts fold-file` (actions/review.md §Host A).
+   */
+  async readDecisions(since?: string): Promise<Decision[]> {
+    const list = this.b.listCollection;
+    if (!list) {
+      throw new Error('akuko: this host binding cannot list the artifact DB; list the `decisions` collection with ArtifactData (load it with ToolSearch) and fold with decisions/cli.ts fold-file');
+    }
+    return (await readArtifactDbStore((c) => list.call(this.b, c), since)).decisions;
   }
 }
 

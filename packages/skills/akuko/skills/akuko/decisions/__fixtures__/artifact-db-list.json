@@ -1,0 +1,148 @@
+[
+  {
+    "id": "39f9bfe0-ce42-4a3c-9bbb-ba5c6c7b1732",
+    "data": {
+      "action": "approve-spend",
+      "unit": "job_kf_sc1",
+      "stage": "keyframes",
+      "id": "39f9bfe0-ce42-4a3c-9bbb-ba5c6c7b1732",
+      "text": "approve 0.36 USD",
+      "by": "you",
+      "at": "2026-11-07T10:03:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:03:00.240013Z"
+  },
+  {
+    "id": "307820e6-1823-4a86-9b98-7a5e68ce1d4d",
+    "data": {
+      "action": "approve",
+      "unit": "sc2_sh4",
+      "stage": "sketch",
+      "id": "307820e6-1823-4a86-9b98-7a5e68ce1d4d",
+      "by": "you",
+      "at": "2026-11-07T10:00:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:00:00.412093Z"
+  },
+  {
+    "id": "bfe1b009-1412-4a63-9b5f-ccd446538816",
+    "data": {
+      "action": "request-changes",
+      "unit": "sc4_sh2",
+      "stage": "sketch",
+      "id": "bfe1b009-1412-4a63-9b5f-ccd446538816",
+      "text": "The dolly should start later, on the first heartbeat.",
+      "by": "you",
+      "at": "2026-11-07T10:01:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:01:00.388201Z"
+  },
+  {
+    "id": "dg54snl36ulb16eig8hp",
+    "data": {
+      "action": "note",
+      "unit": "sc2_sh3",
+      "stage": "sketch",
+      "id": "2ec96544-372a-4a31-9b6d-1780d32876ff",
+      "text": "Keep the lantern in frame when he bolts up.",
+      "by": "you",
+      "at": "2026-11-07T10:02:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:02:00.501877Z"
+  },
+  {
+    "id": "bd091b61-b290-4ac0-9bd9-e71ee1988d85",
+    "data": {
+      "action": "approve",
+      "unit": "char_oldman_turnaround",
+      "stage": "bible",
+      "id": "bd091b61-b290-4ac0-9bd9-e71ee1988d85",
+      "by": "you",
+      "at": "2026-11-07T10:04:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:04:00.918455Z"
+  },
+  {
+    "id": "56ddcce5-ced2-4a98-9b61-0ee3a04d27d3",
+    "data": {
+      "action": "undo",
+      "unit": "sc4_sh2",
+      "stage": "sketch",
+      "id": "56ddcce5-ced2-4a98-9b61-0ee3a04d27d3",
+      "undoes": "bfe1b009-1412-4a63-9b5f-ccd446538816",
+      "by": "you",
+      "at": "2026-11-07T10:05:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:05:00.130662Z"
+  },
+  {
+    "id": "182724ef-d10d-4a96-9b58-3d077a1d1ba7",
+    "data": {
+      "action": "approve",
+      "unit": "sc4_sh2",
+      "stage": "sketch",
+      "id": "182724ef-d10d-4a96-9b58-3d077a1d1ba7",
+      "text": "Better than I thought.",
+      "by": "you",
+      "at": "2026-11-07T11:06:00+01:00",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:06:00.772910Z"
+  },
+  {
+    "id": "35e7397c-bc4d-4aee-9bf8-6391617deedb",
+    "data": {
+      "action": "approve",
+      "unit": "sc2_sh3",
+      "stage": "sketch",
+      "id": "35e7397c-bc4d-4aee-9bf8-6391617deedb",
+      "by": "agent",
+      "at": "2026-11-07T10:07:00Z",
+      "view": "default-board@0.1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:07:00.064519Z"
+  },
+  {
+    "id": "c189e483-5bc6-4a05-9b2c-8591133d47aa",
+    "data": {
+      "action": "approve",
+      "unit": "loc_bedroom_plate",
+      "stage": "bible",
+      "id": "c189e483-5bc6-4a05-9b2c-8591133d47aa",
+      "by": "you",
+      "at": "2026-11-07T10:08:00Z",
+      "view": "freehand:spend-sketch@1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:08:00.355128Z"
+  },
+  {
+    "id": "2c486bfc-2ef4-4aa0-9b86-7129d256c31d",
+    "data": {
+      "action": "note",
+      "unit": "loc_bedroom_plate",
+      "stage": "bible",
+      "id": "2c486bfc-2ef4-4aa0-9b86-7129d256c31d",
+      "text": "The shutters look too modern.",
+      "by": "you",
+      "at": "2026-11-07T10:09:00Z",
+      "view": "freehand:spend-sketch@1"
+    },
+    "version": 1,
+    "updatedAt": "2026-11-07T10:09:00.693340Z"
+  }
+]

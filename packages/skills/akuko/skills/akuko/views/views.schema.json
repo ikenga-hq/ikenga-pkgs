@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ikenga.dev/schemas/akuko/views.schema.json",
+  "title": "akuko view manifest",
+  "description": "The manifest every akuko view embeds as <script type=\"application/json\" id=\"akuko-view\">. A view that writes decisions must offer every required view. The definitions below are the machine-readable view contract that scripts/check-view.mjs enforces: required views (ViewName), the data-akuko-field names each view must carry (fields:<view>), the decision controls (Action) and the five renderer rules (Rule). Prose: views/contract.md. Hand-written; the Decision record itself is views/decision.schema.json, generated from the Zod schema.",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "const": "akuko-view@1",
+      "description": "Version of this view contract.",
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9:._-]*$",
+      "description": "Stable view id, e.g. \"default-board\" or \"freehand:cast-sheet\". Decision.view is \"<id>@<version>\"."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]*$",
+      "description": "Bump it whenever the page changes; a conformance record covers one id@version and one exact HTML hash."
+    },
+    "title": {
+      "type": "string"
+    },
+    "writes_decisions": {
+      "type": "boolean",
+      "description": "True when the view has data-akuko-action controls. Such a view must pass check-view before it is published."
+    },
+    "views": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ViewName"
+      },
+      "uniqueItems": true,
+      "description": "The views this page offers. A read-only freehand view may offer any subset."
+    }
+  },
+  "required": [
+    "contract",
+    "id",
+    "version",
+    "writes_decisions",
+    "views"
+  ],
+  "additionalProperties": false,
+  "if": {
+    "type": "object",
+    "properties": {
+      "writes_decisions": {
+        "type": "boolean",
+        "const": true
+      }
+    },
+    "required": [
+      "writes_decisions"
+    ]
+  },
+  "then": {
+    "type": "object",
+    "properties": {
+      "views": {
+        "type": "array",
+        "allOf": [
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "pipeline"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "shots"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "shot-detail"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "bible"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "spend-gate"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "ledger"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "script-link"
+            }
+          },
+          {
+            "type": "array",
+            "contains": {
+              "type": "string",
+              "const": "your-move"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "ViewName": {
+      "description": "Required views of a review surface (01-plan §Board and views). Each is marked in the page with data-akuko-view=\"<name>\".",
+      "enum": [
+        "pipeline",
+        "shots",
+        "shot-detail",
+        "bible",
+        "spend-gate",
+        "ledger",
+        "script-link",
+        "your-move"
+      ],
+      "type": "string"
+    },
+    "Action": {
+      "description": "Values of data-akuko-action. Each control acts on exactly one unit or job (data-akuko-unit) and writes exactly one Decision with that action.",
+      "enum": [
+        "approve",
+        "request-changes",
+        "note",
+        "approve-spend",
+        "decline-spend",
+        "undo"
+      ],
+      "type": "string"
+    },
+    "fields:pipeline": {
+      "description": "One stage element per stage (data-akuko-stage=<stage id>, data-akuko-status=<stage state>) and one current-stage marker (data-akuko-stage=<current_stage>).",
+      "enum": [
+        "stage",
+        "current-stage"
+      ],
+      "type": "string"
+    },
+    "fields:shots": {
+      "description": "One shot element per shot (data-akuko-unit=<shot id>) holding its status (data-akuko-status), shot type, duration and panel; one scene element per scene (data-akuko-unit=<scene id>).",
+      "enum": [
+        "scene",
+        "shot",
+        "status",
+        "shot-type",
+        "duration",
+        "panel"
+      ],
+      "type": "string"
+    },
+    "fields:shot-detail": {
+      "description": "For the selected shot (data-akuko-unit on the view): panel, camera, action, duration, the screenplay line, the draft prompt, bible refs, the comment thread, its status; plus approve / request-changes / note controls when it is waiting for review or sent back.",
+      "enum": [
+        "status",
+        "panel",
+        "camera",
+        "action",
+        "duration",
+        "script-line",
+        "prompt",
+        "refs",
+        "comments"
+      ],
+      "type": "string"
+    },
+    "fields:bible": {
+      "description": "One bible-entry element per character, location and style (data-akuko-unit, data-akuko-status). Every asset waiting for review has an approve control.",
+      "enum": [
+        "bible-entry"
+      ],
+      "type": "string"
+    },
+    "fields:spend-gate": {
+      "description": "One job element per pending_spend entry (data-akuko-unit=<job id>, data-akuko-status) with its estimate; the budget cap, what is spent, and what is left if you approve. Also sunk and in-flight when they are not zero. Every amount exactly, never rounded.",
+      "enum": [
+        "job",
+        "estimate",
+        "cap",
+        "spent",
+        "left-if-approved"
+      ],
+      "type": "string"
+    },
+    "fields:ledger": {
+      "description": "One ledger-entry element per ledger entry, and the ledger total.",
+      "enum": [
+        "ledger-entry",
+        "ledger-total"
+      ],
+      "type": "string"
+    },
+    "fields:script-link": {
+      "description": "One script-tag element per shot that has a screenplay line (data-akuko-unit=<shot id>); activating it selects that shot in shot-detail.",
+      "enum": [
+        "script-tag"
+      ],
+      "type": "string"
+    },
+    "fields:your-move": {
+      "description": "Counts derived from the data, never typed: shots waiting for review, spend decisions waiting, other units (bible assets, entries) waiting. A count may be omitted when it is zero.",
+      "enum": [
+        "waiting-shots",
+        "waiting-spend",
+        "waiting-other"
+      ],
+      "type": "string"
+    },
+    "Rule": {
+      "description": "The five renderer rules every view obeys (views/contract.md §Renderer rules).",
+      "oneOf": [
+        {
+          "const": "R1",
+          "description": "Only a person can approve: no auto-approve, pre-ticked or batch approval; one explicit action per unit.",
+          "type": "string"
+        },
+        {
+          "const": "R2",
+          "description": "Money is never hidden or rounded: every paid job shows its estimate, the cap, what is spent and what is left if you approve.",
+          "type": "string"
+        },
+        {
+          "const": "R3",
+          "description": "A \"your move\" summary is always visible, derived from the data.",
+          "type": "string"
+        },
+        {
+          "const": "R4",
+          "description": "Decisions are written only through the decision format, never by editing akuko.json from the view.",
+          "type": "string"
+        },
+        {
+          "const": "R5",
+          "description": "Readability floor and keyboard access (designs/_spec.md).",
+          "type": "string"
+        }
+      ],
+      "type": "string"
+    }
+  }
+}

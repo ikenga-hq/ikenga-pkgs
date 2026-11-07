@@ -1,0 +1,291 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "akuko decision",
+  "description": "One human decision written by a review surface (akuko.json schema_version 1). Generated from schema/akuko-project.ts by decisions/export-decision-schema.ts; do not edit by hand.",
+  "$ref": "#/definitions/Decision",
+  "definitions": {
+    "Id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "StageId": {
+      "type": "string",
+      "enum": [
+        "intake",
+        "breakdown",
+        "sketch",
+        "bible",
+        "keyframes",
+        "motion",
+        "sound",
+        "assemble",
+        "export"
+      ]
+    },
+    "Decision": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "unit": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "description": "Shot, bible entry, asset or job id."
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Viewer identity when the host knows it, else \"you\"."
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Renderer that wrote it, e.g. \"default-board@0.1\"."
+            },
+            "action": {
+              "type": "string",
+              "const": "approve"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "request-changes"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "note"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "approve-spend"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "decline-spend"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "undo"
+            },
+            "undoes": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "undoes"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
