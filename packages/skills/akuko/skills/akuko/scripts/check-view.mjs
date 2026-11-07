@@ -59,7 +59,7 @@ export async function main(argv) {
     const r = await checkView(readFileSync(file, 'utf8'), { project });
     results.push({ file, ...r });
     if (!args.json) {
-      console.log(`${r.ok ? 'PASS' : 'FAIL'} ${file}${r.view ? ` (${r.view})` : ''}`);
+      console.log(`${r.ok ? 'PASS' : 'FAIL'} ${file}${r.view ? ` (${r.view})` : ''} · ${r.decisions_checked} decisions checked`);
       for (const f of r.failures) console.log(`  ${f.rule} ${f.code}: ${f.message}`);
     }
   }

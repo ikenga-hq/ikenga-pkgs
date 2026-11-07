@@ -1,0 +1,1538 @@
+<!-- INSTRUMENTED TEST COPY (WP-07a, gate G-VIEW) of the locked D-01 design designs/board-b-script-desk.html.
+  Changes from the design, nothing else: reads akuko.json (<script id="akuko-project">) through fromAkuko(); data-akuko-view /
+  -field / -action marks; writes Decisions through the inlined akuko decision writer instead of the akuko:board-change event;
+  money exact to four decimals (no round2 on amounts); a "Copy decisions for akuko" control when no host store is present.
+  This is a check-view fixture, not the default board (WP-07b builds that).
+
+akuko board · option B "Script desk" · direction: THE LINED SCRIPT
+  Logic: real-world reference, StudioBinder Shot List + Shot Tagger (studiobinder.com/shotlist-app/). Taken: the script beside the shot list,
+    a highlighted line tagged to a numbered shot, dense spec rows under scene banners, colour-coded shots, resolvable comment threads.
+  Skeleton: two-pane script desk. Tramlined screenplay (JetBrains Mono) <-> shot list that opens inline into the shot detail; slim header
+    (title, next action, host badge, 9-stage pipeline); right rail = spend gate on top + sticky Bible / Ledger tabs; at 760px and below, switchable panes.
+  Form came from: the story is a confession told line by line, so the board is that confession on script paper, lined like a script
+    supervisor's page (tramlines + setup tags, as Scriptation automates), and selecting is the lantern's "single thin ray" landing on one line.
+  Assumptions: narration is set as THE NARRATOR (V.O.), each scene summary as its action line; blocking rect x/y = top-left, ellipse x/y = centre;
+    bible images were generated (see ledger) but aren't in the fixture, so frames are labelled placeholders; pending bible assets get an Approve. -->
+<!doctype html>
+<html lang="en" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>akuko board · The Beating</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* ── tokens: @ikenga/tokens theme A "Dusk Wood" (design-contract.json) ── */
+:root {
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --radius-xs: 3px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 14px; --radius-pill: 999px;
+  --ease-calm: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --lining-w: 124px;
+  --nav-h: 0px;
+}
+:root, [data-mode="dark"] {
+  color-scheme: dark;
+  --bg-base: hsl(28,18%,4%);
+  --bg-surface: hsl(28,14%,7%);
+  --bg-raised: hsl(28,11%,11%);
+  --bg-sunken: hsl(28,22%,2.5%);
+  --fg: hsl(36,28%,90%);
+  --fg-muted: hsl(32,11%,56%);
+  --fg-faint: hsl(28,9%,36%);
+  --border: hsl(28,14%,15%);
+  --border-soft: hsl(28,14%,11%);
+  --primary: hsl(20,50%,34%);
+  --primary-fg: hsl(36,30%,92%);
+  --primary-soft: hsl(20,40%,14%);
+  --achievement: hsl(42,78%,54%);
+  --achievement-soft: hsl(42,48%,18%);
+  --kola-amber: hsl(42,78%,50%);
+  --danger: hsl(8,68%,46%);
+  --danger-fg: hsl(0,0%,98%);
+  --danger-soft: hsl(8,50%,16%);
+  --info: hsl(200,66%,64%);
+  --info-soft: hsl(200,42%,15%);
+  --success: hsl(142,70%,50%);
+  --warning: hsl(38,92%,60%);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.25);
+  --shadow-2: 0 4px 12px -2px rgba(0,0,0,.55);
+  --shadow-3: 0 12px 28px -8px rgba(0,0,0,.6);
+  /* role aliases (re-weighting only, no new hues) */
+  --desk: var(--bg-sunken);
+  --paper: var(--bg-surface);
+  --attn-fg: var(--achievement);
+  --money-fg: var(--achievement);
+  --money-bg: transparent;
+  --money-pad: 0;
+}
+[data-mode="light"] {
+  color-scheme: light;
+  --bg-base: hsl(36,22%,96%);
+  --bg-surface: hsl(36,18%,93%);
+  --bg-raised: hsl(36,14%,89%);
+  --bg-sunken: hsl(36,26%,98%);
+  --fg: hsl(28,30%,14%);
+  --fg-muted: hsl(28,14%,38%);
+  --fg-faint: hsl(28,12%,56%);
+  --border: hsl(32,16%,78%);
+  --border-soft: hsl(32,16%,84%);
+  --primary: hsl(20,50%,34%);
+  --primary-fg: hsl(36,26%,98%);
+  --primary-soft: hsl(20,50%,90%);
+  --achievement: hsl(42,78%,42%);
+  --achievement-soft: hsl(42,60%,90%);
+  --kola-amber: hsl(42,78%,50%);
+  --danger: hsl(8,68%,42%);
+  --danger-fg: hsl(0,0%,98%);
+  --danger-soft: hsl(8,60%,92%);
+  --info: hsl(200,74%,36%);
+  --info-soft: hsl(200,50%,90%);
+  --success: hsl(142,65%,38%);
+  --warning: hsl(38,88%,48%);
+  --shadow-1: 0 1px 2px rgba(28,18,8,.08);
+  --shadow-2: 0 4px 12px -2px rgba(28,18,8,.10);
+  --shadow-3: 0 12px 28px -8px rgba(28,18,8,.14);
+  --desk: var(--bg-surface);
+  --paper: var(--bg-sunken);
+  --attn-fg: var(--fg);
+  --money-fg: var(--fg);
+  --money-bg: var(--achievement-soft);
+  --money-pad: 0 4px;
+}
+
+/* ── base ── */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg-base); color: var(--fg);
+  font: 400 14px/1.55 var(--font-body);
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, p, ol, ul, dl, dd, figure, blockquote, pre { margin: 0; }
+ol, ul { padding: 0; list-style: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: inherit; }
+textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.vh { position: absolute !important; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+body, .pane, .rail, .rail-panel, .scroller, .shot, .bib, .ledger, .dn, .rtab, .ref { position: relative; }
+.skip { position: absolute; left: 16px; top: -60px; z-index: 50; padding: 10px 14px; background: var(--primary); color: var(--primary-fg); border-radius: var(--radius-md); font: 600 14px/1 var(--font-sans); text-decoration: none; }
+.skip:focus { top: 8px; }
+.money { color: var(--money-fg); background: var(--money-bg); padding: var(--money-pad); border-radius: var(--radius-xs); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.fine { font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
+.empty { padding: 20px; color: var(--fg-muted); }
+
+/* status glyphs: shape + colour, never colour alone */
+.g { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.g-ok { background: var(--success); }
+.g-wait { border: 2px solid var(--achievement); }
+.g-rework { width: 7px; height: 7px; border-radius: 1px; background: var(--danger); transform: rotate(45deg); }
+.g-none { border: 1.5px dashed var(--fg-muted); }
+.g-prog { background: var(--info); }
+.g-now { background: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft), 0 0 0 3px var(--primary); }
+.g-money { border-radius: 1px; background: var(--kola-amber); }
+.ico { width: 14px; height: 14px; flex: none; }
+
+/* chips */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 5px 9px; border: 1px solid var(--border); border-radius: var(--radius-pill);
+  font: 600 12px/1 var(--font-sans); color: var(--fg); white-space: nowrap;
+}
+.chip[data-st="approved"] { color: var(--fg-muted); }
+.chip[data-st="pending-review"] { background: var(--achievement-soft); border-color: transparent; }
+.chip[data-st="needs-rework"] { background: var(--danger-soft); border-color: transparent; }
+.chip[data-st="not-started"] { color: var(--fg-muted); border-style: dashed; }
+
+/* buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-raised); color: var(--fg); font: 600 14px/1.1 var(--font-sans); white-space: nowrap;
+}
+.btn:hover { border-color: var(--fg-muted); }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.btn-primary:hover { background: color-mix(in srgb, var(--primary) 86%, var(--fg)); border-color: transparent; }
+.btn-ghost { background: transparent; }
+.btn-sm { min-height: 32px; padding: 0 10px; font-size: 13px; }
+.btn[aria-disabled="true"] { opacity: .55; cursor: default; }
+.btn[aria-disabled="true"]:hover { border-color: var(--border); }
+.btn-primary[aria-disabled="true"]:hover { background: var(--primary); border-color: var(--primary); }
+.linkbtn { font: 600 13px/1.3 var(--font-sans); text-decoration: underline; text-underline-offset: 3px; color: var(--fg); padding: 4px 2px; }
+
+/* ── header ── */
+.top { background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+.top-row { display: flex; align-items: center; gap: 20px; padding: 12px 20px; }
+.ident { flex: none; display: grid; gap: 1px; }
+.eyebrow { font: 600 12px/1.2 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--fg-muted); }
+.title { font: 500 26px/1.1 var(--font-display); font-variation-settings: "opsz" 96; letter-spacing: -.01em; }
+.meta { font-size: 12px; color: var(--fg-muted); }
+.next { flex: 1; min-width: 0; display: flex; align-items: center; gap: 16px; padding-left: 20px; border-left: 1px solid var(--border); }
+.next-txt { min-width: 0; }
+.next-main { font: 500 16px/1.3 var(--font-sans); }
+.next-main strong { font-weight: 700; color: var(--attn-fg); }
+.next-sub { font: 500 13px/1.4 var(--font-sans); color: var(--fg-muted); margin-top: 2px; }
+.host {
+  flex: 0 1 330px; display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  font: 500 12.5px/1.4 var(--font-sans); color: var(--fg-muted);
+}
+.host b { color: var(--fg); font-weight: 700; }
+.hdot { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--fg-muted); flex: none; }
+.host[data-live="1"] .hdot { background: var(--success); border-color: var(--success); }
+.mode-btn { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-md); font: 600 13px/1 var(--font-sans); }
+.mode-btn:hover { border-color: var(--fg-muted); }
+
+/* pipeline: nine slate cells */
+.pipeline ol { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); border-top: 1px solid var(--border-soft); }
+.stage { position: relative; min-width: 0; border-right: 1px solid var(--border-soft); }
+.stage:last-child { border-right: 0; }
+.stage-in { display: grid; align-content: start; gap: 3px; width: 100%; height: 100%; padding: 8px 12px 9px; text-align: left; }
+button.stage-in:hover { background: var(--bg-raised); }
+.st-top { display: flex; align-items: baseline; gap: 7px; font: 600 13px/1.25 var(--font-sans); }
+.st-n { font: 500 12px/1 var(--font-mono); color: var(--fg-muted); }
+.st-s { display: flex; align-items: center; gap: 6px; font: 500 12px/1.3 var(--font-sans); color: var(--fg-muted); }
+.stage[aria-current="step"] { background: var(--primary-soft); }
+.stage[aria-current="step"]::before { content: ""; position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: var(--primary); }
+.stage[aria-current="step"] .st-s { color: var(--fg); }
+.stage[data-state="locked"] .st-top { color: var(--fg-muted); }
+.stage[data-state="waiting-spend"] .st-s { color: var(--fg); }
+
+/* ── desk ── */
+.desk { display: grid; min-width: 0; }
+.desk-nav { display: flex; gap: 4px; padding: 8px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+.dn { flex: 1 1 0; min-width: 0; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-md); font: 600 13px/1 var(--font-sans); color: var(--fg-muted); }
+.dn:hover { color: var(--fg); }
+.dn[aria-pressed="true"] { background: var(--bg-raised); color: var(--fg); box-shadow: inset 0 -2px 0 var(--primary); }
+.badge { display: inline-block; min-width: 20px; padding: 3px 6px; border-radius: var(--radius-pill); background: var(--achievement-soft); color: var(--fg); font: 600 12px/1 var(--font-mono); text-align: center; }
+
+.pane, .rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.pane-script { background: var(--desk); border-right: 1px solid var(--border); }
+.pane-shots { background: var(--bg-base); border-right: 1px solid var(--border); }
+.rail { background: var(--bg-surface); }
+.pane-head { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 14px 20px 12px; border-bottom: 1px solid var(--border-soft); }
+.ph-h { font: 500 20px/1.2 var(--font-display); }
+.ph-sub { font: 500 13px/1.4 var(--font-sans); color: var(--fg-muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; width: 100%; font: 500 12px/1.4 var(--font-sans); color: var(--fg-muted); }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+.legend .lt { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--fg-muted); }
+.legend .lt-wait { border-color: var(--achievement); }
+.legend .lt-rework { border-color: var(--danger); }
+.legend .lt-sel { border-top-width: 4px; border-color: var(--primary); }
+.scroller { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+
+/* ── script paper ── */
+.paper-wrap { padding: 20px; }
+.paper {
+  position: relative; max-width: 760px; margin: 0 auto;
+  padding: 36px var(--lining-w) 56px 32px;
+  background: var(--paper); border: 1px solid var(--border-soft); border-radius: var(--radius-xs); box-shadow: var(--shadow-2);
+  font: 400 14px/1.7 var(--font-mono); color: var(--fg);
+}
+.page-head { text-align: center; margin-bottom: 8px; }
+.pg-title { font-weight: 600; letter-spacing: .1em; text-decoration: underline; text-underline-offset: 5px; }
+.pg-src { margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--fg-muted); }
+.scene { margin-top: 30px; }
+.slug { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 1.5ch; font: 600 14px/1.55 var(--font-mono); text-transform: uppercase; }
+.slug .sn { color: var(--fg-muted); font-weight: 500; }
+.action { margin-top: 12px; }
+.cue { margin: 16px 0 0 12ch; text-transform: uppercase; }
+.dlg { margin-left: 6ch; max-width: 34ch; }
+.dlg + .dlg { margin-top: 12px; }
+.ln { cursor: pointer; border-radius: 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone; scroll-margin: 80px; }
+.ln.is-hint { background: var(--bg-raised); }
+.ln.is-sel { background: var(--primary-soft); box-shadow: 0 0 0 2px var(--primary-soft); }
+.ln.is-sel .ln { background: transparent; box-shadow: none; }
+.lining { position: absolute; top: 0; right: 0; bottom: 0; width: var(--lining-w); pointer-events: none; }
+.lining::before { content: ""; position: absolute; left: 0; top: 28px; bottom: 28px; border-left: 1px dashed var(--border); }
+.tram { position: absolute; width: 2px; border-radius: 1px; background: var(--fg-muted); }
+.tram::before, .tram::after { content: ""; position: absolute; left: -3px; width: 8px; height: 2px; background: inherit; }
+.tram::before { top: 0; }
+.tram::after { bottom: 0; }
+.tram[data-st="pending-review"] { background: var(--achievement); }
+.tram[data-st="needs-rework"] { background: var(--danger); }
+.tram.is-hint { background: var(--fg); }
+.tram.is-sel { background: var(--primary); width: 4px; margin-left: -1px; }
+.tag {
+  position: absolute; top: 0; left: 0; pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  font: 500 12px/1 var(--font-mono); color: var(--fg); white-space: nowrap;
+}
+.tag:hover, .tag.is-hint { border-color: var(--fg-muted); }
+.tag.is-sel { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+
+/* ── shots ── */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin-top: 8px; }
+.fchip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid var(--border); border-radius: var(--radius-pill); font: 600 12px/1 var(--font-sans); color: var(--fg-muted); }
+.fchip:hover { color: var(--fg); }
+.fchip[aria-pressed="true"] { background: var(--bg-raised); color: var(--fg); border-color: var(--fg-muted); }
+.banner { position: sticky; top: 0; z-index: 2; display: grid; gap: 3px; padding: 12px 20px 10px; background: var(--bg-base); border-bottom: 1px solid var(--border-soft); }
+.banner h3 { display: flex; align-items: baseline; gap: 10px; font: 600 13px/1.35 var(--font-sans); letter-spacing: .04em; text-transform: uppercase; }
+.bn-n { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-xs); font: 600 12px/1.2 var(--font-mono); letter-spacing: 0; }
+.bn-m { font: 500 12px/1.4 var(--font-sans); color: var(--fg-muted); }
+.shot { border-bottom: 1px solid var(--border-soft); }
+.shot-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; padding: 10px 20px; scroll-margin-top: 72px; }
+.shot-row:hover, .shot-row.is-hint { background: var(--bg-surface); }
+.shot.is-sel > .shot-row { background: var(--primary-soft); }
+.thumb { display: block; width: 112px; aspect-ratio: 16 / 9; }
+.thumb svg { display: block; width: 100%; height: 100%; }
+.sr-main { min-width: 0; display: grid; gap: 3px; }
+.sr-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.sr-id { font: 600 13px/1.3 var(--font-mono); }
+.sr-type { font: 700 12px/1.3 var(--font-sans); letter-spacing: .08em; color: var(--fg-muted); }
+.sr-tc { font: 400 12px/1.3 var(--font-mono); color: var(--fg-muted); }
+.sr-act { font-size: 14px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* detail */
+.detail { padding: 4px 20px 26px; background: var(--bg-surface); border-top: 1px solid var(--border-soft); }
+.panel-big { margin-top: 16px; }
+.panel-big svg { display: block; width: 100%; height: auto; border-radius: var(--radius-sm); }
+.panel-cap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 6px; font: 500 12px/1.4 var(--font-sans); color: var(--fg-muted); }
+.review { margin-top: 14px; padding: 14px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.rv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.rv-msg { flex: 1 1 220px; font-size: 14px; color: var(--fg); }
+.rv-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+.composer { margin-top: 12px; }
+.lbl { display: block; font: 600 13px/1.4 var(--font-sans); margin-bottom: 6px; }
+.composer textarea { display: block; width: 100%; min-height: 84px; resize: vertical; padding: 10px 12px; background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 400 14px/1.5 var(--font-body); }
+.composer textarea[aria-invalid="true"] { border-color: var(--danger); }
+.err { font: 600 13px/1.4 var(--font-sans); margin-top: 6px; }
+.err:empty { display: none; }
+.kbd-hint { font: 500 12px/1.3 var(--font-sans); color: var(--fg-muted); }
+.flash { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font: 500 14px/1.4 var(--font-sans); }
+.specs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 20px; margin-top: 18px; }
+.specs .wide { grid-column: 1 / -1; }
+.specs dt { margin-bottom: 4px; font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); }
+.specs dd { font-size: 14px; }
+.quote { padding: 10px 12px; background: var(--paper); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font: 400 14px/1.6 var(--font-mono); }
+.quote-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.prompt { padding: 10px 12px; background: var(--bg-sunken); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); font: 400 14px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-note { margin-top: 6px; }
+.refs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ref { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 11px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--bg-base); font: 500 13px/1 var(--font-sans); }
+.ref:hover { border-color: var(--fg-muted); }
+.kf { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 12px; align-items: center; }
+.ph-frame {
+  display: grid; place-content: center; gap: 2px; padding: 8px; text-align: center; aspect-ratio: 16 / 9;
+  background: var(--bg-raised); border: 1px dashed var(--border); border-radius: var(--radius-xs);
+  font: 600 12px/1.3 var(--font-sans); color: var(--fg);
+}
+.ph-frame small { font: 500 12px/1.3 var(--font-sans); color: var(--fg-muted); }
+.ph-frame[data-st="approved"] { border-style: solid; }
+.ph-frame[data-st="pending-review"] { background: var(--achievement-soft); border-color: transparent; }
+.ph-frame[data-st="not-started"] { background: var(--bg-sunken); }
+.ph-portrait { aspect-ratio: 4 / 3; }
+.thread { margin-top: 22px; }
+.sub-h { font: 600 12px/1.3 var(--font-sans); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-muted); }
+.thread ol { margin-top: 8px; display: grid; gap: 8px; }
+.nt { padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--bg-base); }
+.nt-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font: 500 13px/1.4 var(--font-sans); }
+.nt-h b { font-weight: 700; }
+.nt-t { font-size: 12px; color: var(--fg-muted); }
+.nt-s { font: 600 12px/1 var(--font-sans); color: var(--fg-muted); padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--radius-xs); }
+.nt-b { margin-top: 4px; font-size: 14px; }
+.nt-ev { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font: 500 13px/1.4 var(--font-sans); }
+.nt-req { background: var(--danger-soft); border-color: transparent; }
+
+/* ── rail: spend gate + tabs ── */
+.rail-panel { display: flex; flex-direction: column; min-height: 0; }
+.gate { flex: none; padding: 16px 18px 18px; border-bottom: 1px solid var(--border); }
+.rh { font: 500 20px/1.2 var(--font-display); }
+.rh:focus { outline: none; }
+.rh:focus-visible { outline: 2px solid var(--info); }
+.gate-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.gate-n { font: 600 12px/1.3 var(--font-sans); color: var(--fg-muted); }
+.job { margin-top: 12px; padding: 14px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.job[data-st="awaiting-approval"] { border-color: var(--achievement); }
+.job-kicker { font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); }
+.job-label { margin-top: 4px; font: 600 15px/1.35 var(--font-sans); }
+.est { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 12px; }
+.est-k { font: 600 12px/1 var(--font-sans); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-muted); }
+.est-v { font: 600 30px/1 var(--font-mono); }
+.est-c { font: 500 12px/1 var(--font-mono); color: var(--fg-muted); }
+.est-n { margin-top: 6px; font: 500 13px/1.45 var(--font-sans); color: var(--fg-muted); }
+.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin-top: 12px; font-size: 14px; }
+.facts dt { font: 500 13px/1.55 var(--font-sans); color: var(--fg-muted); }
+.facts dd { min-width: 0; overflow-wrap: anywhere; }
+.units { display: flex; flex-wrap: wrap; gap: 4px; }
+.unit { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-base); font: 500 12px/1 var(--font-mono); }
+.unit:hover { border-color: var(--fg-muted); }
+.job-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.job-act .btn-primary { flex: 1 1 0; min-width: 0; }
+.tg-l { display: inline; }
+.job-done { margin-top: 12px; font: 500 14px/1.45 var(--font-sans); }
+.meter { margin-top: 16px; }
+.meter-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.meter-h .mono { font-size: 12px; color: var(--fg-muted); }
+.bar { display: flex; height: 12px; margin-top: 8px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius-pill); overflow: hidden; }
+.seg { display: block; height: 100%; min-width: 0; }
+.seg-spent, .sw-spent { background: var(--kola-amber); }
+.seg-commit, .sw-commit { background: var(--primary); }
+.seg-pend, .sw-pend { background: repeating-linear-gradient(135deg, var(--achievement) 0 3px, transparent 3px 6px); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--border); flex: none; }
+.mrows { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; margin-top: 10px; font-size: 14px; }
+.mrows dt { display: flex; align-items: center; gap: 8px; color: var(--fg-muted); font: 500 13px/1.5 var(--font-sans); }
+.mrows dd { text-align: right; }
+.mrows .tot { padding-top: 6px; border-top: 1px solid var(--border-soft); color: var(--fg); font-weight: 600; }
+.meter .fine { margin-top: 10px; }
+.rail-tabs { flex: none; display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.rtab { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font: 600 14px/1 var(--font-sans); color: var(--fg-muted); }
+.rtab:hover { color: var(--fg); }
+.rtab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--primary); }
+.rp-body { padding: 16px 18px 32px; }
+.rp-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+.bib-group + .bib-group { margin-top: 24px; }
+.bib-gh { display: flex; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid var(--border-soft); font: 600 12px/1.3 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-muted); }
+.logline { margin-top: 10px; font: 400 italic 16px/1.5 var(--font-display); }
+.bib-group .fine { margin-top: 6px; }
+.bib { padding: 14px 0; border-bottom: 1px solid var(--border-soft); scroll-margin-top: 12px; border-radius: var(--radius-xs); }
+.bib:focus { outline: none; }
+.bib-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
+.bib-name { font: 500 17px/1.25 var(--font-display); }
+.bib-role { font: 600 12px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); margin-top: 2px; }
+.bib-d { margin-top: 6px; font-size: 14px; }
+.bib-frames { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; align-items: start; }
+.bib-frames figcaption { margin-top: 5px; }
+.bib-use { margin-top: 8px; font: 500 12px/1.4 var(--font-sans); color: var(--fg-muted); }
+.bib-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font: 500 13px/1.4 var(--font-sans); }
+.look { margin-top: 10px; display: grid; gap: 6px; }
+.look li { position: relative; padding-left: 16px; font-size: 14px; }
+.look li::before { content: ""; position: absolute; left: 2px; top: .7em; width: 8px; height: 1px; background: var(--fg-muted); }
+.ledger { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ledger th { padding: 8px 6px; border-bottom: 1px solid var(--border); text-align: left; font: 600 12px/1.2 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); }
+.ledger td { padding: 10px 6px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.ledger .amt { text-align: right; white-space: nowrap; }
+.ledger .lu small { display: block; font: 400 12px/1.4 var(--font-mono); color: var(--fg-muted); overflow-wrap: anywhere; }
+.ledger .lt { white-space: nowrap; }
+.ledger .lt small { display: block; font: 500 12px/1.3 var(--font-sans); color: var(--fg-muted); }
+.ledger tfoot th, .ledger tfoot td { padding-top: 12px; border-bottom: 0; font: 700 14px/1.2 var(--font-sans); color: var(--fg); letter-spacing: 0; text-transform: none; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font: 500 13px/1.45 var(--font-sans); color: var(--fg-muted); }
+
+/* ── footer ── */
+.foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 20px; background: var(--bg-surface); border-top: 1px solid var(--border); font: 500 12px/1.4 var(--font-sans); color: var(--fg-muted); }
+.foot .sp { flex: 1; }
+
+/* sketch panel (framing diagram) */
+.pnl .pf { fill: var(--bg-sunken); stroke: var(--border); stroke-width: 1; }
+.pnl .pg { fill: none; stroke: var(--fg-faint); stroke-width: .45; stroke-dasharray: 1.4 1.8; }
+.pnl .ps { fill: none; stroke: var(--fg-faint); stroke-width: .4; }
+.pnl .pb { fill: var(--bg-raised); stroke: var(--fg-muted); stroke-width: .9; }
+.pnl .pt { font: 600 6px var(--font-sans); fill: var(--fg); }
+.pnl .pk { font: 700 6px var(--font-sans); letter-spacing: .5px; fill: var(--fg-muted); }
+.pnl .pd { font: 500 6px var(--font-mono); fill: var(--fg-muted); }
+.pnl .pm { fill: none; stroke: var(--fg); stroke-width: .8; stroke-dasharray: 2.2 1.6; }
+.pnl .pa { fill: none; stroke: var(--fg); stroke-width: 1; stroke-linecap: round; }
+.pnl .pah { fill: var(--fg); }
+.pnl .pml { font: 700 6px var(--font-sans); letter-spacing: .5px; fill: var(--fg); }
+.thumb .pnl .pb { stroke-width: 1.4; }
+.thumb .pnl .pa, .thumb .pnl .pm { stroke-width: 1.4; }
+
+/* ── motion (opt-in) ── */
+@media (prefers-reduced-motion: no-preference) {
+  .shot-row, .tag, .tram, .ln, .btn, .fchip, .dn, .ref, .unit, button.stage-in { transition: background-color .16s var(--ease-calm), border-color .16s var(--ease-calm), color .16s var(--ease-calm); }
+  .ln.is-sel { animation: ray .55s var(--ease-calm); background-image: linear-gradient(var(--primary-soft), var(--primary-soft)); background-repeat: no-repeat; background-size: 100% 100%; }
+  .ln.pulse { animation: ray .55s var(--ease-calm); }
+  .bib.flash { animation: flash 1.4s var(--ease-calm); }
+}
+@keyframes ray { from { background-size: 0% 100%; } to { background-size: 100% 100%; } }
+@keyframes flash { 0%, 40% { background: var(--primary-soft); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .bib.flash { background: var(--primary-soft); }
+}
+
+/* ── layout: wide (three columns, fixed panes) ── */
+@media (min-width: 761px) {
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+  .top, .foot { flex: none; }
+  .desk { flex: 1; min-height: 0; }
+}
+@media (min-width: 1280px) {
+  .desk { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) 344px; grid-template-rows: minmax(0, 1fr); }
+  .desk-nav { display: none; }
+  .rh-tabbed { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .rail { overflow: auto; overscroll-behavior: contain; }
+  .rail > * { flex: none; }
+  .rail-tabs { position: sticky; top: 0; z-index: 3; background: var(--bg-surface); }
+  body[data-rail="bible"] #p-ledger, body[data-rail="ledger"] #p-bible { display: none; }
+}
+/* ── layout: medium (script | tabbed right column) ── */
+@media (min-width: 761px) and (max-width: 1279px) {
+  .desk { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .pane-script { grid-column: 1; grid-row: 1 / span 2; }
+  .desk-nav { grid-column: 2; grid-row: 1; }
+  .pane-shots, .rail { grid-column: 2; grid-row: 2; }
+  .desk-nav [data-v="script"] { display: none; }
+  .rail-tabs { display: none; }
+  .rail .rail-panel { display: none; }
+  .rail { display: none; }
+  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail { display: flex; }
+  body[data-view="spend"] .pane-shots, body[data-view="bible"] .pane-shots, body[data-view="ledger"] .pane-shots { display: none; }
+  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger { display: flex; flex: 1; overflow: auto; border-bottom: 0; }
+  .host { order: 5; flex: 1 1 100%; max-width: none; }
+  .top-row { flex-wrap: wrap; row-gap: 10px; }
+  .paper { padding-left: 24px; }
+}
+@media (min-width: 761px) and (max-width: 1279px) {
+  .stage-in { padding: 7px 8px 8px; }
+  .st-top { gap: 5px; }
+}
+@media (min-width: 761px) and (max-width: 900px) {
+  .pipeline ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stage { border-bottom: 1px solid var(--border-soft); }
+  .stage:nth-child(3n) { border-right: 0; }
+}
+@media (min-width: 761px) and (max-width: 1060px) {
+  .shot-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .thumb { width: 96px; }
+  .shot-row .chip { grid-column: 2; justify-self: start; }
+}
+/* ── layout: phone (switchable panes, page scroll) ── */
+@media (max-width: 760px) {
+  :root { --lining-w: 92px; --nav-h: 57px; }
+  .top-row { flex-wrap: wrap; gap: 12px; padding: 14px 16px; }
+  .ident { flex: 1 1 0; min-width: 0; }
+  .title { font-size: 24px; }
+  .next { order: 3; flex: 1 1 100%; flex-wrap: wrap; gap: 10px; padding: 12px 0 0; border-left: 0; border-top: 1px solid var(--border-soft); }
+  .host { order: 4; flex: 1 1 100%; max-width: none; }
+  .pipeline ol { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stage { border-bottom: 1px solid var(--border-soft); }
+  .stage:nth-child(3n) { border-right: 0; }
+  .stage-in { padding: 8px 10px; }
+  .desk { display: block; }
+  .desk-nav { position: sticky; top: 0; z-index: 10; padding: 8px; }
+  .pane, .rail { display: none; }
+  body[data-view="script"] .pane-script, body[data-view="shots"] .pane-shots { display: flex; }
+  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail { display: flex; }
+  .rail-tabs { display: none; }
+  .rail .rail-panel { display: none; }
+  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger { display: flex; border-bottom: 0; }
+  .pane-script, .pane-shots { border-right: 0; }
+  .pane-head { padding: 14px 16px 12px; }
+  .scroller { overflow: visible; }
+  .paper-wrap { padding: 0; }
+  .paper { padding: 24px var(--lining-w) 36px 16px; border-left: 0; border-right: 0; border-radius: 0; box-shadow: none; }
+  .cue { margin-left: 6ch; }
+  .dlg { margin-left: 2ch; }
+  .tg-sc { display: none; }
+  .ln { scroll-margin: 90px; }
+  .banner { top: var(--nav-h); padding: 10px 16px; }
+  .shot-row { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 10px 16px; scroll-margin-top: calc(var(--nav-h) + 64px); }
+  .thumb { width: 92px; }
+  .shot-row .chip { grid-column: 2; justify-self: start; }
+  .detail { padding: 4px 16px 24px; }
+  .specs { grid-template-columns: 1fr; }
+  .kf { grid-template-columns: 112px minmax(0, 1fr); }
+  .gate, .rp-body { padding-left: 16px; padding-right: 16px; }
+  .foot { padding: 10px 16px; }
+  .rv-btns .btn { flex: 1 1 auto; }
+}
+@media (pointer: coarse) {
+  .tag { height: 28px; }
+  .btn-sm { min-height: 40px; }
+}
+</style>
+</head>
+<body data-view="script" data-rail="bible">
+<a class="skip" href="#shots">Skip to shots</a>
+
+<header class="top">
+  <div class="top-row">
+    <div class="ident">
+      <p class="eyebrow">akuko board</p>
+      <h1 class="title" id="t-title">Loading…</h1>
+      <p class="meta mono" id="t-meta"></p>
+    </div>
+    <div class="next" id="next" data-akuko-view="your-move"></div>
+    <div class="host" id="host" role="note"></div>
+    <button class="mode-btn" id="mode-btn" type="button" data-act="mode" data-k="mode"></button>
+  </div>
+  <nav class="pipeline" aria-label="Pipeline stages" data-akuko-view="pipeline"><ol id="stages"></ol></nav>
+</header>
+
+<main class="desk" id="desk">
+  <nav class="desk-nav" id="desknav" aria-label="Board sections"></nav>
+
+  <section class="pane pane-script" id="script" data-akuko-view="script-link" aria-labelledby="h-script">
+    <div class="pane-head">
+      <h2 class="ph-h" id="h-script">Script</h2>
+      <p class="ph-sub" id="script-sub"></p>
+      <ul class="legend" aria-label="Tramline key">
+        <li><span class="lt" aria-hidden="true"></span>Approved</li>
+        <li><span class="lt lt-wait" aria-hidden="true"></span>Pending review</li>
+        <li><span class="lt lt-rework" aria-hidden="true"></span>Needs rework</li>
+        <li><span class="lt lt-sel" aria-hidden="true"></span>Selected shot</li>
+      </ul>
+    </div>
+    <div class="scroller" id="script-scroll">
+      <div class="paper-wrap">
+        <div class="paper" id="paper">
+          <article id="page" aria-label="Screenplay excerpt"></article>
+          <div class="lining" id="lining" role="group" aria-label="Shot tags"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane pane-shots" id="shots" data-akuko-view="shots" aria-labelledby="h-shots" tabindex="-1">
+    <div class="pane-head">
+      <h2 class="ph-h" id="h-shots">Shots</h2>
+      <p class="ph-sub mono" id="cut"></p>
+      <div class="filters" id="filters" role="group" aria-label="Filter shots by review status"></div>
+    </div>
+    <div class="scroller" id="shot-scroll"><div id="shotlist"></div></div>
+  </section>
+
+  <aside class="rail" id="rail" aria-label="Spend, bible and ledger">
+    <section class="rail-panel gate" id="p-spend" data-akuko-view="spend-gate" aria-labelledby="h-spend"></section>
+    <div class="rail-tabs" role="tablist" aria-label="Project reference" id="rail-tabs"></div>
+    <section class="rail-panel" id="p-bible" data-akuko-view="bible" role="tabpanel" aria-labelledby="tab-bible"></section>
+    <section class="rail-panel" id="p-ledger" data-akuko-view="ledger" role="tabpanel" aria-labelledby="tab-ledger"></section>
+  </aside>
+</main>
+
+<footer class="foot" id="foot"></footer>
+<p class="vh" id="announce" aria-live="polite"></p>
+
+<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.1.0","variant":"b-script-desk","fallback":{"mode":"mock"}}</script>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"board-b-instrumented","version":"0.1","title":"akuko board (B script desk, instrumented test copy)","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
+<script type="application/json" id="akuko-project">{"format":"akuko","schema_version":1,"project":{"slug":"the-beating","title":"The Beating","logline":"A man insists he is sane while describing how he killed an old man for his pale, clouded eye — until the dead man's heart gives him away.","source":"Adapted from \"The Tell-Tale Heart\" by Edgar Allan Poe (1843, public domain)","runtime_s":70,"aspect_ratio":"16:9","profile":"film","created_at":"2026-11-05T00:00:00Z","notes":"Prices are illustrative fixture values, not quotes."},"host":{"level":"A","label":"Claude artifact","capabilities":{}},"stages":{"intake":{"state":"approved"},"breakdown":{"state":"approved"},"sketch":{"state":"in-review"},"bible":{"state":"in-progress"},"keyframes":{"state":"waiting-spend"},"motion":{"state":"locked"},"sound":{"state":"locked"},"assemble":{"state":"locked"},"export":{"state":"locked"}},"current_stage":"sketch","script":{"beats":[]},"scenes":[{"id":"sc1","heading":"INT. OLD MAN'S HOUSE — HALLWAY — NIGHT","summary":"Midnight. The narrator creeps to the old man's door, as he has every night for a week."},{"id":"sc2","heading":"INT. OLD MAN'S BEDROOM — NIGHT","summary":"The lantern's single ray falls on the eye. The old man wakes. The narrator strikes."},{"id":"sc3","heading":"INT. OLD MAN'S BEDROOM — LATER","summary":"He hides the body beneath the floorboards."},{"id":"sc4","heading":"INT. OLD MAN'S BEDROOM — DAWN","summary":"Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud."}],"shots":[{"id":"sc1_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"ws","camera":"Static, low angle","camera_move":"unset","action":"A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.","duration_s":6,"prompt":"Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro","refs":["char_narrator","loc_hallway","style_lookbook"],"script_line":"Every night, about midnight, I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"N","shape":"rect","x":0.72,"y":0.55,"w":0.06,"h":0.3}]},{"id":"sc1_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"insert","camera":"Macro, locked off","camera_move":"unset","action":"His hand turns the latch, a fraction at a time.","duration_s":4,"prompt":"Extreme close-up of a hand slowly turning an iron door latch, lantern light from below","refs":["char_narrator","style_lookbook"],"script_line":"I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"hand","shape":"rect","x":0.35,"y":0.35,"w":0.3,"h":0.3}]},{"id":"sc1_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"pov","camera":"Handheld, slow push","camera_move":"push-in","action":"Through the crack of the door: darkness, and the shape of the old man asleep.","duration_s":6,"prompt":"POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.","blocking":[{"who":"OM","shape":"ellipse","x":0.5,"y":0.62,"w":0.22,"h":0.12}]},{"id":"sc2_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The narrator opens the lantern a crack. A single thin ray cuts across the room.","duration_s":7,"prompt":"Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.","blocking":[{"who":"N","shape":"rect","x":0.18,"y":0.35,"w":0.12,"h":0.5},{"who":"OM","shape":"ellipse","x":0.72,"y":0.6,"w":0.2,"h":0.12}]},{"id":"sc2_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"The eye, pale blue with a film over it, wide open in the ray of light.","duration_s":4,"prompt":"Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam","refs":["char_oldman","style_lookbook"],"script_line":"It was open — wide, wide open — and I grew furious as I gazed upon it.","blocking":[{"who":"OM eye","shape":"ellipse","x":0.5,"y":0.5,"w":0.34,"h":0.2}]},{"id":"sc2_sh3","stage":"sketch","status":"needs-rework","comments":[{"ts":"2026-11-06T21:12:00Z","stage":"sketch","author":"You","text":"He should bolt up — this framing reads calm. Try a lower, tighter angle."}],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The old man sits up in bed: 'Who's there?'","duration_s":5,"prompt":"Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I heard him sit up in the bed, crying out — \"Who's there?\"","blocking":[{"who":"OM","shape":"rect","x":0.42,"y":0.3,"w":0.16,"h":0.42}]},{"id":"sc2_sh4","stage":"sketch","status":"pending-review","comments":[],"scene":"sc2","shot_type":"ws","camera":"Static, high angle","camera_move":"unset","action":"The lantern drops. The bed is dragged over him. Only shadows move.","duration_s":6,"prompt":"High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow","refs":["char_narrator","char_oldman","loc_bedroom","style_lookbook"],"script_line":"In an instant I dragged him to the floor, and pulled the heavy bed over him.","blocking":[{"who":"N","shape":"rect","x":0.3,"y":0.42,"w":0.1,"h":0.36},{"who":"bed","shape":"rect","x":0.5,"y":0.55,"w":0.32,"h":0.2}]},{"id":"sc3_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc3","shot_type":"overhead","camera":"Overhead, static","camera_move":"unset","action":"From above: he lifts three planks from the floor.","duration_s":7,"prompt":"Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I took up three planks from the flooring of the chamber, and deposited all between the scantlings.","blocking":[{"who":"N","shape":"ellipse","x":0.4,"y":0.45,"w":0.18,"h":0.18},{"who":"planks","shape":"rect","x":0.58,"y":0.3,"w":0.08,"h":0.42}]},{"id":"sc4_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ws","camera":"Static","camera_move":"unset","action":"Dawn light. Three officers stand in the doorway, hats in hand.","duration_s":6,"prompt":"Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway","refs":["char_officers","loc_bedroom","style_lookbook"],"script_line":"There entered three men, who introduced themselves, with perfect suavity, as officers of the police.","blocking":[{"who":"O1","shape":"rect","x":0.4,"y":0.3,"w":0.07,"h":0.45},{"who":"O2","shape":"rect","x":0.5,"y":0.3,"w":0.07,"h":0.45},{"who":"O3","shape":"rect","x":0.6,"y":0.3,"w":0.07,"h":0.45}]},{"id":"sc4_sh2","stage":"sketch","status":"pending-review","comments":[],"scene":"sc4","shot_type":"ms","camera":"Slow dolly in","camera_move":"push-in","action":"He places his chair directly over the hidden boards and smiles at the officers.","duration_s":8,"prompt":"Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"I placed my own seat upon the very spot beneath which reposed the corpse of the victim.","blocking":[{"who":"N","shape":"rect","x":0.44,"y":0.32,"w":0.12,"h":0.46},{"who":"O1","shape":"rect","x":0.12,"y":0.3,"w":0.06,"h":0.4}]},{"id":"sc4_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"Sweat on his temple. Under the silence, a low, dull, quick sound.","duration_s":5,"prompt":"Extreme close-up of a sweating temple and a twitching eye, cold dawn light","refs":["char_narrator","style_lookbook"],"script_line":"It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.","blocking":[{"who":"N face","shape":"ellipse","x":0.55,"y":0.45,"w":0.4,"h":0.5}]},{"id":"sc4_sh4","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ms","camera":"Handheld, whip to boards","camera_move":"whip-pan","action":"He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'","duration_s":6,"prompt":"Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"","blocking":[{"who":"N","shape":"rect","x":0.4,"y":0.5,"w":0.16,"h":0.32},{"who":"O2","shape":"rect","x":0.75,"y":0.28,"w":0.06,"h":0.42}]}],"bible":{"characters":[{"id":"char_narrator","stage":"bible","status":"approved","comments":[],"name":"The Narrator","role":"Principal","description":"Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle.","notes":[],"refs":["char_narrator_portrait","char_narrator_turnaround"]},{"id":"char_oldman","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man","role":"Principal","description":"Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'.","notes":[],"refs":["char_oldman_portrait","char_oldman_turnaround"]},{"id":"char_officers","stage":"bible","status":"pending","comments":[],"name":"Officers (×3)","role":"Supporting","description":"1840s police, dark greatcoats, polite and unhurried.","notes":[],"refs":[]}],"locations":[{"id":"loc_hallway","stage":"bible","status":"approved","comments":[],"name":"Hallway","description":"Narrow, bare boards, a single door at the end.","notes":[],"refs":["loc_hallway_plate"]},{"id":"loc_bedroom","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man's Bedroom","description":"Four-poster bed, shuttered window, wide pine floorboards.","notes":[],"refs":["loc_bedroom_plate"]}],"styles":[{"id":"style_lookbook","stage":"bible","status":"approved","comments":[],"name":"Lookbook","notes":["Lantern chiaroscuro: one warm source, everything else falls to black","Dawn scenes go cold and grey — the only daylight in the film","Fine film grain, no lens flares","Composition leaves dead space around the eye"],"refs":[]}]},"assets":[{"id":"char_narrator_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_narrator","tags":[]},{"id":"char_narrator_turnaround","stage":"bible","status":"approved","comments":[],"kind":"turnaround","owner":"char_narrator","tags":[]},{"id":"char_oldman_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_oldman","tags":[]},{"id":"char_oldman_turnaround","stage":"bible","status":"pending-review","comments":[],"kind":"turnaround","owner":"char_oldman","tags":[]},{"id":"loc_hallway_plate","stage":"bible","status":"approved","comments":[],"kind":"plate","owner":"loc_hallway","tags":[]},{"id":"loc_bedroom_plate","stage":"bible","status":"pending-review","comments":[],"kind":"plate","owner":"loc_bedroom","tags":[]}],"audio":{},"budget":{"cap":15,"currency":"USD","spent":0.84},"pending_spend":[{"id":"job_kf_sc1","stage":"keyframes","label":"Generate key frames for scene 1","units":["sc1_sh1","sc1_sh2","sc1_sh3"],"provider":"Gemini image","model":"gemini-3.1-flash-image-preview","estimate":0.36,"status":"awaiting-approval"}],"ledger":[{"ts":"2026-11-06T19:40:00Z","provider":"Gemini image","unit":"char_narrator_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T19:44:00Z","provider":"Gemini image","unit":"char_narrator_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:05:00Z","provider":"Gemini image","unit":"char_oldman_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T20:09:00Z","provider":"Gemini image","unit":"char_oldman_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:30:00Z","provider":"Gemini image","unit":"loc_hallway_plate","actual":0.06,"status":"done"},{"ts":"2026-11-06T20:33:00Z","provider":"Gemini image","unit":"loc_bedroom_plate","actual":0.06,"status":"done"}],"decisions":[]}</script>
+<script>
+/* akuko-decision-writer v1 — views/contract.md §Decision writer. Inline this block verbatim. */
+(function () {
+  'use strict';
+  var STATE_KEY = 'akuko.decisions';
+  function readJson(id) {
+    try { return JSON.parse(document.getElementById(id).textContent); } catch (e) { return null; }
+  }
+  var M = readJson('akuko-view') || {};
+  var P = readJson('akuko-project') || {};
+  var VIEW = (M.id || 'unknown') + '@' + (M.version || '0');
+  var OUTBOX = 'akuko-outbox:' + ((P.project && P.project.slug) || 'project');
+  var outbox = [];
+  try { outbox = JSON.parse(window.localStorage.getItem(OUTBOX) || '[]'); } catch (e) { outbox = []; }
+  if (!Array.isArray(outbox)) outbox = [];
+  var stored = true;
+  var db = null;
+  var who = 'you';
+  var listeners = [];
+  var ikenga = !!window.__ikenga_host__;
+
+  function save() {
+    try { window.localStorage.setItem(OUTBOX, JSON.stringify(outbox)); stored = true; } catch (e) { stored = false; }
+  }
+  function uuid() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    var b = new Uint8Array(16);
+    window.crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    var h = Array.prototype.map.call(b, function (x) { return (x + 0x100).toString(16).slice(1); }).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  }
+  function toDb(d) {
+    if (!db) return;
+    try { db.collection('decisions').doc(d.id).set(d).catch(function () { /* stays in the outbox */ }); } catch (e) { /* stays in the outbox */ }
+  }
+  function toIkenga() {
+    if (!ikenga) return;
+    try { window.parent.postMessage({ __iyke: true, kind: 'state', payload: { key: STATE_KEY, value: outbox.slice() } }, '*'); } catch (e) { /* ignore */ }
+  }
+  function changed() { listeners.forEach(function (fn) { try { fn(outbox.slice()); } catch (e) { /* ignore */ } }); }
+
+  /**
+   * Write one decision. Call ONLY from a person's click / submit / key press,
+   * once per unit. f = {action, unit, stage, text?, undoes?}. Returns the record.
+   */
+  function emit(f) {
+    var d = { id: uuid(), action: f.action, unit: f.unit, stage: f.stage };
+    if (f.action === 'undo') d.undoes = f.undoes;
+    if (typeof f.text === 'string' && (f.text !== '' || f.action === 'note' || f.action === 'request-changes')) d.text = f.text;
+    d.by = who;
+    d.at = new Date().toISOString();
+    d.view = VIEW;
+    outbox.push(d);
+    save();
+    toDb(d);
+    toIkenga();
+    changed();
+    return d;
+  }
+  function jsonl() { return outbox.map(function (d) { return JSON.stringify(d); }).join('\n') + (outbox.length ? '\n' : ''); }
+
+  window.akukoDecisions = {
+    view: VIEW,
+    emit: emit,
+    all: function () { return outbox.slice(); },
+    jsonl: jsonl,
+    stored: function () { return stored; },
+    store: function () { return db ? 'artifact-db' : ikenga ? 'ikenga' : 'outbox'; },
+    onChange: function (fn) { listeners.push(fn); }
+  };
+
+  // Host A: claude.ai artifact DB (declare capabilities {db, user}). Resolves later, never during this run.
+  if (window.claude && typeof window.claude.use === 'function') {
+    Promise.all([window.claude.use('db'), window.claude.use('user')]).then(function (r) {
+      db = r[0] || null;
+      var u = r[1];
+      var flush = function () { outbox.forEach(toDb); changed(); };
+      if (u && typeof u.id === 'function') {
+        return u.id().then(function (id) { if (id) who = id; flush(); }, flush);
+      }
+      flush();
+    }).catch(function () { db = null; });
+  }
+  // Host C: re-publish the outbox after a pane reload.
+  toIkenga();
+})();
+/* end akuko-decision-writer */
+</script>
+<script>
+(function () {
+  'use strict';
+
+  /* ── data ─────────────────────────────────────────────── */
+  var D;
+  try { D = fromAkuko(JSON.parse(document.getElementById('akuko-project').textContent)); }
+  catch (e) { document.getElementById('t-title').textContent = 'Board data could not be read'; return; }
+
+  /* akuko.json -> the shape this design was drawn against (fixtures/convert-fixture.ts, in reverse) */
+  function fromAkuko(p) {
+    const TYPE = { ews: 'EWS', ws: 'WIDE', ls: 'LONG', fs: 'FULL', ms: 'MEDIUM', cu: 'CU', ecu: 'ECU', ots: 'OTS', pov: 'POV', insert: 'INSERT', aerial: 'AERIAL', overhead: 'TOP' };
+    const MV = { 'push-in': 'push', 'pull-out': 'pull', 'whip-pan': 'whip' };
+    const LABELS = [['intake', 'Intake'], ['breakdown', 'Breakdown'], ['sketch', 'Sketch board'], ['bible', 'Bibles'], ['keyframes', 'Key frames'], ['motion', 'Motion'], ['sound', 'Sound'], ['assemble', 'Assemble'], ['export', 'Export']];
+    const disp = s => (s === 'pending' ? 'not-started' : s);
+    const assetById = {};
+    p.assets.forEach(a => { assetById[a.id] = a; });
+    const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes,
+      assets: e.refs.filter(r => assetById[r]).map(r => ({ id: r, kind: assetById[r].kind, status: disp(assetById[r].status), stage: assetById[r].stage })) });
+    return {
+      schema_version: p.schema_version,
+      project: Object.assign({}, p.project),
+      host: p.host,
+      stages: LABELS.map((l, n) => ({ id: l[0], n: n, label: l[1], state: p.stages[l[0]].state, current: p.current_stage === l[0] })),
+      scenes: p.scenes.map(s => ({ id: s.id, slug: s.heading || s.id, summary: s.summary || '' })),
+      shots: p.shots.map(s => ({ id: s.id, stage: s.stage, scene: s.scene, type: TYPE[s.shot_type] || s.shot_type, camera: s.camera || '', duration_s: s.duration_s || 0, status: disp(s.status),
+        action: s.action || '', script_line: s.script_line || '', prompt: s.prompt || '', refs: s.refs, blocking: s.blocking,
+        move: MV[s.camera_move] || (s.camera_move === 'unset' || s.camera_move === 'static' ? null : s.camera_move), comments: s.comments })),
+      bible: { characters: p.bible.characters.map(entry), locations: p.bible.locations.map(entry), style: p.bible.styles[0] ? entry(p.bible.styles[0]) : null },
+      budget: p.budget || { currency: 'USD', cap: 0, spent: 0 },
+      pending_spend: p.pending_spend,
+      ledger: p.ledger.map(l => Object.assign({}, l, { unit: assetById[l.unit] && assetById[l.unit].owner ? assetById[l.unit].owner + ' · ' + assetById[l.unit].kind : l.unit, actual: l.actual || 0 })),
+      _note: p.project.notes
+    };
+  }
+  const W = window.akukoDecisions;
+  /* the latest decision on a unit that has not been undone: what an Undo control reverses */
+  function lastDecision(unit) {
+    const all = W.all(), undone = {};
+    for (let i = all.length - 1; i >= 0; i--) if (all[i].action === 'undo' && !undone[all[i].id]) undone[all[i].undoes] = true;
+    const mine = all.filter(d => d.unit === unit && d.action !== 'undo' && !undone[d.id]);
+    return mine[mine.length - 1];
+  }
+  const akStatus = st => (st === 'not-started' ? 'pending' : st);
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const plural = (n, one, many) => (n === 1 ? one : (many || one + 's'));
+  const pad2 = n => String(n).padStart(2, '0');
+  const tc = s => pad2(Math.floor(s / 60)) + ':' + pad2(s % 60);
+  const clock = s => Math.floor(s / 60) + ':' + pad2(s % 60);
+  const round2 = n => Math.round(n * 100) / 100;
+  let moneyFmt = null;
+  try { moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: (D.budget && D.budget.currency) || 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }); } catch (e) { moneyFmt = null; }
+  const money = n => (moneyFmt ? moneyFmt.format(n) : '$' + String(Number(Number(n).toFixed(4))));
+  const gateNum = n => String(Number(Number(n).toFixed(4)));
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const when = ts => { const d = new Date(ts); if (isNaN(d)) return ''; return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' · ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ' UTC'; };
+  const reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const mqMobile = window.matchMedia ? matchMedia('(max-width: 760px)') : { matches: false };
+  const mqWide = window.matchMedia ? matchMedia('(min-width: 1280px)') : { matches: true };
+  const isMobile = () => mqMobile.matches;
+  const isWide = () => mqWide.matches;
+
+  const shotsById = {};
+  D.shots.forEach(s => { shotsById[s.id] = s; });
+  const sceneN = {};
+  D.scenes.forEach((sc, i) => { sceneN[sc.id] = i + 1; });
+  const stageById = {};
+  D.stages.forEach(st => { stageById[st.id] = st; });
+  const currentStage = D.stages.find(st => st.current) || D.stages[0];
+  const bibleById = {};
+  (D.bible.characters || []).forEach(c => { bibleById[c.id] = { kind: 'character', item: c }; });
+  (D.bible.locations || []).forEach(l => { bibleById[l.id] = { kind: 'location', item: l }; });
+  if (D.bible.style) bibleById[D.bible.style.id] = { kind: 'style', item: D.bible.style };
+  let tAcc = 0;
+  D.shots.forEach(s => { s._in = tAcc; tAcc += s.duration_s; s._out = tAcc; });
+  const cutTotal = tAcc;
+
+  const ST = {
+    'approved': { label: 'Approved', g: 'ok' },
+    'pending-review': { label: 'Pending review', g: 'wait' },
+    'needs-rework': { label: 'Needs rework', g: 'rework' },
+    'not-started': { label: 'Not started', g: 'none' },
+    'in-progress': { label: 'In progress', g: 'prog' }
+  };
+  const STAGE_TXT = { 'approved': 'Approved', 'in-review': 'In review', 'in-progress': 'In progress', 'waiting-spend': 'Waiting on spend', 'locked': 'Locked' };
+  const KIND = { portrait: 'Portrait', turnaround: 'Turnaround sheet', plate: 'Location plate' };
+  const MOVE = { 'push': 'Push in', 'dolly-in': 'Dolly in', 'whip': 'Whip pan' };
+  const LOCK = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
+  const SUN = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+  const MOON = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 10.1A5.6 5.6 0 0 1 5.9 2.8a5.6 5.6 0 1 0 7.3 7.3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+  const glyph = st => '<span class="g g-' + ((ST[st] || { g: 'none' }).g) + '" aria-hidden="true"></span>';
+  const chip = st => '<span class="chip" data-st="' + esc(st) + '">' + glyph(st) + esc((ST[st] || { label: st }).label) + '</span>';
+
+  /* ── storage (always guarded) ─────────────────────────── */
+  const KEY = 'akuko-board:' + D.project.slug + ':v1';
+  const store = {
+    ok: true,
+    read() { try { const raw = window.localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null; } catch (e) { this.ok = false; return null; } },
+    write(v) { try { window.localStorage.setItem(KEY, JSON.stringify(v)); this.ok = true; } catch (e) { this.ok = false; } },
+    clear() { try { window.localStorage.removeItem(KEY); } catch (e) { this.ok = false; } }
+  };
+
+  /* ── state ────────────────────────────────────────────── */
+  const VIEWS = ['script', 'shots', 'spend', 'bible', 'ledger'];
+  const FILTERS = ['all', 'pending-review', 'needs-rework', 'approved'];
+  const S = {
+    status: {}, notes: {}, asset: {}, spend: {},
+    sel: null, view: 'script', rail: 'bible', filter: 'all', mode: 'dark',
+    compose: null, flash: null, prev: {}, assetPrev: {}
+  };
+  const saved = store.read();
+  if (saved && saved.v === 1) {
+    ['status', 'notes', 'asset', 'spend'].forEach(k => { if (saved[k] && typeof saved[k] === 'object') S[k] = saved[k]; });
+    if (saved.sel && shotsById[saved.sel]) S.sel = saved.sel;
+    if (saved.rail === 'bible' || saved.rail === 'ledger') S.rail = saved.rail;
+    if (FILTERS.indexOf(saved.filter) !== -1) S.filter = saved.filter;
+    if (saved.mode === 'light' || saved.mode === 'dark') S.mode = saved.mode;
+    if (VIEWS.indexOf(saved.view) !== -1) S.view = saved.view;
+  }
+  Object.keys(S.status).forEach(id => { if (!shotsById[id] || !ST[S.status[id]]) delete S.status[id]; });
+  Object.keys(S.notes).forEach(id => { if (!shotsById[id] || !Array.isArray(S.notes[id])) delete S.notes[id]; });
+
+  const shotStatus = id => S.status[id] || shotsById[id].status;
+  const shotComments = id => (shotsById[id].comments || []).concat(S.notes[id] || []);
+  const assetStatus = (bid, i) => S.asset[bid + ':' + i] || bibleById[bid].item.assets[i].status;
+  const spendStatus = j => S.spend[j.id] || j.status;
+  function bibleStatus(bid) {
+    const e = bibleById[bid]; if (!e) return 'not-started';
+    const it = e.item;
+    if (!it.assets || !it.assets.length) return it.status;
+    const st = it.assets.map((a, i) => assetStatus(bid, i));
+    if (st.every(x => x === 'approved')) return 'approved';
+    if (st.some(x => x === 'needs-rework')) return 'needs-rework';
+    if (st.some(x => x === 'pending-review')) return 'pending-review';
+    return it.status;
+  }
+  function counts() {
+    const c = { 'approved': 0, 'pending-review': 0, 'needs-rework': 0 };
+    D.shots.forEach(s => { const st = shotStatus(s.id); c[st] = (c[st] || 0) + 1; });
+    return c;
+  }
+  function pendingAssets() {
+    const out = [];
+    Object.keys(bibleById).forEach(bid => {
+      const it = bibleById[bid].item;
+      (it.assets || []).forEach((a, i) => { if (assetStatus(bid, i) === 'pending-review') out.push({ bid: bid, i: i }); });
+    });
+    return out;
+  }
+  const awaitingSpend = () => D.pending_spend.filter(j => spendStatus(j) === 'awaiting-approval');
+  function nextPending(from) {
+    const list = D.shots.filter(s => shotStatus(s.id) === 'pending-review' && s.id !== from);
+    if (!list.length) return null;
+    const i = D.shots.findIndex(s => s.id === from);
+    const after = list.find(s => D.shots.indexOf(s) > i);
+    return (after || list[0]).id;
+  }
+  if (!S.sel) { const p = D.shots.find(s => shotStatus(s.id) === 'pending-review'); S.sel = (p || D.shots[0]).id; }
+
+  function save() {
+    store.write({ v: 1, status: S.status, notes: S.notes, asset: S.asset, spend: S.spend, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, mode: S.mode });
+  }
+  function announce(msg) { const el = $('#announce'); el.textContent = ''; setTimeout(() => { el.textContent = msg; }, 30); }
+  /* every person's decision goes through the decision format (views/contract.md); no other event */
+  function decide(f) { return W.emit(f); }
+
+  /* ── sketch panel: framing diagram from `blocking` ────── */
+  function arrow(x1, y1, x2, y2) {
+    const a = Math.atan2(y2 - y1, x2 - x1), h = 4.2;
+    const p1 = (x2 - h * Math.cos(a - 0.5)).toFixed(2) + ',' + (y2 - h * Math.sin(a - 0.5)).toFixed(2);
+    const p2 = (x2 - h * Math.cos(a + 0.5)).toFixed(2) + ',' + (y2 - h * Math.sin(a + 0.5)).toFixed(2);
+    return '<line class="pa" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '"/><polygon class="pah" points="' + x2 + ',' + y2 + ' ' + p1 + ' ' + p2 + '"/>';
+  }
+  function moveMarks(move, big) {
+    let g = '';
+    if (move === 'push' || move === 'dolly-in') {
+      g += '<rect class="pm" x="44" y="24.75" width="72" height="40.5"/>';
+      g += arrow(9, 7, 38, 20) + arrow(151, 7, 122, 20) + arrow(9, 83, 38, 70) + arrow(151, 83, 122, 70);
+    } else if (move === 'whip') {
+      g += arrow(26, 13, 134, 13) + '<line class="pa" x1="46" y1="8.5" x2="104" y2="8.5"/><line class="pa" x1="46" y1="17.5" x2="104" y2="17.5"/>';
+    } else {
+      g += arrow(30, 13, 130, 13);
+    }
+    if (big) g += '<text class="pml" x="80" y="84" text-anchor="middle">' + esc((MOVE[move] || move).toUpperCase()) + '</text>';
+    return g;
+  }
+  function describe(s) {
+    const where = b => { const cx = b.shape === 'ellipse' ? b.x : b.x + b.w / 2; return cx < 0.4 ? 'left of frame' : cx > 0.6 ? 'right of frame' : 'centre frame'; };
+    let t = s.type + ' framing diagram. ' + s.blocking.map(b => b.who + ' ' + where(b)).join(', ') + '.';
+    if (s.move) t += ' Camera move: ' + (MOVE[s.move] || s.move) + '.';
+    return t;
+  }
+  function panelSVG(s, big) {
+    const W = 160, H = 90;
+    let g = '<svg class="pnl" viewBox="0 0 ' + W + ' ' + H + '" ' + (big ? 'role="img" aria-label="' + esc(describe(s)) + '"' : 'aria-hidden="true" focusable="false"') + '>';
+    g += '<rect class="pf" x=".5" y=".5" width="' + (W - 1) + '" height="' + (H - 1) + '" rx="1.5"/>';
+    g += '<path class="pg" d="M' + (W / 3).toFixed(2) + ' 0V' + H + 'M' + (2 * W / 3).toFixed(2) + ' 0V' + H + 'M0 ' + H / 3 + 'H' + W + 'M0 ' + 2 * H / 3 + 'H' + W + '"/>';
+    if (big) g += '<rect class="ps" x="' + W * 0.05 + '" y="' + H * 0.05 + '" width="' + W * 0.9 + '" height="' + H * 0.9 + '"/>';
+    s.blocking.forEach(b => {
+      let lx, ly;
+      if (b.shape === 'ellipse') {
+        const cx = b.x * W, cy = b.y * H;
+        g += '<ellipse class="pb" cx="' + cx.toFixed(2) + '" cy="' + cy.toFixed(2) + '" rx="' + (b.w * W / 2).toFixed(2) + '" ry="' + (b.h * H / 2).toFixed(2) + '"/>';
+        lx = cx; ly = cy;
+      } else {
+        const x = b.x * W, y = b.y * H, w = b.w * W, h = b.h * H;
+        g += '<rect class="pb" x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' + w.toFixed(2) + '" height="' + h.toFixed(2) + '" rx=".8"/>';
+        lx = x + w / 2; ly = y + h / 2;
+      }
+      if (big) g += '<text class="pt" x="' + lx.toFixed(2) + '" y="' + ly.toFixed(2) + '" text-anchor="middle" dominant-baseline="central">' + esc(b.who) + '</text>';
+    });
+    if (s.move) g += moveMarks(s.move, big);
+    if (big) {
+      g += '<text class="pk" x="7" y="11">' + esc(s.type) + '</text>';
+      g += '<text class="pd" x="' + (W - 7) + '" y="' + (H - 6) + '" text-anchor="end">' + tc(s._in) + '–' + tc(s._out) + '</text>';
+    }
+    return g + '</svg>';
+  }
+
+  /* ── script (built once; painted on change) ───────────── */
+  function buildScript() {
+    const P = D.project;
+    const narr = bibleById.char_narrator ? bibleById.char_narrator.item.name.toUpperCase() : 'NARRATOR';
+    let h = '<header class="page-head"><p class="pg-title">' + esc(P.title.toUpperCase()) + '</p><p class="pg-src">' + esc(P.source) + '</p></header>';
+    D.scenes.forEach(sc => {
+      const shots = D.shots.filter(s => s.scene === sc.id);
+      const paras = [];
+      shots.forEach(s => {
+        const line = s.script_line || '';
+        const host = paras.find(p => {
+          const at = p.text.indexOf(line);
+          if (!line || at === -1) return false;
+          return p.inner.every(r => at >= r.e || at + line.length <= r.s);
+        });
+        if (host) { const at = host.text.indexOf(line); host.inner.push({ id: s.id, s: at, e: at + line.length }); }
+        else paras.push({ id: s.id, text: line, inner: [] });
+      });
+      const body = paras.map(p => {
+        let pos = 0, inner = '';
+        p.inner.sort((a, b) => a.s - b.s).forEach(r => {
+          inner += esc(p.text.slice(pos, r.s)) + '<span class="ln" id="ln-' + r.id + '" data-shot="' + r.id + '" data-hover="' + r.id + '">' + esc(p.text.slice(r.s, r.e)) + '</span>';
+          pos = r.e;
+        });
+        inner += esc(p.text.slice(pos));
+        return '<p class="dlg"><span class="ln" id="ln-' + p.id + '" data-shot="' + p.id + '" data-hover="' + p.id + '">' + inner + '</span></p>';
+      }).join('');
+      h += '<section class="scene" aria-label="Scene ' + sceneN[sc.id] + '">' +
+        '<h3 class="slug"><span class="sn">' + sceneN[sc.id] + '</span><span>' + esc(sc.slug) + '</span><span class="sn" aria-hidden="true">' + sceneN[sc.id] + '</span></h3>' +
+        '<p class="action">' + esc(sc.summary) + '</p>' +
+        '<p class="cue">' + esc(narr) + ' (V.O.)</p>' + body + '</section>';
+    });
+    $('#page').innerHTML = h;
+    $('#lining').innerHTML = D.shots.map(s => {
+      const m = s.id.match(/^(.*_)(.+)$/);
+      const lbl = '<span class="tg-l">' + (m ? '<span class="tg-sc">' + esc(m[1]) + '</span>' + esc(m[2]) : esc(s.id)) + '</span>';
+      return '<div class="tram" data-id="' + s.id + '" aria-hidden="true"></div>' +
+        '<button class="tag" type="button" data-act="sel-tag" data-akuko-field="script-tag" data-akuko-unit="' + s.id + '" data-id="' + s.id + '" data-k="tag:' + s.id + '" data-hover="' + s.id + '"><span class="tg-g"></span>' + lbl + '</button>';
+    }).join('');
+    $('#script-sub').textContent = D.shots.length + ' shot tags across ' + D.scenes.length + ' scenes · click a line or tag to open its shot';
+  }
+  function paintScript() {
+    $$('#page .ln').forEach(el => { el.classList.toggle('is-sel', el.dataset.shot === S.sel); });
+    $$('#lining .tram').forEach(el => { el.dataset.st = shotStatus(el.dataset.id); el.classList.toggle('is-sel', el.dataset.id === S.sel); });
+    $$('#lining .tag').forEach(el => {
+      const id = el.dataset.id, st = shotStatus(id), sel = id === S.sel;
+      el.classList.toggle('is-sel', sel);
+      el.setAttribute('aria-pressed', String(sel));
+      el.setAttribute('aria-label', 'Shot ' + id + ', ' + ST[st].label);
+      $('.tg-g', el).outerHTML = '<span class="tg-g">' + glyph(st) + '</span>';
+    });
+  }
+  function layoutLining() {
+    const paper = $('#paper'), lining = $('#lining');
+    if (!paper || !lining) return;
+    const pr = paper.getBoundingClientRect();
+    if (!pr.height) return;
+    const top0 = pr.top + paper.clientTop;
+    const items = [];
+    D.shots.forEach(s => {
+      const el = document.getElementById('ln-' + s.id);
+      if (!el) return;
+      const rs = el.getClientRects();
+      if (!rs.length) return;
+      items.push({ id: s.id, top: rs[0].top - top0, bot: rs[rs.length - 1].bottom - top0 });
+    });
+    items.sort((a, b) => a.top - b.top);
+    const ends = [];
+    items.forEach(it => {
+      let l = ends.findIndex(e => e < it.top - 1);
+      if (l < 0) { l = ends.length; ends.push(it.bot); } else ends[l] = it.bot;
+      it.lane = l;
+    });
+    const narrow = isMobile(), LANE = narrow ? 10 : 12, X0 = narrow ? 9 : 12;
+    const tagX = X0 + Math.max(1, ends.length) * LANE + 2;
+    let last = -Infinity;
+    items.forEach(it => {
+      const tram = lining.querySelector('.tram[data-id="' + it.id + '"]');
+      const tag = lining.querySelector('.tag[data-id="' + it.id + '"]');
+      if (tram) { tram.style.left = (X0 + it.lane * LANE) + 'px'; tram.style.top = it.top + 'px'; tram.style.height = Math.max(8, it.bot - it.top) + 'px'; }
+      if (tag) {
+        const h = tag.offsetHeight || 24;
+        const y = Math.max(it.top - 2, last + 4);
+        tag.style.top = y + 'px'; tag.style.left = tagX + 'px';
+        last = y + h;
+      }
+    });
+  }
+
+  /* ── header ───────────────────────────────────────────── */
+  function renderHeader() {
+    const P = D.project;
+    $('#t-title').textContent = P.title;
+    $('#t-meta').textContent = P.runtime_s + ' s target · ' + P.aspect_ratio + ' · ' + D.scenes.length + ' ' + plural(D.scenes.length, 'scene') + ' · ' + D.shots.length + ' ' + plural(D.shots.length, 'shot');
+    const host = $('#host');
+    const live = !!window.__ikenga_host__;
+    host.dataset.live = live ? '1' : '0';
+    host.innerHTML = live
+      ? '<span class="hdot" aria-hidden="true"></span><span><b>Live in Ikenga</b></span>'
+      : '<span class="hdot" aria-hidden="true"></span><span><b>' + esc((D.host && D.host.label) || 'Claude artifact') + '</b> · your approvals reach akuko on its next action</span>';
+    const b = $('#mode-btn');
+    b.innerHTML = (S.mode === 'dark' ? SUN + 'Light' : MOON + 'Dark');
+    b.setAttribute('aria-label', S.mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+  function renderNext() {
+    const c = counts(), pend = c['pending-review'] || 0, rew = c['needs-rework'] || 0;
+    const sp = awaitingSpend(), ba = pendingAssets().length;
+    const parts = [];
+    let main, btn = '';
+    const nf = (f, n) => '<span data-akuko-field="' + f + '">' + n + '</span>';
+    if (pend) { main = '<strong>' + nf('waiting-shots', pend) + ' ' + plural(pend, 'shot') + '</strong> waiting for you'; btn = '<button class="btn btn-primary btn-sm" type="button" data-act="next" data-k="next">Review next shot</button>'; }
+    else if (sp.length) { main = '<strong>' + nf('waiting-spend', sp.length) + ' spend ' + plural(sp.length, 'decision') + '</strong> waiting for you'; btn = '<button class="btn btn-primary btn-sm" type="button" data-act="next" data-k="next">Open spend gate</button>'; }
+    else if (ba) { main = '<strong>' + nf('waiting-other', ba) + ' bible ' + plural(ba, 'item') + '</strong> waiting for you'; btn = '<button class="btn btn-primary btn-sm" type="button" data-act="next" data-k="next">Open bible</button>'; }
+    else main = 'Nothing waiting on you';
+    if (pend && sp.length) parts.push(nf('waiting-spend', sp.length) + ' spend ' + plural(sp.length, 'decision') + ' (' + esc(money(sp.reduce((a, j) => a + j.estimate, 0))) + ')');
+    if ((pend || sp.length) && ba) parts.push(nf('waiting-other', ba) + ' bible ' + plural(ba, 'item') + ' to review');
+    if (rew) parts.push(rew + ' ' + plural(rew, 'shot') + ' back with akuko');
+    if (!pend && !sp.length && !ba) parts.push('akuko picks up your approvals on its next action');
+    $('#next').innerHTML = '<div class="next-txt"><p class="next-main">' + main + '</p><p class="next-sub">' + parts.join(' · ') + '</p></div>' + btn;
+  }
+  function renderStages() {
+    const c = counts(), ba = pendingAssets().length;
+    $('#stages').innerHTML = D.stages.map(st => {
+      let s = STAGE_TXT[st.state] || st.state, g = '';
+      if (st.state === 'approved') g = glyph('approved');
+      else if (st.state === 'in-review') g = '<span class="g g-now" aria-hidden="true"></span>';
+      else if (st.state === 'in-progress') g = '<span class="g g-prog" aria-hidden="true"></span>';
+      else if (st.state === 'waiting-spend') g = '<span class="g g-money" aria-hidden="true"></span>';
+      else if (st.state === 'locked') g = LOCK;
+      if (st.current) s += ' · ' + c.approved + '/' + D.shots.length + ' approved';
+      if (st.id === 'bible' && ba) s += ' · ' + ba + ' to review';
+      const jobs = D.pending_spend.filter(j => j.stage === st.id);
+      if (jobs.length) {
+        const aw = jobs.filter(j => spendStatus(j) === 'awaiting-approval');
+        if (aw.length) s = 'Spend ' + money(round2(aw.reduce((a, j) => a + j.estimate, 0))) + ' waiting';
+        else if (jobs.some(j => spendStatus(j) === 'approved')) { s = 'Spend approved · queued'; g = glyph('approved'); }
+        else s = 'Spend parked';
+      }
+      const target = jobs.length ? 'spend' : st.id === 'bible' ? 'bible' : st.current ? 'shots' : null;
+      const inner = '<span class="st-top"><span class="st-n">' + pad2(st.n) + '</span><span>' + esc(st.label) + '</span></span><span class="st-s">' + g + '<span>' + esc(s) + '</span></span>';
+      return '<li class="stage" data-state="' + esc(st.state) + '" data-akuko-field="stage" data-akuko-stage="' + st.id + '" data-akuko-status="' + esc(st.state) + '"' + (st.current ? ' aria-current="step"' : '') + '>' +
+        (st.current ? '<span class="vh" data-akuko-field="current-stage" data-akuko-stage="' + st.id + '">current stage</span>' : '') +
+        (target ? '<button class="stage-in" type="button" data-act="stage" data-id="' + target + '" data-k="stage:' + st.id + '">' + inner + '</button>' : '<div class="stage-in">' + inner + '</div>') + '</li>';
+    }).join('');
+  }
+  function effView() { return (!isMobile() && S.view === 'script') ? 'shots' : S.view; }
+  function renderNav() {
+    const c = counts(), ev = effView();
+    const items = [['script', 'Script', 0], ['shots', 'Shots', c['pending-review'] || 0], ['spend', 'Spend', awaitingSpend().length], ['bible', 'Bible', pendingAssets().length], ['ledger', 'Ledger', 0]];
+    $('#desknav').innerHTML = items.map(it => '<button class="dn" type="button" data-act="view" data-id="' + it[0] + '" data-v="' + it[0] + '" data-k="view:' + it[0] + '" aria-pressed="' + (ev === it[0]) + '">' + it[1] +
+      (it[2] ? '<span class="badge">' + it[2] + '<span class="vh"> waiting</span></span>' : '') + '</button>').join('');
+    document.body.dataset.view = ev;
+    document.body.dataset.rail = S.rail;
+    const ba = pendingAssets().length;
+    $('#rail-tabs').innerHTML = [['bible', 'Bible', ba ? '<span class="badge">' + ba + '<span class="vh"> waiting</span></span>' : ''], ['ledger', 'Ledger', '<span class="mono" style="font-size:12px">' + D.ledger.length + '</span>']]
+      .map(t => '<button class="rtab" type="button" role="tab" id="tab-' + t[0] + '" aria-controls="p-' + t[0] + '" aria-selected="' + (S.rail === t[0]) + '" tabindex="' + (S.rail === t[0] ? '0' : '-1') + '" data-act="rail" data-id="' + t[0] + '" data-k="rail:' + t[0] + '">' + t[1] + t[2] + '</button>').join('');
+  }
+
+  /* ── shots ────────────────────────────────────────────── */
+  function renderShots() {
+    const c = counts();
+    $('#cut').textContent = 'Cut ' + clock(cutTotal) + ' of ' + clock(D.project.runtime_s) + ' target';
+    const F = [['all', 'All', D.shots.length], ['pending-review', 'Pending review', c['pending-review'] || 0], ['needs-rework', 'Needs rework', c['needs-rework'] || 0], ['approved', 'Approved', c.approved || 0]];
+    $('#filters').innerHTML = F.map(f => '<button class="fchip" type="button" data-act="filter" data-id="' + f[0] + '" data-k="filter:' + f[0] + '" aria-pressed="' + (S.filter === f[0]) + '">' + (f[0] === 'all' ? '' : glyph(f[0])) + f[1] + ' <span class="mono">' + f[2] + '</span></button>').join('');
+    let h = '';
+    D.scenes.forEach(sc => {
+      const all = D.shots.filter(s => s.scene === sc.id);
+      const vis = all.filter(s => S.filter === 'all' || shotStatus(s.id) === S.filter || s.id === S.sel);
+      if (!vis.length) return;
+      const dur = all.reduce((a, s) => a + s.duration_s, 0);
+      const ap = all.filter(s => shotStatus(s.id) === 'approved').length;
+      h += '<section aria-labelledby="bn-' + sc.id + '" data-akuko-field="scene" data-akuko-unit="' + sc.id + '"><header class="banner"><h3 id="bn-' + sc.id + '"><span class="bn-n">SC ' + sceneN[sc.id] + '</span><span>' + esc(sc.slug) + '</span></h3>' +
+        '<p class="bn-m">' + all.length + ' ' + plural(all.length, 'shot') + ' · <span class="mono">' + clock(dur) + '</span> · ' + ap + '/' + all.length + ' approved' + (vis.length < all.length ? ' · ' + (all.length - vis.length) + ' hidden by filter' : '') + '</p></header>' +
+        '<ol>' + vis.map(shotItem).join('') + '</ol></section>';
+    });
+    $('#shotlist').innerHTML = h || '<p class="empty">No shots match this filter.</p>';
+  }
+  function shotItem(s) {
+    const st = shotStatus(s.id), sel = s.id === S.sel;
+    return '<li class="shot' + (sel ? ' is-sel' : '') + '" id="shot-' + s.id + '" data-akuko-field="shot" data-akuko-unit="' + s.id + '">' +
+      '<button class="shot-row" type="button" data-act="sel" data-id="' + s.id + '" data-k="sel:' + s.id + '" data-hover="' + s.id + '" aria-expanded="' + sel + '"' + (sel ? ' aria-controls="det-' + s.id + '"' : '') + '>' +
+      '<span class="thumb" data-akuko-field="panel">' + panelSVG(s, false) + '</span>' +
+      '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + s.id + '</span><span class="sr-type" data-akuko-field="shot-type">' + esc(s.type) + '</span><span class="sr-tc" data-akuko-field="duration">' + s.duration_s + 's · ' + tc(s._in) + '–' + tc(s._out) + '</span></span>' +
+      '<span class="sr-act">' + esc(s.action) + '</span></span><span data-akuko-field="status" data-akuko-status="' + akStatus(st) + '">' + chip(st) + '</span></button>' +
+      (sel ? detail(s) : '') + '</li>';
+  }
+  function detail(s) {
+    const st = shotStatus(s.id), id = s.id;
+    const MSG = {
+      'pending-review': 'Waiting for your call. Approve the framing, or tell akuko what to change.',
+      'needs-rework': 'Sent back to akuko. It redraws this panel from the notes below on its next action.',
+      'approved': 'Approved. This framing is locked for key frames.'
+    };
+    const isAp = st === 'approved';
+    let rv = '<div class="review"><div class="rv-head"><span data-akuko-field="status" data-akuko-status="' + akStatus(st) + '">' + chip(st) + '</span><p class="rv-msg">' + esc(MSG[st] || '') + '</p></div>' +
+      '<div class="rv-btns">' +
+      '<button class="btn btn-primary" type="button" data-act="approve" data-akuko-action="approve" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="approve:' + id + '" aria-disabled="' + isAp + '">' + (isAp ? 'Approved' : 'Approve') + '</button>' +
+      '<button class="btn" type="button" data-act="request" data-akuko-action="request-changes" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="request:' + id + '">' + (isAp ? 'Reopen · request changes' : 'Request changes') + '</button>' +
+      '<button class="btn btn-ghost" type="button" data-act="note" data-akuko-action="note" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="note:' + id + '">Add a note</button></div>';
+    if (S.compose && S.compose.id === id) {
+      const req = S.compose.mode === 'request';
+      rv += '<form class="composer" data-form="compose" data-id="' + id + '" novalidate>' +
+        '<label class="lbl" for="compose-text">' + (req ? 'What should change? akuko redraws from this note.' : 'Note for akuko (the status stays as it is)') + '</label>' +
+        '<textarea id="compose-text" rows="3" aria-describedby="compose-err" data-akuko-text>' + esc(S.compose.text || '') + '</textarea>' +
+        '<p class="err" id="compose-err" role="alert"></p>' +
+        '<div class="rv-btns"><button class="btn btn-primary" type="submit" data-akuko-submit data-k="c-submit:' + id + '">' + (req ? 'Send back to akuko' : 'Add note') + '</button>' +
+        '<button class="btn btn-ghost" type="button" data-act="c-cancel" data-id="' + id + '" data-k="c-cancel:' + id + '">Cancel</button><span class="kbd-hint">Ctrl + Enter sends · Esc cancels</span></div></form>';
+    }
+    if (S.flash && S.flash.id === id) {
+      const nx = nextPending(id);
+      rv += '<p class="flash" role="status"><span>' + esc(S.flash.text) + '</span>' +
+        (S.prev[id] ? '<button class="linkbtn" type="button" data-act="undo" data-akuko-action="undo" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="undo:' + id + '">Undo</button>' : '') +
+        (nx ? '<button class="linkbtn" type="button" data-act="goto" data-id="' + nx + '" data-k="goto:' + nx + '">Next waiting: ' + nx + '</button>' : '') + '</p>';
+    }
+    rv += '</div>';
+
+    const refs = (s.refs || []).map(r => {
+      const e = bibleById[r];
+      if (!e) return '<span class="ref mono">' + esc(r) + '</span>';
+      const bs = bibleStatus(r);
+      return '<button class="ref" type="button" data-act="ref" data-id="' + r + '" data-k="ref:' + id + ':' + r + '">' + glyph(bs) + esc(e.item.name) + '<span class="vh">, ' + esc((ST[bs] || { label: bs }).label) + '</span></button>';
+    }).join('');
+
+    const job = D.pending_spend.find(j => j.units.indexOf(id) !== -1);
+    let kf = 'Not scheduled yet. No paid key-frame job covers this shot.';
+    if (job) {
+      const js = spendStatus(job);
+      kf = js === 'approved' ? 'Queued. You approved “' + job.label + '”; akuko renders it on its next action.'
+        : js === 'not-now' ? 'On hold. You parked “' + job.label + '”.'
+        : 'Generated after you approve “' + job.label + '” (est. ' + money(job.estimate) + ').';
+    }
+
+    const comments = shotComments(id);
+    const thread = comments.length ? '<ol>' + comments.map(noteItem).join('') + '</ol>' : '<p class="fine" style="margin-top:6px">No notes yet.</p>';
+
+    return '<div class="detail" id="det-' + id + '" role="region" aria-label="Shot ' + id + ' detail" data-akuko-view="shot-detail" data-akuko-unit="' + id + '">' +
+      '<figure class="panel-big" data-akuko-field="panel">' + panelSVG(s, true) + '<figcaption class="panel-cap"><span>Sketch panel · framing diagram drawn from blocking</span><span class="mono">' + esc(s.type) + ' · ' + s.duration_s + ' s</span></figcaption></figure>' +
+      rv +
+      '<dl class="specs">' +
+      '<div><dt>Camera</dt><dd data-akuko-field="camera">' + esc(s.camera) + (s.move ? ' <span class="fine">(' + esc(MOVE[s.move] || s.move) + ')</span>' : '') + '</dd></div>' +
+      '<div><dt>Duration</dt><dd class="mono" data-akuko-field="duration">' + s.duration_s + ' s · ' + tc(s._in) + ' → ' + tc(s._out) + '</dd></div>' +
+      '<div class="wide"><dt>Action</dt><dd data-akuko-field="action">' + esc(s.action) + '</dd></div>' +
+      '<div class="wide"><dt>From the script · scene ' + sceneN[s.scene] + '</dt><dd><blockquote class="quote" data-akuko-field="script-line">' + esc(s.script_line) + '</blockquote>' +
+      '<div class="quote-row"><button class="btn btn-sm" type="button" data-act="toscript" data-id="' + id + '" data-k="toscript:' + id + '">Show in script</button></div></dd></div>' +
+      '<div class="wide"><dt>Draft prompt</dt><dd><pre class="prompt" data-akuko-field="prompt">' + esc(s.prompt) + '</pre><p class="fine prompt-note">Draft only. Nothing is sent to a paid model until a spend is approved.</p></dd></div>' +
+      '<div class="wide"><dt>Bible refs</dt><dd><div class="refs" data-akuko-field="refs">' + refs + '</div></dd></div>' +
+      '<div class="wide"><dt>Key frame</dt><dd class="kf"><div class="ph-frame" data-st="not-started">Key frame<small>not generated</small></div><p class="fine" style="font-size:13px">' + esc(kf) + '</p></dd></div>' +
+      '</dl>' +
+      '<section class="thread" aria-label="Notes on ' + id + '" data-akuko-field="comments"><h4 class="sub-h">Notes <span class="mono">' + comments.length + '</span></h4>' + thread + '</section>' +
+      '</div>';
+  }
+  function stageLabel(sid) { return stageById[sid] ? stageById[sid].label : sid; }
+  function noteItem(n) {
+    const k = n.kind || 'note';
+    if (k === 'approve') return '<li class="nt nt-ev">' + glyph('approved') + '<span><b>' + esc(n.author) + '</b> approved this panel</span><span class="nt-t mono">' + esc(when(n.ts)) + '</span></li>';
+    return '<li class="nt' + (k === 'request' ? ' nt-req' : '') + '"><div class="nt-h">' + (k === 'request' ? glyph('needs-rework') : '') +
+      '<span><b>' + esc(n.author) + '</b>' + (k === 'request' ? ' requested changes' : '') + '</span><span class="nt-t mono">' + esc(when(n.ts)) + '</span>' +
+      (n.stage ? '<span class="nt-s">' + esc(stageLabel(n.stage)) + '</span>' : '') + '</div><p class="nt-b">' + esc(n.text) + '</p></li>';
+  }
+
+  /* ── spend gate ───────────────────────────────────────── */
+  function renderGate() {
+    const b = D.budget, jobs = D.pending_spend;
+    const sum = f => jobs.filter(f).reduce((a, j) => a + (j.approved_max != null && f === isApproved ? j.approved_max : j.estimate), 0);
+    const isApproved = j => spendStatus(j) === 'approved';
+    const awaiting = sum(j => spendStatus(j) === 'awaiting-approval');
+    const committed = sum(isApproved);
+    const left = b.cap - b.spent - committed - awaiting;
+    const pct = v => Math.max(0, Math.min(100, v / b.cap * 100)).toFixed(2);
+    const nAw = jobs.filter(j => spendStatus(j) === 'awaiting-approval').length;
+    let h = '<div class="gate-head"><h2 class="rh" id="h-spend" tabindex="-1">Spend gate</h2><span class="gate-n">' + (nAw ? nAw + ' waiting for you' : 'Nothing waiting') + '</span></div>';
+    h += jobs.length ? jobs.map(jobCard).join('') : '<p class="fine" style="margin-top:10px">No paid jobs queued.</p>';
+    const aria = 'Budget: ' + money(b.spent) + ' spent' + (committed ? ', ' + money(committed) + ' approved and not yet charged' : '') + (awaiting ? ', ' + money(awaiting) + ' waiting for approval' : '') + ', ' + money(left) + ' left of a ' + money(b.cap) + ' cap.';
+    h += '<div class="meter"><div class="meter-h"><h3 class="sub-h">Budget</h3><span class="mono" data-akuko-field="cap">cap ' + money(b.cap) + ' ' + esc(b.currency) + '</span></div>' +
+      '<div class="bar" role="img" aria-label="' + esc(aria) + '">' +
+      [['spent', b.spent], ['commit', committed], ['pend', awaiting]].filter(x => x[1] > 0).map(x => '<span class="seg seg-' + x[0] + '" style="width:' + pct(x[1]) + '%"></span>').join('') + '</div>' +
+      '<dl class="mrows"><dt><span class="sw sw-spent"></span>Spent so far</dt><dd class="money" data-akuko-field="spent">' + money(b.spent) + '</dd>' +
+      (committed ? '<dt><span class="sw sw-commit"></span>Approved, not yet charged</dt><dd class="money">' + money(committed) + '</dd>' : '') +
+      (awaiting ? '<dt><span class="sw sw-pend"></span>Waiting for your approval</dt><dd class="money">' + money(awaiting) + '</dd>' : '') +
+      '<dt class="tot">' + (awaiting ? 'Left if you approve' : 'Left') + '</dt><dd class="tot money" data-akuko-field="left-if-approved">' + money(left) + '</dd></dl>' +
+      (D._note ? '<p class="fine">' + esc(D._note) + '</p>' : '') + '</div>';
+    $('#p-spend').innerHTML = h;
+  }
+  function jobCard(j) {
+    const st = spendStatus(j), stg = stageById[j.stage];
+    const units = j.units.map(u => '<button class="unit" type="button" data-act="sel-unit" data-id="' + u + '" data-k="unit:' + j.id + ':' + u + '">' + glyph(shotsById[u] ? shotStatus(u) : 'not-started') + esc(u) + '</button>').join('');
+    let act;
+    if (st === 'approved') act = '<p class="job-done">' + glyph('approved') + ' Approved. akuko runs this on its next action; nothing is charged until it does.</p><div class="job-act"><button class="btn btn-sm" type="button" data-act="spend-reset" data-akuko-action="undo" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="spend-reset:' + j.id + '">Undo approval</button></div>';
+    else if (st === 'not-now') act = '<p class="job-done">Parked. akuko won’t run this until you approve it.</p><div class="job-act"><button class="btn btn-sm" type="button" data-act="spend-reset" data-akuko-action="undo" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="spend-reset:' + j.id + '">Reconsider</button></div>';
+    else act = '<div class="job-act"><button class="btn btn-primary" type="button" data-act="spend-ok" data-akuko-action="approve-spend" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="spend-ok:' + j.id + '">Approve spend · ' + money(j.estimate) + '</button><button class="btn" type="button" data-act="spend-no" data-akuko-action="decline-spend" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="spend-no:' + j.id + '">Not now</button></div>';
+    return '<article class="job" data-st="' + esc(st) + '" aria-labelledby="job-' + j.id + '" data-akuko-field="job" data-akuko-unit="' + j.id + '">' +
+      '<p class="job-kicker">' + esc(stg ? stg.label : j.stage) + ' · paid job</p>' +
+      '<h3 class="job-label" id="job-' + j.id + '">' + esc(j.label) + '</h3>' +
+      '<div class="est"><span class="est-k">' + (st === 'approved' ? 'Approved estimate' : 'Estimate') + '</span><span class="est-v money" data-akuko-field="estimate" data-akuko-unit="' + j.id + '">' + money(j.estimate) + '</span><span class="est-c">' + esc(D.budget.currency) + ' · not a charge</span></div>' +
+      '<dl class="facts"><dt>Shots</dt><dd><span class="units">' + units + '</span></dd><dt>Provider</dt><dd>' + esc(j.provider) + '</dd><dt>Model</dt><dd class="mono" style="font-size:13px">' + esc(j.model) + '</dd></dl>' +
+      act + '</article>';
+  }
+
+  /* ── bible ────────────────────────────────────────────── */
+  function usedIn(bid) { return D.shots.filter(s => (s.refs || []).indexOf(bid) !== -1).length; }
+  function bibEntry(it, kind) {
+    const bs = bibleStatus(it.id);
+    let frames;
+    if (it.assets && it.assets.length) {
+      frames = it.assets.map((a, i) => {
+        const ast = assetStatus(it.id, i);
+        return '<figure><div class="ph-frame ph-' + esc(a.kind) + '" data-st="' + esc(ast) + '">' + esc(KIND[a.kind] || a.kind) + '<small>no image in this board</small></div><figcaption>' + chip(ast) + '</figcaption></figure>';
+      }).join('');
+    } else {
+      frames = '<figure><div class="ph-frame" data-st="not-started">' + (kind === 'character' ? 'Turnaround sheet' : 'Location plate') + '<small>generated on approval</small></div></figure>';
+    }
+    let acts = '';
+    (it.assets || []).forEach((a, i) => {
+      const key = it.id + ':' + i, ast = assetStatus(it.id, i), lab = KIND[a.kind] || a.kind;
+      if (ast === 'pending-review') acts += '<div class="bib-act"><span>' + esc(lab) + ' is waiting for you</span><button class="btn btn-sm btn-primary" type="button" data-act="asset-ok" data-akuko-action="approve" data-akuko-unit="' + esc(it.assets[i].id) + '" data-id="' + key + '" data-k="asset-ok:' + key + '">Approve ' + esc(lab.toLowerCase()) + '</button></div>';
+      else if (S.assetPrev[key]) acts += '<div class="bib-act" role="status"><span>' + esc(lab) + ' approved.</span><button class="linkbtn" type="button" data-act="asset-undo" data-akuko-action="undo" data-akuko-unit="' + esc(it.assets[i].id) + '" data-id="' + key + '" data-k="asset-undo:' + key + '">Undo</button></div>';
+    });
+    const n = usedIn(it.id);
+    return '<article class="bib" id="bib-' + it.id + '" tabindex="-1" aria-labelledby="bnm-' + it.id + '" data-akuko-field="bible-entry" data-akuko-unit="' + it.id + '" data-akuko-status="' + esc(it._status) + '">' +
+      '<div class="bib-h"><h4 class="bib-name" id="bnm-' + it.id + '">' + esc(it.name) + '</h4>' + chip(bs) + '</div>' +
+      (it.role ? '<p class="bib-role">' + esc(it.role) + '</p>' : '') +
+      '<p class="bib-d">' + esc(it.description) + '</p>' +
+      '<div class="bib-frames">' + frames + '</div>' + acts +
+      '<p class="bib-use">Referenced by ' + n + ' ' + plural(n, 'shot') + '</p></article>';
+  }
+  function renderBible() {
+    const P = D.project, B = D.bible;
+    let h = '<div class="rp-body"><h2 class="rh rh-tabbed" id="h-bible" tabindex="-1">Bible</h2>' +
+      '<section class="bib-group" aria-labelledby="bg-story"><h3 class="bib-gh" id="bg-story">Story</h3><p class="logline">' + esc(P.logline) + '</p><p class="fine">' + esc(P.source) + '</p></section>' +
+      '<section class="bib-group" aria-labelledby="bg-char"><h3 class="bib-gh" id="bg-char"><span>Characters</span><span class="mono">' + B.characters.length + '</span></h3>' + B.characters.map(c => bibEntry(c, 'character')).join('') + '</section>' +
+      '<section class="bib-group" aria-labelledby="bg-loc"><h3 class="bib-gh" id="bg-loc"><span>Locations</span><span class="mono">' + B.locations.length + '</span></h3>' + B.locations.map(l => bibEntry(l, 'location')).join('') + '</section>';
+    if (B.style) {
+      const n = usedIn(B.style.id);
+      h += '<section class="bib-group" aria-labelledby="bg-style"><h3 class="bib-gh" id="bg-style"><span>Style</span></h3>' +
+        '<article class="bib" id="bib-' + B.style.id + '" tabindex="-1" aria-labelledby="bnm-' + B.style.id + '" data-akuko-field="bible-entry" data-akuko-unit="' + B.style.id + '" data-akuko-status="' + esc(B.style._status) + '"><div class="bib-h"><h4 class="bib-name" id="bnm-' + B.style.id + '">' + esc(B.style.name) + '</h4>' + chip(B.style.status) + '</div>' +
+        '<ul class="look">' + (B.style.notes || []).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul><p class="bib-use">Referenced by ' + n + ' ' + plural(n, 'shot') + '</p></article></section>';
+    }
+    $('#p-bible').innerHTML = h + '</div>';
+  }
+
+  /* ── ledger ───────────────────────────────────────────── */
+  function renderLedger() {
+    const rows = D.ledger.map(r => {
+      const parts = String(r.unit).split(' · ');
+      const e = bibleById[parts[0]];
+      const name = e ? e.item.name + (parts[1] ? ' · ' + parts[1] : '') : r.unit;
+      const d = new Date(r.ts);
+      const t = isNaN(d) ? '' : pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+      const day = isNaN(d) ? '' : MON[d.getUTCMonth()] + ' ' + d.getUTCDate();
+      return '<tr data-akuko-field="ledger-entry"><td class="lt mono">' + t + '<small>' + day + '</small></td><td class="lu">' + esc(name) + '<small>' + esc(r.unit) + ' · ' + esc(r.provider) + '</small></td><td class="amt money">' + money(r.actual) + '</td></tr>';
+    }).join('');
+    const total = D.ledger.reduce((a, r) => a + r.actual, 0);
+    const match = Math.abs(total - D.budget.spent) < 0.005;
+    $('#p-ledger').innerHTML = '<div class="rp-body"><div class="rp-h"><h2 class="rh rh-tabbed" id="h-ledger" tabindex="-1">Ledger</h2><span class="fine">' + D.ledger.length + ' paid ' + plural(D.ledger.length, 'call') + '</span></div>' +
+      '<table class="ledger"><caption class="vh">Paid calls so far</caption><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Unit</th><th scope="col" class="amt">Charged</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody><tfoot><tr><th scope="row" colspan="2">Total charged</th><td class="amt money" data-akuko-field="ledger-total">' + money(total) + '</td></tr></tfoot></table>' +
+      '<p class="check">' + (match ? glyph('approved') + '<span>Matches the budget’s spent figure (' + money(D.budget.spent) + ').</span>' : glyph('needs-rework') + '<span>Budget says ' + money(D.budget.spent) + ' spent; the ledger totals ' + money(total) + '.</span>') + '</p>' +
+      (D._note ? '<p class="fine" style="margin-top:8px">' + esc(D._note) + '</p>' : '') + '</div>';
+  }
+
+  /* ── footer ───────────────────────────────────────────── */
+  let resetArmed = false;
+  function renderFoot() {
+    let man = {};
+    try { man = JSON.parse($('#ikenga-manifest').textContent); } catch (e) { man = {}; }
+    $('#foot').innerHTML = '<span>' + (store.ok ? 'Your decisions are saved in this browser.' : 'Not saved: this browser blocks storage, so changes last until you close the page.') + '</span>' +
+      '<span class="mono">' + esc(D.project.slug) + ' · schema ' + esc(D.schema_version) + ' · ' + esc(man.name || '') + ' ' + esc(man.version || '') + '</span><span class="sp"></span>' +
+      (W.store() === 'outbox' ? '<button class="linkbtn" type="button" data-act="export" data-akuko-export data-k="export">Copy decisions for akuko (' + W.all().length + ')</button>' : '') +
+      '<button class="linkbtn" type="button" data-act="reset" data-k="reset">' + (resetArmed ? 'Click again to clear your changes' : 'Reset board to the fixture') + '</button>';
+  }
+
+  /* ── render + focus continuity ────────────────────────── */
+  function renderAll(fallbackFocus) {
+    const ae = document.activeElement;
+    const k = ae && ae.dataset ? ae.dataset.k : null;
+    document.documentElement.setAttribute('data-mode', S.mode);
+    renderHeader(); renderNext(); renderStages(); renderNav();
+    paintScript(); renderShots(); renderGate(); renderBible(); renderLedger(); renderFoot();
+    const want = k || fallbackFocus;
+    if (want && (!ae || !document.body.contains(ae) || ae === document.body || k)) {
+      const el = document.querySelector('[data-k="' + want.replace(/"/g, '\\"') + '"]');
+      if (el && el !== ae) el.focus({ preventScroll: true });
+      else if (!el && fallbackFocus) { const fb = document.querySelector('[data-k="' + fallbackFocus + '"]'); if (fb) fb.focus({ preventScroll: true }); }
+    }
+    requestAnimationFrame(layoutLining);
+  }
+  function commit(fallbackFocus) { save(); renderAll(fallbackFocus); }
+
+  function scrollParent(el) {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowY;
+      if ((o === 'auto' || o === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+    }
+    return null;
+  }
+  function reveal(el, block) {
+    if (!el) return;
+    const sc = scrollParent(el);
+    const scrolls = !!sc;
+    const r = el.getBoundingClientRect();
+    const box = scrolls ? sc.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    const topPad = scrolls ? 64 : (isMobile() ? 130 : 16);
+    if (r.top >= box.top + topPad && r.bottom <= box.bottom - 12) return;
+    el.scrollIntoView({ block: block || 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+  }
+  function pulseLine(id) {
+    const ln = document.getElementById('ln-' + id);
+    if (!ln) return;
+    ln.classList.remove('pulse'); void ln.offsetWidth; ln.classList.add('pulse');
+  }
+
+  /* ── actions ──────────────────────────────────────────── */
+  function selectShot(id, from, opts) {
+    if (!shotsById[id]) return;
+    const toggle = from === 'row' && S.sel === id;
+    S.sel = toggle ? null : id;
+    if (!S.compose || S.compose.id !== S.sel) S.compose = null;
+    if (!S.flash || S.flash.id !== S.sel) S.flash = null;
+    if (!isWide() && !(isMobile() && from === 'toscript')) {
+      if (isMobile() ? (from !== 'row') : (S.view !== 'script' && S.view !== 'shots')) S.view = 'shots';
+    }
+    save();
+    renderAll((opts && opts.focus) || null);
+    if (toggle) return;
+    requestAnimationFrame(() => {
+      const row = $('#shot-' + id + ' .shot-row');
+      if (from !== 'row') reveal(row, 'start');
+      if (from === 'row' && row) reveal(row, 'nearest');
+      if (isWide() || (!isMobile())) reveal(document.getElementById('ln-' + id), 'center');
+    });
+  }
+  function noteFor(kind, text) {
+    return { nid: 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(), stage: currentStage.id, author: 'You', kind: kind, text: text || '' };
+  }
+  function setShot(id, st, kind, text) {
+    const prevSt = shotStatus(id);
+    const n = noteFor(kind, text);
+    (S.notes[id] = S.notes[id] || []).push(n);
+    if (st) { if (st === shotsById[id].status) delete S.status[id]; else S.status[id] = st; }
+    S.prev[id] = { st: prevSt, nid: n.nid };
+    decide({ action: kind === 'request' ? 'request-changes' : kind, unit: id, stage: shotsById[id].stage, text: text || '' });
+  }
+  function openGate() {
+    if (!isWide()) S.view = 'spend';
+    save(); renderAll();
+    requestAnimationFrame(() => { const h = $('#h-spend'); if (h) { reveal(h, 'start'); h.focus({ preventScroll: true }); } });
+  }
+  function openBible(bid) {
+    S.rail = 'bible';
+    if (!isWide()) S.view = 'bible';
+    save(); renderAll();
+    requestAnimationFrame(() => {
+      const el = document.getElementById('bib-' + bid);
+      if (!el) return;
+      el.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+      el.focus({ preventScroll: true });
+    });
+  }
+  function submitCompose(form) {
+    const id = form.dataset.id, ta = $('#compose-text', form), text = ta.value.trim();
+    if (!S.compose) return;
+    if (!text) {
+      $('#compose-err', form).textContent = S.compose.mode === 'request' ? 'Say what should change, so akuko can act on it.' : 'Write the note first.';
+      ta.setAttribute('aria-invalid', 'true'); ta.focus(); return;
+    }
+    if (S.compose.mode === 'request') { setShot(id, 'needs-rework', 'request', text); S.flash = { id: id, text: 'Sent back to akuko with your note.' }; announce(id + ' sent back to akuko'); }
+    else { setShot(id, null, 'note', text); S.flash = { id: id, text: 'Note added to the thread.' }; announce('Note added to ' + id); }
+    S.compose = null;
+    commit('approve:' + id);
+  }
+
+  document.addEventListener('click', e => {
+    const t = e.target.closest('[data-act]');
+    if (!t) {
+      const ln = e.target.closest('#page .ln');
+      if (ln) selectShot(ln.dataset.shot, 'script');
+      return;
+    }
+    const a = t.dataset.act, id = t.dataset.id;
+    if (t.getAttribute('aria-disabled') === 'true') return;
+    if (a !== 'reset' && resetArmed) { resetArmed = false; }
+    switch (a) {
+      case 'sel': selectShot(id, 'row'); break;
+      case 'sel-tag': selectShot(id, 'script', { focus: 'tag:' + id }); break;
+      case 'sel-unit': case 'goto': selectShot(id, 'gate', { focus: 'sel:' + id }); break;
+      case 'approve':
+        setShot(id, 'approved', 'approve', '');
+        S.compose = null; S.flash = { id: id, text: 'Approved. akuko picks this up on its next action.' };
+        announce(id + ' approved'); commit('approve:' + id); break;
+      case 'request': case 'note':
+        S.compose = { id: id, mode: a, text: (S.compose && S.compose.id === id && S.compose.mode === a) ? S.compose.text : '' };
+        S.flash = null; renderAll();
+        requestAnimationFrame(() => { const ta = $('#compose-text'); if (ta) ta.focus(); });
+        break;
+      case 'c-cancel': S.compose = null; renderAll((S.sel ? 'approve:' + S.sel : null)); break;
+      case 'undo': {
+        const p = S.prev[id]; if (!p) return;
+        if (p.st === shotsById[id].status) delete S.status[id]; else S.status[id] = p.st;
+        if (S.notes[id]) { S.notes[id] = S.notes[id].filter(n => n.nid !== p.nid); if (!S.notes[id].length) delete S.notes[id]; }
+        delete S.prev[id]; S.flash = null;
+        const ud = lastDecision(id); if (ud) decide({ action: 'undo', unit: id, stage: shotsById[id].stage, undoes: ud.id });
+        announce('Undone. ' + id + ' is ' + ST[shotStatus(id)].label.toLowerCase()); commit('approve:' + id); break;
+      }
+      case 'next': {
+        const n = nextPending(S.sel);
+        if (n) selectShot(n, 'gate', { focus: 'sel:' + n });
+        else if (S.sel && shotStatus(S.sel) === 'pending-review') selectShot(S.sel, 'gate', { focus: 'sel:' + S.sel });
+        else if (awaitingSpend().length) openGate();
+        else if (pendingAssets().length) openBible(pendingAssets()[0].bid);
+        break;
+      }
+      case 'toscript': {
+        if (isMobile()) { S.view = 'script'; save(); renderAll(); }
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          layoutLining();
+          const ln = document.getElementById('ln-' + id);
+          if (ln) { ln.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' }); pulseLine(id); }
+          const tag = $('.tag[data-id="' + id + '"]'); if (tag) tag.focus({ preventScroll: true });
+        }));
+        break;
+      }
+      case 'ref': openBible(id); break;
+      case 'filter': S.filter = id; commit('filter:' + id); break;
+      case 'view': {
+        S.view = id; save(); renderAll('view:' + id);
+        const target = { script: '#script', shots: '#shots', spend: '#p-spend', bible: '#p-bible', ledger: '#p-ledger' }[id];
+        if (isMobile()) { const nav = $('#desknav'); const y = nav.getBoundingClientRect().top + window.scrollY; if (window.scrollY > y) window.scrollTo({ top: y, behavior: 'auto' }); }
+        if (id === 'shots') requestAnimationFrame(() => { if (S.sel) reveal($('#shot-' + S.sel + ' .shot-row'), 'start'); });
+        if (id === 'script') requestAnimationFrame(() => { layoutLining(); });
+        void target; break;
+      }
+      case 'rail': S.rail = id; commit('rail:' + id); break;
+      case 'stage': if (id === 'spend') openGate(); else if (id === 'bible') openBible((pendingAssets()[0] || { bid: '' }).bid); else { if (!isWide()) S.view = 'shots'; save(); renderAll(); requestAnimationFrame(() => { const h = $('#h-shots'); if (h) reveal(h, 'start'); }); } break;
+      case 'spend-ok': {
+        const j = D.pending_spend.find(x => x.id === id); if (!j) return;
+        S.spend[id] = 'approved'; decide({ action: 'approve-spend', unit: id, stage: j.stage, text: 'approve ' + gateNum(j.approved_max != null ? j.approved_max : j.estimate) + ' ' + D.budget.currency });
+        announce('Spend approved: ' + money(j.estimate) + ' for ' + j.label); commit('spend-reset:' + id); break;
+      }
+      case 'spend-no': { const j = D.pending_spend.find(x => x.id === id); S.spend[id] = 'not-now'; if (j) decide({ action: 'decline-spend', unit: id, stage: j.stage }); announce('Spend parked'); commit('spend-reset:' + id); break; }
+      case 'spend-reset': { delete S.spend[id]; const sd = lastDecision(id), j = D.pending_spend.find(x => x.id === id); if (sd && j) decide({ action: 'undo', unit: id, stage: j.stage, undoes: sd.id }); announce('Spend is waiting for your decision again'); commit('spend-ok:' + id); break; }
+      case 'asset-ok': {
+        const parts = id.split(':'); S.assetPrev[id] = assetStatus(parts[0], +parts[1]);
+        S.asset[id] = 'approved'; { const a = bibleById[parts[0]].item.assets[+parts[1]]; decide({ action: 'approve', unit: a.id, stage: a.stage }); } announce('Bible item approved'); commit('asset-undo:' + id); break;
+      }
+      case 'asset-undo': {
+        const parts = id.split(':'), orig = bibleById[parts[0]].item.assets[+parts[1]].status, pv = S.assetPrev[id];
+        if (pv === orig) delete S.asset[id]; else S.asset[id] = pv;
+        delete S.assetPrev[id]; { const a = bibleById[parts[0]].item.assets[+parts[1]], ad = lastDecision(a.id); if (ad) decide({ action: 'undo', unit: a.id, stage: a.stage, undoes: ad.id }); } announce('Undone'); commit('asset-ok:' + id); break;
+      }
+      case 'mode': S.mode = S.mode === 'dark' ? 'light' : 'dark'; commit('mode'); break;
+      case 'export': try { navigator.clipboard.writeText(W.jsonl()); announce('Decisions copied. Paste them to akuko.'); } catch (e) { announce('Copy failed'); } break;
+      case 'reset':
+        if (!resetArmed) { resetArmed = true; renderFoot(); const rb = $('[data-k="reset"]'); if (rb) rb.focus(); setTimeout(() => { if (resetArmed) { resetArmed = false; renderFoot(); } }, 5000); return; }
+        resetArmed = false; store.clear();
+        S.status = {}; S.notes = {}; S.asset = {}; S.spend = {}; S.prev = {}; S.assetPrev = {}; S.compose = null; S.flash = null; S.filter = 'all';
+        announce('Board reset to the fixture'); commit('reset'); break;
+    }
+  });
+  document.addEventListener('submit', e => {
+    const f = e.target.closest('form[data-form="compose"]');
+    if (!f) return;
+    e.preventDefault(); submitCompose(f);
+  });
+  document.addEventListener('input', e => {
+    if (e.target.id === 'compose-text' && S.compose) {
+      S.compose.text = e.target.value;
+      if (e.target.value.trim()) { e.target.removeAttribute('aria-invalid'); const er = $('#compose-err'); if (er) er.textContent = ''; }
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.target.id === 'compose-text') {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitCompose(e.target.form); return; }
+      if (e.key === 'Escape') { e.preventDefault(); const id = S.compose && S.compose.id; S.compose = null; renderAll(id ? 'approve:' + id : null); return; }
+    }
+    if (e.target.getAttribute && e.target.getAttribute('role') === 'tab' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
+      e.preventDefault();
+      const tabs = $$('#rail-tabs [role="tab"]'), i = tabs.indexOf(e.target);
+      const n = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      S.rail = tabs[n].dataset.id; commit('rail:' + S.rail);
+    }
+  });
+
+  /* linked hover: script line <-> tramline <-> shot row */
+  let hoverId = null;
+  function paintHover() {
+    $$('.is-hint').forEach(el => el.classList.remove('is-hint'));
+    if (!hoverId) return;
+    const ln = document.getElementById('ln-' + hoverId); if (ln) ln.classList.add('is-hint');
+    $$('#lining [data-id="' + hoverId + '"]').forEach(el => el.classList.add('is-hint'));
+    const row = $('#shot-' + hoverId + ' > .shot-row'); if (row) row.classList.add('is-hint');
+  }
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest ? e.target.closest('[data-hover]') : null;
+    const id = el ? el.dataset.hover : null;
+    if (id !== hoverId) { hoverId = id; paintHover(); }
+  });
+
+  /* ── boot ─────────────────────────────────────────────── */
+  buildScript();
+  renderAll();
+  const relayout = () => requestAnimationFrame(layoutLining);
+  if (window.ResizeObserver) new ResizeObserver(relayout).observe($('#paper'));
+  window.addEventListener('resize', relayout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(relayout).catch(() => {});
+  const onMq = () => { renderNav(); relayout(); };
+  [mqMobile, mqWide].forEach(mq => { if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq); });
+  window.addEventListener('load', () => { renderHeader(); relayout(); });
+  requestAnimationFrame(() => {
+    layoutLining();
+    if (S.sel && !isMobile()) {
+      const row = $('#shot-' + S.sel + ' .shot-row');
+      if (row) row.scrollIntoView({ block: 'start' });
+      const ln = document.getElementById('ln-' + S.sel);
+      if (ln) { const sc = $('#script-scroll'); if (sc) sc.scrollTop = Math.max(0, ln.getBoundingClientRect().top - sc.getBoundingClientRect().top - sc.clientHeight / 3); }
+      window.scrollTo(0, 0);
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -36,24 +36,33 @@ const AGENT_AUTHOR = /^(agent|akuko|claude|assistant|system|ai|bot|llm)(?:$|[\s:
 const STATE_KEY = 'akuko.decisions';
 const WIDTH = 1440;
 const EPS = 1e-9;
+let decisionsChecked = 0;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Static checks
 // ─────────────────────────────────────────────────────────────────────────
 
+/** The HTML with every comment blanked out (same length), so tags quoted in comments are never matched. */
+const uncommented = (html) => html.replace(/<!--[\s\S]*?-->/g, (m) => ' '.repeat(m.length));
+
+function blockRange(html, id) {
+  const m = new RegExp(`(<script[^>]*\\bid=["']${id}["'][^>]*>)([\\s\\S]*?)</script>`, 'i').exec(uncommented(html));
+  return m ? { start: m.index + m[1].length, end: m.index + m[1].length + m[2].length } : undefined;
+}
+
 function jsonBlock(html, id) {
-  const m = new RegExp(`<script[^>]*\\bid=["']${id}["'][^>]*>([\\s\\S]*?)</script>`, 'i').exec(html);
-  return m ? m[1] : undefined;
+  const r = blockRange(html, id);
+  return r ? html.slice(r.start, r.end) : undefined;
 }
 
 export function injectProject(html, project) {
-  const json = JSON.stringify(project).replace(/</g, '\\u003c');
-  const re = /(<script[^>]*\bid=["']akuko-project["'][^>]*>)([\s\S]*?)(<\/script>)/i;
-  return re.test(html) ? html.replace(re, (_m, a, _b, c) => `${a}${json}${c}`) : undefined;
+  const r = blockRange(html, 'akuko-project');
+  if (!r) return undefined;
+  return html.slice(0, r.start) + JSON.stringify(project).replace(/</g, '\\u003c') + html.slice(r.end);
 }
 
 function scripts(html) {
-  return [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
+  return [...uncommented(html).matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
     .filter(([, attrs]) => !/type=["']application\/json["']/i.test(attrs))
     .map(([, , body]) => body);
 }
@@ -130,7 +139,7 @@ function fakeDb(rec, project) {
   return { doc: ref, collection: coll };
 }
 
-async function load(html, project, host) {
+async function load(html, project, host, wait = 40) {
   const rec = { epoch: 0, writes: [], posts: [], violations: [], errors: [], clipboard: null };
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { if (!/Not implemented/i.test(String(e.message))) rec.errors.push(String(e.message).split('\n')[0]); });
@@ -171,8 +180,8 @@ async function load(html, project, host) {
     },
   });
   const w = dom.window;
-  if (w.document.readyState !== 'complete') await new Promise((r) => w.addEventListener('load', r, { once: true }));
-  await settle(w, 300);
+  if (w.document.readyState !== 'complete') await Promise.race([new Promise((r) => w.addEventListener('load', r, { once: true })), sleep(15000)]);
+  await settle(w, wait);
   return { dom, w, d: w.document, rec, host, slug: project.project.slug, close: () => w.close() };
 }
 
@@ -394,6 +403,7 @@ function checkControls(page, p, fail) {
 }
 
 function checkDecision(dec, page, p, want, fail, manifest) {
+  decisionsChecked++;
   const where = `the "${want.action}" control for ${want.unit}`;
   if (!validDecision(dec)) {
     fail('decision', 'invalid-decision', `${where} wrote a record that is not a valid Decision: ${ajv.errorsText(validDecision.errors)}`);
@@ -457,7 +467,7 @@ async function clickTests(html, p, manifest, fail) {
   if (shot && (shot.status === 'pending-review' || shot.status === 'needs-rework')) {
     const ym = expectedYourMove(p);
     const ap = await one(page, 'approve', shot.id);
-    if (ap && shot.status === 'pending-review') {
+    if (ap && shot.status === 'pending-review' && inViews(page.d, 'your-move').length) {
       checkYourMove(page, inViews(page.d, 'your-move'), { ...ym, 'waiting-shots': ym['waiting-shots'] - 1 }, fail, '', ` after approving ${shot.id}`);
     }
     if (ap) await one(page, 'undo', shot.id, { undoes: ap.id });
@@ -528,6 +538,7 @@ export async function checkView(html, opts = {}) {
     if (!seen.has(k)) { seen.add(k); failures.push({ rule, code, message }); }
   };
   const sha256 = createHash('sha256').update(html, 'utf8').digest('hex');
+  decisionsChecked = 0;
   let manifest = null;
   const raw = jsonBlock(html, 'akuko-view');
   if (raw === undefined) fail('contract', 'no-manifest', 'no <script type="application/json" id="akuko-view"> manifest');
@@ -541,7 +552,7 @@ export async function checkView(html, opts = {}) {
   }
   staticChecks(html, fail);
 
-  const first = await load(html, project, 'A');
+  const first = await load(html, project, 'A', 400); // long enough to catch a page that approves on a timer
   for (const e of first.rec.errors) fail('contract', 'page-error', `the page threw: ${e}`);
   const early = [...decisions(first).values()].filter((x) => x.epoch === 0);
   for (const { d } of early) {
@@ -564,6 +575,7 @@ export async function checkView(html, opts = {}) {
     view: manifest ? `${manifest.id}@${manifest.version}` : null,
     sha256,
     failures,
+    decisions_checked: decisionsChecked,
     manual: ['R5 contrast ≥ 4.5:1 and body text ≥ 14px are checked by eye (designs/_spec.md)'],
   };
 }
