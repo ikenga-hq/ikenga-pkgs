@@ -16,7 +16,8 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
-import { assetDir, assetId, buildAsset, decisionsNotImplemented, safeBasename } from './shared.ts';
+import { readJsonlStore } from '../decisions/jsonl.ts';
+import { assetDir, assetId, buildAsset, safeBasename } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 
 export const PROJECT_FILE = 'akuko.json';
@@ -120,9 +121,9 @@ export class LocalHost implements HostAdapter {
     return { path };
   }
 
-  /** Delegates to `decisions/jsonl.ts` (`<project>/decisions.jsonl`) — WP-07a. */
-  async readDecisions(_since?: string): Promise<Decision[]> {
-    return decisionsNotImplemented('B');
+  /** Delegates to `decisions/jsonl.ts`: `<project>/decisions.jsonl`. `since` is a `jsonl:<offset>` cursor. */
+  async readDecisions(since?: string): Promise<Decision[]> {
+    return (await readJsonlStore(this.projectDir, since)).decisions;
   }
 }
 

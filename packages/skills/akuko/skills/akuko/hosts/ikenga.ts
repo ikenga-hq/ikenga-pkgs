@@ -15,18 +15,38 @@
  */
 
 import type { Decision } from '../schema/akuko-project.ts';
+import { readIkengaStore } from '../decisions/ikenga.ts';
 import { LocalHost, type LocalHostOptions } from './local.ts';
-import { decisionsNotImplemented } from './shared.ts';
 import type { HostAdapter } from './types.ts';
 
+export interface IkengaHostOptions extends LocalHostOptions {
+  /**
+   * Output of `iyke iframe-state <pane>` for the pane showing the board, or
+   * undefined when no pane is open. Without it only the mirror is read.
+   */
+  readIframeState?: () => Promise<string | undefined>;
+}
+
 export class IkengaHost extends LocalHost {
-  /** Delegates to `decisions/ikenga.ts` (bridge-published state mirrored to `decisions.jsonl`) — WP-07a. */
-  override async readDecisions(_since?: string): Promise<Decision[]> {
-    return decisionsNotImplemented('C');
+  private readonly readIframeState: (() => Promise<string | undefined>) | undefined;
+
+  constructor(opts: IkengaHostOptions) {
+    super(opts);
+    this.readIframeState = opts.readIframeState;
+  }
+
+  /**
+   * Delegates to `decisions/ikenga.ts`: decisions the pane published
+   * (`akuko.decisions` in `iyke iframe-state`) are mirrored into
+   * `decisions.jsonl`, then the mirror is read. `since` is a `jsonl:<offset>` cursor.
+   */
+  override async readDecisions(since?: string): Promise<Decision[]> {
+    const iframeState = this.readIframeState ? await this.readIframeState() : undefined;
+    return (await readIkengaStore({ projectDir: this.projectDir, since, ...(iframeState !== undefined ? { iframeState } : {}) })).decisions;
   }
 }
 
-export function createIkengaHost(opts: LocalHostOptions): IkengaHost {
+export function createIkengaHost(opts: IkengaHostOptions): IkengaHost {
   return new IkengaHost(opts);
 }
 

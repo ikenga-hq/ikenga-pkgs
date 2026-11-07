@@ -1,0 +1,282 @@
+# akuko — view contract (gate G-VIEW)
+
+The board is a contract, not a page. Any agent or tool can render a review surface for an akuko project. akuko depends only on two things: the data it publishes (`akuko.json`), and the decisions it gets back in one format. This file is that contract. Two parts are machine-readable:
+
+| File | What it is | Source |
+|---|---|---|
+| `views/views.schema.json` | The view manifest, the required views (`ViewName`), the fields each view carries (`fields:<view>`), the controls (`Action`) and the five rules (`Rule`) | Hand-written. This file is the prose. |
+| `views/decision.schema.json` | The `Decision` record | **Generated** from `schema/akuko-project.ts#DecisionSchema`. Never edit it by hand. |
+| `scripts/check-view.mjs` | The conformance check | `scripts/check-view/` |
+| `scripts/check-view/decision-writer.js` | The reference decision writer, inlined verbatim by conforming views | |
+| `views/__fixtures__/` | `board-b-instrumented.html` (the locked board B design plus marks), `tiny-board.html` (the smallest conforming page), and `bad-*.html` (each breaks one rule) | |
+
+Regenerate the decision schema after any change to `DecisionSchema`:
+
+```bash
+node --experimental-strip-types --disable-warning=ExperimentalWarning decisions/export-decision-schema.ts
+```
+
+`decisions/decision-schema.test.ts` fails if the committed file differs from that output.
+
+---
+
+## 1. Data in
+
+- The page holds the project as `<script type="application/json" id="akuko-project">` (an `AkukoProject`, with `<` written as `<`). The publisher writes that block. check-view replaces it with its fixture.
+- Everything shown is **derived from that data**: counts, money, statuses. Nothing is typed in.
+- On host A a view may also read the live doc `akuko/project` from the artifact database (`db.doc("akuko/project").get()`) and re-render. It never writes it.
+- What the person decided in the page (status overlays, notes) is a local preview of their own decisions. akuko's fold is the record.
+
+## 2. The manifest
+
+Every view embeds:
+
+```html
+<script type="application/json" id="akuko-view">
+{"contract":"akuko-view@1","id":"default-board","version":"0.1","writes_decisions":true,
+ "views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}
+</script>
+```
+
+- `Decision.view` is `<id>@<version>`, e.g. `default-board@0.1` or `freehand:cast-sheet@1`.
+- **Bump `version` whenever the page changes.** A conformance record covers one `id@version` and one exact HTML hash.
+- A view with `writes_decisions: true` must list all eight views. A read-only freehand view may list any subset, and needs no check.
+
+## 3. Required views and fields
+
+Mark each view's container `data-akuko-view="<name>"`. Mark each field `data-akuko-field="<name>"`. Scope it to a unit or job with `data-akuko-unit="<id>"`, or to a stage with `data-akuko-stage="<id>"`. Give status fields the machine value in `data-akuko-status`. A field may be visually styled any way you like. The mark only tells the check where it is.
+
+| View | Must show | Marks |
+|---|---|---|
+| `pipeline` | All nine stages with their state, and which one is current | `stage` × 9 (`data-akuko-stage`, `data-akuko-status` = `stages.<id>.state`); one `current-stage` (`data-akuko-stage` = `current_stage`) |
+| `shots` | Every shot, grouped by scene, each with its sketch panel, id, shot type, duration and review status | `scene` per scene; `shot` per shot (`data-akuko-unit`) holding `status` (`data-akuko-status`), `shot-type`, `duration`, `panel` |
+| `shot-detail` | For the selected shot: panel, camera, action, duration, the screenplay line, draft prompt, bible refs, comment thread, status. If it is `pending-review` or `needs-rework`, also **Approve / Request changes / Add a note** | The view element has `data-akuko-unit` = the shot; fields `status`, `panel`, `camera`, `action`, `duration`, `script-line`, `prompt`, `refs`, `comments` |
+| `bible` | Characters, locations, styles with status; an Approve on every asset waiting for review | `bible-entry` per entry (`data-akuko-unit`, `data-akuko-status`) |
+| `spend-gate` | Every `pending_spend` job with its estimate and status; the cap, what is spent and **what is left if you approve**; sunk and in-flight money when not zero; **Approve spend / Not now** on each job waiting | `job` (`data-akuko-unit`, optional `status`), `estimate` (`data-akuko-unit`), `cap`, `spent`, `left-if-approved`, `sunk`, `in-flight` |
+| `ledger` | Every paid call, and the total | `ledger-entry` per entry, `ledger-total` |
+| `script-link` | The screenplay with a tag per shot. Activating a tag selects that shot in `shot-detail` | `script-tag` per shot with a `script_line` (`data-akuko-unit`) |
+| `your-move` | Always visible: what is waiting for the person, counted from the data | `waiting-shots`, `waiting-spend`, `waiting-other` (each element's text starts with the number; omit a zero count if you like) |
+
+The numbers check-view expects (`scripts/check-view/expected.mjs`):
+
+- `waiting-shots` = shots with status `pending-review`.
+- `waiting-spend` = jobs `awaiting-approval`.
+- `waiting-other` = assets `pending-review`, plus bible entries `pending-review` whose refs include no asset.
+- `left-if-approved` = cap − spent − sunk − in flight − (bounds of approved jobs not yet run) − (estimates of jobs waiting). This is what is left if you approve everything waiting.
+- Every amount is shown **exactly**, to at most four decimals, as the spend gate prints it. Never round to cents: 0.4125 is `0.4125`, not `0.41`.
+
+## 4. Controls and the decision format
+
+A control that writes a decision is marked `data-akuko-action="<action>"` with `data-akuko-unit="<unit or job id>"`. It must be a real control: a `button`, link, or input reachable by keyboard.
+
+| Action | On | Decision written | Notes |
+|---|---|---|---|
+| `approve` | a unit `pending-review` / `needs-rework` | `{action: "approve"}` | One click, one unit |
+| `request-changes` | same | `{action: "request-changes", text}` | May open a composer: `textarea[data-akuko-text]` + a `[data-akuko-submit]` control. Writes nothing until submitted |
+| `note` | any unit | `{action: "note", text}` | Same composer pattern |
+| `approve-spend` | a job `awaiting-approval` | `{action: "approve-spend", text: "approve <amount> <CUR>"}` | **The text is the amount the person was shown**: see §7 |
+| `decline-spend` | same | `{action: "decline-spend"}` | |
+| `undo` | the unit or job of an earlier decision | `{action: "undo", undoes: <that decision's id>}` | Reverses exactly that decision |
+
+Every record validates against `views/decision.schema.json`:
+
+```ts
+{ id: uuid, action, unit, stage /* the unit's or job's stage */, text?, undoes?,
+  by: /* viewer id when the host knows it, else "you" — never an agent name */,
+  at: /* ISO timestamp with seconds and zone */, view: "<manifest id>@<version>" }
+```
+
+`schema/akuko-project.ts#DecisionSchema` is frozen (G-SCHEMA). This contract adds rules **on** its fields and adds no fields.
+
+### The decision writer
+
+Inline `scripts/check-view/decision-writer.js` verbatim, then call `akukoDecisions.emit({action, unit, stage, text?, undoes?})` from a person's click, submit or key press, **once per unit**. It fills `id`, `by`, `at` and `view`. It keeps every decision in a localStorage outbox (`akuko-outbox:<slug>`) and sends each one to the host's store. It also offers `all()`, `jsonl()`, `store()` and `onChange(fn)`. A view may write the stores itself instead, as long as what lands in each store is the same.
+
+## 5. Where decisions land, per host
+
+| Host | Store the view writes | How akuko reads it | Reader |
+|---|---|---|---|
+| **A** claude.ai artifact | DB collection `decisions`, **one row per decision**: `db.collection("decisions").doc(d.id).set(d)` | The agent lists `decisions` with the **ArtifactData** tool (rows `{id, data, version, updatedAt}`) | `decisions/artifact-db.ts` |
+| **B** Claude Code | `<project>/decisions.jsonl`, one decision per line | `readDecisions()` reads the file | `decisions/jsonl.ts` |
+| **C** Ikenga | `window.parent.postMessage({__iyke: true, kind: "state", payload: {key: "akuko.decisions", value: [every decision this page holds]}}, "*")` | The agent runs `iyke iframe-state <pane>` and **mirrors** what it finds into `decisions.jsonl` | `decisions/ikenga.ts` |
+
+**Host A.**
+
+- Publish the view with `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`.
+  - Reviewers (Contributors and up) can add decisions.
+  - Only the owner (the agent's user) writes `akuko/project` and `akuko/conformed`.
+- Add `assets: {}` only if the view uploads files.
+- The agent writes `akuko/project` with `if_version` (compare-and-swap).
+- Keep the project doc and each decision in their own documents. A per-document size limit is unverified, so never put all decisions in one doc. A view that needs big lists (shots, assets) can get them in their own collections.
+- An `add()` row with its own row id is read too: the decision id is `data.id`.
+- **The agent must load ArtifactData explicitly** (ToolSearch). It is often deferred, sometimes absent, and named differently between chats. Detection's `artifactDb` is not reliable on A.
+
+**Host B.**
+
+- A view opened as a local file can't write files. The writer keeps decisions in its outbox, and the page shows a visible **"Copy decisions for akuko"** control (`data-akuko-export`).
+- The person pastes the copied lines into chat. The agent appends them as given: `node --experimental-strip-types decisions/cli.ts append <project> -` (it validates and de-duplicates).
+- A B project can also publish its board as a claude.ai artifact (the desktop app has ArtifactData) and use store A.
+
+**Host C.**
+
+- `art.state` is **not** the store. Per the shell's source (`shell/src/lib/artifact/bridge.ts`), it is iframe localStorage the agent can't read, and the shell's injected `art` has no `publishState`. Both facts come from source: the runtime checks for them (G-HOST C4(a)/(c)) were not run.
+- What *was* observed: a raw bridge post reaches `iyke iframe-state` (C4(b)), and a pane reload clears it (C5). The plan's "decisions land in `art.state`" is replaced by the raw bridge post above.
+- The shell keeps only the latest value per key, so the page posts its whole outbox every time, and again on load.
+- A pane reload clears that state, so the agent mirrors to `decisions.jsonl` on every read. The mirror is the durable store.
+
+Approvals typed in chat: on any host, the person can reply in chat with exactly `approve <amount> <CURRENCY>` (the spend gate's line asks for it, e.g. `approve 0.36 USD`) or exactly `approve <unit id>` (one unit per reply). The agent records that one reply in the host's store with `view: "chat@1"`, `by: "you"` and `text` = the reply. It never infers an approval from "yes", "go ahead" or "approve all". See §8 for what folding accepts from that source.
+
+## 6. Renderer rules
+
+| Rule | What it says | What check-view enforces |
+|---|---|---|
+| **R1** Only a person approves | No auto-approve, pre-tick or batch approval; one explicit action per unit | Nothing is written while the page opens and idles: the page's timers are fast-forwarded ten minutes, and pointer moves, scrolls, focus, tab hide/show and common key presses must write nothing. The check runs with a browser user agent, so a page cannot behave differently under it (`auto-approve`, `decision-without-action`). **Every** clickable element is clicked, one at a time: one not marked `data-akuko-action` writes nothing (`unmarked-control-writes`; a composer's `[data-akuko-submit]` may write the one decision it was opened for); a marked one writes at most one decision, for its own unit, with its own action (`writes-other-unit`, `batch-approve`, `wrong-action`). No `data-akuko-action` control without a single `data-akuko-unit` (`batch-approve`); no approval checkbox ticked at load (`pre-ticked`); no decision signed with an agent name (`signed-by-agent`) |
+| **R2** Money is never hidden or rounded | Every paid job shows its estimate, the cap, what is spent, what is left if you approve | Each amount is present, visible and exactly equal to the data as the spend gate prints it, to at most four decimals (`hidden-estimate`, `hidden-money`, `rounded-money`, `wrong-money`). Hidden means any of: `hidden`, `aria-hidden`, `inert`, a closed `<details>`, `display:none`, `visibility:hidden`, opacity ≈ 0, visually-hidden 1px boxes, off-screen positioning (≤ −999px, or `text-indent`), `clip`/`clip-path` that removes it, `transform: scale(0)`, zero height or width with overflow hidden on it or any ancestor, `font-size` 0, or transparent text colour. The spend gate is visible while a job waits (`hidden-spend-gate`); `approve-spend` text names the amount shown (`spend-amount-not-bound`) |
+| **R3** A "your move" summary is always visible, derived from data | | The view exists (`no-your-move`) and is visible (`hidden-your-move`); its counts equal the data on the fixture **and** on a changed copy of it, and drop after an approval (`your-move-not-derived`) |
+| **R4** Decisions only through the decision format | Never edit `akuko.json` from the view | The fake host records every write: any DB write outside `decisions/<id>`, any non-GET `fetch`/XHR, a bridge post under another key, or an artifact self-publish fails (`writes-project`); a static scan catches `writeState(`, file writes and `"akuko/project"` writes |
+| **R5** Readability floor and keyboard access (`designs/_spec.md`) | Body ≥ 14px, labels ≥ 12px, contrast ≥ 4.5:1; every control keyboard-reachable and focus-visible; reduced motion respected | No text under 12px in style sheets, inline styles or style strings in scripts, in any unit (px, pt, em, rem, %, vw, vh, keywords, unitless 0, the `font:` shorthand) (`text-below-floor`). SVG text is exempt: rules for `svg`/`text`/`tspan`, or a class the page puts on an `<svg>`, are sized in viewBox units. Every decision control focusable (`not-keyboard-reachable`); a `:focus-visible` style (`no-focus-style`); `prefers-reduced-motion` when the page animates (`no-reduced-motion`). **By eye:** contrast and the 14px body |
+
+It also checks the contract itself:
+
+- the manifest validates;
+- every required view and field is there;
+- statuses match the data;
+- every control in §4 exists;
+- each one writes a schema-valid decision with the right action, unit, stage and `view`;
+- undo names the decision just made;
+- a script tag selects its shot;
+- in Ikenga the decision reaches the bridge post;
+- with no host store it stays in the outbox, with a copy control.
+
+The page's scripts run inside jsdom with fake host stores, so nothing leaves the machine. Only check views you would open in a browser anyway.
+
+## 7. Spend: binding an approval to the amount shown
+
+`Decision` has no amount field (and is frozen). So an `approve-spend` carries the amount in `text`, in the exact words the spend gate's confirmation line asks for: `approve <amount> <CURRENCY>`. The amount is printed as the gate prints money (`String(Number(n.toFixed(4)))`), e.g. `approve 0.36 USD`.
+
+The amount is the job's bound: `approved_max` when set, else `estimate`. Folding passes the decision to `spend/gate.ts#canApprove(project, jobId, decision)`, which refuses with `approval-mismatch` when:
+
+- the text has no amount;
+- the text names another currency;
+- the text names **less** than the job's current bound *as printed* (`money(bound)`, the very words the gate asked for, so an estimate of 0.41254 is approved by `approve 0.4125 USD`). This catches a stale approval after `quote()` raised the estimate.
+
+The first word may be any case (`Approve 0.36 USD`); the currency code may not.
+
+The person then sees the new amount and approves again. Approving more than the bound is fine: the gate still never runs above the bound.
+
+## 8. Conformance and provenance (R-12)
+
+- **Conformed views.** `node scripts/check-view.mjs <view.html> --record <conformed.json>` adds `{view: "<id>@<version>", sha256: <hash of the exact HTML>, checked_at, checker: "check-view@1"}` for each file that passes. The list lives:
+  - on B/C in `<project>/views/conformed.json`, plus the skill's own `views/conformed.json` for shipped views (the default board, WP-07b);
+  - on A in the DB doc `akuko/conformed`, written by the owner only.
+- **Before publishing** a view that writes decisions: check it, record it, and publish only HTML whose hash is on the list (`decisions/conformed.ts#isConformedHtml`). Change the page → bump `version` → check again.
+- **One id@version, one page.** `--record` refuses to replace an `id@version` already recorded for different HTML: bump `version`. check-view fails a page with `id-collision` if it reuses, for different HTML, the id of a view the skill ships (`views/conformed.json`) or of its fixtures (`test-board@1`, `board-b-instrumented@0.1`), or claims `default-board`.
+- **Which lists folding reads.** `decisions/cli.ts` always reads the skill's shipped `views/conformed.json`, plus `--conformed` (default `<project>/views/conformed.json`). A missing file counts as an empty list and is named in the output's `warnings`.
+- **Folding** (`decisions/fold.ts`) accepts `approve`, `approve-spend` and `undo` only when:
+  - `view` is on the conformed list (or is the built-in `chat@1`);
+  - `by` is not an agent name (`agent`, `akuko`, `claude`, `assistant`, `system`, `ai`, `bot`, `llm`, alone or as a prefix like `claude-code` / `agent:x`).
+
+  `note`, `request-changes` and `decline-spend` are accepted from any view: they never approve anything.
+- **`chat@1`** is a person's chat reply written down by the agent. It is accepted only in the exact words akuko asks for (the first word in any case):
+  - for `approve-spend`, the text is exactly `approve <amount> <CURRENCY>`, and `canApprove` then binds the amount;
+  - for `approve`, the text is exactly `approve <that decision's unit id>`, one record per unit;
+  - **`undo` is never accepted from chat** (`chat-undo`): only a checked view can undo.
+
+  This rests on the agent being honest about what the person typed, exactly as anything in chat does. It is the one approval path that doesn't come from a page.
+- **Rejected decisions stay visible.**
+  - They stay in `akuko.json.decisions[]`.
+  - They are listed in the fold report, which `review` tells the person.
+  - Their unit gets a comment `{author: "agent", text: "Not applied: <why>"}`.
+  - A unit rejection is final: a view conformed later does not revive it. The person approves again.
+- **Limits.** `view` is self-reported by the page, so provenance stops honest mistakes: an unchecked agent-built view, or an agent approving for the person. It does not stop a page deliberately forging a conformed id. On claude.ai the DB rules, and in Ikenga the pane, decide who can write at all.
+
+## 9. Folding
+
+Rules: `lib/state.md` §Decision folding. Code: `decisions/fold.ts`. CLI for every host: `decisions/cli.ts`.
+
+## 10. Running the check
+
+```bash
+node scripts/check-view.mjs views/__fixtures__/board-b-instrumented.html     # PASS
+node scripts/check-view.mjs views/__fixtures__/bad-*.html                     # each FAILs, with the reason
+node scripts/check-view.mjs my-view.html --project path/to/akuko.json --json
+```
+
+Exit code 0 only if every file passes. `scripts/check-view.test.ts` pins:
+
+- the two passing fixtures;
+- the reason each bad fixture fails;
+- that removing one mark from the instrumented board makes it fail.
+
+| Fixture | Breaks | Expected failure |
+|---|---|---|
+| `bad-hidden-estimate.html` | R2 | `hidden-estimate` |
+| `bad-auto-approve.html` | R1 | `auto-approve` |
+| `bad-no-your-move.html` | R3 | `no-your-move` |
+| `bad-writes-project.html` | R4 | `writes-project` (DB update of `akuko/project`, `PUT akuko.json`) |
+| `bad-pre-ticked.html` | R1 | `pre-ticked` |
+| `bad-batch-approve.html` | R1 | `batch-approve` |
+| `bad-rounded-money.html` | R2 | `rounded-money` |
+| `bad-typed-summary.html` | R3 | `your-move-not-derived` (on the changed project) |
+| `bad-signed-by-agent.html` | R1 / R-12 | `signed-by-agent` |
+| `bad-transparent-estimate.html` · `bad-offscreen-estimate.html` · `bad-zero-font-estimate.html` · `bad-scaled-estimate.html` | R2 | `hidden-estimate` (transparent ink; `left: -9999px`; `font-size: 0`, also `text-below-floor`; `scale(0)`) |
+| `bad-clipped-spend-gate.html` · `bad-collapsed-spend-gate.html` | R2 | `hidden-spend-gate` (`clip-path: inset(100%)`; height 0 + overflow hidden) |
+| `bad-tiny-text.html` | R5 | `text-below-floor` (6pt, 0.5vw) |
+| `bad-timer-auto-approve.html` · `bad-mousemove-auto-approve.html` · `bad-microtask-auto-approve.html` · `bad-keyboard-approve-all.html` · `bad-ua-sniff-auto-approve.html` | R1 | `auto-approve` (after 1.5 s; on pointer/scroll/focus; in a microtask; on the `a` key; unless the user agent says jsdom) |
+| `bad-unmarked-approve-all.html` · `bad-select-approves.html` | R1 | `unmarked-control-writes` |
+| `bad-decline-approves-spend.html` | R1 / R2 | `wrong-action` ("Not now" writes an approve-spend) |
+| `bad-approves-other-unit.html` | R1 | `writes-other-unit` |
+
+The last sixteen are the G-VIEW reviewer's variants of `tiny-board.html`, kept so the check can never lose them. Every bad fixture has its own view id.
+
+---
+
+## §Manual decision-store check
+
+**For the person (G-VIEW, user-attested).** About 10 minutes per host. Each step says what to do and what to expect, with a line for what you saw. Copy this section into a reply with the `Observed:` lines filled in. The test page is `views/__fixtures__/tiny-board.html`: it is small, conforming, and already holds *The Beating*.
+
+### A — claude.ai (artifact database)
+
+Every file is pinned to commit `071189ff52fd0c753875de3a30580e548a95c6e0` of the public repo, so the check runs against exactly the code that was reviewed. Steps 1–2 happen on claude.ai. Steps 3–5 run from **Claude Code with the ArtifactData tool** (the desktop app has it; G-HOST check B4), in a checkout of `ikenga-hq/ikenga-pkgs` at `071189ff52fd0c753875de3a30580e548a95c6e0` or later. That is the main path, because folding needs the whole skill and its dependencies.
+
+1. In a claude.ai chat, ask: *"Fetch `https://raw.githubusercontent.com/ikenga-hq/ikenga-pkgs/071189ff52fd0c753875de3a30580e548a95c6e0/packages/skills/akuko/skills/akuko/views/__fixtures__/tiny-board.html` and publish it unchanged as an artifact named akuko-store-check, with capabilities `{db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`."*
+   Expected: an artifact link. The page shows "Your move: 2 shots waiting for you · 1 spend decisions · 2 bible items".
+   Observed: ______
+2. Open the artifact, signed in. Click **Approve sc2_sh4**. Then click **Add a note**, type `store check`, and press **Send**. Then click **Undo note** (the Undo control reverses the latest decision on sc2_sh4).
+   Expected: "Your move" drops to 1 shot waiting after the approval; the note appears in the thread, then disappears; no error.
+   Observed: ______
+3. In Claude Code, ask: *"Load your ArtifactData tool (use ToolSearch if it is deferred), list the `decisions` collection of <the artifact link>, and save the result as rows.json."*
+   Expected: three rows, each `{id, data, version, updatedAt}`. `data` is an approve, a note (`store check`), and an undo whose `undoes` is the note's id. Each has `view: "test-board@1"` and `by` your viewer id (`u_…`).
+   Observed: ______
+4. In the checkout, from `packages/skills/akuko/skills/akuko/`, write `conformed.json` = `{"format":"akuko-conformed-views","version":1,"views":[{"view":"test-board@1"}]}`. Then run `node --experimental-strip-types decisions/cli.ts fold-file --project fixtures/the-beating/akuko.json --rows rows.json --conformed conformed.json --out folded.json` and look at the report and shot `sc2_sh4` in folded.json.
+   Expected:
+   - the report lists 3 new decisions; `applied` is the approve alone (the note was undone in the same batch, so it never lands); `rejected` is empty;
+   - `sc2_sh4` is `approved`, with one trail comment `Status: pending-review → approved` and **no** `store check` comment.
+   Observed: ______
+5. Run the same command again with `--project folded.json --out folded2.json`.
+   Expected: `"changed": false`; nothing new.
+   Observed: ______
+
+**Optional: steps 3–5 on claude.ai itself.** Step 3 works there: load ArtifactData with ToolSearch and list the collection. That alone shows the agent can read the board's rows on host A. Folding there needs the **whole skill** fetched into the workspace (`decisions/`, `schema/`, `spend/`, `providers/`, `hosts/`, `views/`, `fixtures/`), plus its npm dependencies `zod` and `@ikenga/studio-schema`. The latter is not yet published outside the monorepo; bundling is WP-20. Fetching `decisions/` alone does not run.
+
+### C — Ikenga (bridge post + jsonl mirror)
+
+Needs a running Ikenga whose file allowlist includes the folder holding the page (Ikenga ≥ the fs-roots fix, or a temporary root). Use a scratch project folder holding a copy of `fixtures/the-beating/akuko.json`.
+
+1. Open `tiny-board.html` in an Ikenga artifact pane (or the instrumented board, `board-b-instrumented.html`).
+   Expected: the page renders, and the footer says "Your decisions reach akuko on its next action" (the Ikenga host was detected).
+   Observed: ______
+2. Click **Approve sc2_sh4**. In a terminal run `iyke iframe-state <pane>` (or `GET /iyke/iframe-state`) and save the output to a file.
+   Expected: the state has `akuko.decisions`, an array holding one decision with `action: "approve"`, `unit: "sc2_sh4"`, `view: "test-board@1"`.
+   Observed: ______
+3. Run `node --experimental-strip-types decisions/cli.ts fold <scratch project> --iframe-state <that file> --conformed <a list naming test-board@1>`.
+   Expected: the report applies the approval; `<scratch project>/decisions.jsonl` now has one line; `akuko.json` shows `sc2_sh4` approved.
+   Observed: ______
+4. Reload the pane (`POST /iyke/refresh`, or close and reopen it). Run `iyke iframe-state <pane>` again.
+   Expected: either the state is empty, or the page re-posted its outbox on load and the approval is back. Either way, `decisions.jsonl` still has the line.
+   Observed: ______
+5. Run the fold command again without `--iframe-state`.
+   Expected: `"changed": false`. The mirror alone carries the decision.
+   Observed: ______
+
+**Report:** paste the filled-in steps to the orchestrator. Any "Expected" that doesn't hold is a G-VIEW finding: say which step.

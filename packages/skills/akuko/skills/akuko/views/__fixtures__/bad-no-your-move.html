@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>akuko · minimal review board</title>
+<!--
+  BAD FIXTURE: no "your move" summary (R3).
+  scripts/check-view.mjs must FAIL this page. Otherwise identical to tiny-board.html.
+
+  Minimal conforming akuko review surface (views/contract.md). It is the
+  smallest page that passes scripts/check-view.mjs: every required view,
+  every field, one control per unit, the decision writer inlined verbatim.
+  Use it as the starting point for a freehand view that writes decisions,
+  and as the test page for the manual decision-store check. The project data
+  is the <script id="akuko-project"> block; the publisher replaces it.
+-->
+<style>
+:root { --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; --ember: #f08a4b; --ok: #8fd19e; --warn: #f2c46d; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1, h2, h3 { font-weight: 600; line-height: 1.25; margin: 0 0 8px; }
+h1 { font-size: 22px; } h2 { font-size: 18px; } h3 { font-size: 16px; }
+section, header.move { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px; }
+header.move { position: sticky; top: 0; z-index: 2; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+ol, ul { margin: 0; padding-left: 20px; }
+.muted { color: var(--muted); font-size: 14px; }
+.mono, .money { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+button { font: inherit; font-size: 14px; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; margin: 2px 4px 2px 0; }
+button.primary { background: var(--ember); border-color: var(--ember); color: #1a120c; font-weight: 600; }
+:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+textarea { width: 100%; min-height: 64px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.stage[data-akuko-status="approved"] { color: var(--ok); }
+.current { font-weight: 700; text-decoration: underline; }
+svg.panel { width: 160px; height: 90px; background: #0e0b08; border: 1px solid var(--line); display: block; }
+table { border-collapse: collapse; width: 100%; } td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<h1 id="title"></h1>
+<nav data-akuko-view="pipeline" aria-label="Pipeline" id="pipeline"></nav>
+<div class="grid">
+  <section data-akuko-view="shots" id="shots" aria-labelledby="h-shots"></section>
+  <section data-akuko-view="shot-detail" id="detail" aria-live="polite"></section>
+  <section data-akuko-view="script-link" id="script" aria-labelledby="h-script"></section>
+  <section data-akuko-view="spend-gate" id="spend" aria-labelledby="h-spend"></section>
+  <section data-akuko-view="bible" id="bible" aria-labelledby="h-bible"></section>
+  <section data-akuko-view="ledger" id="ledger" aria-labelledby="h-ledger"></section>
+</div>
+<footer id="foot" class="muted"></footer>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"bad-no-your-move","version":"1","title":"akuko minimal review board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
+<script type="application/json" id="akuko-project">{"format":"akuko","schema_version":1,"project":{"slug":"the-beating","title":"The Beating","logline":"A man insists he is sane while describing how he killed an old man for his pale, clouded eye — until the dead man's heart gives him away.","source":"Adapted from \"The Tell-Tale Heart\" by Edgar Allan Poe (1843, public domain)","runtime_s":70,"aspect_ratio":"16:9","profile":"film","created_at":"2026-11-05T00:00:00Z","notes":"Prices are illustrative fixture values, not quotes."},"host":{"level":"A","label":"Claude artifact","capabilities":{}},"stages":{"intake":{"state":"approved"},"breakdown":{"state":"approved"},"sketch":{"state":"in-review"},"bible":{"state":"in-progress"},"keyframes":{"state":"waiting-spend"},"motion":{"state":"locked"},"sound":{"state":"locked"},"assemble":{"state":"locked"},"export":{"state":"locked"}},"current_stage":"sketch","script":{"beats":[]},"scenes":[{"id":"sc1","heading":"INT. OLD MAN'S HOUSE — HALLWAY — NIGHT","summary":"Midnight. The narrator creeps to the old man's door, as he has every night for a week."},{"id":"sc2","heading":"INT. OLD MAN'S BEDROOM — NIGHT","summary":"The lantern's single ray falls on the eye. The old man wakes. The narrator strikes."},{"id":"sc3","heading":"INT. OLD MAN'S BEDROOM — LATER","summary":"He hides the body beneath the floorboards."},{"id":"sc4","heading":"INT. OLD MAN'S BEDROOM — DAWN","summary":"Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud."}],"shots":[{"id":"sc1_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"ws","camera":"Static, low angle","camera_move":"unset","action":"A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.","duration_s":6,"prompt":"Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro","refs":["char_narrator","loc_hallway","style_lookbook"],"script_line":"Every night, about midnight, I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"N","shape":"rect","x":0.72,"y":0.55,"w":0.06,"h":0.3}]},{"id":"sc1_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"insert","camera":"Macro, locked off","camera_move":"unset","action":"His hand turns the latch, a fraction at a time.","duration_s":4,"prompt":"Extreme close-up of a hand slowly turning an iron door latch, lantern light from below","refs":["char_narrator","style_lookbook"],"script_line":"I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"hand","shape":"rect","x":0.35,"y":0.35,"w":0.3,"h":0.3}]},{"id":"sc1_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"pov","camera":"Handheld, slow push","camera_move":"push-in","action":"Through the crack of the door: darkness, and the shape of the old man asleep.","duration_s":6,"prompt":"POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.","blocking":[{"who":"OM","shape":"ellipse","x":0.5,"y":0.62,"w":0.22,"h":0.12}]},{"id":"sc2_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The narrator opens the lantern a crack. A single thin ray cuts across the room.","duration_s":7,"prompt":"Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.","blocking":[{"who":"N","shape":"rect","x":0.18,"y":0.35,"w":0.12,"h":0.5},{"who":"OM","shape":"ellipse","x":0.72,"y":0.6,"w":0.2,"h":0.12}]},{"id":"sc2_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"The eye, pale blue with a film over it, wide open in the ray of light.","duration_s":4,"prompt":"Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam","refs":["char_oldman","style_lookbook"],"script_line":"It was open — wide, wide open — and I grew furious as I gazed upon it.","blocking":[{"who":"OM eye","shape":"ellipse","x":0.5,"y":0.5,"w":0.34,"h":0.2}]},{"id":"sc2_sh3","stage":"sketch","status":"needs-rework","comments":[{"ts":"2026-11-06T21:12:00Z","stage":"sketch","author":"You","text":"He should bolt up — this framing reads calm. Try a lower, tighter angle."}],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The old man sits up in bed: 'Who's there?'","duration_s":5,"prompt":"Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I heard him sit up in the bed, crying out — \"Who's there?\"","blocking":[{"who":"OM","shape":"rect","x":0.42,"y":0.3,"w":0.16,"h":0.42}]},{"id":"sc2_sh4","stage":"sketch","status":"pending-review","comments":[],"scene":"sc2","shot_type":"ws","camera":"Static, high angle","camera_move":"unset","action":"The lantern drops. The bed is dragged over him. Only shadows move.","duration_s":6,"prompt":"High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow","refs":["char_narrator","char_oldman","loc_bedroom","style_lookbook"],"script_line":"In an instant I dragged him to the floor, and pulled the heavy bed over him.","blocking":[{"who":"N","shape":"rect","x":0.3,"y":0.42,"w":0.1,"h":0.36},{"who":"bed","shape":"rect","x":0.5,"y":0.55,"w":0.32,"h":0.2}]},{"id":"sc3_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc3","shot_type":"overhead","camera":"Overhead, static","camera_move":"unset","action":"From above: he lifts three planks from the floor.","duration_s":7,"prompt":"Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I took up three planks from the flooring of the chamber, and deposited all between the scantlings.","blocking":[{"who":"N","shape":"ellipse","x":0.4,"y":0.45,"w":0.18,"h":0.18},{"who":"planks","shape":"rect","x":0.58,"y":0.3,"w":0.08,"h":0.42}]},{"id":"sc4_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ws","camera":"Static","camera_move":"unset","action":"Dawn light. Three officers stand in the doorway, hats in hand.","duration_s":6,"prompt":"Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway","refs":["char_officers","loc_bedroom","style_lookbook"],"script_line":"There entered three men, who introduced themselves, with perfect suavity, as officers of the police.","blocking":[{"who":"O1","shape":"rect","x":0.4,"y":0.3,"w":0.07,"h":0.45},{"who":"O2","shape":"rect","x":0.5,"y":0.3,"w":0.07,"h":0.45},{"who":"O3","shape":"rect","x":0.6,"y":0.3,"w":0.07,"h":0.45}]},{"id":"sc4_sh2","stage":"sketch","status":"pending-review","comments":[],"scene":"sc4","shot_type":"ms","camera":"Slow dolly in","camera_move":"push-in","action":"He places his chair directly over the hidden boards and smiles at the officers.","duration_s":8,"prompt":"Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"I placed my own seat upon the very spot beneath which reposed the corpse of the victim.","blocking":[{"who":"N","shape":"rect","x":0.44,"y":0.32,"w":0.12,"h":0.46},{"who":"O1","shape":"rect","x":0.12,"y":0.3,"w":0.06,"h":0.4}]},{"id":"sc4_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"Sweat on his temple. Under the silence, a low, dull, quick sound.","duration_s":5,"prompt":"Extreme close-up of a sweating temple and a twitching eye, cold dawn light","refs":["char_narrator","style_lookbook"],"script_line":"It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.","blocking":[{"who":"N face","shape":"ellipse","x":0.55,"y":0.45,"w":0.4,"h":0.5}]},{"id":"sc4_sh4","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ms","camera":"Handheld, whip to boards","camera_move":"whip-pan","action":"He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'","duration_s":6,"prompt":"Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"","blocking":[{"who":"N","shape":"rect","x":0.4,"y":0.5,"w":0.16,"h":0.32},{"who":"O2","shape":"rect","x":0.75,"y":0.28,"w":0.06,"h":0.42}]}],"bible":{"characters":[{"id":"char_narrator","stage":"bible","status":"approved","comments":[],"name":"The Narrator","role":"Principal","description":"Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle.","notes":[],"refs":["char_narrator_portrait","char_narrator_turnaround"]},{"id":"char_oldman","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man","role":"Principal","description":"Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'.","notes":[],"refs":["char_oldman_portrait","char_oldman_turnaround"]},{"id":"char_officers","stage":"bible","status":"pending","comments":[],"name":"Officers (×3)","role":"Supporting","description":"1840s police, dark greatcoats, polite and unhurried.","notes":[],"refs":[]}],"locations":[{"id":"loc_hallway","stage":"bible","status":"approved","comments":[],"name":"Hallway","description":"Narrow, bare boards, a single door at the end.","notes":[],"refs":["loc_hallway_plate"]},{"id":"loc_bedroom","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man's Bedroom","description":"Four-poster bed, shuttered window, wide pine floorboards.","notes":[],"refs":["loc_bedroom_plate"]}],"styles":[{"id":"style_lookbook","stage":"bible","status":"approved","comments":[],"name":"Lookbook","notes":["Lantern chiaroscuro: one warm source, everything else falls to black","Dawn scenes go cold and grey — the only daylight in the film","Fine film grain, no lens flares","Composition leaves dead space around the eye"],"refs":[]}]},"assets":[{"id":"char_narrator_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_narrator","tags":[]},{"id":"char_narrator_turnaround","stage":"bible","status":"approved","comments":[],"kind":"turnaround","owner":"char_narrator","tags":[]},{"id":"char_oldman_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_oldman","tags":[]},{"id":"char_oldman_turnaround","stage":"bible","status":"pending-review","comments":[],"kind":"turnaround","owner":"char_oldman","tags":[]},{"id":"loc_hallway_plate","stage":"bible","status":"approved","comments":[],"kind":"plate","owner":"loc_hallway","tags":[]},{"id":"loc_bedroom_plate","stage":"bible","status":"pending-review","comments":[],"kind":"plate","owner":"loc_bedroom","tags":[]}],"audio":{},"budget":{"cap":15,"currency":"USD","spent":0.84},"pending_spend":[{"id":"job_kf_sc1","stage":"keyframes","label":"Generate key frames for scene 1","units":["sc1_sh1","sc1_sh2","sc1_sh3"],"provider":"Gemini image","model":"gemini-3.1-flash-image-preview","estimate":0.36,"status":"awaiting-approval"}],"ledger":[{"ts":"2026-11-06T19:40:00Z","provider":"Gemini image","unit":"char_narrator_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T19:44:00Z","provider":"Gemini image","unit":"char_narrator_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:05:00Z","provider":"Gemini image","unit":"char_oldman_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T20:09:00Z","provider":"Gemini image","unit":"char_oldman_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:30:00Z","provider":"Gemini image","unit":"loc_hallway_plate","actual":0.06,"status":"done"},{"ts":"2026-11-06T20:33:00Z","provider":"Gemini image","unit":"loc_bedroom_plate","actual":0.06,"status":"done"}],"decisions":[]}</script>
+<script>
+/* akuko-decision-writer v1 — views/contract.md §Decision writer. Inline this block verbatim. */
+(function () {
+  'use strict';
+  var STATE_KEY = 'akuko.decisions';
+  function readJson(id) {
+    try { return JSON.parse(document.getElementById(id).textContent); } catch (e) { return null; }
+  }
+  var M = readJson('akuko-view') || {};
+  var P = readJson('akuko-project') || {};
+  var VIEW = (M.id || 'unknown') + '@' + (M.version || '0');
+  var OUTBOX = 'akuko-outbox:' + ((P.project && P.project.slug) || 'project');
+  var outbox = [];
+  try { outbox = JSON.parse(window.localStorage.getItem(OUTBOX) || '[]'); } catch (e) { outbox = []; }
+  if (!Array.isArray(outbox)) outbox = [];
+  var stored = true;
+  var db = null;
+  var who = 'you';
+  var listeners = [];
+  var ikenga = !!window.__ikenga_host__;
+
+  function save() {
+    try { window.localStorage.setItem(OUTBOX, JSON.stringify(outbox)); stored = true; } catch (e) { stored = false; }
+  }
+  function uuid() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    var b = new Uint8Array(16);
+    window.crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    var h = Array.prototype.map.call(b, function (x) { return (x + 0x100).toString(16).slice(1); }).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  }
+  function toDb(d) {
+    if (!db) return;
+    try { db.collection('decisions').doc(d.id).set(d).catch(function () { /* stays in the outbox */ }); } catch (e) { /* stays in the outbox */ }
+  }
+  function toIkenga() {
+    if (!ikenga) return;
+    try { window.parent.postMessage({ __iyke: true, kind: 'state', payload: { key: STATE_KEY, value: outbox.slice() } }, '*'); } catch (e) { /* ignore */ }
+  }
+  function changed() { listeners.forEach(function (fn) { try { fn(outbox.slice()); } catch (e) { /* ignore */ } }); }
+
+  /**
+   * Write one decision. Call ONLY from a person's click / submit / key press,
+   * once per unit. f = {action, unit, stage, text?, undoes?}. Returns the record.
+   */
+  function emit(f) {
+    var d = { id: uuid(), action: f.action, unit: f.unit, stage: f.stage };
+    if (f.action === 'undo') d.undoes = f.undoes;
+    if (typeof f.text === 'string' && (f.text !== '' || f.action === 'note' || f.action === 'request-changes')) d.text = f.text;
+    d.by = who;
+    d.at = new Date().toISOString();
+    d.view = VIEW;
+    outbox.push(d);
+    save();
+    toDb(d);
+    toIkenga();
+    changed();
+    return d;
+  }
+  function jsonl() { return outbox.map(function (d) { return JSON.stringify(d); }).join('\n') + (outbox.length ? '\n' : ''); }
+
+  window.akukoDecisions = {
+    view: VIEW,
+    emit: emit,
+    all: function () { return outbox.slice(); },
+    jsonl: jsonl,
+    stored: function () { return stored; },
+    store: function () { return db ? 'artifact-db' : ikenga ? 'ikenga' : 'outbox'; },
+    onChange: function (fn) { listeners.push(fn); }
+  };
+
+  // Host A: claude.ai artifact DB (declare capabilities {db, user}). Resolves later, never during this run.
+  if (window.claude && typeof window.claude.use === 'function') {
+    Promise.all([window.claude.use('db'), window.claude.use('user')]).then(function (r) {
+      db = r[0] || null;
+      var u = r[1];
+      var flush = function () { outbox.forEach(toDb); changed(); };
+      if (u && typeof u.id === 'function') {
+        return u.id().then(function (id) { if (id) who = id; flush(); }, flush);
+      }
+      flush();
+    }).catch(function () { db = null; });
+  }
+  // Host C: re-publish the outbox after a pane reload.
+  toIkenga();
+})();
+/* end akuko-decision-writer */
+</script>
+<script>
+(function () {
+  'use strict';
+  var P;
+  try { P = JSON.parse(document.getElementById('akuko-project').textContent); } catch (e) { document.getElementById('title').textContent = 'Project data could not be read'; return; }
+  var W = window.akukoDecisions;
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var CUR = (P.budget && P.budget.currency) || 'USD';
+  // Money: exact to four decimals, never rounded to cents (rule R2).
+  var num = function (n) { return String(Number(Number(n).toFixed(4))); };
+  var money = function (n) { var s = (Math.round(n * 10000) / 10000).toFixed(4).replace(/0{1,2}$/, ''); return CUR + ' ' + s; };
+  var STAGES = [['intake', 'Intake'], ['breakdown', 'Breakdown'], ['sketch', 'Sketch board'], ['bible', 'Bibles'], ['keyframes', 'Key frames'], ['motion', 'Motion'], ['sound', 'Sound'], ['assemble', 'Assemble'], ['export', 'Export']];
+  var S = { sel: null, compose: null };
+
+  /* What the person decided in this page, laid over the project (a preview; akuko folds the real thing). */
+  function view() {
+    var V = JSON.parse(JSON.stringify(P));
+    var ds = W.all();
+    var undone = {};
+    for (var i = ds.length - 1; i >= 0; i--) if (ds[i].action === 'undo' && !undone[ds[i].id]) undone[ds[i].undoes] = true;
+    var units = {};
+    V.shots.forEach(function (u) { units[u.id] = u; });
+    V.assets.forEach(function (u) { units[u.id] = u; });
+    ['characters', 'locations', 'styles'].forEach(function (k) { V.bible[k].forEach(function (u) { units[u.id] = u; }); });
+    ds.forEach(function (d) {
+      if (undone[d.id] || d.action === 'undo') return;
+      var u = units[d.unit];
+      var j = V.pending_spend.filter(function (x) { return x.id === d.unit; })[0];
+      if (d.action === 'approve' && u) u.status = 'approved';
+      if (d.action === 'request-changes' && u) u.status = 'needs-rework';
+      if ((d.action === 'note' || d.action === 'request-changes') && u) u.comments.push({ ts: d.at, stage: d.stage, author: d.by, text: d.text });
+      if (d.action === 'approve-spend' && j) j.status = 'approved';
+      if (d.action === 'decline-spend' && j) j.status = 'declined';
+    });
+    return { V: V, units: units, undone: undone };
+  }
+  function lastOn(unit, undone) {
+    var ds = W.all().filter(function (d) { return d.unit === unit && d.action !== 'undo' && !undone[d.id]; });
+    return ds[ds.length - 1];
+  }
+  function stageOf(V, unit) {
+    var j = V.pending_spend.filter(function (x) { return x.id === unit; })[0];
+    if (j) return j.stage;
+    var all = V.shots.concat(V.assets, V.bible.characters, V.bible.locations, V.bible.styles);
+    var u = all.filter(function (x) { return x.id === unit; })[0];
+    return u ? u.stage : 'intake';
+  }
+  function panel(s) {
+    return '<svg class="panel" data-akuko-field="panel" viewBox="0 0 160 90" role="img" aria-label="Sketch panel for ' + esc(s.id) + '"><rect x="0.5" y="0.5" width="159" height="89" fill="none" stroke="#5a4a3c"/>' +
+      (s.blocking || []).map(function (b) { return '<rect x="' + (b.x * 160) + '" y="' + (b.y * 90) + '" width="' + (b.w * 160) + '" height="' + (b.h * 90) + '" fill="none" stroke="#f08a4b"/><text x="' + (b.x * 160 + 2) + '" y="' + (b.y * 90 + 12) + '" fill="#f4ede5" font-size="12">' + esc(b.who) + '</text>'; }).join('') + '</svg>';
+  }
+  function undoBtn(unit, undone) {
+    var d = lastOn(unit, undone);
+    return d ? '<button type="button" data-akuko-action="undo" data-akuko-unit="' + esc(unit) + '" data-akuko-undoes="' + d.id + '">Undo ' + esc(d.action) + '</button>' : '';
+  }
+
+  function render() {
+    var R = view(), V = R.V;
+    var waitShots = V.shots.filter(function (s) { return s.status === 'pending-review'; }).length;
+    var waitSpend = V.pending_spend.filter(function (j) { return j.status === 'awaiting-approval'; }).length;
+    var assetIds = {};
+    V.assets.forEach(function (a) { assetIds[a.id] = true; });
+    var waitOther = V.assets.filter(function (a) { return a.status === 'pending-review'; }).length +
+      V.bible.characters.concat(V.bible.locations, V.bible.styles).filter(function (e) { return e.status === 'pending-review' && !(e.refs || []).some(function (r) { return assetIds[r]; }); }).length;
+    void '<h2>Your move</h2><p><strong data-akuko-field="waiting-shots">' + waitShots + '</strong> shots waiting for you · <span data-akuko-field="waiting-spend">' + waitSpend + '</span> spend decisions · <span data-akuko-field="waiting-other">' + waitOther + '</span> bible items</p>';
+    $('#title').textContent = V.project.title;
+
+    $('#pipeline').innerHTML = '<ol>' + STAGES.map(function (st) {
+      var cur = V.current_stage === st[0];
+      return '<li class="stage' + (cur ? ' current' : '') + '" data-akuko-field="stage" data-akuko-stage="' + st[0] + '" data-akuko-status="' + esc(V.stages[st[0]].state) + '">' + st[1] + ': ' + esc(V.stages[st[0]].state) +
+        (cur ? ' <span data-akuko-field="current-stage" data-akuko-stage="' + st[0] + '">(current)</span>' : '') + '</li>';
+    }).join('') + '</ol>';
+
+    if (!S.sel || !R.units[S.sel]) { var p = V.shots.filter(function (s) { return s.status === 'pending-review'; })[0] || V.shots[0]; S.sel = p && p.id; }
+    $('#shots').innerHTML = '<h2 id="h-shots">Shots</h2>' + V.scenes.map(function (sc) {
+      return '<div data-akuko-field="scene" data-akuko-unit="' + esc(sc.id) + '"><h3>' + esc(sc.heading || sc.id) + '</h3><ul>' + V.shots.filter(function (s) { return s.scene === sc.id; }).map(function (s) {
+        return '<li data-akuko-field="shot" data-akuko-unit="' + esc(s.id) + '"><button type="button" data-select="' + esc(s.id) + '" aria-pressed="' + (S.sel === s.id) + '"><span class="mono">' + esc(s.id) + '</span></button> ' +
+          '<span data-akuko-field="shot-type">' + esc(s.shot_type) + '</span> · <span data-akuko-field="duration">' + esc(s.duration_s) + ' s</span> · <span data-akuko-field="status" data-akuko-status="' + esc(s.status) + '">' + esc(s.status) + '</span>' + panel(s) + '</li>';
+      }).join('') + '</ul></div>';
+    }).join('');
+
+    var s = R.units[S.sel];
+    var det = $('#detail');
+    det.setAttribute('data-akuko-unit', s ? s.id : '');
+    if (s) {
+      var open = s.status === 'pending-review' || s.status === 'needs-rework';
+      var comp = S.compose && S.compose.unit === s.id
+        ? '<form data-compose><label for="ctext">' + (S.compose.action === 'note' ? 'Your note' : 'What should change?') + '</label><textarea id="ctext" data-akuko-text></textarea><button type="submit" class="primary" data-akuko-submit>Send</button><button type="button" data-cancel>Cancel</button></form>'
+        : '';
+      det.innerHTML = '<h2>Shot <span class="mono">' + esc(s.id) + '</span></h2>' + panel(s) +
+        '<dl><dt>Status</dt><dd data-akuko-field="status" data-akuko-status="' + esc(s.status) + '">' + esc(s.status) + '</dd>' +
+        '<dt>Camera</dt><dd data-akuko-field="camera">' + esc(s.camera) + '</dd><dt>Action</dt><dd data-akuko-field="action">' + esc(s.action) + '</dd>' +
+        '<dt>Duration</dt><dd data-akuko-field="duration">' + esc(s.duration_s) + ' s</dd><dt>Script</dt><dd data-akuko-field="script-line">' + esc(s.script_line) + '</dd>' +
+        '<dt>Prompt</dt><dd data-akuko-field="prompt">' + esc(s.prompt) + '</dd><dt>Refs</dt><dd data-akuko-field="refs">' + esc((s.refs || []).join(', ')) + '</dd></dl>' +
+        '<h3>Comments</h3><ul data-akuko-field="comments">' + (s.comments || []).map(function (c) { return '<li>' + esc(c.author) + ': ' + esc(c.text) + '</li>'; }).join('') + '</ul>' +
+        (open ? '<button type="button" class="primary" data-akuko-action="approve" data-akuko-unit="' + esc(s.id) + '">Approve ' + esc(s.id) + '</button>' +
+          '<button type="button" data-akuko-action="request-changes" data-akuko-unit="' + esc(s.id) + '">Request changes</button>' : '') +
+        '<button type="button" data-akuko-action="note" data-akuko-unit="' + esc(s.id) + '">Add a note</button>' + undoBtn(s.id, R.undone) + comp;
+    } else det.innerHTML = '<h2>Shot</h2><p>No shot selected.</p>';
+
+    $('#script').innerHTML = '<h2 id="h-script">Script</h2><ol>' + V.shots.filter(function (x) { return x.script_line; }).map(function (x) {
+      return '<li>' + esc(x.script_line) + ' <button type="button" data-akuko-field="script-tag" data-akuko-unit="' + esc(x.id) + '" data-select="' + esc(x.id) + '">' + esc(x.id) + '</button></li>';
+    }).join('') + '</ol>';
+
+    var b = V.budget;
+    var spentDone = 0, sunk = 0, flight = 0;
+    V.ledger.forEach(function (e) { if (e.status === 'done') spentDone += e.actual || 0; else if (e.status === 'submitted') flight += e.estimate || 0; else sunk += e.actual || 0; });
+    var ran = function (j) { return V.ledger.some(function (e) { return e.job === j.id && (e.status === 'submitted' || e.status === 'done'); }); };
+    var committed = V.pending_spend.filter(function (j) { return j.status === 'approved' && !ran(j); }).reduce(function (a, j) { return a + (j.approved_max != null ? j.approved_max : j.estimate); }, 0);
+    var awaiting = V.pending_spend.filter(function (j) { return j.status === 'awaiting-approval'; }).reduce(function (a, j) { return a + j.estimate; }, 0);
+    $('#spend').innerHTML = '<h2 id="h-spend">Spend gate</h2>' + V.pending_spend.map(function (j) {
+      var bound = j.approved_max != null ? j.approved_max : j.estimate;
+      var act = j.status === 'awaiting-approval'
+        ? '<button type="button" class="primary" data-akuko-action="approve-spend" data-akuko-unit="' + esc(j.id) + '" data-akuko-text="approve ' + num(bound) + ' ' + esc(CUR) + '">Approve spend · ' + money(bound) + '</button><button type="button" data-akuko-action="decline-spend" data-akuko-unit="' + esc(j.id) + '">Not now</button>'
+        : undoBtn(j.id, R.undone);
+      return '<article data-akuko-field="job" data-akuko-unit="' + esc(j.id) + '"><h3>' + esc(j.label) + '</h3><p>Estimate <span class="money" data-akuko-field="estimate" data-akuko-unit="' + esc(j.id) + '">' + money(j.estimate) + '</span> · ' + esc(j.provider) + ' · <span data-akuko-field="status" data-akuko-status="' + esc(j.status) + '">' + esc(j.status) + '</span></p>' + act + '</article>';
+    }).join('') + (b ? '<dl><dt>Cap</dt><dd class="money" data-akuko-field="cap">' + money(b.cap) + '</dd><dt>Spent</dt><dd class="money" data-akuko-field="spent">' + money(b.spent) + '</dd>' +
+      (sunk ? '<dt>Sunk (failed calls)</dt><dd class="money" data-akuko-field="sunk">' + money(sunk) + '</dd>' : '') +
+      (flight ? '<dt>In flight</dt><dd class="money" data-akuko-field="in-flight">' + money(flight) + '</dd>' : '') +
+      '<dt>Left if you approve</dt><dd class="money" data-akuko-field="left-if-approved">' + money(b.cap - b.spent - sunk - flight - committed - awaiting) + '</dd></dl>' : '<p>No budget cap is set: nothing paid can run. Run <code>/akuko setup</code>.</p>');
+
+    var byOwner = {};
+    V.assets.forEach(function (a) { (byOwner[a.owner] = byOwner[a.owner] || []).push(a); });
+    $('#bible').innerHTML = '<h2 id="h-bible">Bible</h2>' + V.bible.characters.concat(V.bible.locations, V.bible.styles).map(function (e) {
+      return '<div data-akuko-field="bible-entry" data-akuko-unit="' + esc(e.id) + '" data-akuko-status="' + esc(e.status) + '"><h3>' + esc(e.name) + ' <span class="muted">' + esc(e.status) + '</span></h3><ul>' + (byOwner[e.id] || []).map(function (a) {
+        return '<li>' + esc(a.kind) + ': <span data-akuko-field="status" data-akuko-unit="' + esc(a.id) + '" data-akuko-status="' + esc(a.status) + '">' + esc(a.status) + '</span> ' +
+          (a.status === 'pending-review' ? '<button type="button" data-akuko-action="approve" data-akuko-unit="' + esc(a.id) + '">Approve ' + esc(a.kind) + '</button>' : undoBtn(a.id, R.undone)) + '</li>';
+      }).join('') + '</ul></div>';
+    }).join('');
+
+    $('#ledger').innerHTML = '<h2 id="h-ledger">Ledger</h2><table><thead><tr><th scope="col">When</th><th scope="col">Unit</th><th scope="col">Charged</th></tr></thead><tbody>' + V.ledger.map(function (e) {
+      return '<tr data-akuko-field="ledger-entry"><td class="mono">' + esc(e.ts) + '</td><td>' + esc(e.unit) + ' · ' + esc(e.provider) + '</td><td class="money">' + money(e.actual || 0) + '</td></tr>';
+    }).join('') + '</tbody><tfoot><tr><th scope="row" colspan="2">Total</th><td class="money" data-akuko-field="ledger-total">' + money(V.ledger.reduce(function (a, e) { return a + (e.actual || 0); }, 0)) + '</td></tr></tfoot></table>';
+
+    var n = W.all().length;
+    $('#foot').innerHTML = W.store() === 'outbox'
+      ? (n ? n + ' decisions are waiting for akuko. ' : '') + '<button type="button" data-akuko-export>Copy decisions for akuko</button>' + (W.stored() ? '' : ' Not saved: this browser blocks storage.')
+      : 'Your decisions reach akuko on its next action.';
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-akuko-action],[data-select],[data-cancel],[data-akuko-export]');
+    if (!t) return;
+    var R = view();
+    if (t.hasAttribute('data-select')) { S.sel = t.getAttribute('data-select'); S.compose = null; render(); return; }
+    if (t.hasAttribute('data-cancel')) { S.compose = null; render(); return; }
+    if (t.hasAttribute('data-akuko-export')) { try { navigator.clipboard.writeText(W.jsonl()); } catch (err) { /* ignore */ } return; }
+    var a = t.getAttribute('data-akuko-action'), unit = t.getAttribute('data-akuko-unit');
+    if (a === 'request-changes' || a === 'note') { S.compose = { unit: unit, action: a }; render(); var ta = document.getElementById('ctext'); if (ta) ta.focus(); return; }
+    var f = { action: a, unit: unit, stage: stageOf(R.V, unit) };
+    if (a === 'undo') f.undoes = t.getAttribute('data-akuko-undoes');
+    if (a === 'approve-spend') f.text = t.getAttribute('data-akuko-text');
+    W.emit(f);
+    render();
+  });
+  document.addEventListener('submit', function (e) {
+    var form = e.target.closest('[data-compose]');
+    if (!form || !S.compose) return;
+    e.preventDefault();
+    var text = document.getElementById('ctext').value.trim();
+    if (!text) return;
+    W.emit({ action: S.compose.action, unit: S.compose.unit, stage: stageOf(P, S.compose.unit), text: text });
+    S.compose = null;
+    render();
+  });
+  W.onChange(render);
+  render();
+})();
+</script>
+</body>
+</html>
