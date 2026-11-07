@@ -32,6 +32,9 @@ import { SpendGateBypassError, createSpendGate, isSealed } from '../spend/gate.t
 import { spentFromLedger } from '../spend/ledger.ts';
 import { PNG, createFakeHost, tinyProject } from './__fixtures__/fake-host.ts';
 import { createFakePaid, testConfig } from '../spend/__fixtures__/fake-paid.ts';
+import { createGeminiImageProvider } from './gemini-image/index.ts';
+import { createFalImageProvider } from './fal/index.ts';
+import { mockFal, mockGemini } from './gemini-image/__fixtures__/mock-net.ts';
 
 interface ProviderSpec {
   name: string;
@@ -70,6 +73,18 @@ const PROVIDERS: ProviderSpec[] = [
       };
     },
     job: () => keyframeJob('manual'),
+  },
+  {
+    name: 'gemini-image (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createGeminiImageProvider(host, { fetch: mockGemini().fetch, apiKey: 'test-key' }) }),
+    job: () => keyframeJob('gemini-image'),
+  },
+  {
+    name: 'fal (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createFalImageProvider(host, { fetch: mockFal().fetch, apiKey: 'test-key' }) }),
+    job: () => keyframeJob('fal'),
   },
   {
     // Not a real provider: proves the suite's paid branch works before WP-06 adds real ones.
@@ -249,11 +264,12 @@ describe('providers/config.json', () => {
     }
   });
 
-  it('carries the manual provider as free, and marks every other entry an example until WP-06', () => {
+  it('carries the manual provider as free, and marks the example entries as placeholders', () => {
     assert.equal(config.providers.manual?.billing, 'free');
     assert.equal(config.providers.manual?.example, false);
     for (const [id, p] of Object.entries(config.providers)) {
-      if (id !== 'manual') assert.equal(p.example, true, `${id} is a placeholder`);
+      if (id.startsWith('example-')) assert.equal(p.example, true, `${id} is a placeholder`);
+      else assert.equal(p.example, false, `${id} is a real entry`);
     }
   });
 
