@@ -1,0 +1,32 @@
+{
+  "scenes": [
+    { "n": 1, "heading": "River pier, dusk", "summary": "Mara arrives with a letter; Oren is closing up." },
+    { "n": 2, "heading": "On the ferry, mid-river, night", "summary": "The engine dies in the fog; Mara speaks of her sister." },
+    { "n": 3, "heading": "Far pier, night", "summary": "A woman waits; Mara steps off; Oren turns back." }
+  ],
+  "checklist": {
+    "characters": [
+      { "name": "Mara", "role": "Principal", "description": "Arrives with a suitcase and a letter." },
+      { "name": "Oren", "role": "Principal", "description": "The ferryman." },
+      { "name": "The Woman", "role": "Supporting", "description": "Waits at the far pier, face hidden by fog." }
+    ],
+    "locations": [
+      { "name": "River Pier" },
+      { "name": "The Ferry" },
+      { "name": "Far Pier" }
+    ],
+    "styles": [
+      { "name": "Fog and Lamplight", "description": "Dusk blues, lantern warmth, fog." }
+    ]
+  },
+  "shots": [
+    { "scene": 1, "beat": "Arrival", "shot_type": "ws", "action": "Mara walks onto the river pier at dusk, suitcase in one hand, letter in the other.", "duration_s": 6, "script_line": "Mara reaches the river pier at dusk with a suitcase in one hand and a letter in the other.", "characters": ["Mara"], "location": "River Pier" },
+    { "scene": 1, "beat": "Arrival", "shot_type": "ms", "action": "Oren coils the rope for the last crossing of the day.", "duration_s": 5, "script_line": "is already coiling the rope for the last crossing of the day", "characters": ["Oren"], "location": "River Pier" },
+    { "scene": 1, "beat": "The letter", "shot_type": "ots", "action": "Oren says they are closed. Mara holds up the letter; he reads it and folds it away.", "duration_s": 9, "script_line": "She holds up the letter. He reads it, folds it away, and says nothing.", "characters": ["Mara", "Oren"], "location": "River Pier" },
+    { "scene": 2, "beat": "The engine dies", "shot_type": "ws", "action": "Halfway across, the engine coughs and dies and fog closes in around the little boat.", "duration_s": 7, "script_line": "the engine coughs and dies, and fog closes in around the little boat", "characters": ["Mara", "Oren"], "location": "The Ferry" },
+    { "scene": 2, "beat": "The repair", "shot_type": "cu", "action": "Oren kneels at the engine while Mara holds the lantern over his hands.", "duration_s": 6, "script_line": "Oren kneels at the engine while Mara holds the lantern steady over his hands.", "characters": ["Oren", "Mara"], "location": "The Ferry" },
+    { "scene": 2, "beat": "Her sister", "shot_type": "ms", "action": "Mara says her sister lived on the far shore; Oren nods without looking up.", "duration_s": 7, "script_line": "\"My sister lived over there,\" she says. Oren nods, not looking up.", "characters": ["Mara", "Oren"], "location": "The Ferry" },
+    { "scene": 3, "beat": "The woman waits", "shot_type": "ws", "action": "A woman waits under a street lamp at the far pier, her face hidden by the fog.", "duration_s": 7, "script_line": "a woman waits under a street lamp, her face hidden by the fog", "characters": ["The Woman"], "location": "Far Pier" },
+    { "scene": 3, "beat": "Landing", "shot_type": "ws", "action": "Mara steps off the ferry; Oren turns the boat back into the fog.", "duration_s": 8, "script_line": "Mara steps off the ferry. Oren turns the boat back into the fog.", "characters": ["Mara", "Oren"], "location": "The Ferry" }
+  ]
+}
