@@ -4,7 +4,7 @@ akuko runs on three hosts. Every action detects the host first, then reads and w
 
 | Level | Host | Adapter | Executable? |
 |---|---|---|---|
-| **A** | claude-artifact (claude.ai chat + published artifacts) | `hosts/claude-artifact.ts` | **Instruction-only** on claude.ai — the agent performs each method with a tool call (to be confirmed: §Manual host check A2) |
+| **A** | claude-artifact (claude.ai chat + published artifacts) | `hosts/claude-artifact.ts` | Code runs (Bash + Node in a remote cloud workspace), but that workspace lasts one chat and can't call the artifact tools — so every state / asset method is a **tool call** by the agent (manual check A2, 2026-11-07) |
 | **B** | local (Claude Code) | `hosts/local.ts` | Yes (Node ≥ 22.6) |
 | **C** | ikenga (Ikenga shell, optionally Studio) | `hosts/ikenga.ts` (extends local) | Yes (Ikenga's engine is Claude Code) |
 
@@ -16,37 +16,59 @@ Rule (`classifyHost`, `../hosts/detect.ts`):
 
 1. `AKUKO_HOST=A|B|C` set → that level.
 2. An Ikenga shell is reachable **or** the Studio MCP is connected → **C**.
-3. Shell **and** filesystem available → **B**.
+3. Shell **and durable** project filesystem → **B**.
 4. Otherwise → **A**.
 
-How to detect, per host:
+**Run detection on every host** that can run code — including claude.ai:
 
-- **B / C (a shell exists):** run
-  `node --experimental-strip-types --disable-warning=ExperimentalWarning <skill>/hosts/detect.ts --tools <your tool names, comma-separated>`
-  and use its `level` and `capabilities`. Pass your **full** tool list — it must include `Bash` (or `PowerShell`), plus every `mcp__*` name and `ArtifactData` if present. The script can't see your tool list, and **a tool list without a shell tool is read as "this agent has no shell" → level A**. `detect.ts` has no dependencies, so it runs from an installed skill.
-- **A (no shell):** decide by inspection — no Bash / filesystem tools and no Studio MCP tools → A. Capabilities: `shell: false, fs: false, codeExec: false` (unless §Manual host check A2 says otherwise), `artifactDb: true` once the board artifact with the `db` capability exists, `connectedMcps` = the connectors you can see (e.g. Canva).
+`node --experimental-strip-types --disable-warning=ExperimentalWarning <skill>/hosts/detect.ts --tools <your FULL tool list, comma-separated>`
+
+Use its `level` and `capabilities`. The list must be complete: `Bash` / `PowerShell`, every `mcp__*` name, `ArtifactData`, and any built-in tools. The script can't see your tools, and the tool list is what tells claude.ai apart from Claude Code. Without `--tools` the script can't recognise claude.ai and prints a `warning`. `detect.ts` has no dependencies, so it runs from an installed skill (on claude.ai, fetch it into the workspace first).
+
+If code can't run at all, decide by inspection with the same rule.
 
 Write the result to `akuko.json.host` (`toHostRecord(level, capabilities)`).
 
-### How `shell` is decided (`detectShell`)
+### What the capabilities mean
 
-- **A `--tools` list was passed → it decides.** `shell` is true if and only if the list contains `Bash` or `PowerShell` (Claude Code's exact tool names; near misses such as `bash_tool` don't count). The environment and the disk are not consulted.
-- **No `--tools` list** (a script or CI job with no agent) → `SHELL` / `ComSpec` in the environment, else a shell binary on disk — `/bin/sh`, or `%SystemRoot%\System32\cmd.exe` on Windows (e.g. a bare Docker container where `SHELL` is unset).
+| Field | Meaning | A — claude.ai | B | C |
+|---|---|---|---|---|
+| `shell` | the agent can run shell commands *somewhere* | true (cloud workspace) | true | true |
+| `fs` | **durable** read/write access to the project folder | **false** — the workspace is remote and lasts one chat | true | true |
+| `codeExec` | the agent can execute code | true | true | true |
+| `artifactDb` | the agent can reach a Claude artifact database (`ArtifactData`) | true | true when the session has ArtifactData | as B |
 
-Why the tool list wins: a claude.ai code sandbox could contain `/bin/sh` and set `SHELL`, and an agent there must stay host A — its files don't persist and the project lives in the artifact database. Only the agent's own tools say whether *it* can run commands. The flip side: a Claude Code or Ikenga agent that passes `--tools` without `Bash` / `PowerShell` is classified A. **To be confirmed by §Manual host check A2**: if code runs in claude.ai, A2 also runs `detect.ts` there and must report level A.
+The source of truth follows `fs`: with no durable folder (host A) the project lives in the board artifact's database; never keep `akuko.json` in claude.ai's workspace.
+
+### How the level is decided (`detect.ts`)
+
+1. **claude.ai signal → `fs: false` → A.** The tool list contains either an MCP tool on the server named exactly `claude_ai` (`mcp__claude_ai__*`), or one of claude.ai's chat-only built-in tools: `conversation_search`, `recent_chats`, `read_conversation`, `end_conversation` (`isClaudeAiToolList`). Both were observed on claude.ai on 2026-11-07 (manual check A2, 157 tools).
+   - **Why these don't misclassify Claude Code.** The Claude desktop app's Code tab (the session that built WP-02) has `Bash`, `PowerShell`, `ArtifactData`, `Artifact`, `mcp__claude-in-chrome__*`, `mcp__visualize__*`, `mcp__ccd_*` and connectors under opaque ids. It has no `claude_ai` server and none of the four tools. The Claude Code CLI names claude.ai connectors `mcp__claude_ai_<Connector>__*` (server `claude_ai_Canva`, …), and the match is exact, so those don't count.
+   - **Left out on purpose:** `memory_*` (the name `memory` is also a common MCP server in Claude Code setups); `mcp__claude-in-chrome__*` and `mcp__visualize__*` (both hosts have them); and the sandbox's `HOME=/home/claude` / root user, for the reasons below.
+2. **`shell`:** with a tool list, true if and only if it contains `Bash` or `PowerShell` (exact names). With no tool list (a script or CI job with no agent): `SHELL` / `ComSpec`, else a shell binary on disk (`/bin/sh`, `%SystemRoot%\System32\cmd.exe`), e.g. a bare Docker container.
+3. Then the rule above. A Claude Code or Ikenga agent that passes `--tools` without `Bash` / `PowerShell` gets `shell: false` and is classified A, so always pass the full list.
+
+**No `--tools`, no claude.ai fingerprint.** A process-level fingerprint would be the only way to spot claude.ai without a tool list, and none is reliable:
+- `HOME=/home/claude` with user root was reported in the A2 run, but `detect.ts` in the same run resolved the home dir to `/root`, so the fingerprint isn't even consistent within one run;
+- any Linux box can have a user named `claude`;
+- the sandbox image can change.
+
+So a run with no tool list falls back to B/C rules and prints a `warning`. **Unverified:** whether the four tool names and the `claude_ai` server stay stable across claude.ai releases and models. Re-run §Manual host check A2 after a claude.ai change.
 
 ## Adapter, per host
 
 | Method | A — claude-artifact | B — local | C — ikenga |
 |---|---|---|---|
-| `detect()` | inspection (above) | `probeNode()` + `classifyHost()` | same as B |
-| `readState()` | ArtifactData `get` doc `akuko/project` on the board artifact; validate | read + validate `<project>/akuko.json` | same as B |
+| `detect()` | `detect.ts --tools <full list>` in the workspace (or inspection if no code runs) → pass as `capabilities` | `probeNode()` + `classifyHost()` | same as B |
+| `readState()` | ArtifactData `get` doc `akuko/project` on the board artifact (load ArtifactData with ToolSearch first — it is deferred); validate | read + validate `<project>/akuko.json` | same as B |
 | `writeState(p)` | validate; ArtifactData `set` doc `akuko/project` | validate; atomic write of `akuko.json` | same as B |
-| `storeAsset(a)` | Artifact `publish` with `asset: true` → `file.uri` = returned url | write under the project folder (layout in `lib/state.md`); `file.uri` = relative path + sha256 | same as B now; via the bridge to Studio in WP-16 |
+| `storeAsset(a)` | Artifact `publish` with `asset: true` (the page must declare the `assets` capability) → `file.uri` = returned `/_blob/<id>` url | write under the project folder (layout in `lib/state.md`); `file.uri` = relative path + sha256 | same as B now; via the bridge to Studio in WP-16 |
 | `publishView(v)` | Artifact `publish` of the view HTML → `{url}` | write `<project>/views/<name>.html` → `{path}` | same as B now; open in an Ikenga pane in WP-16 |
 | `readDecisions(since)` | `decisions/artifact-db.ts` — ArtifactData `list` / `query` of `decisions` (WP-07a) | `decisions/jsonl.ts` — `<project>/decisions.jsonl` (WP-07a) | `decisions/ikenga.ts` — bridge-published state mirrored to `decisions.jsonl` (WP-07a) |
 
-**Action frontmatter `requires_capabilities` is an Atelier / Ikenga grant, not a host fact.** The stubs declare `fs`, `secrets`, `sidecar` and so on for the Ikenga shell's permission check. Outside Ikenga those keys are ignored, and on host A `fs` does not hold: there the "files" are the artifact's asset store and database. Use `detect()`'s `capabilities` to decide what an action can do, never the frontmatter.
+**Action frontmatter `requires_capabilities` is an Atelier / Ikenga grant, not a host fact.** The stubs declare `fs`, `secrets`, `sidecar` and so on for the Ikenga shell's permission check. Outside Ikenga those keys are ignored, and on host A `fs` does not hold: there is a workspace, but it lasts one chat, so the durable "files" are the artifact's asset store and database. Use `detect()`'s `capabilities` to decide what an action can do, never the frontmatter.
+
+On host A, Node code may run in the workspace, but `createNodeHost()` refuses level A: use `ClaudeArtifactHost`, so the project never lands in a folder that vanishes with the chat.
 
 All three `readDecisions` currently throw `NotImplementedError` naming WP-07a. `writeState` is never called by a view. `storeAsset` returns an `Asset` with status `pending-review` and does not touch `akuko.json`.
 
@@ -54,19 +76,23 @@ All three `readDecisions` currently throw `NotImplementedError` naming WP-07a. `
 
 ## Host-capability note (G-09)
 
-What each host can actually do for the artifact database and files, recorded 2026-11-07 by WP-02. Each claim is marked **verified-from-source** (with the path), **verified-in-session** (observed in the Claude Code session that built WP-02), or **unverified** (to be confirmed by §Manual host check).
+What each host can actually do for the artifact database and files, recorded 2026-11-07 by WP-02 and corrected the same day by the host-A manual check. Each claim is marked:
+- **verified-from-source** (with the path);
+- **verified-in-session** (observed in the Claude Code session that built WP-02);
+- **verified-manual** (observed in §Manual host check, with the step);
+- **unverified**.
 
 ### Summary
 
 | Capability | A — claude.ai | B — Claude Code | C — Ikenga |
 |---|---|---|---|
-| Shell / filesystem | no — **unverified** (A1) | yes — verified-in-session | yes — Ikenga engine is Claude Code (B) |
-| Run `hosts/*.ts` | **no, instruction-only** — unverified whether the chat's code tool could (A2) | yes — verified-in-session (`detect.ts` CLI ran on Node 24) | yes, as B |
-| Read/write artifact DB | **agent: tool calls** (ArtifactData `get/list/query/set/update/batch`); **page: `claude.use("db")`** — verified-from-source (artifact-capabilities skill, runtime contract 0.2.96, `db.d.ts`) | yes, if the session has the ArtifactData / Artifact tools — verified-in-session (Claude Code desktop app); plain CLI unverified (B3) | not native; an Ikenga artifact has no claude.ai DB |
-| Store binary assets | **agent:** Artifact `publish` with `asset: true`; **page:** `claude.use("assets").upload(blob)` (Editors only by default; 20 MiB cap) — verified-from-source (`assets.d.ts`) | files in the project folder | files; bridge to Studio later (WP-16) |
-| Viewer identity for `Decision.by` | page: `claude.use("user").id()` (opaque, needs `user` capability) — verified-from-source (`user.d.ts`) | none (`you`) | `art.host.user` — verified-from-source (`ikenga-artifact-builder/skills/ikenga-artifact-builder/SKILL.md` §Bridge surface) |
+| Shell / filesystem | `Bash, Read, Write, Edit, Glob, Grep` in a **remote Linux cloud workspace** (cwd `/home/claude`, user root); files persist within the chat only; no access to the user's machine → `shell: true, fs: false` — verified-manual (A1, A2) | yes, durable — verified-in-session | yes — Ikenga engine is Claude Code (B) |
+| Run `hosts/*.ts` | yes — Node v22.23.4; `detect.ts` fetched from raw.githubusercontent ran (type-only imports strip) → `codeExec: true` — verified-manual (A2). Code there can't call ArtifactData, so the A adapter's state/asset methods stay tool calls | yes — verified-in-session (`detect.ts` CLI ran on Node 24) | yes, as B |
+| Read/write artifact DB | **agent: tool calls** (ArtifactData `get/list/query/set/update/batch`, a **deferred** tool — load via ToolSearch); **page: `claude.use("db")`** — verified-from-source (`db.d.ts`) and verified-manual (A3, A4) | yes, if the session has the ArtifactData / Artifact tools — verified-in-session (Claude Code desktop app); plain CLI unverified (B3) | not native; an Ikenga artifact has no claude.ai DB |
+| Store binary assets | **agent:** Artifact `publish` with `asset: true`; **page:** `claude.use("assets").upload(blob)` (Editors only by default; 20 MiB cap). The page must declare the **`assets`** capability — verified-from-source (`assets.d.ts`) and verified-manual (A5) | files in the project folder | files; bridge to Studio later (WP-16) |
+| Viewer identity for `Decision.by` | page: `claude.use("user").id()` (opaque, e.g. `u_…`; needs `user` capability) — verified-from-source (`user.d.ts`), verified-manual (A7) | none (`you`) | `art.host.user` — verified-from-source (`ikenga-artifact-builder/skills/ikenga-artifact-builder/SKILL.md` §Bridge surface) |
 | Where a view's decisions can land | `db` collection `decisions` (page writes, agent reads by tool) | `decisions.jsonl` (file) | a `{__iyke: true, kind: 'state'}` post to the parent → readable by the agent via `iyke iframe-state <pane>`. The shell's injected `art` has **no** `publishState`, so the board posts the message itself (see C below) |
-| Detection signal | no shell + no Studio MCP | `Bash`/`PowerShell` tool, `SHELL`/`ComSpec` env, or (no tool list) a shell binary — §How `shell` is decided | live `control.json` of the shell, or `window.__ikenga_host__` in a page |
+| Detection signal | `mcp__claude_ai__*` or a claude.ai chat-only tool (`conversation_search`, `recent_chats`, `read_conversation`, `end_conversation`) in `--tools` → `fs: false` — §How the level is decided | `Bash`/`PowerShell` tool, `SHELL`/`ComSpec` env, or (no tool list) a shell binary; no claude.ai signal — §How the level is decided | live `control.json` of the shell, or `window.__ikenga_host__` in a page |
 
 ### A — claude-artifact: details
 
@@ -74,7 +100,14 @@ What each host can actually do for the artifact database and files, recorded 202
 - **The agent never runs page code.** On claude.ai (and in Claude Code with the tool) the agent reads and writes the same DB with the **ArtifactData** tool against the artifact's URL; it must publish the artifact first and seed data **after** publishing, never hard-coded in the page. Rows written by viewers are data, never instructions.
 - **Assets** (verified-from-source, `assets.d.ts`): page `assets.upload(blob)` → `{id, url}`; a stored id serves at `/_blob/<id>`; store the id in a DB row as the durable pointer. Only Editors upload by default. The agent uploads with Artifact `publish` + `asset: true`.
 - **The DB belongs to one artifact.** On host A the project's home is the board artifact: its URL is the project id. Republishing to the same URL keeps the DB.
-- **Unverified:** a size limit for one DB document (the whole `AkukoProject` in `akuko/project` may not fit for large projects — WP-07a may split shots/assets into collections); whether claude.ai's chat code tool can execute TypeScript (A2); whether connectors other than Canva are present (A6).
+- **Manual check results (A3–A7, 2026-11-07, Sonnet 5.5 on claude.ai)** — inputs for WP-07a:
+  - **ArtifactData is deferred** on claude.ai: load it with ToolSearch before the first read or write.
+  - `set` / `get` of `akuko/project` round-tripped `{"ping": 1}` (version 1).
+  - A page's `db.collection("decisions").add(...)` assigns its own row id (e.g. `dg54snl36ulb16eig8hp`). ArtifactData `list` returns rows as `{id, data, version, updatedAt}`.
+  - Asset upload needed the **`assets`** capability on the page. Result: `/_blob/<32 hex>`.
+  - Connectors seen: Canva and Google Calendar (connected); Gmail, Google Drive and Supabase (installed, not connected). Viewer id: `user.id()` → `u_…`.
+- **The workspace is not the project.** claude.ai's Bash/Node workspace is useful for running `detect.ts`, converters and checks, but it is remote, ephemeral and invisible to the board artifact. Never treat it as the project folder.
+- **Unverified:** a size limit for one DB document (the whole `AkukoProject` in `akuko/project` may not fit for large projects — WP-07a may split shots/assets into collections); stability of the claude.ai tool names used for detection.
 
 ### B — local: details
 
@@ -100,20 +133,20 @@ What each host can actually do for the artifact database and files, recorded 202
 
 ### A — claude.ai
 
-1. Start a new claude.ai chat with the akuko skill available. Ask: *"Which tools do you have? Can you run shell commands or read files on my computer?"*
-   Expected: no shell or file tools.
+1. Start a new claude.ai chat with the akuko skill available. Ask: *"Which tools do you have? Can you run shell commands, and on which machine — mine or a cloud workspace?"*
+   Expected: shell and file tools (`Bash`, `Read`, `Write`, …) that run in a **cloud workspace**, with no access to your computer.
    Observed: ______
-2. Ask: *"Can you execute JavaScript or TypeScript in this chat? If yes, run `console.log(typeof process, typeof require, typeof Deno)`."*
-   Expected: unknown — this decides whether `hosts/claude-artifact.ts` is executable on A. Record whether code runs at all and what it prints. If code runs **and** can read files, also ask Claude to run `hosts/detect.ts` from the skill with `--tools <its tool names>`: expected `"level": "A"` (the sandbox must not be mistaken for Claude Code — §How `shell` is decided).
+2. Ask: *"Run `node --version` and `pwd`. Then fetch `hosts/detect.ts` from the akuko skill (raw GitHub URL of the PR branch) into your workspace and run `node --experimental-strip-types hosts/detect.ts --tools <your full tool list, comma-separated>`."*
+   Expected: Node ≥ 22.6 runs; detect prints **`"level": "A"`** with `shell: true`, `fs: false`, `codeExec: true`, and `connectedMcps` including `claude_ai`. If it prints B, report the tool list — the claude.ai signal is missing.
    Observed: ______
-3. Ask: *"Publish a tiny artifact named akuko-host-check with the `db` and `user` capabilities. Then, with your data tool, set doc `akuko/project` to `{"ping": 1}` and read it back."*
+3. Ask: *"Publish a tiny artifact named akuko-host-check with the `db`, `user` and `assets` capabilities. Then, with your data tool (ArtifactData — load it with ToolSearch if it is deferred), set doc `akuko/project` to `{"ping": 1}` and read it back."*
    Expected: Claude gives an artifact link, then reads back `{"ping": 1}`.
    Observed: ______
 4. Ask Claude to add a button to that artifact that writes `{"action": "note", "text": "hello"}` into the `decisions` collection. Open the artifact, click it, then ask: *"List the decisions collection."*
-   Expected: Claude sees the row you wrote from the page.
+   Expected: Claude sees the row you wrote from the page, shaped `{id, data, version, updatedAt}`.
    Observed: ______
 5. Ask: *"Upload a small test image to that artifact's asset store and tell me its URL."*
-   Expected: success; a URL (often `/_blob/<id>`).
+   Expected: success; a URL `/_blob/<id>` (needs the `assets` capability from step 3).
    Observed: ______
 6. Ask: *"Which connectors are connected in this chat?"*
    Expected: a list (e.g. Canva, if you connected it).

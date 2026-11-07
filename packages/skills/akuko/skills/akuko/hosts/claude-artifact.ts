@@ -1,23 +1,27 @@
 /**
  * akuko — host A, claude-artifact (claude.ai).
  *
- * INSTRUCTION-ONLY ON claude.ai. The agent in a claude.ai chat reads and
- * writes a published artifact's database and asset store through TOOL CALLS
- * (the Artifact / ArtifactData tools), not by running this file; whether
- * claude.ai's own code sandbox could execute it is unconfirmed (lib/hosts.md
- * §Host-capability note, row A — to be confirmed by §Manual host check).
+ * claude.ai's chat CAN run code (Bash + Node in a remote cloud workspace —
+ * manual check A2, 2026-11-07), but that workspace lasts one chat and code
+ * there cannot call the Artifact / ArtifactData tools. So the project's
+ * source of truth is the board artifact's database, and every state / asset
+ * method below is performed by the agent as a TOOL CALL. (ArtifactData is a
+ * deferred tool on claude.ai: load it with ToolSearch first.)
  *
  * So this file is two things at once:
  *   1. The spec the agent follows on host A: each method's comment names the
  *      tool call that performs it.
  *   2. An executable adapter over injected `ArtifactBindings`, used by tests
- *      (with a fake) and by any runtime that can execute it — e.g. Claude
- *      Code holding the same ArtifactData tool, or a future page-side script.
+ *      (with a fake) and by any runtime whose bindings can reach the tools —
+ *      e.g. Claude Code holding the same ArtifactData tool, or a page script.
  *
  * Store layout (PROVISIONAL — WP-07a fixes the decisions half):
  *   doc  `akuko/project`        the whole AkukoProject (export → akuko.json)
- *   coll `decisions`            one doc per Decision, id = decision id (WP-07a)
- *   asset store                 bytes; Asset.file.uri = the returned asset url
+ *   coll `decisions`            one doc per Decision (WP-07a). A page's `add()`
+ *                               assigns its own row id (e.g. `dg54snl36ulb16eig8hp`);
+ *                               ArtifactData returns rows as {id, data, version, updatedAt}
+ *   asset store                 bytes; Asset.file.uri = the returned `/_blob/<id>` url.
+ *                               The page must declare the `assets` capability.
  */
 
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
@@ -42,7 +46,7 @@ export interface ArtifactBindings {
   uploadAsset(a: { filename: string; mime: string; data: Uint8Array }): Promise<{ id: string; url: string }>;
   /** Artifact `publish` { file_path } of the view's HTML (new or same path) → `{ url }`. */
   publish(v: ViewArtifact): Promise<{ url: string }>;
-  /** What the runtime can do beyond the DB (e.g. connected connectors). Defaults: DB only. */
+  /** What the runtime can do (normally `detect.ts --tools` output). Defaults: the DB plus code execution, no durable fs (claude.ai, A2 2026-11-07). */
   capabilities?: Partial<Capabilities>;
   /** Clock for `updated_at`. */
   now?: () => Date;
@@ -56,13 +60,13 @@ export class ClaudeArtifactHost implements HostAdapter {
   }
 
   /**
-   * On claude.ai the agent does this by inspection, not code: no Bash/fs
-   * tools and no Studio MCP → level A; artifactDb is true once a board
-   * artifact with the `db` capability exists. Connected connectors (e.g.
-   * Canva) go in `connectedMcps`.
+   * On claude.ai the agent runs `hosts/detect.ts --tools <its full tool
+   * list>` in its workspace (→ level A, `fs: false`, `codeExec: true`) and
+   * passes the result as `capabilities`. artifactDb is true once a board
+   * artifact with the `db` capability exists.
    */
   async detect(): Promise<{ level: HostLevel; capabilities: Capabilities }> {
-    const capabilities = normalizeCapabilities({ artifactDb: true, ...this.b.capabilities });
+    const capabilities = normalizeCapabilities({ artifactDb: true, codeExec: true, fs: false, ...this.b.capabilities });
     const level = classifyHost(capabilities);
     return { level, capabilities };
   }

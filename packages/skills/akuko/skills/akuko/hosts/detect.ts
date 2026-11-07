@@ -8,8 +8,11 @@
  *
  * Level rule (01 §Host levels):
  *   C ikenga          — an Ikenga shell is reachable or the Studio MCP is connected
- *   B local           — shell + filesystem
- *   A claude-artifact — anything else (no shell, no Studio MCP)
+ *   B local           — shell + DURABLE project filesystem
+ *   A claude-artifact — anything else. claude.ai's chat has Bash and a
+ *                       workspace fs too, but both are remote and ephemeral,
+ *                       so a claude.ai tool list sets `fs: false` (see
+ *                       `isClaudeAiToolList`) and lands here.
  * `AKUKO_HOST=A|B|C` forces a level (manual host check, or to keep a local
  * run out of a running Ikenga).
  *
@@ -182,14 +185,40 @@ export function ikengaShellRunning(d: NodeProbeDeps): boolean {
 }
 
 /**
- * Claude Code's shell tools. Exact names only: claude.ai's chat tools are
- * named differently (unverified — lib/hosts.md §Manual host check A2), so a
- * near-miss like `bash_tool` must not count.
+ * Shell tools (Claude Code's names; claude.ai's chat uses the same `Bash`).
+ * Exact names only — a near miss like `bash_tool` doesn't count.
  */
 export const SHELL_TOOLS: readonly string[] = ['Bash', 'PowerShell'];
 
 export function hasShellTool(toolNames: readonly string[]): boolean {
   return toolNames.some((t) => SHELL_TOOLS.includes(t));
+}
+
+/**
+ * MCP server names that only claude.ai's chat has. Exact match: Claude Code
+ * names claude.ai connectors `claude_ai_<Connector>` (e.g. `claude_ai_Canva`),
+ * which must NOT match. Observed on claude.ai 2026-11-07 (manual check A2).
+ */
+export const CLAUDE_AI_SERVERS: readonly string[] = ['claude_ai'];
+
+/**
+ * Built-in (non-MCP) tools that only claude.ai's chat has: chat history and
+ * conversation control. Observed on claude.ai 2026-11-07 (manual check A2);
+ * absent from the Claude desktop app's Code tab and the Claude Code CLI.
+ * claude.ai's `memory_*` tools are left out on purpose: "memory" is also a
+ * common MCP server name in Claude Code setups.
+ */
+export const CLAUDE_AI_TOOLS: readonly string[] = [
+  'conversation_search',
+  'recent_chats',
+  'read_conversation',
+  'end_conversation',
+];
+
+/** True when a tool list comes from claude.ai's chat (host A), whatever else it contains. */
+export function isClaudeAiToolList(toolNames: readonly string[]): boolean {
+  if (toolNames.some((t) => CLAUDE_AI_TOOLS.includes(t))) return true;
+  return mcpServersFromToolNames(toolNames).some((s) => CLAUDE_AI_SERVERS.includes(s));
 }
 
 /** A shell binary that exists on any normal machine of that platform. */
@@ -201,15 +230,14 @@ export function shellBinaryPath(d: Pick<NodeProbeDeps, 'env' | 'platform'>): str
 }
 
 /**
- * Can the agent run shell commands?
+ * Can the agent run shell commands (anywhere — on host A that is claude.ai's
+ * cloud workspace)?
  *   - A tool list was passed → it decides: true iff it contains `Bash` or
- *     `PowerShell`. Nothing else is consulted, because a claude.ai code
- *     sandbox may set `SHELL` and contain `/bin/sh` and must stay host A
- *     (to be confirmed by §Manual host check A2).
- *   - No tool list (a script or CI run with no agent) → fall back to:
- *   1. `SHELL` / `ComSpec` in the environment;
- *   2. a shell binary on disk (`/bin/sh`, `%SystemRoot%\System32\cmd.exe`),
- *      e.g. a bare Docker container with no `SHELL`.
+ *     `PowerShell`.
+ *   - No tool list (a script or CI run with no agent) → `SHELL` / `ComSpec`
+ *     in the environment, else a shell binary on disk (`/bin/sh`,
+ *     `%SystemRoot%\System32\cmd.exe`), e.g. a bare Docker container.
+ * Having a shell does not make a host B: see `hasDurableFs`.
  */
 export function detectShell(hints: ProbeHints, deps: NodeProbeDeps): boolean {
   const tools = hints.toolNames ?? [];
@@ -218,12 +246,23 @@ export function detectShell(hints: ProbeHints, deps: NodeProbeDeps): boolean {
   return deps.exists(shellBinaryPath(deps));
 }
 
+/**
+ * Does this runtime have DURABLE access to the project folder? False on
+ * claude.ai (its workspace is remote and lasts one chat), detected from the
+ * tool list. With no tool list there is no claude.ai fingerprint we trust
+ * (see lib/hosts.md §How the level is decided), so a plain Node run counts as
+ * durable — agents on claude.ai must always pass `--tools`.
+ */
+export function hasDurableFs(hints: ProbeHints): boolean {
+  return !isClaudeAiToolList(hints.toolNames ?? []);
+}
+
 /** Capabilities of the Node process this code runs in. */
 export function probeNode(hints: ProbeHints = {}, deps: NodeProbeDeps = defaultNodeDeps()): Capabilities {
   const tools = hints.toolNames ?? [];
   return normalizeCapabilities({
     shell: detectShell(hints, deps),
-    fs: true,       // node:fs is loaded, or this module would not have imported
+    fs: hasDurableFs(hints),
     codeExec: true, // this code is running
     artifactDb: hasArtifactDbTool(tools),
     ikengaBridge: deps.ikengaHostGlobal != null || ikengaShellRunning(deps),
@@ -252,5 +291,9 @@ if (entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).hre
   const deps = defaultNodeDeps();
   const capabilities = probeNode({ toolNames }, deps);
   const level = classifyHost(capabilities, deps.env.AKUKO_HOST);
-  process.stdout.write(`${JSON.stringify({ level, label: HOST_LABEL[level], capabilities, ikengaControlFile: ikengaControlPath(deps) }, null, 2)}\n`);
+  const out: Record<string, unknown> = { level, label: HOST_LABEL[level], capabilities, ikengaControlFile: ikengaControlPath(deps) };
+  if (toolNames.length === 0) {
+    out.warning = 'no --tools passed: claude.ai cannot be recognised without the tool list; an agent must pass its full tool list';
+  }
+  process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
 }

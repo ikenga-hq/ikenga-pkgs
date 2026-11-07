@@ -29,6 +29,35 @@ const FIXTURE = fileURLToPath(new URL('../fixtures/the-beating/akuko.json', impo
 const fixture = (): AkukoProject => AkukoProjectSchema.parse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
 const NOW = new Date('2026-11-07T12:00:00.000Z');
 
+/**
+ * claude.ai chat tool list, as observed in the G-HOST manual check (A2,
+ * 2026-11-07, Sonnet 5.5; 157 tools). Bare names and MCP server segments are
+ * as observed; the `__tool` suffixes after a server are placeholders (the
+ * per-tool names were not recorded and detection only reads the server).
+ */
+const CLAUDE_AI_TOOLS_OBSERVED = [
+  'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'ToolSearch', 'ArtifactData',
+  'conversation_search', 'recent_chats', 'read_conversation', 'end_conversation',
+  'memory_read', 'memory_write',
+  'mcp__claude_ai__tool', 'mcp__Canva__tool', 'mcp__Claude_Docs__tool', 'mcp__Google_Calendar__tool',
+  'mcp__claude-code-remote__tool', 'mcp__claude-in-chrome__tool', 'mcp__memory__tool',
+  'mcp__remote-devices__tool', 'mcp__visualize__tool', 'mcp__widgets__tool',
+];
+
+/**
+ * Claude desktop app, Code tab (the session that built WP-02; real names).
+ * The B counterexample: it shares Bash, ArtifactData, claude-in-chrome and
+ * visualize with claude.ai but has no claude.ai-only signal.
+ */
+const DESKTOP_CODE_TAB_TOOLS = [
+  'Agent', 'Artifact', 'Bash', 'Edit', 'Glob', 'Grep', 'PowerShell', 'Read', 'SearchPlugins', 'Skill', 'ToolSearch', 'Write',
+  'ArtifactComments', 'ArtifactData', 'Monitor', 'WebFetch', 'WebSearch',
+  'mcp__1a59c906-04da-521d-bda7-7f71b9f9e01c__batch', 'mcp__520e91dc-b31f-4939-9157-d07c1e43c896__generate-image',
+  'mcp__ccd_session__mark_chapter', 'mcp__ccd_turn__update_plan', 'mcp__Claude_Browser__navigate',
+  'mcp__claude-in-chrome__navigate', 'mcp__computer-use__screenshot', 'mcp__scheduled-tasks__list_scheduled_tasks',
+  'mcp__terminal__read_terminal', 'mcp__visualize__show_widget',
+];
+
 /** A simulated machine. `files` maps absolute path → contents; `alive` lists live pids. */
 function sim(over: Partial<NodeProbeDeps> & { files?: Record<string, string>; alive?: number[] } = {}): NodeProbeDeps {
   const files = over.files ?? {};
@@ -79,7 +108,7 @@ const png = (n = 1): AssetInput => ({
 describe('classifyHost', () => {
   const c = (p: Parameters<typeof normalizeCapabilities>[0]) => normalizeCapabilities(p);
 
-  it('nothing at all is A (instruction-only)', () => {
+  it('nothing at all is A', () => {
     assert.equal(classifyHost(NO_CAPABILITIES), 'A');
   });
   it('artifact DB without shell is A', () => {
@@ -189,7 +218,7 @@ describe('detect() — simulated hosts', () => {
     assert.deepEqual(d.capabilities.connectedMcps, ['studio']);
   });
 
-  it('a Node sandbox with no shell (e.g. a chat code tool) → A, codeExec true', async () => {
+  it('a Node runtime with no shell and no tool list → A, codeExec true', async () => {
     const d = await detectWith(sim({ env: {} }));
     assert.equal(d.level, 'A');
     assert.equal(d.capabilities.codeExec, true);
@@ -219,7 +248,7 @@ describe('detect() — simulated hosts', () => {
     assert.equal(shellBinaryPath({ platform: 'win32', env: {} }), 'C:\\Windows\\System32\\cmd.exe');
   });
 
-  it('a tool list without a shell tool keeps a sandbox with /bin/sh at A (claude.ai code tool)', async () => {
+  it('a tool list without a shell tool keeps a sandbox with /bin/sh at A', async () => {
     const d = await detectWith(sim({ env: {}, files: { '/bin/sh': '' } }), ['bash_tool', 'create_file', 'view']);
     assert.equal(d.level, 'A');
     assert.equal(d.capabilities.shell, false);
@@ -247,11 +276,56 @@ describe('detect() — simulated hosts', () => {
     assert.equal(d.capabilities.ikengaBridge, true);
   });
 
-  it('claude.ai (instruction-only adapter, Canva connected) → A', async () => {
+  it('claude.ai adapter with detect.ts output (shell + workspace, fs false) stays A', async () => {
+    const capabilities = probeNode({ toolNames: CLAUDE_AI_TOOLS_OBSERVED }, sim({ env: { SHELL: '/bin/bash' } }));
+    assert.equal((await createClaudeArtifactHost({ ...fakeBindings().b, capabilities }).detect()).level, 'A');
+  });
+
+  it('claude.ai adapter (DB by tool calls, Canva connected) → A', async () => {
     const host = createClaudeArtifactHost({ ...fakeBindings().b, capabilities: { connectedMcps: ['Canva'] } });
     const d = await host.detect();
     assert.equal(d.level, 'A');
-    assert.deepEqual(d.capabilities, { ...NO_CAPABILITIES, artifactDb: true, connectedMcps: ['Canva'] });
+    assert.deepEqual(d.capabilities, { ...NO_CAPABILITIES, artifactDb: true, codeExec: true, connectedMcps: ['Canva'] });
+  });
+
+  // G-HOST manual check A2 (2026-11-07): claude.ai has Bash + a workspace fs, and must still be A.
+  it('claude.ai observed tool list, SHELL set, /bin/sh present → A (fs false, codeExec true)', async () => {
+    const d = await detectWith(sim({ env: { SHELL: '/bin/bash', HOME: '/home/claude' }, home: '/root', files: { '/bin/sh': '' } }), CLAUDE_AI_TOOLS_OBSERVED);
+    assert.equal(d.level, 'A');
+    assert.equal(d.capabilities.shell, true);
+    assert.equal(d.capabilities.fs, false);
+    assert.equal(d.capabilities.codeExec, true);
+    assert.equal(d.capabilities.artifactDb, true);
+    assert.ok(d.capabilities.connectedMcps.includes('claude_ai'));
+  });
+
+  it('one mcp__claude_ai__ tool beside Bash is enough for A', async () => {
+    assert.equal((await detectWith(sim({ env: { SHELL: '/bin/bash' } }), ['Bash', 'Read', 'mcp__claude_ai__tool'])).level, 'A');
+  });
+
+  it('one claude.ai-only built-in tool beside Bash is enough for A', async () => {
+    for (const t of ['conversation_search', 'recent_chats', 'read_conversation', 'end_conversation']) {
+      assert.equal((await detectWith(sim({ env: { SHELL: '/bin/bash' } }), ['Bash', t])).level, 'A', t);
+    }
+  });
+
+  it('Claude desktop Code tab tool list → B (no claude.ai-only signal)', async () => {
+    const d = await detectWith(sim({ platform: 'win32', home: 'C:\\Users\\u', env: { ComSpec: 'C:\\Windows\\system32\\cmd.exe' } }), DESKTOP_CODE_TAB_TOOLS);
+    assert.equal(d.level, 'B');
+    assert.equal(d.capabilities.fs, true);
+    assert.equal(d.capabilities.artifactDb, true);
+  });
+
+  it('Claude Code CLI claude.ai connectors (server claude_ai_Canva) and a `memory` MCP stay B', async () => {
+    const d = await detectWith(sim({ env: { SHELL: '/bin/bash' } }), ['Bash', 'Read', 'mcp__claude_ai_Canva__generate', 'mcp__memory__create_entities']);
+    assert.equal(d.level, 'B');
+  });
+
+  it('createNodeHost refuses host A (the project lives in the artifact DB)', async () => {
+    await assert.rejects(
+      createNodeHost({ projectDir: '/p', deps: sim({ env: { SHELL: '/bin/bash' } }), hints: { toolNames: CLAUDE_AI_TOOLS_OBSERVED } }),
+      /ClaudeArtifactHost/,
+    );
   });
 
   it('createNodeHost picks IkengaHost on C and LocalHost on B', async () => {

@@ -20,9 +20,9 @@ import type { AkukoProject, Asset, AssetKind, Decision } from '../schema/akuko-p
 export type HostLevel = 'A' | 'B' | 'C';
 
 export interface Capabilities {
-  /** Can run shell commands (Bash, ffmpeg, scripts). */
+  /** Can run shell commands somewhere (on host A: claude.ai's cloud workspace, not the user's machine). */
   shell: boolean;
-  /** Can read and write files in the project folder. */
+  /** DURABLE read/write access to the project folder. False on host A, whose workspace is remote and lasts one chat. */
   fs: boolean;
   /** A Claude artifact database is reachable (claude.ai `db` capability, or the ArtifactData tool). */
   artifactDb: boolean;
@@ -30,7 +30,7 @@ export interface Capabilities {
   ikengaBridge: boolean;
   /** The Studio MCP server is connected. */
   studioMcp: boolean;
-  /** This TypeScript can execute in the agent's runtime (false = instruction-only adapter). */
+  /** The agent can execute code (true on A, B and C; false only for a runtime with no code tool at all). */
   codeExec: boolean;
   /** Names of connected MCP servers / connectors, e.g. `['canva', 'studio']`. */
   connectedMcps: string[];

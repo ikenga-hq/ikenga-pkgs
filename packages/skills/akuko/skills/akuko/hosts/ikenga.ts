@@ -31,12 +31,17 @@ export function createIkengaHost(opts: LocalHostOptions): IkengaHost {
 }
 
 /**
- * The adapter for a Node runtime: `IkengaHost` when detection says C, else
- * `LocalHost`. Host A never reaches here — it has no Node runtime (see
- * `claude-artifact.ts`).
+ * The adapter for a Node runtime: `IkengaHost` when detection says C,
+ * `LocalHost` on B. On A (e.g. Node inside claude.ai's cloud workspace) it
+ * throws: the project lives in the artifact database there, and a project
+ * folder in that workspace would vanish with the chat — use
+ * `ClaudeArtifactHost`.
  */
 export async function createNodeHost(opts: LocalHostOptions): Promise<HostAdapter> {
   const local = new LocalHost(opts);
   const { level } = await local.detect();
+  if (level === 'A') {
+    throw new Error('akuko: host A (claude-artifact) — the project lives in the artifact database; use ClaudeArtifactHost, not a project folder');
+  }
   return level === 'C' ? createIkengaHost(opts) : local;
 }
