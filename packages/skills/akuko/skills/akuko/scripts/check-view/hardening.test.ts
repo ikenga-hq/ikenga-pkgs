@@ -7,9 +7,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { staleWriter, WRITER_VERSION } from './check.mjs';
+import { injectProject, staleWriter, WRITER_VERSION } from './check.mjs';
 import { hiddenReasons, loadWriter } from './harness.mjs';
-import { conformanceHash, conformanceText, findJsonBlock } from './hash.mjs';
+import { conformanceHash, conformanceText, escapeJsonForScript, findJsonBlock } from './hash.mjs';
 import { decisionWriteSigns, viewIdOf } from './predicates.mjs';
 import { isConformedHtml, viewHash } from '../../decisions/conformed.ts';
 import { smallText, substituteVars } from './hidden.mjs';
@@ -177,6 +177,47 @@ describe('the conformance hash ignores the embedded project, and nothing else', 
     assert.equal(findJsonBlock(withProject(tiny, ''), 'akuko-project').status, 'ok', 'an empty block is fine');
     const twice = tiny.replace('</body>', '<script type="application/json" id="akuko-project">{}</script></body>');
     assert.equal(findJsonBlock(twice, 'akuko-project').status, 'bad', 'two blocks');
+  });
+
+  // 07a2 re-review h16: a block inside a <textarea> whose content is a JSON *string* is no longer accepted;
+  // a raw "<" in the block is what lets it close the textarea and run markup, so it fails closed.
+  it('h16: a project block holding a raw "<" is bad (textarea decoy, JSON string, anywhere), and the two twins hash apart', () => {
+    // the page holds one opener, inside a <textarea>; a script copies its text into a real block at run time
+    const OPEN = '<script type="application/json" id="akuko-project">';
+    const wrap = (inner: string) => {
+      const h = withProject(tiny, inner);
+      const at = h.indexOf(OPEN, h.indexOf('-->'));
+      const end = h.indexOf('</script>', at) + '</script>'.length;
+      return `${h.slice(0, at)}<textarea hidden id="pj">${h.slice(at, end)}</textarea>${h.slice(end)}`;
+    };
+    const benign = wrap('{"a":1}');
+    const evil = wrap('"</textarea><script>' + EVIL + '//"');
+    assert.equal(findJsonBlock(benign, 'akuko-project').status, 'ok', 'a plain opener in a textarea cannot be told from a real one by text alone');
+    assert.equal(findJsonBlock(evil, 'akuko-project').status, 'bad', 'a JSON string holding "<" fails closed');
+    assert.equal(conformanceText(evil), evil, 'nothing is left out of the hash');
+    assert.notEqual(conformanceHash(evil), conformanceHash(benign));
+    for (const data of ['{"a":"<"}', '{"a":"x<b"}', '"<"', '{"a":"<b>"}']) {
+      assert.equal(findJsonBlock(withProject(tiny, data), 'akuko-project').status, 'bad', data);
+    }
+  });
+
+  it('h16: the same text written with \u003c is fine, and parses to the same value', () => {
+    const data = '{"a":"\\u003c/script>\\u003c!--"}';
+    assert.equal(findJsonBlock(withProject(tiny, data), 'akuko-project').status, 'ok');
+    assert.equal(JSON.parse(data).a, '</script><!--');
+  });
+
+  it('h16: injectProject (check-view) writes no raw "<" into the block', () => {
+    const project = { project: { slug: 'x' }, notes: 'a </script><script>alert(1)</script> <!-- b' };
+    const out = injectProject(tiny, project)!;
+    const b = findJsonBlock(out, 'akuko-project');
+    assert.equal(b.status, 'ok');
+    if (b.status !== 'ok') return;
+    const block = out.slice(b.start, b.end);
+    assert.ok(!block.includes('<'), 'no raw "<" in the block');
+    assert.deepEqual(JSON.parse(block), project, 'JSON-equivalent');
+    assert.equal(conformanceHash(out), conformanceHash(tiny), 'the hash ignores the block');
+    assert.equal(escapeJsonForScript('{"a":"<"}'), '{"a":"\\u003c"}');
   });
 
   it('a comment that quotes the data block is not mistaken for it', () => {

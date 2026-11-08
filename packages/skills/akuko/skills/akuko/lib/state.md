@@ -25,7 +25,7 @@ Project folder (B and C; on A the same paths are asset names):
   decisions.jsonl            decisions from local / Ikenga views (WP-07a)
   script/   source.md · screenplay.fountain
   bible/    characters/<id>/refs/*  locations/<id>/refs/*  style/
-  board/    panels/<shot>-<stage>.png · beatboards/*.html
+  board/    panels/<shot>-<stage>.{svg,png} · beatboards/*.html
   motion/   <shot>/*.mp4 · scenes/<shot>/index.html
   audio/    vo/*.wav · words.json · music/ · sfx/
   cut/      timeline.json · exports/*.mp4
