@@ -27,6 +27,9 @@ export interface KeyframeContext {
 
 const NOTHING = '(not specified)';
 
+/** Text without its closing full stop, so the sentence it ends can add one. */
+const bare = (t: string | undefined): string => (t ?? '').trim().replace(/[.\s]+$/, '');
+
 const third = (v: number, names: [string, string, string]): string => (v < 1 / 3 ? names[0] : v < 2 / 3 ? names[1] : names[2]);
 
 /** One sentence per blocking box: where it sits in the frame and how large it is. Deterministic. */
@@ -49,17 +52,17 @@ export function keyframePrompt(c: KeyframeContext, asked = ''): string {
   const move = s.camera_move === 'unset' ? 'none given' : s.camera_move;
   const lines = [
     `Final key frame for a film, ${c.aspect}. One still image: the single most telling moment of the shot, not a collage, no text, no captions, no labels, no borders.`,
-    `Shot ${s.id}: ${type}. Camera: ${s.camera?.trim() || NOTHING}. Camera move (for context only, the image is still): ${move}.`,
-    `Scene: ${c.scene.trim() || NOTHING}.`,
-    `Action in frame: ${s.action?.trim() || NOTHING}.`,
+    `Shot ${s.id}: ${type}. Camera: ${bare(s.camera) || NOTHING}. Camera move (for context only, the image is still): ${move}.`,
+    `Scene: ${bare(c.scene) || NOTHING}.`,
+    `Action in frame: ${bare(s.action) || NOTHING}.`,
     `Composition, from the approved sketch board (thirds grid): ${blockingText(s.blocking)}.`,
   ];
   if (c.characters.length > 0) {
-    lines.push(`Characters (each must match the attached reference of the same name exactly): ${c.characters.map((e) => `${e.name}${e.description ? ` - ${e.description}` : ''}`).join('; ')}.`);
+    lines.push(`Characters (each must match the attached reference of the same name exactly): ${c.characters.map((e) => `${e.name}${e.description ? ` - ${bare(e.description)}` : ''}`).join('; ')}.`);
   }
-  if (c.location) lines.push(`Location (match the attached plate): ${c.location.name}${c.location.description ? ` - ${c.location.description}` : ''}.`);
-  lines.push(`Look (match the attached lookbook): ${c.look.trim() || NOTHING}.`);
-  if (s.prompt?.trim()) lines.push(`Director's note: ${s.prompt.trim()}`);
+  if (c.location) lines.push(`Location (match the attached plate): ${c.location.name}${c.location.description ? ` - ${bare(c.location.description)}` : ''}.`);
+  lines.push(`Look (match the attached lookbook): ${bare(c.look) || NOTHING}.`);
+  if (s.prompt?.trim()) lines.push(`Director's note: ${bare(s.prompt)}.`);
   if (asked) lines.push(`Changes the person asked for: ${asked}`);
   return lines.join('\n');
 }
