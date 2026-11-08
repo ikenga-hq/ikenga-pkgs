@@ -217,6 +217,8 @@ async function load(html, project, host, wait = 40) {
         if (method !== 'GET' && method !== 'HEAD') rec.violations.push(`fetch ${method} ${url}`);
         return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
       };
+      // sendBeacon always POSTs: a write, like a non-GET fetch (07a2 review r06)
+      Object.defineProperty(w.navigator, 'sendBeacon', { value: (url) => { rec.violations.push(`navigator.sendBeacon ${url}`); return true; }, configurable: true });
       const open = w.XMLHttpRequest.prototype.open;
       w.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         if (!/^(GET|HEAD)$/i.test(method)) rec.violations.push(`XMLHttpRequest ${method} ${url}`);
