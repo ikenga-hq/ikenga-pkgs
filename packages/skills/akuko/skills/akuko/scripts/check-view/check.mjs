@@ -71,6 +71,14 @@ function scripts(html) {
     .map(([, , body]) => body);
 }
 
+/** Obvious direct writes of the project in a page's scripts (R4). */
+const PROJECT_WRITES = [
+  [/\bwriteState\s*\(/, 'calls writeState()'],
+  [/showSaveFilePicker|\bcreateWritable\s*\(/, 'writes files from the page'],
+  [/["'`]akuko\/project["'`]\s*\)\s*\.\s*(set|update|delete)\s*\(/, 'writes the akuko/project document'],
+  [/akuko\.json["'`][\s\S]{0,80}method\s*:\s*["'`](PUT|POST|PATCH)/i, 'sends akuko.json to a server'],
+];
+
 function staticChecks(html, fail) {
   const css = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
   const inline = [...html.matchAll(/style=["']([^"']*)["']/gi)].map((m) => m[1]).join(';');
@@ -83,21 +91,23 @@ function staticChecks(html, fail) {
   if (!/:focus-visible|:focus\b/.test(css)) fail('R5', 'no-focus-style', 'no :focus-visible (or :focus) style: keyboard focus must be visible');
   if (/(transition|animation)\s*:/.test(css) && !/prefers-reduced-motion/.test(css)) fail('R5', 'no-reduced-motion', 'animates without honouring prefers-reduced-motion');
   // R4: obvious direct writes of the project.
-  const writes = [
-    [/\bwriteState\s*\(/, 'calls writeState()'],
-    [/showSaveFilePicker|\bcreateWritable\s*\(/, 'writes files from the page'],
-    [/["'`]akuko\/project["'`]\s*\)\s*\.\s*(set|update|delete)\s*\(/, 'writes the akuko/project document'],
-    [/akuko\.json["'`][\s\S]{0,80}method\s*:\s*["'`](PUT|POST|PATCH)/i, 'sends akuko.json to a server'],
-  ];
-  for (const [re, what] of writes) if (re.test(code)) fail('R4', 'writes-project', `the page ${what}; views write decisions only`);
-  // A page that inlines the decision writer carries the current one, unchanged
-  // (line endings aside): a stale copy keeps its old bugs (v1 posted an empty
-  // list over the Ikenga shell's stored one on every pane remount).
-  if (/akuko-decision-writer/.test(code) && !code.replace(/\r\n/g, '\n').includes(WRITER)) {
-    const found = /akuko-decision-writer (v\d+)/.exec(code)?.[1];
-    const what = !found ? 'an unversioned copy of akuko-decision-writer' : found === WRITER_VERSION ? `a changed copy of akuko-decision-writer ${found}` : `akuko-decision-writer ${found}`;
-    fail('contract', 'stale-writer', `the page inlines ${what}; inline the current canonical ${WRITER_VERSION} block (scripts/check-view/decision-writer.js) verbatim`);
-  }
+  for (const [re, what] of PROJECT_WRITES) if (re.test(code)) fail('R4', 'writes-project', `the page ${what}; views write decisions only`);
+  const stale = staleWriter(html);
+  if (stale) fail('contract', 'stale-writer', stale);
+}
+
+/**
+ * A page that inlines the decision writer carries the current canonical one,
+ * byte for byte (line endings aside): a stale copy keeps its old bugs (v1
+ * posted an empty list over the Ikenga shell's stored one on every pane
+ * remount). Returns what is wrong, or null.
+ */
+export function staleWriter(html) {
+  const code = scripts(html).join('\n');
+  if (!/akuko-decision-writer/.test(code) || code.replace(/\r\n/g, '\n').includes(WRITER)) return null;
+  const found = /akuko-decision-writer (v\d+)/.exec(code)?.[1];
+  const what = !found ? 'an unversioned copy of akuko-decision-writer' : found === WRITER_VERSION ? `a changed copy of akuko-decision-writer ${found}` : `akuko-decision-writer ${found}`;
+  return `the page inlines ${what}; inline the current canonical ${WRITER_VERSION} block (scripts/check-view/decision-writer.js) verbatim`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -154,7 +164,7 @@ async function load(html, project, host, wait = 40) {
   const rec = { epoch: 0, writes: [], posts: [], violations: [], errors: [], clipboard: null, timers: new Map(), now: 0 };
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { if (!/Not implemented/i.test(String(e.message))) rec.errors.push(String(e.message).split('\n')[0]); });
-  const doc = injectProject(html, project);
+  const doc = injectProject(html, project) ?? html;
   const dom = new JSDOM(doc, {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
@@ -715,6 +725,29 @@ async function sweep(html, p, fail) {
 }
 
 /**
+ * A read-only view needs no check (§2), but only if it really is one. Its
+ * manifest says `writes_decisions: false` and it has no decision control and
+ * no decision writer; this then opens it on every host, idles, clicks, picks
+ * and double-clicks everything, and returns what it saw it write (decisions
+ * in any store, or the project). Empty: it is read-only. A page cannot dodge
+ * the check by saying so in its manifest.
+ */
+async function readOnlyProbe(html, project) {
+  const found = [];
+  const code = scripts(html).join('\n');
+  for (const [re, what] of PROJECT_WRITES) if (re.test(code)) found.push(`the page ${what}`);
+  for (const host of ['A', 'C', 'local']) {
+    const page = await load(html, project, host, host === 'A' ? 400 : 40);
+    await idle(page);
+    for (const { d, store } of decisions(page).values()) found.push(`it wrote a "${d.action}" for ${d.unit} (${store}) while it opened and idled`);
+    for (const v of page.rec.violations.splice(0)) found.push(v);
+    page.close();
+  }
+  await sweep(html, project, (_rule, _code, message) => found.push(message));
+  return [...new Set(found)];
+}
+
+/**
  * Ids people rely on: the views the skill ships (views/conformed.json, when
  * present) and its own fixtures. A page reusing one for different HTML would
  * borrow their conformance record (G-VIEW review C7).
@@ -763,6 +796,17 @@ export async function checkView(html, opts = {}) {
     try { manifest = JSON.parse(raw); } catch { fail('contract', 'bad-manifest', 'the akuko-view manifest is not JSON'); }
     if (manifest && !validManifest(manifest)) fail('contract', 'bad-manifest', `the akuko-view manifest does not match views/views.schema.json: ${ajv.errorsText(validManifest.errors)}`);
   }
+  // Read-only (§2): no check applies, once the page is seen to write nothing.
+  const claimsReadOnly = !!manifest && validManifest(manifest) && manifest.writes_decisions === false;
+  const live = uncommented(html); // a comment that names a control is not one
+  const hasDecisionCode = /data-akuko-action/i.test(live) || /akuko-decision-writer|akukoDecisions/.test(live);
+  if (claimsReadOnly && !hasDecisionCode) {
+    const why = await readOnlyProbe(html, project);
+    if (why.length === 0) {
+      return { ok: true, skipped: true, view: `${manifest.id}@${manifest.version}`, sha256, failures: [], decisions_checked: 0, manual: [], note: 'read-only (not applicable)' };
+    }
+    for (const m of why) fail('R1', 'read-only-writes', `the manifest says writes_decisions: false, but ${m}: a page that writes is held to the whole contract`);
+  }
   if (injectProject(html, project) === undefined) {
     fail('contract', 'no-project-block', 'no <script type="application/json" id="akuko-project"> block to read the project from');
     return { ok: false, view: manifest ? `${manifest.id}@${manifest.version}` : null, sha256, failures, manual: [] };
@@ -791,7 +835,7 @@ export async function checkView(html, opts = {}) {
   checkStructure(second, mutated, fail, 'with a changed project');
   second.close();
 
-  if (manifest?.writes_decisions !== false) {
+  if (manifest?.writes_decisions !== false || hasDecisionCode) {
     await clickTests(html, project, manifest, fail);
     await sweep(html, project, fail);
   }

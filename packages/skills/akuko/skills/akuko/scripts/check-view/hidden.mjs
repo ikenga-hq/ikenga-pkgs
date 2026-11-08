@@ -158,15 +158,15 @@ const isTransparent = (c) => {
 
 /** [r, g, b, a] (0–255, alpha 0–1) for #rgb[a], #rrggbb[aa] and rgb()/rgba(), else null. */
 function parseColour(c) {
-  const v = String(c ?? '').trim().toLowerCase().replace(/s+/g, ' ');
+  const v = String(c ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
   let m = /^#([0-9a-f]{3,8})$/.exec(v);
   if (m && [3, 4, 6, 8].includes(m[1].length)) {
     const h = m[1].length <= 4 ? [...m[1]].map((x) => x + x).join('') : m[1];
     return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).concat(h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1);
   }
-  m = /^rgba?(([^)]*))$/.exec(v);
+  m = /^rgba?\(([^)]*)\)$/.exec(v);
   if (!m) return null;
-  const p = m[1].split(/[s,/]+/).filter(Boolean);
+  const p = m[1].split(/[\s,/]+/).filter(Boolean);
   if (p.length < 3 || p.slice(0, 3).some((x) => !Number.isFinite(Number.parseFloat(x)))) return null;
   const ch = (x) => (x.endsWith('%') ? (Number.parseFloat(x) * 255) / 100 : Number.parseFloat(x));
   const a = p[3] === undefined ? 1 : p[3].endsWith('%') ? Number.parseFloat(p[3]) / 100 : Number.parseFloat(p[3]);
@@ -183,7 +183,7 @@ function contrast(a, b) {
 /** A translate() that moves the element off-screen (≤ −999px either way), as the off-screen offsets above. */
 function translatedAway(t) {
   const s2 = String(t).trim().toLowerCase();
-  for (const m of s2.matchAll(/translate(?:3d|x|y)?(([^)]*))/g)) for (const part of m[1].split(',')) { const px = cssPx(part.trim()); if (px !== null && px <= -999) return true; }
+  for (const m of s2.matchAll(/translate(?:3d|x|y)?\(([^)]*)\)/g)) for (const part of m[1].split(',')) { const px = cssPx(part.trim()); if (px !== null && px <= -999) return true; }
   return false;
 }
 
@@ -238,7 +238,7 @@ export function hiddenReason(w, el) {
     const op = Number.parseFloat(opacity);
     if (Number.isFinite(op) && op < 0.05) return `opacity: ${opacity}`;
     const filter = prop(cs, 'filter');
-    for (const m of filter.matchAll(/opacity(s*([d.]+)(%?)s*)/gi)) {
+    for (const m of filter.matchAll(/opacity\(\s*([\d.]+)(%?)\s*\)/gi)) {
       const f2 = Number(m[1]) / (m[2] ? 100 : 1);
       if (Number.isFinite(f2)) { if (f2 < 0.05) return `filter: ${filter}`; alpha *= f2; }
     }
@@ -280,8 +280,10 @@ export function hiddenReason(w, el) {
       }
     }
     if (!ground) {
-      const bg = parseColour(prop(cs, 'background-color'));
-      if (bg && bg[3] >= 0.95) ground = bg;
+      // jsdom does not expand a `background:` shorthand holding var(): read its colour too
+      const opaque = (c) => (c && c[3] >= 0.95 ? c : null);
+      const bg = opaque(parseColour(prop(cs, 'background-color'))) ?? opaque(parseColour(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/i.exec(prop(cs, 'background'))?.[0]));
+      if (bg) ground = bg;
     }
   }
   // Text the colour of what is behind it (contrast under 1.5:1, far below the 4.5:1 floor) is not shown.

@@ -9,7 +9,9 @@
 // "your move" counts against the data, every data-akuko-action control (one
 // person's click → exactly one valid Decision, in each host's store), and the
 // five renderer rules as far as a machine can. Exit code 0 only if every file
-// passes. With --record, each passing file is added to a conformed-views list
+// passes. A read-only view (manifest writes_decisions: false, no decision
+// control, no decision writer) that is seen to write nothing is reported
+// SKIP (not applicable) and also exits 0. With --record, each passing file is added to a conformed-views list
 // ({view, sha256, checked_at, checker}); folding accepts approvals only from
 // views on that list (decisions/conformed.ts).
 //
@@ -41,7 +43,7 @@ function record(path, results) {
   const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const refused = [];
   for (const r of results) {
-    if (!r.ok || !r.view) continue;
+    if (!r.ok || r.skipped || !r.view) continue; // a read-only page needs no record
     const had = list.views.find((v) => v.view === r.view);
     if (had && had.sha256 && had.sha256 !== r.sha256) {
       // One id@version is one exact page: a changed page needs a new version.
@@ -67,7 +69,8 @@ export async function main(argv) {
     const r = await checkView(readFileSync(file, 'utf8'), { project });
     results.push({ file, ...r });
     if (!args.json) {
-      console.log(`${r.ok ? 'PASS' : 'FAIL'} ${file}${r.view ? ` (${r.view})` : ''} · ${r.decisions_checked} decisions checked`);
+      if (r.skipped) console.log(`SKIP ${file}${r.view ? ` (${r.view})` : ''} · ${r.note}`);
+      else console.log(`${r.ok ? 'PASS' : 'FAIL'} ${file}${r.view ? ` (${r.view})` : ''} · ${r.decisions_checked} decisions checked`);
       for (const f of r.failures) console.log(`  ${f.rule} ${f.code}: ${f.message}`);
     }
   }

@@ -147,10 +147,13 @@ export function viewIdOf(html: string): string | undefined {
  * `writes_decisions: true`, or the caller saying so. Anything else is read-only.
  */
 export function viewWritesDecisions(v: Pick<ViewArtifact, 'html' | 'writesDecisions'>): boolean {
+  const live = v.html.replace(/<!--[\s\S]*?-->/g, ''); // a comment naming a control is not one (as check-view)
   return v.writesDecisions === true
-    || /data-akuko-action/i.test(v.html)
-    || /akuko-decision-writer|akukoDecisions\s*\.\s*emit\b/.test(v.html)
-    || /"writes_decisions"\s*:\s*true/.test(v.html);
+    || /data-akuko-action/i.test(live)
+    || /akuko-decision-writer|akukoDecisions/.test(live)
+    // writing a store directly: the Ikenga state key, or the artifact DB's decisions collection
+    || /akuko\.decisions|collection\(\s*["'`]decisions["'`]/.test(live)
+    || /"writes_decisions"\s*:\s*true/.test(live);
 }
 
 /**
