@@ -28,22 +28,10 @@ export function projectBlock(): string {
   return JSON.stringify(p).replace(/</g, '\\u003c');
 }
 
-/** The canonical decision writer (scripts/check-view/decision-writer.js), at its v2 form whatever is on disk. */
+/** The canonical decision writer (scripts/check-view/decision-writer.js), exactly as it is on disk (v2). */
 export function decisionWriterV2(): string {
-  let w = readFileSync(resolve(AKUKO, 'scripts/check-view/decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '');
-  const swap = (from: string, to: string) => {
-    if (w.includes(to)) return; // the canonical file is already v2
-    if (!w.includes(from)) throw new Error(`build: decision-writer.js changed shape, cannot find ${JSON.stringify(from.slice(0, 70))}`);
-    w = w.replace(from, () => to);
-  };
-  swap(
-    '/* akuko-decision-writer v1 — views/contract.md §Decision writer. Inline this block verbatim. */',
-    '/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */',
-  );
-  swap(
-    '  // Host C: re-publish the outbox after a pane reload.\n  toIkenga();',
-    '  // Host C: re-publish the outbox after a pane reload.\n  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)',
-  );
+  const w = readFileSync(resolve(AKUKO, 'scripts/check-view/decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '');
+  if (!w.startsWith('/* akuko-decision-writer v2 ')) throw new Error('build: decision-writer.js is not v2; rebuild the example views against the current writer');
   return w;
 }
 

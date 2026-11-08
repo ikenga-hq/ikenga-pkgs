@@ -114,6 +114,16 @@ describe('read-only views', () => {
       assert.deepEqual(publishGate(html(a), { format: 'akuko-conformed-views', version: 1, views: [] }), { ok: true });
     });
   }
+  it('check-view SKIPs both (read-only, not applicable) and fails a page that claims read-only but writes', async () => {
+    const r = await exec([here('cast-sheet', 'view.html'), here('scene-comparison', 'view.html'), '--json']);
+    assert.equal(r.code, 0, r.stdout);
+    const res = JSON.parse(r.stdout.slice(r.stdout.indexOf('[')));
+    assert.deepEqual(res.map((x: { skipped?: boolean }) => x.skipped), [true, true]);
+    assert.deepEqual(res.map((x: { note?: string }) => x.note), ['read-only (not applicable)', 'read-only (not applicable)']);
+    const bad = await exec([join(SKILL, 'views', '__fixtures__', 'bad-readonly-writes-decision.html'), '--json']);
+    assert.equal(bad.code, 1);
+    assert.ok(JSON.parse(bad.stdout.slice(bad.stdout.indexOf('['))).flatMap((x: { failures: { code: string }[] }) => x.failures).some((f: { code: string }) => f.code === 'read-only-writes'));
+  });
   it('cast sheet names every bible entry, derived from the data', () => {
     const h = html('cast-sheet');
     for (const k of ['characters', 'locations', 'styles'] as const) for (const e of project.bible[k]) assert.ok(h.includes(e.id), e.id);

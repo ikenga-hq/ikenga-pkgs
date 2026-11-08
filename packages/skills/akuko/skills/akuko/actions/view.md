@@ -42,7 +42,7 @@ This action designs a page for the question at hand. It never weakens the review
 
 | The question is about | Kind | What it needs |
 |---|---|---|
-| Looking: who is in it, what it costs, how two scenes differ, what changed since yesterday | **Read-only** (the default) | `writes_decisions: false`. No check. |
+| Looking: who is in it, what it costs, how two scenes differ, what changed since yesterday | **Read-only** (the default) | `writes_decisions: false`. `check-view` SKIPs it. |
 | Deciding: approve this shot, approve this spend, send this back | **Decision-writing** | `writes_decisions: true`, all eight required views, the decision writer, and a passing `check-view`. |
 
 Prefer read-only. A page that answers a question and sends the person to the board to decide is the cheaper, safer design. Design a decision-writing view only when the person asked to decide in it.
@@ -73,7 +73,10 @@ Prefer read-only. A page that answers a question and sends the person to the boa
 
 ## 4. Check, then publish
 
-**Read-only view.** Publish it. Do not run `check-view` on it: the contract exempts read-only views (`views/contract.md` §2), and the check is built for the eight-view decision pages, so it reports every required view as missing. Before publishing, confirm for yourself that the page has no `data-akuko-action`, no decision writer, and no write of any kind.
+**Run `node scripts/check-view.mjs <view.html>` on every view, read-only or not.**
+
+- **Read-only view.** The check probes the page on every host and, if it writes nothing, prints `SKIP <file> (<id>@<version>) · read-only (not applicable)` and exits 0. Publish it freely. Nothing is recorded for it.
+- **A page that claims read-only but writes** (a decision writer, a store write, a bridge post, even from a delayed or host-specific branch) fails with `read-only-writes`. It is then held to the whole contract: make it truly read-only, or make it a decision-writing view and take the path below.
 
 **Decision-writing view.** It is blocked until `check-view` passes and the pass is recorded:
 
@@ -123,11 +126,13 @@ Stop. Never approve anything yourself, and do not run the next stage.
 
 | Ask | Page | Kind | `check-view` |
 |---|---|---|---|
-| "show me the cast" | `evals/views/cast-sheet/view.html` (`freehand:cast-sheet@1`) | read-only | not run |
-| "compare the bedroom scenes" | `evals/views/scene-comparison/view.html` (`freehand:scene-comparison@1`) | read-only | not run |
+| "show me the cast" | `evals/views/cast-sheet/view.html` (`freehand:cast-sheet@1`) | read-only | SKIP (exit 0) |
+| "compare the bedroom scenes" | `evals/views/scene-comparison/view.html` (`freehand:scene-comparison@1`) | read-only | SKIP (exit 0) |
 | "where is the money going, and what is waiting on me?" | `evals/views/spend-breakdown/view.html` (`freehand:spend-breakdown@1`) | **writes decisions** (per-job approve / decline) | **PASS** |
 
 ## Manual host-A check
+
+Depends on the hardened check-view and the `publishView` gate (WP-07a2, PR #195) being merged.
 
 For the person. About 15 minutes. **Environment:** run it in a session that has the akuko skill loaded and the Artifact tool, ArtifactData and a shell (for example Claude Code with the skill). A plain claude.ai chat has neither the skill nor the publish gate, so it cannot show steps 3 to 6. Each step says what to do and what to expect; copy this section into a reply with the `Observed:` lines filled in. The three pages are in `evals/views/` of `ikenga-hq/ikenga-pkgs` (use the commit the PR merged as, or later).
 
@@ -137,7 +142,7 @@ For the person. About 15 minutes. **Environment:** run it in a session that has 
 2. Do the same with `evals/views/scene-comparison/view.html`.
    Expected: two scenes side by side (sc2 left, sc4 right), the line "sc4 runs 3 s longer than sc2 (4 shots against 4)", and scene buttons that change the columns when pressed. Nothing else changes; reloading resets it.
    Observed: ______
-3. **(Requires WP-07a2's `publishView` gate, merged.)** Ask: *"Publish `evals/views/spend-breakdown/view.html` as akuko-spend-breakdown with db and user capabilities (db rules: root read view / write owner; `decisions` read view / write interact), without running the check."*
+3. Ask: *"Publish `evals/views/spend-breakdown/view.html` as akuko-spend-breakdown with db and user capabilities (db rules: root read view / write owner; `decisions` read view / write interact), without running the check."*
    Expected: **refused** by the host's publish gate (a page with decision controls and no conformance record), naming the page as not conformed. If it publishes anyway, that is a finding: say so.
    Observed: ______
 4. Now ask the agent to run `node scripts/check-view.mjs` on that page with `--record conformed.json`, then ArtifactData `set` the doc `akuko/conformed` with that file, then publish again.
