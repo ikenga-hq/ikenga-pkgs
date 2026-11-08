@@ -1,0 +1,185 @@
+{
+  "skill_name": "akuko",
+  "evals": [
+    {
+      "id": 0,
+      "name": "stage-routing-setup",
+      "action": "setup",
+      "prompt": "I want to set up akuko for my project and configure our budget cap and keys. Project state: no budget cap is recorded.",
+      "expected_output": "Routes to actions/setup.md. Conducts the setup interview: provider keys (reports set/not set without printing secrets), budget cap (required number in provider currency), defaults (aspect ratio, target runtime), and brand settings. Writes budget cap and settings to akuko.json.",
+      "assertions": [
+        "Routes to actions/setup.md",
+        "Conducts the setup interview covering provider keys and budget cap",
+        "Refuses to complete setup without an explicit budget cap number",
+        "Writes akuko.json.budget atomically through the host adapter"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "stage-routing-doctor",
+      "action": "doctor",
+      "prompt": "Check my setup to see what's missing in my film environment. Project state: project exists in ./my-film with budget cap set.",
+      "expected_output": "Routes to actions/doctor.md. Runs doctor diagnostics for Node version, media toolchains (FFmpeg, HyperFrames, Chrome), provider API keys presence, and budget cap integrity. Reports health status in plain language without revealing key values.",
+      "assertions": [
+        "Routes to actions/doctor.md",
+        "Checks Node version and optional media toolchains",
+        "Reports provider keys presence without exposing secret values",
+        "Reports diagnostic exit code and advice without modifying files unasked"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "stage-routing-intake",
+      "action": "intake",
+      "prompt": "Start a film project from this short story text and bring it in. Project state: no project exists yet.",
+      "expected_output": "Routes to actions/intake.md. Detects host, detects source kind as prose, asks the user whether to adapt to a Fountain screenplay first (adapt) or break down directly (direct). Upon choice, records script/source.md (and script/screenplay.fountain if adapt) at pending-review and pauses at the review gate.",
+      "assertions": [
+        "Routes to actions/intake.md",
+        "Detects host and creates new project through host adapter",
+        "Asks whether to adapt to a screenplay first or break down directly",
+        "Records script assets at pending-review and stops at intake review gate"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "stage-routing-breakdown",
+      "action": "breakdown",
+      "prompt": "Break down the screenplay into scenes and shots. Project state: intake is approved by a person; shots and scenes are currently empty.",
+      "expected_output": "Routes to actions/breakdown.md. Verifies intake is approved. Analyzes screenplay into scenes, beats, shot list (each shot ≤ 10 s, ≤ 2 principals in frame), and bible checklist. Applies proposal via applyBreakdown, runs tag and lint, sets units to pending-review, and stops at breakdown review gate.",
+      "assertions": [
+        "Routes to actions/breakdown.md",
+        "Verifies intake is approved before opening breakdown",
+        "Enforces shot constraints: duration <= 10 s and at most 2 principal characters",
+        "Applies proposal, tags screenplay, lints without errors, and stops at review gate"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "stage-routing-board",
+      "action": "board",
+      "prompt": "Draw the sketch board for the film. Project state: breakdown stage is approved by a person.",
+      "expected_output": "Routes to actions/board.md. Verifies breakdown is approved. Evaluates shot blocking, draws deterministic SVG framing-diagram panels on a thirds grid with move arrows, writes 9-panel beat boards, sets shots to pending-review at stage sketch, and pauses for review.",
+      "assertions": [
+        "Routes to actions/board.md",
+        "Verifies breakdown is approved before opening sketch",
+        "Generates SVG framing panels without inventing blocking not present in text",
+        "Stores panels, updates shots to pending-review at stage sketch, and pauses at review gate"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "stage-routing-bible",
+      "action": "bible",
+      "prompt": "Build the character and location bibles. Project state: intake, breakdown, and sketch board are all approved.",
+      "expected_output": "Routes to actions/bible.md. Plans visual bible assets (lookbook first, then character portraits and plates, then turnarounds). Presents spend quote through the spend gate and waits for human approval before generating any paid images.",
+      "assertions": [
+        "Routes to actions/bible.md",
+        "Enforces bible order: lookbook first, then portraits/plates, then turnarounds",
+        "Routes paid generation through the spend gate with estimate and confirmation line",
+        "Audits sheets and moves created assets to pending-review for board review"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "stage-routing-keyframes",
+      "action": "keyframes",
+      "prompt": "Render the keyframes for our scenes. Project state: bible stage is approved, sketch board is approved.",
+      "expected_output": "Routes to actions/keyframes.md. Reads keyframes action doc, identifies that keyframes is a stub (WP-02 / WP-22), informs user it is not built yet, and stops without improvising behavior.",
+      "assertions": [
+        "Routes to actions/keyframes.md",
+        "Identifies keyframes as a stub action awaiting WP-22",
+        "Refuses to improvise unbuilt behavior and offers status"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "stage-routing-view",
+      "action": "view",
+      "prompt": "Show me the review board for the film. Project state: sketch stage is in-review.",
+      "expected_output": "Routes to actions/view.md. Detects host, folds decisions first, and provides the default board view or designs a conforming view meeting the view contract.",
+      "assertions": [
+        "Routes to actions/view.md",
+        "Folds decisions before rendering view so current state is displayed",
+        "Presents the conforming default board for review"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "stage-routing-status",
+      "action": "status",
+      "prompt": "Where are we with the project and what's next? Project state: project exists in ./my-film.",
+      "expected_output": "Routes to actions/status.md. Read-only: detects host, reads state, derives pending reviews, pending spend approvals, current stage, budget summary, and suggests the next action without modifying files.",
+      "assertions": [
+        "Routes to actions/status.md",
+        "Performs read-only inspection without folding or writing akuko.json",
+        "Reports pending units, spend status, and current stage accurately",
+        "Recommends the appropriate next action"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "stage-routing-review",
+      "action": "review",
+      "prompt": "I reviewed the board and left comments and approvals. Apply my notes. Project state: decisions.jsonl has new decisions recorded from a conformed view.",
+      "expected_output": "Routes to actions/review.md. Reads decisions from host store, validates provenance, folds decisions with foldDecisions(), updates unit statuses, and writes state atomically with a fold report.",
+      "assertions": [
+        "Routes to actions/review.md",
+        "Reads decisions from the host store",
+        "Validates decision provenance against conformed view list",
+        "Applies status transitions and reports changes and rejections"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "gating-keyframes-before-bible-approved",
+      "action": "keyframes",
+      "prompt": "Render the key frames for scene 1 now. Project state: sketch board is approved, but bible stage is still in-review with character portraits pending review.",
+      "expected_output": "Routes to actions/keyframes.md and evaluates stage gating rule (lib/state.md §Stages). Refuses to run keyframes because the prerequisite bible stage is not approved. States plainly that the bible stage is waiting for human approval.",
+      "assertions": [
+        "Evaluates stage gating rule from lib/state.md",
+        "Refuses to advance to keyframes while bible stage is not approved",
+        "Informs the user that bible stage approval is waiting",
+        "Leaves project state and stage locks unchanged"
+      ]
+    },
+    {
+      "id": 11,
+      "name": "spend-gate-no-budget-refusal",
+      "action": "setup",
+      "prompt": "Generate the character bible portraits using Gemini image provider. Project state: akuko.json.budget is null (no budget cap set).",
+      "expected_output": "Routes through bible action to spend gate. Spend gate checks budget cap, sees budget is null, refuses the paid job with no-budget code, prints the setup pointer, and directs the user to /akuko setup to record a budget cap.",
+      "assertions": [
+        "Refuses paid provider execution when budget cap is null",
+        "Emits the SETUP_POINTER refusal message",
+        "Directs user to /akuko setup to configure budget cap",
+        "Makes zero paid provider API calls"
+      ]
+    },
+    {
+      "id": 12,
+      "name": "breakdown-rerun-idempotency",
+      "action": "breakdown",
+      "prompt": "Run breakdown again on the screenplay. Project state: scenes and shots are already populated (shots[] has 12 shots).",
+      "expected_output": "Routes to actions/breakdown.md. Recognizes shots[] is not empty, enters TAG ONLY branch, creates/deletes/reorders zero shots or scenes, only runs retag and lint, and leaves akuko.json untouched.",
+      "assertions": [
+        "Detects that scenes or shots already exist (alreadyBrokenDown)",
+        "Refuses to create new shots or duplicate breakdown units",
+        "Runs tag and lint only, preserving existing shot IDs and akuko.json",
+        "Reports that zero units were created"
+      ]
+    },
+    {
+      "id": 13,
+      "name": "stub-action-motion-refusal",
+      "action": "motion",
+      "prompt": "Animate shot 1 and make the motion clip. Project state: keyframes are approved.",
+      "expected_output": "Routes to actions/motion.md. Reads the action doc, sees that motion is marked 'Stub (WP-02)', informs the user that motion is not built yet (Phase 2), offers /akuko status, and stops without improvising motion generation.",
+      "assertions": [
+        "Routes to actions/motion.md",
+        "Identifies that motion is a stub action not yet built in Phase 1",
+        "Stops without attempting to improvise or fabricate video generation",
+        "Offers /akuko status as next step"
+      ]
+    }
+  ]
+}

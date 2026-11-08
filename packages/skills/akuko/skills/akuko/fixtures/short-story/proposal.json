@@ -1,0 +1,253 @@
+{
+  "scenes": [
+    {
+      "n": 1,
+      "heading": "INT. OLD MAN'S HOUSE - HALLWAY - NIGHT",
+      "summary": "Midnight. The narrator creeps to the old man's door, as he has every night for a week.",
+      "act": "I",
+      "sequence": "The Nightly Visit"
+    },
+    {
+      "n": 2,
+      "heading": "INT. OLD MAN'S BEDROOM - NIGHT",
+      "summary": "The lantern's single ray falls on the eye. The old man wakes. The narrator strikes.",
+      "act": "I",
+      "sequence": "The Deed"
+    },
+    {
+      "n": 3,
+      "heading": "INT. OLD MAN'S BEDROOM - LATER",
+      "summary": "He hides the body beneath the floorboards.",
+      "act": "II",
+      "sequence": "Concealment"
+    },
+    {
+      "n": 4,
+      "heading": "INT. OLD MAN'S BEDROOM - DAWN",
+      "summary": "Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud.",
+      "act": "II",
+      "sequence": "The Confession"
+    }
+  ],
+  "checklist": {
+    "characters": [
+      {
+        "name": "The Narrator",
+        "role": "Principal",
+        "description": "Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle."
+      },
+      {
+        "name": "The Old Man",
+        "role": "Principal",
+        "description": "Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'."
+      },
+      {
+        "name": "Officers (×3)",
+        "role": "Supporting",
+        "description": "1840s police, dark greatcoats, polite and unhurried."
+      }
+    ],
+    "locations": [
+      {
+        "name": "Hallway",
+        "description": "Narrow, bare boards, a single door at the end."
+      },
+      {
+        "name": "The Old Man's Bedroom",
+        "description": "Four-poster bed, shuttered window, wide pine floorboards."
+      }
+    ],
+    "styles": [
+      {
+        "name": "Lookbook",
+        "description": "Lantern chiaroscuro: one warm source, everything else falls to black. Dawn scenes go cold and grey — the only daylight in the film. Fine film grain, no lens flares. Composition leaves dead space around the eye."
+      }
+    ]
+  },
+  "shots": [
+    {
+      "scene": 1,
+      "beat": "Midnight",
+      "shot_type": "ws",
+      "camera": "Static, low angle",
+      "camera_move": "unset",
+      "action": "A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.",
+      "duration_s": 6,
+      "prompt": "Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro",
+      "script_line": "Every night, about midnight, I turned the latch of his door and opened it — oh so gently!",
+      "characters": [
+        "The Narrator"
+      ],
+      "location": "Hallway"
+    },
+    {
+      "scene": 1,
+      "beat": "The latch",
+      "shot_type": "insert",
+      "camera": "Macro, locked off",
+      "camera_move": "unset",
+      "action": "His hand turns the latch, a fraction at a time.",
+      "duration_s": 4,
+      "prompt": "Extreme close-up of a hand slowly turning an iron door latch, lantern light from below",
+      "script_line": "I turned the latch of his door and opened it — oh so gently!",
+      "characters": [
+        "The Narrator"
+      ],
+      "location": "Hallway"
+    },
+    {
+      "scene": 1,
+      "beat": "The sleeping man",
+      "shot_type": "pov",
+      "camera": "Handheld, slow push",
+      "camera_move": "push-in",
+      "action": "Through the crack of the door: darkness, and the shape of the old man asleep.",
+      "duration_s": 6,
+      "prompt": "POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure",
+      "script_line": "I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.",
+      "characters": [
+        "The Old Man"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 2,
+      "beat": "The ray",
+      "shot_type": "ms",
+      "camera": "Static",
+      "camera_move": "unset",
+      "action": "The narrator opens the lantern a crack. A single thin ray cuts across the room.",
+      "duration_s": 7,
+      "prompt": "Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room",
+      "script_line": "I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.",
+      "characters": [
+        "The Narrator",
+        "The Old Man"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 2,
+      "beat": "The vulture eye",
+      "shot_type": "ecu",
+      "camera": "Locked off",
+      "camera_move": "unset",
+      "action": "The eye, pale blue with a film over it, wide open in the ray of light.",
+      "duration_s": 4,
+      "prompt": "Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam",
+      "script_line": "It was open — wide, wide open — and I grew furious as I gazed upon it.",
+      "characters": [
+        "The Old Man"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 2,
+      "beat": "Who's there",
+      "shot_type": "ms",
+      "camera": "Static",
+      "camera_move": "unset",
+      "action": "The old man sits up in bed: 'Who's there?'",
+      "duration_s": 5,
+      "prompt": "Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified",
+      "script_line": "I heard him sit up in the bed, crying out — \"Who's there?\"",
+      "characters": [
+        "The Old Man"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 2,
+      "beat": "The strike",
+      "shot_type": "ws",
+      "camera": "Static, high angle",
+      "camera_move": "unset",
+      "action": "The lantern drops. The bed is dragged over him. Only shadows move.",
+      "duration_s": 6,
+      "prompt": "High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow",
+      "script_line": "In an instant I dragged him to the floor, and pulled the heavy bed over him.",
+      "characters": [
+        "The Narrator",
+        "The Old Man"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 3,
+      "beat": "Concealment",
+      "shot_type": "overhead",
+      "camera": "Overhead, static",
+      "camera_move": "unset",
+      "action": "From above: he lifts three planks from the floor.",
+      "duration_s": 7,
+      "prompt": "Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him",
+      "script_line": "I took up three planks from the flooring of the chamber, and deposited all between the scantlings.",
+      "characters": [
+        "The Narrator"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 4,
+      "beat": "The officers arrive",
+      "shot_type": "ws",
+      "camera": "Static",
+      "camera_move": "unset",
+      "action": "Dawn light. Three officers stand in the doorway, hats in hand.",
+      "duration_s": 6,
+      "prompt": "Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway",
+      "script_line": "There entered three men, who introduced themselves, with perfect suavity, as officers of the police.",
+      "characters": [
+        "Officers (×3)"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 4,
+      "beat": "The chair over the boards",
+      "shot_type": "ms",
+      "camera": "Slow dolly in",
+      "camera_move": "push-in",
+      "action": "He places his chair directly over the hidden boards and smiles at the officers.",
+      "duration_s": 8,
+      "prompt": "Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus",
+      "script_line": "I placed my own seat upon the very spot beneath which reposed the corpse of the victim.",
+      "characters": [
+        "The Narrator",
+        "Officers (×3)"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 4,
+      "beat": "The sound grows",
+      "shot_type": "ecu",
+      "camera": "Locked off",
+      "camera_move": "unset",
+      "action": "Sweat on his temple. Under the silence, a low, dull, quick sound.",
+      "duration_s": 5,
+      "prompt": "Extreme close-up of a sweating temple and a twitching eye, cold dawn light",
+      "script_line": "It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.",
+      "characters": [
+        "The Narrator"
+      ],
+      "location": "The Old Man's Bedroom"
+    },
+    {
+      "scene": 4,
+      "beat": "The confession",
+      "shot_type": "ms",
+      "camera": "Handheld, whip to boards",
+      "camera_move": "whip-pan",
+      "action": "He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'",
+      "duration_s": 6,
+      "prompt": "Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling",
+      "script_line": "\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"",
+      "characters": [
+        "The Narrator",
+        "Officers (×3)"
+      ],
+      "location": "The Old Man's Bedroom"
+    }
+  ]
+}

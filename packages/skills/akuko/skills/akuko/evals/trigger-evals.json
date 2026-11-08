@@ -1,0 +1,98 @@
+[
+  {
+    "query": "turn this short story into a short film",
+    "should_trigger": true
+  },
+  {
+    "query": "storyboard my screenplay",
+    "should_trigger": true
+  },
+  {
+    "query": "make the key frames for scene 2",
+    "should_trigger": true
+  },
+  {
+    "query": "set a budget cap for akuko of $25",
+    "should_trigger": true
+  },
+  {
+    "query": "I have a gothic horror story I wrote last year. Can we take this from intake all the way to a finished short film?",
+    "should_trigger": true
+  },
+  {
+    "query": "Run akuko doctor on this project folder to see what tools or API keys I am missing",
+    "should_trigger": true
+  },
+  {
+    "query": "break it down into scenes and shots so we can see the shot list and timing",
+    "should_trigger": true
+  },
+  {
+    "query": "Let's draw the sketch board panels for the shots in our akuko.json project",
+    "should_trigger": true
+  },
+  {
+    "query": "Build the character and location bibles for the approved breakdown",
+    "should_trigger": true
+  },
+  {
+    "query": "I reviewed the storyboard on the review board and requested changes on shot 4. Please fold my decisions into akuko.json",
+    "should_trigger": true
+  },
+  {
+    "query": "show me the review board for the current stage of the film",
+    "should_trigger": true
+  },
+  {
+    "query": "Where are we with the short film project and what's next?",
+    "should_trigger": true
+  },
+  {
+    "query": "write me a short story about an astronaut marooned on Europa",
+    "should_trigger": false
+  },
+  {
+    "query": "edit this video in Premiere to cut out the awkward pauses and add background music",
+    "should_trigger": false
+  },
+  {
+    "query": "generate one image of a black cat wearing a wizard hat in watercolor style",
+    "should_trigger": false
+  },
+  {
+    "query": "write a music-video treatment for a fast-paced electronic dance track",
+    "should_trigger": false
+  },
+  {
+    "query": "plan the pre-production for my short film as a project plan with work packages and milestones",
+    "should_trigger": false
+  },
+  {
+    "query": "Can you explain how color grading curves work in DaVinci Resolve Studio?",
+    "should_trigger": false
+  },
+  {
+    "query": "Give me detailed script doctor feedback on the pacing, subtext, and third act twist of this script draft",
+    "should_trigger": false
+  },
+  {
+    "query": "Convert this 1080p MP4 recording into a web-optimized 60fps animated GIF",
+    "should_trigger": false
+  },
+  {
+    "query": "Create an Excel spreadsheet template to calculate equipment rental and catering costs for an indie film shoot",
+    "should_trigger": false
+  },
+  {
+    "query": "Draw a minimalist SVG vector logo for my film production company called Dark Room Cinema",
+    "should_trigger": false
+  },
+  {
+    "query": "Clone my voice with ElevenLabs and generate an audio narration of chapter 1 of Moby Dick",
+    "should_trigger": false
+  },
+  {
+    "query": "Format this raw interview transcript into standard two-column broadcast script layout",
+    "should_trigger": false
+  }
+]
