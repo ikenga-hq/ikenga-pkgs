@@ -17,7 +17,8 @@ import { dirname, join } from 'node:path';
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
 import { readJsonlStore } from '../decisions/jsonl.ts';
-import { assetDir, assetId, buildAsset, safeBasename } from './shared.ts';
+import { loadConformedFile } from '../decisions/conformed.ts';
+import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 
 export const PROJECT_FILE = 'akuko.json';
@@ -114,8 +115,14 @@ export class LocalHost implements HostAdapter {
     return asset;
   }
 
-  /** Write the view to `<project>/views/<name>.html` and return its path. */
+  /**
+   * Write the view to `<project>/views/<name>.html` and return its path. A view
+   * that writes decisions is refused unless its exact HTML is on the skill's
+   * `views/conformed.json` or `<project>/views/conformed.json` (C8; a
+   * missing file is an empty list). Read-only views publish freely.
+   */
   async publishView(v: ViewArtifact): Promise<{ url?: string; path?: string }> {
+    await assertPublishable(v, () => [loadConformedFile(SHIPPED_CONFORMED), loadConformedFile(join(this.projectDir, VIEWS_DIR, 'conformed.json'))]);
     const path = join(this.projectDir, VIEWS_DIR, `${safeBasename(v.name).replace(/\.html?$/i, '')}.html`);
     await writeFileAtomic(path, v.html);
     return { path };

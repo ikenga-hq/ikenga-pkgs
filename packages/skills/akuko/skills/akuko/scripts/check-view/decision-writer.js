@@ -1,4 +1,4 @@
-/* akuko-decision-writer v1 — views/contract.md §Decision writer. Inline this block verbatim. */
+/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */
 (function () {
   'use strict';
   var STATE_KEY = 'akuko.decisions';
@@ -82,6 +82,6 @@
     }).catch(function () { db = null; });
   }
   // Host C: re-publish the outbox after a pane reload.
-  toIkenga();
+  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)
 })();
 /* end akuko-decision-writer */

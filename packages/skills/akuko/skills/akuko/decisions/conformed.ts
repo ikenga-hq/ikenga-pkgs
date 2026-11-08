@@ -4,8 +4,10 @@
  * A view "conforms" once `scripts/check-view.mjs` has passed it. The check
  * records `{view, sha256, checked_at, checker}` (`--record <file>`), where
  * `view` is the exact `Decision.view` string the page writes
- * (`<manifest id>@<manifest version>`) and `sha256` is the hash of the HTML it
- * checked. Folding accepts `approve`, `approve-spend` and `undo` decisions
+ * (`<manifest id>@<manifest version>`) and `sha256` is the conformance hash
+ * of the HTML it checked: the page with its `akuko-project` data block emptied
+ * (`viewHash`, scripts/check-view/hash.mjs), so the record holds whatever
+ * project the page is published with, and nothing else may change. Folding accepts `approve`, `approve-spend` and `undo` decisions
  * only from a `view` on this list (plus the built-in chat source below);
  * publishing a decision-writing view needs its hash on the list.
  *
@@ -16,8 +18,8 @@
  *           only the owner can write (views/contract.md §Host A)
  */
 
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { conformanceHash } from '../scripts/check-view/hash.mjs';
 
 export const CONFORMED_FORMAT = 'akuko-conformed-views' as const;
 
@@ -75,10 +77,14 @@ export function conformedViewIds(input: ConformedInput): Set<string> {
   return out;
 }
 
-/** sha256 of a view's HTML exactly as published (what check-view records). */
-export const viewHash = (html: string): string => createHash('sha256').update(html, 'utf8').digest('hex');
+/**
+ * The conformance hash of a view's HTML (what check-view records): sha256 of
+ * the page with the content of its `<script id="akuko-project">` data block
+ * removed. The embedded project may differ; any other byte may not.
+ */
+export const viewHash = (html: string): string => conformanceHash(html);
 
-/** Is this exact HTML recorded as conformed under `view`? Use before publishing a view that writes decisions. */
+/** Is this page (any embedded project) recorded as conformed under `view`? Use before publishing a view that writes decisions. */
 export function isConformedHtml(input: ConformedInput, view: string, html: string): boolean {
   if (input === undefined) return false;
   const list: Iterable<ConformedView | string> = isFile(input) ? input.views : input;

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>akuko · cast sheet (read-only)</title>
+<!--
+  READ-ONLY FIXTURE: a freehand view that only shows the project. Its manifest
+  says writes_decisions: false; it has no decision control and no decision
+  writer, and writes nothing when opened, clicked or left. scripts/check-view.mjs
+  reports it SKIP (read-only, not applicable) and exits 0 (views/contract.md §10).
+-->
+<style>
+:root { --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+article { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 0 0 12px; }
+button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; }
+:focus-visible { outline: 3px solid #f2c46d; outline-offset: 2px; }
+.muted { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Cast sheet</h1>
+<label>Show <select id="kind"><option value="all">everyone</option><option value="pending-review">waiting for review</option></select></label>
+<button type="button" id="expand" aria-expanded="false">Show notes</button>
+<div data-akuko-view="bible" id="cast"></div>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"freehand:cast-sheet","version":"1","writes_decisions":false,"views":["bible"]}</script>
+<script type="application/json" id="akuko-project">{}</script>
+<script>
+(function () {
+  'use strict';
+  var P = {};
+  try { P = JSON.parse(document.getElementById('akuko-project').textContent); } catch (e) { P = {}; }
+  var chars = (P.bible && P.bible.characters) || [];
+  var notes = false;
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function render() {
+    var kind = document.getElementById('kind').value;
+    document.getElementById('cast').innerHTML = chars.filter(function (c) { return kind === 'all' || c.status === kind; }).map(function (c) {
+      return '<article data-akuko-field="bible-entry" data-akuko-unit="' + esc(c.id) + '" data-akuko-status="' + esc(c.status) + '"><h2>' + esc(c.name || c.id) + '</h2><p class="muted">' + esc(c.status) + '</p>' + (notes ? '<p>' + esc(c.description || '') + '</p>' : '') + '</article>';
+    }).join('');
+  }
+  document.getElementById('kind').addEventListener('change', render);
+  document.getElementById('expand').addEventListener('click', function (e) { notes = !notes; e.currentTarget.setAttribute('aria-expanded', String(notes)); render(); });
+  render();
+})();
+</script>
+</body>
+</html>
