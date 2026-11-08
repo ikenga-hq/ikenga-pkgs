@@ -23,6 +23,9 @@ import {
 import { createIkengaHost, createNodeHost, IkengaHost } from './ikenga.ts';
 import { createLocalHost, LocalHost, PROJECT_FILE, serializeProject, writeFileAtomic } from './local.ts';
 import type { AssetInput, HostAdapter, WaveOneHost } from './types.ts';
+import { viewHash } from '../decisions/conformed.ts';
+import { CONFORMED_DOC } from './claude-artifact.ts';
+import { assertPublishable, SHIPPED_CONFORMED, viewIdOf, viewWritesDecisions } from './shared.ts';
 
 const FIXTURE = fileURLToPath(new URL('../fixtures/the-beating/akuko.json', import.meta.url));
 const fixture = (): AkukoProject => AkukoProjectSchema.parse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
@@ -550,6 +553,95 @@ describe('readDecisions (WP-07a)', () => {
 
   it('A without a list binding says how to read the store with ArtifactData', async () => {
     await assert.rejects(createClaudeArtifactHost(fakeBindings().b).readDecisions(), /ArtifactData/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// publishView gate (C8, WP-07a2): a decision-writing view needs its exact
+// HTML on a conformed list; read-only views publish freely.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('publishView', () => {
+  const VFX = fileURLToPath(new URL('../views/__fixtures__/', import.meta.url));
+  const board = readFileSync(join(VFX, 'tiny-board.html'), 'utf8'); // writes decisions as test-board@1
+  const readOnly = readFileSync(join(VFX, 'readonly-cast-sheet.html'), 'utf8');
+  const liar = readFileSync(join(VFX, 'bad-readonly-writes-decision.html'), 'utf8');
+  const listFor = (view: string, html: string) => ({ format: 'akuko-conformed-views' as const, version: 1 as const, views: [{ view, sha256: viewHash(html), checked_at: '2026-11-08T00:00:00Z', checker: 'check-view@2' }] });
+  const refusal = /refusing to publish view test-board@1 \("board"\).*not on a conformed-views list.*check-view\.mjs <view\.html> --record/;
+  const writeList = (dir: string, list: unknown) => { mkdirSync(join(dir, 'views'), { recursive: true }); writeFileSync(join(dir, 'views', 'conformed.json'), JSON.stringify(list)); };
+
+  it('tells decision-writing views from read-only ones, and reads the view id from the manifest', () => {
+    assert.equal(viewWritesDecisions({ html: board }), true);
+    assert.equal(viewWritesDecisions({ html: liar }), true, 'a page writing the Ikenga store directly is gated, whatever its manifest says');
+    assert.equal(viewWritesDecisions({ html: readOnly }), false);
+    assert.equal(viewWritesDecisions({ html: '<!-- no data-akuko-action here --><p>hi</p>' }), false, 'a comment is not a control');
+    assert.equal(viewWritesDecisions({ html: '<p>hi</p>', writesDecisions: true }), true);
+    assert.equal(viewIdOf(board), 'test-board@1');
+    assert.equal(viewIdOf(readOnly), 'freehand:cast-sheet@1');
+    assert.equal(viewIdOf('<p>no manifest</p>'), undefined);
+    assert.match(SHIPPED_CONFORMED.replace(/\\/g, '/'), /\/views\/conformed\.json$/);
+  });
+
+  it('a read-only view that reads decisions publishes; the honest ways of writing one are gated (shared predicate, B8)', async () => {
+    const reads = readOnly.replace('render();\n})();', "if (window.claude) window.claude.use('db').then(function (db) { return db && db.collection('decisions').get(); });\n  render();\n})();");
+    assert.notEqual(reads, readOnly);
+    assert.equal(viewWritesDecisions({ html: reads }), false);
+    const host = createLocalHost({ projectDir: tmpProject(false) });
+    assert.ok((await host.publishView({ name: 'decision-log', html: reads })).path);
+    for (const code of ["b.dataset.akukoAction = 'approve';", "localStorage.setItem('akuko-outbox:the-beating', '[]');", "parent.postMessage({__iyke: true, kind: 'state', payload: {key: k, value: []}}, '*');"]) {
+      const html = readOnly.replace('render();\n})();', `${code}\n  render();\n})();`);
+      assert.equal(viewWritesDecisions({ html }), true, code);
+      await assert.rejects(host.publishView({ name: 'mistake', html }), /refusing to publish view freehand:cast-sheet@1/, code);
+    }
+  });
+
+  it('assertPublishable reads the lists only for a decision-writing view, and accepts an entry on any list', async () => {
+    let reads = 0;
+    const lists = () => { reads++; return [{ format: 'akuko-conformed-views' as const, version: 1 as const, views: [] }, listFor('test-board@1', board)]; };
+    await assertPublishable({ name: 'cast', html: readOnly }, lists);
+    assert.equal(reads, 0);
+    await assertPublishable({ name: 'board', html: board }, lists);
+    assert.equal(reads, 1);
+    await assert.rejects(assertPublishable({ name: 'board', html: `${board} ` }, lists), refusal, 'one byte changed: not the recorded page');
+    await assert.rejects(assertPublishable({ name: 'board', html: board }, () => [listFor('test-board@2', board)]), refusal, 'another version of the id does not count');
+    await assert.rejects(assertPublishable({ name: 'x', html: '<button data-akuko-action="approve" data-akuko-unit="sc2_sh4">ok</button>' }, () => []), /refusing to publish view "x": it writes decisions but has no akuko-view manifest/);
+  });
+
+  for (const [label, make] of [['B (LocalHost)', (dir: string) => createLocalHost({ projectDir: dir })], ['C (IkengaHost)', (dir: string) => createIkengaHost({ projectDir: dir })]] as const) {
+    it(`${label}: refuses an unrecorded decision-writing view (a missing conformed.json is an empty list), publishes it once <project>/views/conformed.json has its hash`, async () => {
+      const dir = tmpProject(false);
+      const host = make(dir);
+      await assert.rejects(host.publishView({ name: 'board', html: board }), refusal);
+      assert.equal(existsSync(join(dir, 'views', 'board.html')), false, 'nothing was written');
+      writeList(dir, listFor('test-board@1', board));
+      const r = await host.publishView({ name: 'board', html: board });
+      assert.equal(readFileSync(r.path ?? '', 'utf8'), board);
+      // the publisher embeds the real project: still the recorded page (the data block is not hashed)
+      const withProject = board.replace(/(<script type="application\/json" id="akuko-project">)[\s\S]*?(<\/script>)/, (_m, a: string, b: string) => `${a}${JSON.stringify({ ...fixture(), current_stage: 'export' })}${b}`);
+      assert.notEqual(withProject, board);
+      await host.publishView({ name: 'board', html: withProject });
+      await assert.rejects(host.publishView({ name: 'board', html: board.replace('minimal review board</title>', 'minimal review board (edited)</title>') }), refusal);
+      await assert.rejects(host.publishView({ name: 'liar', html: liar }), /refusing to publish view bad-readonly-writes-decision@1/);
+    });
+
+    it(`${label}: a read-only view publishes with no conformed record, even beside a broken list`, async () => {
+      const dir = tmpProject(false);
+      writeList(dir, { not: 'a conformed list' });
+      const r = await make(dir).publishView({ name: 'cast-sheet', html: readOnly });
+      assert.equal(readFileSync(r.path ?? '', 'utf8'), readOnly);
+    });
+  }
+
+  it('A (ClaudeArtifactHost): reads the board\'s akuko/conformed doc; refuses until the hash is there; read-only views publish freely', async () => {
+    const f = fakeBindings();
+    const host = createClaudeArtifactHost(f.b);
+    await assert.rejects(host.publishView({ name: 'board', html: board }), refusal);
+    assert.deepEqual(f.published, [], 'nothing was published');
+    f.docs.set(CONFORMED_DOC, listFor('test-board@1', board));
+    assert.deepEqual(await host.publishView({ name: 'board', html: board }), { url: 'https://claude.ai/artifact/board' });
+    assert.deepEqual(await host.publishView({ name: 'cast-sheet', html: readOnly }), { url: 'https://claude.ai/artifact/cast-sheet' });
+    await assert.rejects(host.publishView({ name: 'liar', html: liar }), /bad-readonly-writes-decision@1/);
+    assert.deepEqual(f.published, ['board', 'cast-sheet']);
   });
 });
 

@@ -1,11 +1,12 @@
 // scripts/check-view.mjs (G-VIEW sign-off): passes the instrumented copy of
 // the locked board and the minimal board, fails every bad fixture for its
-// specific reason (including the G-VIEW reviewer's sixteen variants).
-// Fixtures are checked in a few processes in parallel (at most POOL at a time).
+// specific reason (including the G-VIEW reviewer's variants and the WP-07a2
+// hardening probes), and reports a truly read-only page SKIP.
+// Fixtures are checked in small groups, one process per group, at most POOL at a time.
 
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -18,13 +19,13 @@ import { approveSpendText, expectedMoney, expectedYourMove, mutateProject } from
 const SKILL = fileURLToPath(new URL('..', import.meta.url));
 const FX = join(SKILL, 'views', '__fixtures__');
 const CLI = join(SKILL, 'scripts', 'check-view.mjs');
-const TIMEOUT = 540_000;
+const TIMEOUT = 900_000;
 const tmp: string[] = [];
 const tmpDir = (p: string) => { const d = mkdtempSync(join(tmpdir(), p)); tmp.push(d); return d; };
 after(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }); });
 
 interface Failure { rule: string; code: string; message: string }
-interface Result { file: string; ok: boolean; view: string | null; sha256: string; failures: Failure[]; decisions_checked: number }
+interface Result { file: string; ok: boolean; skipped?: boolean; view: string | null; sha256: string; failures: Failure[]; decisions_checked: number }
 
 // A small pool: each check-view process runs jsdom many times.
 const POOL = Math.max(2, Math.min(4, availableParallelism()));
@@ -36,9 +37,9 @@ async function pooled<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { running--; queue.shift()?.(); }
 }
 
-function exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function exec(args: string[], env: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return pooled(() => new Promise((resolve, reject) => {
-    execFile(process.execPath, [CLI, ...args], { cwd: SKILL, timeout: TIMEOUT - 20_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(process.execPath, [CLI, ...args], { cwd: SKILL, timeout: 480_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...env } }, (err, stdout, stderr) => {
       if (err && typeof (err as { code?: unknown }).code !== 'number') return reject(err);
       resolve({ code: err ? Number((err as { code: number }).code) : 0, stdout, stderr });
     });
@@ -82,12 +83,32 @@ const BAD: Record<string, string[]> = {
   'bad-decline-approves-spend.html': ['wrong-action'],
   'bad-ua-sniff-auto-approve.html': ['auto-approve'],
   'bad-approves-other-unit.html': ['writes-other-unit'],
+  // WP-07a2 hardening: the reviewer's later probes (F1–F6) and a page lying about being read-only
+  'bad-select-change-approves.html': ['unmarked-control-writes'],
+  'bad-pointerdown-approve-all.html': ['batch-approve', 'unmarked-control-writes'],
+  'bad-unload-approve-all.html': ['auto-approve'],
+  'bad-var-zero-font-estimate.html': ['hidden-estimate', 'text-below-floor'],
+  'bad-raf-auto-approve.html': ['auto-approve'],
+  'bad-dblclick-approves.html': ['unmarked-control-writes'],
+  'bad-readonly-writes-decision.html': ['read-only-writes'],
+  // the WP-07a2 review (C1–C6, B7)
+  'bad-hostc-auto-approve.html': ['auto-approve'],
+  'bad-delayed-other-unit.html': ['writes-other-unit'],
+  'bad-observer-auto-approve.html': ['auto-approve'],
+  'bad-card-click-approves.html': ['unmarked-control-writes'],
+  'bad-early-close-project-block.html': ['auto-approve'],
+  'bad-project-block-decoy.html': ['bad-project-block'],
+  'bad-empties-ikenga-store.html': ['empties-ikenga-store'],
+  'bad-iframe-in-view.html': ['iframe-in-view'],
+  'bad-readonly-hostc-delayed-post.html': ['read-only-writes'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
+const SKIP = ['readonly-cast-sheet.html'];
 
 // Start the checks now, a few files per process; the tests below await their own.
-const all = [...GOOD, ...Object.keys(BAD)];
-const groups = Array.from({ length: POOL }, (_, i) => all.filter((_f, k) => k % POOL === i));
+const all = [...GOOD, ...SKIP, ...Object.keys(BAD)];
+const GROUP = 4;
+const groups = Array.from({ length: Math.ceil(all.length / GROUP) }, (_, i) => all.slice(i * GROUP, (i + 1) * GROUP));
 const byFile = new Map<string, Promise<{ code: number; result: Result }>>();
 for (const g of groups) {
   const p = run(g.map((f) => join(FX, f)));
@@ -128,11 +149,32 @@ describe('check-view passes conforming views', { timeout: TIMEOUT }, () => {
   });
 });
 
+describe('check-view skips a truly read-only view', { timeout: TIMEOUT }, () => {
+  for (const f of SKIP) {
+    it(`SKIP ${f} (read-only, not applicable), exit 0`, async () => {
+      const { result: r } = await byFile.get(f)!;
+      assert.equal(r.ok, true);
+      assert.equal(r.skipped, true);
+      assert.deepEqual(r.failures, []);
+    });
+  }
+
+  it('the CLI prints SKIP, exits 0 and never records a read-only page', async () => {
+    const dir = tmpDir('akuko-ro-');
+    const out = join(dir, 'conformed.json');
+    const { code, stdout } = await exec([join(FX, 'readonly-cast-sheet.html'), '--record', out]);
+    assert.equal(code, 0);
+    assert.match(stdout, /^SKIP .*readonly-cast-sheet\.html \(freehand:cast-sheet@1\) · read-only \(not applicable\)/m);
+    assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')).views, []);
+  });
+});
+
 describe('check-view fails each bad fixture for its reason', { timeout: TIMEOUT }, () => {
   for (const [f, codes] of Object.entries(BAD)) {
     it(`FAIL ${f} → ${codes.join(', ')}`, async () => {
       const { result: r } = await byFile.get(f)!;
       assert.equal(r.ok, false);
+      assert.ok(!r.skipped);
       for (const c of codes) assert.ok(r.failures.some((x) => x.code === c), `${f} did not fail with ${c}: ${JSON.stringify(r.failures)}`);
       assert.ok(!r.failures.some((x) => x.code === 'id-collision'), `${f} has its own view id`);
       for (const x of r.failures) assert.ok(x.message.length > 20, 'every failure says what is wrong');
@@ -145,6 +187,15 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
 
   it('the conforming fixtures inline the decision writer verbatim', () => {
     for (const f of GOOD) assert.ok(readFileSync(join(FX, f), 'utf8').includes(writer), f);
+  });
+
+  it('every fixture inlining the writer carries the current one (no stale-writer outside the signed-by-agent fixture, which edits it)', async () => {
+    for (const [f, codes] of Object.entries(BAD)) {
+      const { result: r } = await byFile.get(f)!;
+      const stale = r.failures.some((x) => x.code === 'stale-writer');
+      assert.equal(stale, f === 'bad-signed-by-agent.html', `${f}: ${JSON.stringify(r.failures.filter((x) => x.code === 'stale-writer'))}`);
+      void codes;
+    }
   });
 
   it('each bad fixture is labelled as one', () => {
@@ -177,8 +228,13 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
     const first = await exec([file, '--record', out]);
     assert.equal(first.code, 0, first.stdout);
     const list = parseConformedFile(JSON.parse(readFileSync(out, 'utf8')));
-    assert.deepEqual(list.views.map((v) => [v.view, v.checker]), [['rec-board@1', 'check-view@1']]);
+    assert.deepEqual(list.views.map((v) => [v.view, v.checker]), [['rec-board@1', 'check-view@2']]);
     assert.equal(isConformedHtml(list, 'rec-board@1', readFileSync(file, 'utf8')), true);
+    // the publisher embeds the real project: the record still holds (the data block is not hashed)
+    const published = readFileSync(file, 'utf8').replace(/(<script type="application\/json" id="akuko-project">)[\s\S]*?(<\/script>)/, (_m, a: string, b: string) => `${a}{"project":{"slug":"someone-elses-film"}}${b}`);
+    assert.notEqual(published, readFileSync(file, 'utf8'));
+    assert.equal(isConformedHtml(list, 'rec-board@1', published), true);
+    assert.equal(isConformedHtml(list, 'rec-board@1', published.replace('<title>', '<title>x')), false);
     const changed = join(dir, 'rec-board-edited.html');
     writeFileSync(changed, readFileSync(file, 'utf8').replace('<title>akuko · minimal review board</title>', '<title>akuko · minimal review board (edited)</title>'));
     const second = await exec([changed, '--record', out]);
@@ -196,6 +252,45 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
       assert.equal(r.ok, false, r.file);
       assert.ok(r.failures.some((f) => f.code === 'id-collision'), `${r.file}: ${JSON.stringify(r.failures)}`);
     }
+  });
+
+  it('--ship records a new version of a shipped view; keeps C3; never takes a freehand id; replaces an entry an older checker hashed', async () => {
+    const dir = tmpDir('akuko-ship-');
+    const ship = join(dir, 'conformed.json');
+    const board = (version: string, title = 'akuko · minimal review board') => asView(tiny, 'default-board').replace('"version":"1"', `"version":"${version}"`).replace('<title>akuko · minimal review board</title>', `<title>${title}</title>`);
+    writeFileSync(join(dir, 'board-02.html'), board('0.2'));
+    writeFileSync(join(dir, 'freehand.html'), asView(tiny, 'freehand:sheet'));
+    const env = { AKUKO_CHECK_VIEW_SHIPPED_LIST: ship }; // stands in for the skill's views/conformed.json
+    const first = await exec([join(dir, 'board-02.html'), join(dir, 'freehand.html'), '--ship', ship, '--json'], env);
+    const r1 = JSON.parse(first.stdout) as Result[];
+    assert.equal(r1[0]!.ok, true, JSON.stringify(r1[0]!.failures));
+    assert.ok(r1[1]!.failures.some((f) => f.code === 'id-collision' && /freehand view; --ship records only/.test(f.message)));
+    assert.deepEqual(parseConformedFile(JSON.parse(readFileSync(ship, 'utf8'))).views.map((v) => v.view), ['default-board@0.2']);
+
+    // C3 holds under --ship: the same id@version for different HTML is refused
+    writeFileSync(join(dir, 'board-02-edited.html'), board('0.2', 'edited'));
+    // an entry recorded by check-view@1 (raw-page hash) is replaced by re-recording the page
+    const seeded = JSON.parse(readFileSync(ship, 'utf8'));
+    seeded.views.push({ view: 'default-board@0.3', sha256: 'b'.repeat(64), checked_at: '2026-11-07T00:00:00Z', checker: 'check-view@1' });
+    writeFileSync(ship, JSON.stringify(seeded));
+    writeFileSync(join(dir, 'board-03.html'), board('0.3'));
+    const second = await exec([join(dir, 'board-02-edited.html'), join(dir, 'board-03.html'), '--ship', ship, '--json'], env);
+    const r2 = JSON.parse(second.stdout) as Result[];
+    assert.ok(r2[0]!.failures.some((f) => f.code === 'id-collision' && /default-board@0\.2, a view id the skill already uses for different HTML/.test(f.message)));
+    assert.equal(r2[1]!.ok, true, JSON.stringify(r2[1]!.failures));
+    const after = parseConformedFile(JSON.parse(readFileSync(ship, 'utf8'))).views;
+    assert.deepEqual(after.map((v) => [v.view, v.checker]).sort(), [['default-board@0.2', 'check-view@2'], ['default-board@0.3', 'check-view@2']]);
+    assert.equal(after.find((v) => v.view === 'default-board@0.3')!.sha256, r2[1]!.sha256);
+    assert.equal(after.find((v) => v.view === 'default-board@0.2')!.sha256, r1[0]!.sha256, 'the 0.2 record is untouched');
+  });
+
+  it('--ship refuses any list but the skill\'s own views/conformed.json', async () => {
+    const dir = tmpDir('akuko-ship-x-');
+    const project = join(dir, 'views', 'conformed.json');
+    const r = await exec([join(FX, 'tiny-board.html'), '--ship', project]);
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /--ship records only into the skill's own list .*views[\\/]conformed\.json\); record a project's views with --record/);
+    assert.equal(existsSync(project), false);
   });
 
   it('money with more than four decimals: exact means "as the spend gate prints it" (G-VIEW C2)', async () => {
