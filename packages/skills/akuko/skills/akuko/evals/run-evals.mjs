@@ -21,11 +21,16 @@
 //   The command must print what the model did on standard output. Triggering and
 //   routing are read from tool calls, so ask for a trace, for example with Claude Code:
 //
-//     --cmd "claude -p --output-format stream-json --verbose --allowedTools Skill Read Glob Grep"
+//     --cmd "claude -p --output-format stream-json --verbose --max-turns 8 --tools \"Skill,Read,Glob,Grep\" --allowedTools \"Skill\" \"Read\" \"Glob\" \"Grep\""
 //
 //   run from a folder where the akuko skill is installed (for example a project with
-//   .claude/skills/akuko, or a plugin that ships it). Allowing only Skill, Read, Glob
-//   and Grep keeps the run read-only: nothing is written, executed or generated.
+//   .claude/skills/akuko, or a plugin that ships it). Both tool flags are needed:
+//   --tools restricts which tools exist in the session (so Bash, Write and Edit are not
+//   available at all), while --allowedTools only auto-approves permission prompts for the
+//   tools listed and does not restrict anything on its own. Together the run is read-only:
+//   nothing is written, executed or generated. If your claude version rejects Skill in
+//   --tools, drop --tools and add --disallowedTools "Bash" "Write" "Edit" instead. Do not
+//   add --bare: it skips skill discovery. Run --dry-run and then --limit 2 first.
 //   With plain text output only (no trace) the script falls back to looking for
 //   "Skill(akuko" and "actions/<name>.md" in the text, and says so in the result.
 //

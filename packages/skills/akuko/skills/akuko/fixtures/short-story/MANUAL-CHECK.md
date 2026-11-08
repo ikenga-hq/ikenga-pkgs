@@ -6,8 +6,8 @@ Nothing here is needed to merge; it is the sign-off evidence for Phase 1 items 2
 
 | Part | Phase 1 item | Where | Time | Costs money? |
 |---|---|---|---|---|
-| A | 2 | Claude Code, real Gemini key | about 25 min | yes, about 0.37 USD (cap 1 USD) |
-| B | 3 | claude.ai, manual provider only | about 20 min | no |
+| A | 2 | Claude Code, real Gemini key | about 20 to 30 min | yes, about 0.37 USD (cap 1 USD) |
+| B | 3 | claude.ai, manual provider only | about 20 to 30 min | no |
 | C | 4b (claude.ai half) | claude.ai + Claude Code | about 10 min | no |
 | D | 6 | your terminal, your Claude account | about 10 min to start, then it runs by itself | uses your Claude usage |
 
@@ -81,7 +81,7 @@ The cap you set is 1.00 USD, so at most 0.6304 USD is left. (Gemini also bills r
 
 **Needs**
 - claude.ai with Artifacts and the code-execution workspace on, and the `ArtifactData` tool available (it is deferred: the agent loads it with ToolSearch).
-- The akuko skill available to the chat. Packaging for claude.ai (WP-20) is not built yet, so zip the folder `packages/skills/akuko/skills/akuko/` (the zip must contain a top-level `akuko/` folder with `SKILL.md`) and upload it as a custom skill in Settings, Capabilities. If claude.ai rejects the zip, tell me the message; that is a finding.
+- The akuko skill available to the chat. Packaging for claude.ai (WP-20) is not built yet, so zip the folder `packages/skills/akuko/skills/akuko/` (the zip must contain a top-level `akuko/` folder with `SKILL.md`) and upload it as a custom skill in Settings, Capabilities. **Uploading the skill zip as a claude.ai custom skill is untested**, and **whether claude.ai's sandbox has Node 22.6 or newer is unknown** (the skill's scripts run with `--experimental-strip-types`). If claude.ai rejects the zip, tell me the message; that is a finding. If Node is missing or too old there, the fold step cannot run in the chat: fall back to Claude Code with ArtifactData, as in part C, and note it as a finding.
 - One small PNG on your machine (any picture, a few KB). You will attach it each time the agent asks for an image: it only has to be a valid image.
 - **No API keys.** Do not set any. **No cost.**
 
@@ -157,9 +157,9 @@ The runner is `evals/run-evals.mjs`. **It calls a model through the command you 
 - A scratch folder with the skill installed under it, so the model can see it: `mkdir evals-run && cd evals-run && mkdir -p .claude/skills && cp -r <repo>/packages/skills/akuko/skills/akuko .claude/skills/akuko`.
 - Node 22.6 or newer.
 
-**What it sends.** 38 prompts, one `claude -p` session each: the 24 queries in `evals/trigger-evals.json` (12 should load the skill, 12 should not) and the 14 stage prompts in `evals/evals.json`. The tools are limited to `Skill Read Glob Grep`, so a session can read the skill but cannot write files, run commands or generate anything. Each is a short session (a few turns: load the skill, open one action file), with `--max-turns 8` as a ceiling. I have not measured the usage; run the 2-prompt smoke test first and multiply.
+**What it sends.** 38 prompts, one `claude -p` session each: the 24 queries in `evals/trigger-evals.json` (12 should load the skill, 12 should not) and the 14 stage prompts in `evals/evals.json`. Two flags keep each session read-only, and both are needed: `--tools "Skill,Read,Glob,Grep"` restricts which tools exist in the session (no Bash, Write or Edit at all), while `--allowedTools` only auto-approves permission prompts for the tools it lists and restricts nothing by itself. A session can read the skill but cannot write files, run commands or generate anything. **Fallback:** if your `claude` version rejects `Skill` in `--tools`, drop `--tools` and add `--disallowedTools "Bash" "Write" "Edit"` instead. Do not add `--bare` (it skips skill discovery). Run the `--dry-run` and the `--limit 2` smoke test below first. Each is a short session (a few turns: load the skill, open one action file), with `--max-turns 8` as a ceiling. I have not measured the usage; run the 2-prompt smoke test first and multiply.
 
-**How it scores.** From the tool calls in the trace: *triggering* passes when the akuko skill was loaded (or its files opened) exactly when `should_trigger` says; *stage routing* passes when the first akuko action file opened is the one the eval names (`actions/<name>.md`). The verdict is PASS when each rate is at least 80%. The per-eval assertions in `evals.json` (for example "refuses without a budget") are written into the results file for you to read; the runner does not grade them.
+**How it scores.** From the tool calls in the trace: *triggering* passes when the akuko skill was loaded (or its files opened) exactly when `should_trigger` says; *stage routing* passes when the model opened exactly one distinct akuko action file and it is the one the eval names (`actions/<name>.md`); opening two or more different action files fails with a `reason`, and every action read is listed per prompt in the results. The verdict is PASS when each rate is at least 80%. The per-eval assertions in `evals.json` (for example "refuses without a budget") are written into the results file for you to read; the runner does not grade them.
 
 **Commands** (from `evals-run`, with `<repo>` your checkout):
 
@@ -169,12 +169,12 @@ The runner is `evals/run-evals.mjs`. **It calls a model through the command you 
    Observed: ______
 
 2. Smoke test (2 + 2 prompts, a few minutes):
-   `node <repo>/packages/skills/akuko/skills/akuko/evals/run-evals.mjs --cmd "claude -p --output-format stream-json --verbose --max-turns 8 --allowedTools Skill Read Glob Grep" --limit 2 --out smoke.json`
+   `node <repo>/packages/skills/akuko/skills/akuko/evals/run-evals.mjs --cmd "claude -p --output-format stream-json --verbose --max-turns 8 --tools \"Skill,Read,Glob,Grep\" --allowedTools \"Skill\" \"Read\" \"Glob\" \"Grep\"" --limit 2 --out smoke.json`
    Expected: four lines `[n/4] pass ...`, and in `smoke.json` every row has `"method": "trace"`. If a row says `"method": "text"`, the command did not produce a stream-json trace: check `claude --help` for the flag names in your version.
    Observed: ______
 
 3. The real run (about 38 sessions, two at a time):
-   `node <repo>/packages/skills/akuko/skills/akuko/evals/run-evals.mjs --cmd "claude -p --output-format stream-json --verbose --max-turns 8 --allowedTools Skill Read Glob Grep" --concurrency 2 --out akuko-evals-results.json`
+   `node <repo>/packages/skills/akuko/skills/akuko/evals/run-evals.mjs --cmd "claude -p --output-format stream-json --verbose --max-turns 8 --tools \"Skill,Read,Glob,Grep\" --allowedTools \"Skill\" \"Read\" \"Glob\" \"Grep\"" --concurrency 2 --out akuko-evals-results.json`
    Expected: progress lines, then `Triggering: x/24`, `Stage routing: y/14`, and `Verdict (each at least 80%): PASS`. That needs at least 20 of 24 and 12 of 14.
    Observed (the two rates and the verdict): ______
 
