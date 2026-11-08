@@ -1461,7 +1461,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const sb = $('#sample-bar');
     if (sb) {
       sb.hidden = !isSample();
-      sb.textContent = !isSample() ? '' : 'Sample project: ' + D.project.title + '. ' + (hostKind() === 'A' ? 'Your own project appears here once akuko has saved it to this board’s database.' : 'Load your akuko.json (bottom right) to see your film. Approve and note buttons are off until then.');
+      sb.textContent = !isSample() ? '' : 'Sample project: ' + D.project.title + '. ' + (hostKind() === 'A' ? 'Your own project appears here once akuko has saved it to this board’s database.' : 'Use “Load akuko.json” at the bottom of the page to see your film. Approve and note buttons are off until then.');
     }
     const wb = $('#store-warn');
     if (wb) { wb.hidden = ok; wb.textContent = ok ? '' : (kind === 'outbox' ? 'This browser blocks storage, so your decisions are not saved here. Copy them to akuko before you close the page.' : 'This browser blocks storage. Your decisions still reach ' + (kind === 'artifact-db' ? 'the board database' : 'Ikenga') + ', but a reload would lose this page’s copy.'); }

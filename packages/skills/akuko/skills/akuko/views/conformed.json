@@ -4,8 +4,8 @@
   "views": [
     {
       "view": "default-board@0.1",
-      "sha256": "017e58da1f9c483398be15948b5c4c66886e332a529b0cbe4c6db3f8a82dfd82",
-      "checked_at": "2026-11-08T00:25:19Z",
+      "sha256": "b39ac2374fce7b8a5c5f5e816beb5e3484e3d558001cda1aa74b43861f683a14",
+      "checked_at": "2026-11-08T00:37:56Z",
       "checker": "check-view@1"
     }
   ]

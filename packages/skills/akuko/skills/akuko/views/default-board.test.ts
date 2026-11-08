@@ -362,7 +362,7 @@ describe('default board: decisions and hosts', () => {
     assert.equal(p.d.documentElement.getAttribute('data-akuko-mode'), 'dark');
     p.d.documentElement.setAttribute('data-mode', 'light');
     await p.tick();
-    assert.equal(p.d.documentElement.getAttribute('data-akuko-mode'), 'dark', 'a person's choice wins over the host');
+    assert.equal(p.d.documentElement.getAttribute('data-akuko-mode'), 'dark', "a person's choice wins over the host");
     p.close();
   });
 
