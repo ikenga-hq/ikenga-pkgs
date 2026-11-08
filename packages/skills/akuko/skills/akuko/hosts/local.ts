@@ -44,13 +44,47 @@ export function serializeProject(p: AkukoProject): string {
   return `${JSON.stringify(p, null, 2)}\n`;
 }
 
+/** Errors Windows gives when the target is open in another program (an editor, a viewer, an indexer). */
+const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/** Waits between rename attempts while the target is busy: about 2.5 s in all. */
+export const RENAME_BACKOFF_MS = [10, 20, 40, 80, 150, 250, 400, 600, 900] as const;
+
+/**
+ * `rename(from, to)`, retried with a short backoff while Windows reports the
+ * target busy (EPERM / EBUSY / EACCES: some program has it open, even only
+ * to read it). After the last wait it throws a clear error naming the file
+ * (Wave 3 review, finding 5). Other errors are thrown at once.
+ */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  opts: { rename?: (a: string, b: string) => Promise<void>; backoff?: readonly number[] } = {},
+): Promise<void> {
+  const mv = opts.rename ?? rename;
+  const waits = opts.backoff ?? RENAME_BACKOFF_MS;
+  for (let i = 0; ; i++) {
+    try {
+      return await mv(from, to);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (!BUSY.has(code)) throw err;
+      if (i >= waits.length) {
+        const e = new Error(`akuko: could not replace ${to}: another program has it open (${code}). Close it (or wait for it to finish), then try again; nothing was changed.`);
+        (e as NodeJS.ErrnoException).code = code;
+        throw e;
+      }
+      await sleep(waits[i]!);
+    }
+  }
+}
+
 /** Write via a temp file + rename so a crash never leaves a half-written file. */
-export async function writeFileAtomic(path: string, data: string | Uint8Array): Promise<void> {
+export async function writeFileAtomic(path: string, data: string | Uint8Array, opts: Parameters<typeof renameWithRetry>[2] = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
     await writeFile(tmp, data);
-    await rename(tmp, path);
+    await renameWithRetry(tmp, path, opts);
   } catch (err) {
     await rm(tmp, { force: true });
     throw err;
