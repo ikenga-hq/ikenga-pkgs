@@ -7,19 +7,20 @@
 // views you would open in a browser anyway. Nothing leaves the process: the
 // host stores are fakes that record what the page writes.
 
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ajv } from 'ajv';
 import addFormatsModule from 'ajv-formats';
 import { JSDOM, VirtualConsole } from 'jsdom';
+import { conformanceHash } from './hash.mjs';
 import { hiddenReason, smallText } from './hidden.mjs';
 import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
-export const CHECKER = 'check-view@1';
+// @2: the recorded sha256 is the conformance hash (data block emptied, hash.mjs); @1 hashed the raw page.
+export const CHECKER = 'check-view@2';
 export const DEFAULT_PROJECT = join(SKILL, 'fixtures', 'the-beating', 'akuko.json');
 /** The canonical decision writer: a page that inlines one carries it byte for byte (views/contract.md §Decision writer). */
 export const WRITER = readFileSync(join(HERE, 'decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').trim();
@@ -747,28 +748,59 @@ async function readOnlyProbe(html, project) {
   return [...new Set(found)];
 }
 
+/** The skill's own conformed list: the views it ships (WP-07b's default board among them). */
+export const SHIPPED_LIST = join(SKILL, 'views', 'conformed.json');
+const FIXTURE_VIEWS = [['test-board@1', 'tiny-board.html'], ['board-b-instrumented@0.1', 'board-b-instrumented.html']];
+const idOf = (view) => view.slice(0, view.lastIndexOf('@'));
+
 /**
- * Ids people rely on: the views the skill ships (views/conformed.json, when
- * present) and its own fixtures. A page reusing one for different HTML would
- * borrow their conformance record (G-VIEW review C7).
+ * Ids people rely on: the views the skill ships (views/conformed.json, plus
+ * the list given with --ship), its own fixtures, and "default-board". A page
+ * reusing one would borrow their conformance record (G-VIEW review C7).
+ * `views` maps each recorded id@version to the hashes this checker recorded
+ * for it (an entry from an older checker reserves the id but carries no
+ * comparable hash).
  */
-function reservedViews() {
-  const out = new Map();
-  try {
-    const shipped = JSON.parse(readFileSync(join(SKILL, 'views', 'conformed.json'), 'utf8'));
-    for (const v of shipped.views ?? []) if (v.view && v.sha256) out.set(v.view, new Set([...(out.get(v.view) ?? []), v.sha256]));
-  } catch { /* no shipped list yet */ }
-  for (const [view, file] of [['test-board@1', 'tiny-board.html'], ['board-b-instrumented@0.1', 'board-b-instrumented.html']]) {
-    try { out.set(view, new Set([...(out.get(view) ?? []), createHash('sha256').update(readFileSync(join(SKILL, 'views', '__fixtures__', file), 'utf8'), 'utf8').digest('hex')])); } catch { /* fixture absent */ }
+function reservedViews(extra = []) {
+  const views = new Map();
+  const ids = new Set(['default-board']);
+  for (const path of [SHIPPED_LIST, ...extra]) {
+    let list;
+    try { list = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; /* no list yet */ }
+    for (const v of list.views ?? []) {
+      if (!v || typeof v.view !== 'string' || !v.view.includes('@')) continue;
+      ids.add(idOf(v.view));
+      const set = views.get(v.view) ?? new Set();
+      if (v.sha256 && v.checker === CHECKER) set.add(v.sha256);
+      views.set(v.view, set);
+    }
   }
-  return out;
+  for (const [view, file] of FIXTURE_VIEWS) {
+    try {
+      const h = conformanceHash(readFileSync(join(SKILL, 'views', '__fixtures__', file), 'utf8'));
+      ids.add(idOf(view));
+      views.set(view, new Set([...(views.get(view) ?? []), h]));
+    } catch { /* fixture absent */ }
+  }
+  return { views, ids };
 }
 
-function idCollision(view, sha256, fail) {
-  const reserved = reservedViews();
-  const hashes = reserved.get(view);
-  if (hashes && !hashes.has(sha256)) fail('contract', 'id-collision', `the manifest says ${view}, a view id the skill already uses for different HTML; give this page its own id or a new version`);
-  else if (!hashes && view.startsWith('default-board@')) fail('contract', 'id-collision', `"default-board" is the id of the board the skill ships; give this page its own id`);
+/**
+ * id-collision (C7). Always: an id@version recorded for different HTML fails
+ * (bump the version). Without --ship: any reserved id fails unless this very
+ * page is what is recorded under it. With --ship <list>: a new version of a
+ * shipped view (or a first one) may be checked, to be recorded into that list.
+ */
+function idCollision(view, sha256, fail, ship) {
+  const { views, ids } = reservedViews(ship ? [ship] : []);
+  const hashes = views.get(view);
+  if (hashes && hashes.size > 0 && !hashes.has(sha256)) {
+    fail('contract', 'id-collision', `the manifest says ${view}, a view id the skill already uses for different HTML; give this page its own id or a new version`);
+  } else if (!ship && ids.has(idOf(view)) && !(hashes && hashes.has(sha256))) {
+    fail('contract', 'id-collision', `"${idOf(view)}" is the id of a view the skill ships; give this page its own id (a new version of a shipped view is recorded with --ship <views/conformed.json>)`);
+  } else if (ship && /^freehand:/.test(view)) {
+    fail('contract', 'id-collision', `${view} is a freehand view; --ship records only the skill's own views`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -787,7 +819,7 @@ export async function checkView(html, opts = {}) {
     const k = `${rule}|${code}|${message}`;
     if (!seen.has(k)) { seen.add(k); failures.push({ rule, code, message }); }
   };
-  const sha256 = createHash('sha256').update(html, 'utf8').digest('hex');
+  const sha256 = conformanceHash(html);
   decisionsChecked = 0;
   let manifest = null;
   const raw = jsonBlock(html, 'akuko-view');
@@ -839,7 +871,7 @@ export async function checkView(html, opts = {}) {
     await clickTests(html, project, manifest, fail);
     await sweep(html, project, fail);
   }
-  if (manifest) idCollision(`${manifest.id}@${manifest.version}`, sha256, fail);
+  if (manifest) idCollision(`${manifest.id}@${manifest.version}`, sha256, fail, opts.ship);
   return {
     ok: failures.length === 0,
     view: manifest ? `${manifest.id}@${manifest.version}` : null,

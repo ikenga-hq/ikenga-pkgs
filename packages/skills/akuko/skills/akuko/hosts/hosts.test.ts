@@ -566,7 +566,7 @@ describe('publishView', () => {
   const board = readFileSync(join(VFX, 'tiny-board.html'), 'utf8'); // writes decisions as test-board@1
   const readOnly = readFileSync(join(VFX, 'readonly-cast-sheet.html'), 'utf8');
   const liar = readFileSync(join(VFX, 'bad-readonly-writes-decision.html'), 'utf8');
-  const listFor = (view: string, html: string) => ({ format: 'akuko-conformed-views' as const, version: 1 as const, views: [{ view, sha256: viewHash(html), checked_at: '2026-11-08T00:00:00Z', checker: 'check-view@1' }] });
+  const listFor = (view: string, html: string) => ({ format: 'akuko-conformed-views' as const, version: 1 as const, views: [{ view, sha256: viewHash(html), checked_at: '2026-11-08T00:00:00Z', checker: 'check-view@2' }] });
   const refusal = /refusing to publish view test-board@1 \("board"\).*not on a conformed-views list.*check-view\.mjs <view\.html> --record/;
   const writeList = (dir: string, list: unknown) => { mkdirSync(join(dir, 'views'), { recursive: true }); writeFileSync(join(dir, 'views', 'conformed.json'), JSON.stringify(list)); };
 
@@ -603,6 +603,10 @@ describe('publishView', () => {
       writeList(dir, listFor('test-board@1', board));
       const r = await host.publishView({ name: 'board', html: board });
       assert.equal(readFileSync(r.path ?? '', 'utf8'), board);
+      // the publisher embeds the real project: still the recorded page (the data block is not hashed)
+      const withProject = board.replace(/(<script type="application\/json" id="akuko-project">)[\s\S]*?(<\/script>)/, (_m, a: string, b: string) => `${a}${JSON.stringify({ ...fixture(), current_stage: 'export' })}${b}`);
+      assert.notEqual(withProject, board);
+      await host.publishView({ name: 'board', html: withProject });
       await assert.rejects(host.publishView({ name: 'board', html: board.replace('minimal review board</title>', 'minimal review board (edited)</title>') }), refusal);
       await assert.rejects(host.publishView({ name: 'liar', html: liar }), /refusing to publish view bad-readonly-writes-decision@1/);
     });

@@ -218,8 +218,13 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
     const first = await exec([file, '--record', out]);
     assert.equal(first.code, 0, first.stdout);
     const list = parseConformedFile(JSON.parse(readFileSync(out, 'utf8')));
-    assert.deepEqual(list.views.map((v) => [v.view, v.checker]), [['rec-board@1', 'check-view@1']]);
+    assert.deepEqual(list.views.map((v) => [v.view, v.checker]), [['rec-board@1', 'check-view@2']]);
     assert.equal(isConformedHtml(list, 'rec-board@1', readFileSync(file, 'utf8')), true);
+    // the publisher embeds the real project: the record still holds (the data block is not hashed)
+    const published = readFileSync(file, 'utf8').replace(/(<script type="application\/json" id="akuko-project">)[\s\S]*?(<\/script>)/, (_m, a: string, b: string) => `${a}{"project":{"slug":"someone-elses-film"}}${b}`);
+    assert.notEqual(published, readFileSync(file, 'utf8'));
+    assert.equal(isConformedHtml(list, 'rec-board@1', published), true);
+    assert.equal(isConformedHtml(list, 'rec-board@1', published.replace('<title>', '<title>x')), false);
     const changed = join(dir, 'rec-board-edited.html');
     writeFileSync(changed, readFileSync(file, 'utf8').replace('<title>akuko · minimal review board</title>', '<title>akuko · minimal review board (edited)</title>'));
     const second = await exec([changed, '--record', out]);
@@ -237,6 +242,35 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
       assert.equal(r.ok, false, r.file);
       assert.ok(r.failures.some((f) => f.code === 'id-collision'), `${r.file}: ${JSON.stringify(r.failures)}`);
     }
+  });
+
+  it('--ship records a new version of a shipped view; keeps C3; never takes a freehand id; replaces an entry an older checker hashed', async () => {
+    const dir = tmpDir('akuko-ship-');
+    const ship = join(dir, 'conformed.json');
+    const board = (version: string, title = 'akuko · minimal review board') => asView(tiny, 'default-board').replace('"version":"1"', `"version":"${version}"`).replace('<title>akuko · minimal review board</title>', `<title>${title}</title>`);
+    writeFileSync(join(dir, 'board-02.html'), board('0.2'));
+    writeFileSync(join(dir, 'freehand.html'), asView(tiny, 'freehand:sheet'));
+    const first = await exec([join(dir, 'board-02.html'), join(dir, 'freehand.html'), '--ship', ship, '--json']);
+    const r1 = JSON.parse(first.stdout) as Result[];
+    assert.equal(r1[0]!.ok, true, JSON.stringify(r1[0]!.failures));
+    assert.ok(r1[1]!.failures.some((f) => f.code === 'id-collision' && /freehand view; --ship records only/.test(f.message)));
+    assert.deepEqual(parseConformedFile(JSON.parse(readFileSync(ship, 'utf8'))).views.map((v) => v.view), ['default-board@0.2']);
+
+    // C3 holds under --ship: the same id@version for different HTML is refused
+    writeFileSync(join(dir, 'board-02-edited.html'), board('0.2', 'edited'));
+    // an entry recorded by check-view@1 (raw-page hash) is replaced by re-recording the page
+    const seeded = JSON.parse(readFileSync(ship, 'utf8'));
+    seeded.views.push({ view: 'default-board@0.3', sha256: 'b'.repeat(64), checked_at: '2026-11-07T00:00:00Z', checker: 'check-view@1' });
+    writeFileSync(ship, JSON.stringify(seeded));
+    writeFileSync(join(dir, 'board-03.html'), board('0.3'));
+    const second = await exec([join(dir, 'board-02-edited.html'), join(dir, 'board-03.html'), '--ship', ship, '--json']);
+    const r2 = JSON.parse(second.stdout) as Result[];
+    assert.ok(r2[0]!.failures.some((f) => f.code === 'id-collision' && /default-board@0\.2, a view id the skill already uses for different HTML/.test(f.message)));
+    assert.equal(r2[1]!.ok, true, JSON.stringify(r2[1]!.failures));
+    const after = parseConformedFile(JSON.parse(readFileSync(ship, 'utf8'))).views;
+    assert.deepEqual(after.map((v) => [v.view, v.checker]).sort(), [['default-board@0.2', 'check-view@2'], ['default-board@0.3', 'check-view@2']]);
+    assert.equal(after.find((v) => v.view === 'default-board@0.3')!.sha256, r2[1]!.sha256);
+    assert.equal(after.find((v) => v.view === 'default-board@0.2')!.sha256, r1[0]!.sha256, 'the 0.2 record is untouched');
   });
 
   it('money with more than four decimals: exact means "as the spend gate prints it" (G-VIEW C2)', async () => {

@@ -2,6 +2,7 @@
 // akuko — view conformance check (gate G-VIEW). Contract: views/contract.md.
 //
 //   node scripts/check-view.mjs <view.html>… [--project <akuko.json>] [--json] [--record <conformed.json>]
+//   node scripts/check-view.mjs views/default-board.html --ship views/conformed.json   (the skill's own views)
 //
 // Loads each view with the fixture project (default: the converted "The
 // Beating", fixtures/the-beating/akuko.json), then with a changed copy of it,
@@ -26,15 +27,18 @@ import { CHECKER, checkView } from './check-view/check.mjs';
 
 function parse(argv) {
   const files = [];
-  const o = { json: false, project: undefined, record: undefined };
+  const o = { json: false, project: undefined, record: undefined, ship: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') o.json = true;
     else if (a === '--project') o.project = argv[++i];
     else if (a === '--record') o.record = argv[++i];
+    else if (a === '--ship') o.ship = argv[++i];
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else files.push(a);
   }
+  if (o.ship && o.record && resolve(o.ship) !== resolve(o.record)) throw new Error('--ship names the list it records into; give --ship alone, or the same file to --record');
+  if (o.ship) o.record = o.ship;
   return { files, ...o };
 }
 
@@ -46,7 +50,8 @@ function record(path, results) {
   for (const r of results) {
     if (!r.ok || r.skipped || !r.view) continue; // a read-only page needs no record
     const had = list.views.find((v) => v.view === r.view);
-    if (had && had.sha256 && had.sha256 !== r.sha256) {
+    // An entry from an older checker (or none named) hashed differently (check-view@1 hashed the raw page): re-recording replaces it.
+    if (had && had.sha256 && had.sha256 !== r.sha256 && had.checker === CHECKER) {
       // One id@version is one exact page: a changed page needs a new version.
       refused.push(`${r.file}: ${r.view} is already recorded for different HTML (sha256 ${had.sha256.slice(0, 12)}…); bump "version" in its akuko-view manifest and check it again`);
       continue;
@@ -61,13 +66,13 @@ function record(path, results) {
 export async function main(argv) {
   const args = parse(argv);
   if (args.files.length === 0) {
-    console.error('usage: node scripts/check-view.mjs <view.html>… [--project <akuko.json>] [--json] [--record <conformed.json>]');
+    console.error('usage: node scripts/check-view.mjs <view.html>… [--project <akuko.json>] [--json] [--record <conformed.json> | --ship <views/conformed.json>]');
     return 2;
   }
   const project = args.project ? JSON.parse(readFileSync(args.project, 'utf8')) : undefined;
   const results = [];
   for (const file of args.files) {
-    const r = await checkView(readFileSync(file, 'utf8'), { project });
+    const r = await checkView(readFileSync(file, 'utf8'), { project, ship: args.ship ? resolve(args.ship) : undefined });
     results.push({ file, ...r });
     if (!args.json) {
       if (r.skipped) console.log(`SKIP ${file}${r.view ? ` (${r.view})` : ''} · ${r.note}`);

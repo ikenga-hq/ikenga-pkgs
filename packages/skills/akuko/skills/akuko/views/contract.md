@@ -39,7 +39,7 @@ Every view embeds:
 ```
 
 - `Decision.view` is `<id>@<version>`, e.g. `default-board@0.1` or `freehand:cast-sheet@1`.
-- **Bump `version` whenever the page changes.** A conformance record covers one `id@version` and one exact HTML hash.
+- **Bump `version` whenever the page changes.** A conformance record covers one `id@version` and one page, by its conformance hash (§8).
 - A view with `writes_decisions: true` must list all eight views. A read-only freehand view may list any subset, and needs no check: check-view reports it `SKIP` once it has seen it write nothing (§10).
 
 ## 3. Required views and fields
@@ -170,12 +170,14 @@ The person then sees the new amount and approves again. Approving more than the 
 
 ## 8. Conformance and provenance (R-12)
 
-- **Conformed views.** `node scripts/check-view.mjs <view.html> --record <conformed.json>` adds `{view: "<id>@<version>", sha256: <hash of the exact HTML>, checked_at, checker: "check-view@1"}` for each file that passes. The list lives:
+- **Conformed views.** `node scripts/check-view.mjs <view.html> --record <conformed.json>` adds `{view: "<id>@<version>", sha256: <conformance hash>, checked_at, checker: "check-view@2"}` for each file that passes. The list lives:
   - on B/C in `<project>/views/conformed.json`, plus the skill's own `views/conformed.json` for shipped views (the default board, WP-07b);
   - on A in the DB doc `akuko/conformed`, written by the owner only.
-- **Before publishing** a view that writes decisions: check it, record it, and publish only HTML whose hash is on the list (`decisions/conformed.ts#isConformedHtml`). Change the page → bump `version` → check again.
-- **The hosts enforce this (C8).** Every host's `publishView()` (`hosts/shared.ts#assertPublishable`) refuses a view that writes decisions unless its exact HTML is on the skill's `views/conformed.json` or the project's list: `<project>/views/conformed.json` on B and C, the board's `akuko/conformed` doc on A. A missing list counts as empty. The error names the view's `id@version` and says to run `check-view --record`. "Writes decisions" means: a `data-akuko-action` control, the inlined decision writer, a direct write of a decision store (`akuko.decisions`, `collection("decisions")`), or `writes_decisions: true`; HTML comments don't count. Anything else is read-only and publishes freely, with no record.
-- **One id@version, one page.** `--record` refuses to replace an `id@version` already recorded for different HTML: bump `version`. check-view fails a page with `id-collision` if it reuses, for different HTML, the id of a view the skill ships (`views/conformed.json`) or of its fixtures (`test-board@1`, `board-b-instrumented@0.1`), or claims `default-board`.
+- **The conformance hash** (`scripts/check-view/hash.mjs#conformanceHash`, re-exported as `decisions/conformed.ts#viewHash`) is the sha256 of the page with the **content of its `<script type="application/json" id="akuko-project">` block removed** (the first real one; a block quoted in an HTML comment is not it). That block is what the publisher fills (§1), so a page checked with the fixture still conforms when it is published with the real project; every other byte counts: scripts, controls, CSS, the manifest, comments. check-view `--record`, `isConformedHtml()` and every host's publish gate use this one function. `check-view@2` introduced it; `check-view@1` hashed the raw page, so its entries no longer match and must be recorded again (an `@1` entry may be replaced by re-recording the same `id@version`).
+- **Before publishing** a view that writes decisions: check it, record it, and publish only a page whose conformance hash is on the list (`decisions/conformed.ts#isConformedHtml`). Change the page → bump `version` → check again.
+- **The hosts enforce this (C8).** Every host's `publishView()` (`hosts/shared.ts#assertPublishable`) refuses a view that writes decisions unless its conformance hash is on the skill's `views/conformed.json` or the project's list: `<project>/views/conformed.json` on B and C, the board's `akuko/conformed` doc on A. A missing list counts as empty. The error names the view's `id@version` and says to run `check-view --record`. "Writes decisions" means: a `data-akuko-action` control, the inlined decision writer, a direct write of a decision store (`akuko.decisions`, `collection("decisions")`), or `writes_decisions: true`; HTML comments don't count. Anything else is read-only and publishes freely, with no record.
+- **One id@version, one page.** `--record` refuses to replace an `id@version` already recorded (by `check-view@2`) for different HTML: bump `version`. check-view fails a page with `id-collision` if it reuses, for different HTML, an `id@version` already recorded, or if it takes the **id** of a view the skill ships (any id on `views/conformed.json`, its fixtures `test-board` and `board-b-instrumented`, and `default-board`) at a version not recorded for this very page.
+- **Recording the skill's own views: `--ship`.** A new version of a shipped view (or the first one) is checked and recorded with `node scripts/check-view.mjs views/default-board.html --ship views/conformed.json`. `--ship <list>` records into that list and lets the page take a shipped id at a **new** `id@version`. It still fails an `id@version` already recorded there for different HTML (bump `version`), and it refuses `freehand:` ids. Without `--ship`, no page can take a shipped id, so a freehand or project view can never borrow the default board's record. To re-record a page after the hash change: run the same `--ship` (or `--record`) command on the unchanged page; its `check-view@1` entry is replaced.
 - **Which lists folding reads.** `decisions/cli.ts` always reads the skill's shipped `views/conformed.json`, plus `--conformed` (default `<project>/views/conformed.json`). A missing file counts as an empty list and is named in the output's `warnings`.
 - **Folding** (`decisions/fold.ts`) accepts `approve`, `approve-spend` and `undo` only when:
   - `view` is on the conformed list (or is the built-in `chat@1`);
@@ -206,6 +208,8 @@ node scripts/check-view.mjs views/__fixtures__/board-b-instrumented.html     # P
 node scripts/check-view.mjs views/__fixtures__/bad-*.html                     # each FAILs, with the reason
 node scripts/check-view.mjs views/__fixtures__/readonly-cast-sheet.html       # SKIP (read-only, not applicable)
 node scripts/check-view.mjs my-view.html --project path/to/akuko.json --json
+node scripts/check-view.mjs my-view.html --record <project>/views/conformed.json
+node scripts/check-view.mjs views/default-board.html --ship views/conformed.json  # the skill's own views (§8)
 ```
 
 Exit code 0 only if every file passes or is skipped.

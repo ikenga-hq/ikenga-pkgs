@@ -9,6 +9,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { staleWriter, WRITER_VERSION } from './check.mjs';
 import { hiddenReasons, loadWriter } from './harness.mjs';
+import { conformanceHash, conformanceText } from './hash.mjs';
+import { isConformedHtml, viewHash } from '../../decisions/conformed.ts';
 import { smallText, substituteVars } from './hidden.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -88,6 +90,41 @@ describe('decision writer v2 (host C remount guard)', () => {
     assert.deepEqual(page.onLoad, []);
     assert.deepEqual(page.emit({ action: 'approve', unit: 'sc2_sh4', stage: 'sketch' }).posts, []);
     page.close();
+  });
+});
+
+describe('the conformance hash ignores the embedded project, and nothing else', () => {
+  const FX = join(HERE, '..', '..', 'views', '__fixtures__');
+  const tiny = readFileSync(join(FX, 'tiny-board.html'), 'utf8');
+  const withProject = (html: string, data: string) => html.replace(/(<script type="application\/json" id="akuko-project">)[\s\S]*?(<\/script>)/, (_m, a: string, b: string) => `${a}${data}${b}`);
+
+  it('the same page with any project conforms: check-view, isConformedHtml and the publish gate share viewHash', () => {
+    const other = withProject(tiny, JSON.stringify({ project: { slug: 'another-film' }, shots: [] }));
+    assert.notEqual(other, tiny);
+    assert.equal(conformanceHash(other), conformanceHash(tiny));
+    assert.equal(viewHash(other), conformanceHash(tiny));
+    assert.equal(isConformedHtml([{ view: 'test-board@1', sha256: viewHash(tiny) }], 'test-board@1', other), true);
+    assert.ok(!conformanceText(tiny).includes('"slug":"the-beating"'), 'the data block is emptied before hashing');
+  });
+
+  it('any other change breaks it: script, controls, CSS, manifest, comments', () => {
+    const h = conformanceHash(tiny);
+    for (const [what, edited] of [
+      ['CSS', tiny.replace('button.primary {', 'button.primary { opacity: .5;')],
+      ['script', tiny.replace("var who = 'you';", "var who = 'me';")],
+      ['manifest', tiny.replace('"id":"test-board","version":"1"', '"id":"test-board","version":"2"')],
+      ['markup', tiny.replace('<footer id="foot"', '<footer data-x="1" id="foot"')],
+      ['comment', tiny.replace('Minimal conforming akuko review surface', 'Minimal conforming review surface')],
+    ] as const) {
+      assert.notEqual(edited, tiny, what);
+      assert.notEqual(conformanceHash(edited), h, what);
+    }
+  });
+
+  it('a comment that quotes the data block is not mistaken for it', () => {
+    // tiny-board's header comment mentions <script id="akuko-project">; the manifest after it still counts
+    assert.match(tiny.slice(0, tiny.indexOf('-->')), /<script id="akuko-project">/);
+    assert.ok(conformanceText(tiny).includes('"id":"test-board","version":"1"'));
   });
 });
 
