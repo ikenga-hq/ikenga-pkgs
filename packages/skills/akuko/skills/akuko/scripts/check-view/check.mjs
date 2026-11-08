@@ -21,6 +21,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
 export const CHECKER = 'check-view@1';
 export const DEFAULT_PROJECT = join(SKILL, 'fixtures', 'the-beating', 'akuko.json');
+/** The canonical decision writer: a page that inlines one carries it byte for byte (views/contract.md §Decision writer). */
+export const WRITER = readFileSync(join(HERE, 'decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').trim();
+export const WRITER_VERSION = /akuko-decision-writer (v\d+)/.exec(WRITER)?.[1] ?? 'v?';
 const VIEWS_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'views.schema.json'), 'utf8'));
 const DECISION_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'decision.schema.json'), 'utf8'));
 
@@ -87,6 +90,14 @@ function staticChecks(html, fail) {
     [/akuko\.json["'`][\s\S]{0,80}method\s*:\s*["'`](PUT|POST|PATCH)/i, 'sends akuko.json to a server'],
   ];
   for (const [re, what] of writes) if (re.test(code)) fail('R4', 'writes-project', `the page ${what}; views write decisions only`);
+  // A page that inlines the decision writer carries the current one, unchanged
+  // (line endings aside): a stale copy keeps its old bugs (v1 posted an empty
+  // list over the Ikenga shell's stored one on every pane remount).
+  if (/akuko-decision-writer/.test(code) && !code.replace(/\r\n/g, '\n').includes(WRITER)) {
+    const found = /akuko-decision-writer (v\d+)/.exec(code)?.[1];
+    const what = !found ? 'an unversioned copy of akuko-decision-writer' : found === WRITER_VERSION ? `a changed copy of akuko-decision-writer ${found}` : `akuko-decision-writer ${found}`;
+    fail('contract', 'stale-writer', `the page inlines ${what}; inline the current canonical ${WRITER_VERSION} block (scripts/check-view/decision-writer.js) verbatim`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -189,14 +200,21 @@ async function load(html, project, host, wait = 40) {
   return { dom, w, d: w.document, rec, host, slug: project.project.slug, close: () => { rec.closed = true; w.close(); } };
 }
 
+/** The page's real requestAnimationFrame, kept for settle() once the page's own is on the fake clock. */
+const REAL_RAF = new WeakMap();
+
 /**
  * The page's timers run on a clock the check controls: short ones (≤100 ms)
  * also run in real time so the page works, every one can be fast-forwarded,
  * so a page that approves "in a minute" is caught without waiting a minute.
+ * requestAnimationFrame (a 16 ms timer), Date.now() and performance.now() are
+ * on the same clock, so a frame-counting or clock-polling page is
+ * fast-forwarded too (G-VIEW hardening F6).
  */
 function installClock(w, rec) {
   const realSet = w.setTimeout.bind(w), realClear = w.clearTimeout.bind(w);
   let seq = 0;
+  rec.skew = 0; // ms the page's clock runs ahead of real time
   const fire = (id) => {
     const t = rec.timers.get(id);
     if (!t || rec.closed) return;
@@ -204,10 +222,10 @@ function installClock(w, rec) {
     else rec.timers.delete(id);
     if (typeof t.fn === 'function') { try { t.fn(...t.args); } catch (e) { rec.errors.push(String(e && e.message || e)); } }
   };
-  const add = (repeat) => (fn, ms = 0, ...args) => {
+  const add = (repeat, raf = false) => (fn, ms = 0, ...args) => {
     const id = ++seq;
     const d = Math.max(0, Number(ms) || 0);
-    const t = { fn, ms: d, args, repeat, due: rec.now + d, fired: 0, real: null };
+    const t = { fn, ms: d, args, repeat, raf, due: rec.now + d, fired: 0, real: null };
     rec.timers.set(id, t);
     if (d <= 100) t.real = realSet(() => fire(id), d);
     return id;
@@ -217,18 +235,29 @@ function installClock(w, rec) {
   w.setInterval = add(true);
   w.clearTimeout = clear;
   w.clearInterval = clear;
+  const realDateNow = w.Date.now.bind(w.Date);
+  const realPerfNow = w.performance.now.bind(w.performance);
+  try { Object.defineProperty(w.Date, 'now', { value: () => realDateNow() + rec.skew, configurable: true, writable: true }); } catch { /* keep the real one */ }
+  try { Object.defineProperty(w.performance, 'now', { value: () => realPerfNow() + rec.skew, configurable: true, writable: true }); } catch { /* keep the real one */ }
+  if (typeof w.requestAnimationFrame === 'function') REAL_RAF.set(w, w.requestAnimationFrame.bind(w));
+  const frame = add(false, true);
+  w.requestAnimationFrame = (fn) => frame(() => fn(w.performance.now()), 16);
+  w.cancelAnimationFrame = clear;
   rec.advance = (ms) => {
     const until = rec.now + ms;
-    for (let guard = 0; guard < 500; guard++) {
+    let frames = 0; // an animation loop never ends: give frames ten seconds' worth, then let the other timers run
+    for (let guard = 0; guard < 5000; guard++) {
       let next = null;
-      for (const [id, t] of rec.timers) if (t.due <= until && (next === null || t.due < next[1].due)) next = [id, t];
+      for (const [id, t] of rec.timers) if (t.due <= until && !(t.raf && frames >= 600) && (next === null || t.due < next[1].due)) next = [id, t];
       if (!next) break;
       const [id, t] = next;
       if (t.real) { realClear(t.real); t.real = null; }
-      if (t.repeat && t.fired >= 50) { rec.timers.delete(id); continue; }
-      rec.now = Math.max(rec.now, t.due);
+      if (t.repeat && t.fired >= 300) { rec.timers.delete(id); continue; }
+      if (t.raf) frames++;
+      if (t.due > rec.now) { rec.skew += t.due - rec.now; rec.now = t.due; }
       fire(id);
     }
+    rec.skew += until - rec.now;
     rec.now = until;
   };
 }
@@ -243,9 +272,19 @@ async function idle(page) {
     }
   }
   ev(w, 'scroll'); ev(d, 'scroll'); ev(w, 'resize'); ev(w, 'focus'); ev(w, 'blur');
+  for (const type of ['wheel', 'touchmove', 'touchend', 'contextmenu', 'selectionchange', 'copy']) { ev(d.body, type); ev(d, type); }
+  // Leaving the page decides nothing either (F3): hide the tab, fire what a
+  // browser fires as the page goes away, then come back.
   Object.defineProperty(d, 'visibilityState', { value: 'hidden', configurable: true });
+  Object.defineProperty(d, 'hidden', { value: true, configurable: true });
   ev(d, 'visibilitychange');
+  ev(w, 'pagehide', { bubbles: false });
+  ev(w, 'beforeunload', { bubbles: false });
+  ev(w, 'unload', { bubbles: false });
+  ev(w, 'freeze', { bubbles: false });
   Object.defineProperty(d, 'visibilityState', { value: 'visible', configurable: true });
+  Object.defineProperty(d, 'hidden', { value: false, configurable: true });
+  ev(w, 'pageshow', { bubbles: false });
   ev(d, 'visibilitychange');
   for (const el of [...d.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')].slice(0, 120)) { try { el.focus(); } catch { /* ignore */ } }
   const keys = [['a'], ['A', { shiftKey: true }], ['a', { ctrlKey: true }], ['a', { metaKey: true }], ['Enter'], [' '], ['Escape'], ['Tab'], ['ArrowDown'], ['ArrowRight'], ['j'], ['k'], ['y'], ['n'], ['1']];
@@ -265,7 +304,7 @@ async function idle(page) {
 async function settle(w, ms = 30, frames = 3) {
   for (let i = 0; i < frames; i++) {
     await sleep(0);
-    await new Promise((r) => w.requestAnimationFrame(() => r()));
+    await new Promise((r) => (REAL_RAF.get(w) ?? ((fn) => setTimeout(fn, 16)))(() => r()));
   }
   await sleep(ms);
 }
@@ -305,8 +344,49 @@ function isFocusable(el) {
   return ti !== null && Number(ti) >= 0;
 }
 
+/**
+ * A person's click, as a browser fires it (G-VIEW hardening F2): pointerdown,
+ * mousedown, focus, pointerup, mouseup, click. A page listening on any of
+ * them sees the click.
+ */
 function click(w, el) {
-  el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, view: w }));
+  const init = { bubbles: true, cancelable: true, composed: true, view: w, button: 0, clientX: 10, clientY: 10 };
+  const P = typeof w.PointerEvent === 'function' ? w.PointerEvent : w.MouseEvent;
+  const pointer = (type, buttons) => { try { el.dispatchEvent(new P(type, { ...init, buttons, pointerId: 1, pointerType: 'mouse', isPrimary: true })); } catch { /* ignore */ } };
+  pointer('pointerdown', 1);
+  el.dispatchEvent(new w.MouseEvent('mousedown', { ...init, buttons: 1, detail: 1 }));
+  try { if (el.isConnected && typeof el.focus === 'function') el.focus(); } catch { /* ignore */ }
+  pointer('pointerup', 0);
+  el.dispatchEvent(new w.MouseEvent('mouseup', { ...init, buttons: 0, detail: 1 }));
+  el.dispatchEvent(new w.MouseEvent('click', { ...init, buttons: 0, detail: 1 }));
+}
+
+/**
+ * Every value a person can pick in an unmarked form control (F1): each option
+ * of a select, both states of a checkbox, a radio, the ends and middle of a
+ * range, each followed by `input` and `change` as a browser fires them.
+ */
+function pickEveryValue(w, el) {
+  const pick = (set) => {
+    if (!el.isConnected) return;
+    try { set(); } catch { return; }
+    el.dispatchEvent(new w.Event('input', { bubbles: true }));
+    el.dispatchEvent(new w.Event('change', { bubbles: true }));
+  };
+  if (el.tagName === 'SELECT') {
+    const n = el.options.length;
+    for (let i = 0; i < n; i++) pick(() => { if (el.multiple) el.options[i].selected = !el.options[i].selected; else el.selectedIndex = i; });
+    if (n > 0 && !el.multiple) pick(() => { el.selectedIndex = 0; });
+    return;
+  }
+  const type = String(el.type ?? '').toLowerCase();
+  if (type === 'checkbox') { pick(() => { el.checked = !el.checked; }); pick(() => { el.checked = !el.checked; }); }
+  else if (type === 'radio') pick(() => { el.checked = true; });
+  else if (type === 'range') {
+    const num = (x, dflt) => (Number.isFinite(Number.parseFloat(x)) ? Number.parseFloat(x) : dflt);
+    const min = num(el.min, 0), max = num(el.max, 100);
+    for (const v of [max, min, (min + max) / 2]) pick(() => { el.value = String(v); });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -605,18 +685,31 @@ async function sweep(html, p, fail) {
     const before = new Set(decisions(page).keys());
     page.rec.epoch++;
     click(page.w, el);
+    const picks = !a && el.matches('select, input[type="checkbox" i], input[type="radio" i], input[type="range" i]');
+    if (picks) pickEveryValue(page.w, el);
     await settle(page.w, 0, 1);
     const fresh = [...decisions(page).entries()].filter(([id]) => !before.has(id)).map(([, v]) => v.d);
     const list = fresh.map((x) => `${x.action}:${x.unit}`).join(', ');
     if (!a) {
       if (el.hasAttribute('data-akuko-submit') && fresh.length <= 1) continue;
-      if (fresh.length) fail('R1', 'unmarked-control-writes', `"${name(el)}" is not a decision control (no data-akuko-action) but clicking it wrote ${list}`);
+      if (fresh.length) fail('R1', 'unmarked-control-writes', `"${name(el)}" is not a decision control (no data-akuko-action) but ${picks ? 'clicking it or picking one of its values' : 'clicking it'} wrote ${list}`);
     } else {
       if (fresh.some((x) => x.unit !== u)) fail('R1', 'writes-other-unit', `the "${a}" control for ${u} also wrote ${list}: one click, one unit`);
       else if (fresh.length > 1) fail('R1', 'batch-approve', `one "${a}" click on ${u} wrote ${fresh.length} decisions (${list})`);
       else if (fresh.length === 1 && fresh[0].action !== a) fail('decision', 'wrong-action', `the "${a}" control for ${u} wrote "${fresh[0].action}"`);
     }
     for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after clicking "${name(el)}": ${v}; views write decisions only`);
+  }
+  // A double-click on anything that is not a decision control writes nothing (F6).
+  for (const el of [...page.d.querySelectorAll(`${INTERACTIVE}, [data-akuko-field], [data-akuko-unit], [data-akuko-view]`)].slice(0, 400)) {
+    if (!el.isConnected || el.hasAttribute('data-akuko-action') || el.hasAttribute('data-akuko-submit') || hiddenReason(page.w, el)) continue;
+    const before = new Set(decisions(page).keys());
+    page.rec.epoch++;
+    el.dispatchEvent(new page.w.MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, view: page.w, button: 0, detail: 2 }));
+    await sleep(0);
+    const fresh = [...decisions(page).entries()].filter(([id]) => !before.has(id)).map(([, v]) => v.d);
+    if (fresh.length) fail('R1', 'unmarked-control-writes', `double-clicking "${name(el)}" (not a decision control) wrote ${fresh.map((x) => `${x.action}:${x.unit}`).join(', ')}`);
+    for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after double-clicking "${name(el)}": ${v}; views write decisions only`);
   }
   page.close();
 }

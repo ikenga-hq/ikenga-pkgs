@@ -45,14 +45,75 @@ function shorthandSize(value) {
   return null;
 }
 
-function sizesIn(decls) {
+/**
+ * Replace each `var(--name[, fallback])` in a CSS value (G-VIEW hardening F4:
+ * jsdom leaves var() unresolved). `lookup(name)` returns the custom
+ * property's value, or null when it is not declared (then the fallback, if
+ * any, is used). Nested references resolve to a small depth; whatever still
+ * can't be resolved is left as written.
+ */
+export function substituteVars(value, lookup, depth = 0) {
+  const v = String(value ?? '');
+  if (depth > 8 || !/var\(/i.test(v)) return v;
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const at = v.toLowerCase().indexOf('var(', i);
+    if (at < 0) { out += v.slice(i); break; }
+    out += v.slice(i, at);
+    let j = at + 4;
+    for (let level = 1; j < v.length && level > 0; j++) { if (v[j] === '(') level++; else if (v[j] === ')') level--; }
+    const inner = v.slice(at + 4, j - 1);
+    const comma = inner.indexOf(',');
+    const name = (comma < 0 ? inner : inner.slice(0, comma)).trim();
+    const fallback = comma < 0 ? null : inner.slice(comma + 1).trim();
+    const got = /^--[\w-]+$/.test(name) ? lookup(name) : null;
+    const use = got !== null && got !== undefined && String(got).trim() !== '' ? String(got).trim() : fallback;
+    out += use === null ? v.slice(at, j) : substituteVars(use, lookup, depth + 1);
+    i = j;
+  }
+  return out;
+}
+
+/** Every custom property declared in some CSS text (`--name: value`): name → its values, in source order. */
+export function cssVars(text) {
+  const out = new Map();
+  for (const m of String(text).matchAll(/(?<![\w-])(--[\w-]+)\s*:\s*([^;}"'<>]+)/g)) {
+    const list = out.get(m[1]) ?? [];
+    list.push(m[2].trim());
+    out.set(m[1], list);
+  }
+  return out;
+}
+
+/**
+ * A static lookup over cssVars() for the readability floor: a token is judged
+ * by the smallest text size it is ever given (any rule, any media query), so a
+ * tiny value can't hide behind a normal one. Not a cascade, on purpose.
+ */
+function smallestLookup(vars) {
+  const resolve = (name, seen) => {
+    const list = vars.get(name);
+    if (!list || list.length === 0 || seen.has(name)) return null;
+    const next = new Set([...seen, name]);
+    let best = null, bestPx = Infinity;
+    for (const raw of list) {
+      const px = cssPx(substituteVars(raw, (n) => resolve(n, next)));
+      if (px !== null && px < bestPx) { best = raw; bestPx = px; }
+    }
+    return best ?? list[list.length - 1];
+  };
+  return (name) => resolve(name, new Set());
+}
+
+function sizesIn(decls, lookup = () => null) {
   const out = [];
-  for (const m of decls.matchAll(/font-size\s*:\s*([^;}"'!<>]+)/gi)) {
-    const px = cssPx(m[1]);
+  for (const m of decls.matchAll(/(?<![\w-])font-size\s*:\s*([^;}"'!<>]+)/gi)) {
+    const px = cssPx(substituteVars(m[1], lookup).trim());
     if (px !== null && px < 12) out.push(m[1].trim());
   }
   for (const m of decls.matchAll(/(?<![-\w])font\s*:\s*([^;}"'!<>]+)/gi)) {
-    const size = shorthandSize(m[1]);
+    const size = shorthandSize(substituteVars(m[1], lookup));
     const px = size === null ? null : cssPx(size);
     if (px !== null && px < 12) out.push(`font: ${m[1].trim()}`);
   }
@@ -70,9 +131,11 @@ export function smallText(css, rest, html) {
   for (const m of html.matchAll(/<svg\b[^>]*\bclass=\\?["']([^"'\\]+)/gi)) for (const c of m[1].split(/\s+/)) if (c) svgClasses.add(c);
   const escape = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const isSvgRule = (sel) => /(^|[\s>+~,(])(svg|text|tspan|textPath)\b/i.test(sel) || [...svgClasses].some((c) => new RegExp(`\\.${escape(c)}(?![\\w-])`).test(sel));
+  // Custom properties (F4): `font-size: var(--x)` is judged by what --x is set to.
+  const lookup = smallestLookup(cssVars(`${css}\n${rest}`));
   const out = [];
-  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) if (!isSvgRule(m[1])) out.push(...sizesIn(m[2]));
-  out.push(...sizesIn(rest));
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) if (!isSvgRule(m[1])) out.push(...sizesIn(m[2], lookup));
+  out.push(...sizesIn(rest, lookup));
   return out;
 }
 
@@ -93,7 +156,42 @@ const isTransparent = (c) => {
   return false;
 };
 
-const prop = (cs, name) => cs.getPropertyValue(name) || cs[name.replace(/-([a-z])/g, (_x, c) => c.toUpperCase())] || '';
+/** [r, g, b, a] (0–255, alpha 0–1) for #rgb[a], #rrggbb[aa] and rgb()/rgba(), else null. */
+function parseColour(c) {
+  const v = String(c ?? '').trim().toLowerCase().replace(/s+/g, ' ');
+  let m = /^#([0-9a-f]{3,8})$/.exec(v);
+  if (m && [3, 4, 6, 8].includes(m[1].length)) {
+    const h = m[1].length <= 4 ? [...m[1]].map((x) => x + x).join('') : m[1];
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).concat(h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1);
+  }
+  m = /^rgba?(([^)]*))$/.exec(v);
+  if (!m) return null;
+  const p = m[1].split(/[s,/]+/).filter(Boolean);
+  if (p.length < 3 || p.slice(0, 3).some((x) => !Number.isFinite(Number.parseFloat(x)))) return null;
+  const ch = (x) => (x.endsWith('%') ? (Number.parseFloat(x) * 255) / 100 : Number.parseFloat(x));
+  const a = p[3] === undefined ? 1 : p[3].endsWith('%') ? Number.parseFloat(p[3]) / 100 : Number.parseFloat(p[3]);
+  return [ch(p[0]), ch(p[1]), ch(p[2]), Number.isFinite(a) ? a : 1];
+}
+
+/** WCAG contrast ratio of two opaque colours. */
+function contrast(a, b) {
+  const lum = ([r, g, b2]) => [r, g, b2].map((x) => { const c = x / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }).reduce((s2, c, i) => s2 + c * [0.2126, 0.7152, 0.0722][i], 0);
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+
+/** A translate() that moves the element off-screen (≤ −999px either way), as the off-screen offsets above. */
+function translatedAway(t) {
+  const s2 = String(t).trim().toLowerCase();
+  for (const m of s2.matchAll(/translate(?:3d|x|y)?(([^)]*))/g)) for (const part of m[1].split(',')) { const px = cssPx(part.trim()); if (px !== null && px <= -999) return true; }
+  return false;
+}
+
+const rawProp = (cs, name) => cs.getPropertyValue(name) || cs[name.replace(/-([a-z])/g, (_x, c) => c.toUpperCase())] || '';
+// jsdom cascades and inherits custom properties, but leaves var() unresolved
+// in every other property: substitute from the element's computed custom
+// properties before reading a length, colour or keyword (F4).
+const prop = (cs, name) => substituteVars(rawProp(cs, name), (n) => cs.getPropertyValue(n) || null).trim();
 
 function clipHides(v) {
   const s = String(v).trim().toLowerCase();
@@ -123,25 +221,43 @@ function scaledToZero(t) {
 /** Why an element is not shown to the person, or null when it is. */
 export function hiddenReason(w, el) {
   let colourSettled = false;
+  let ink = null; // the text colour, once settled
+  let ground = null; // the first opaque background behind the text
+  let alpha = 1; // opacity compounds down the tree
   for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
     if (e.hidden) return 'hidden attribute';
     if (e.getAttribute('aria-hidden') === 'true') return 'aria-hidden';
     if (e.hasAttribute('inert')) return 'inert';
     if (e.tagName === 'DETAILS' && !e.open && e !== el && !el.closest('summary')) return 'inside a closed <details>';
     const cs = w.getComputedStyle(e);
-    if (cs.display === 'none') return 'display: none';
-    if (cs.visibility === 'hidden' || cs.visibility === 'collapse') return 'visibility: hidden';
-    const op = Number.parseFloat(cs.opacity);
-    if (Number.isFinite(op) && op < 0.05) return `opacity: ${cs.opacity}`;
-    const pos = cs.position;
-    const w1 = cssPx(cs.width), h1 = cssPx(cs.height);
-    if ((pos === 'absolute' || pos === 'fixed') && ((w1 !== null && w1 <= 1) || (h1 !== null && h1 <= 1) || clipHides(cs.clip))) return 'visually hidden';
+    if (prop(cs, 'display') === 'none') return 'display: none';
+    const vis = prop(cs, 'visibility');
+    if (vis === 'hidden' || vis === 'collapse') return 'visibility: hidden';
+    if (prop(cs, 'content-visibility') === 'hidden') return 'content-visibility: hidden'; // F5: its contents are skipped
+    const opacity = prop(cs, 'opacity');
+    const op = Number.parseFloat(opacity);
+    if (Number.isFinite(op) && op < 0.05) return `opacity: ${opacity}`;
+    const filter = prop(cs, 'filter');
+    for (const m of filter.matchAll(/opacity(s*([d.]+)(%?)s*)/gi)) {
+      const f2 = Number(m[1]) / (m[2] ? 100 : 1);
+      if (Number.isFinite(f2)) { if (f2 < 0.05) return `filter: ${filter}`; alpha *= f2; }
+    }
+    if (Number.isFinite(op)) alpha *= op;
+    if (alpha < 0.05) return `opacity compounds to ${alpha.toFixed(3)} down the tree`;
+    const pos = prop(cs, 'position');
+    const w1 = cssPx(prop(cs, 'width')), h1 = cssPx(prop(cs, 'height'));
+    if ((pos === 'absolute' || pos === 'fixed') && ((w1 !== null && w1 <= 1) || (h1 !== null && h1 <= 1) || clipHides(prop(cs, 'clip')))) return 'visually hidden';
     if (pos === 'absolute' || pos === 'fixed' || pos === 'relative') {
       for (const side of ['left', 'top', 'right', 'bottom']) {
         const px = cssPx(prop(cs, side));
         if (px !== null && px <= -999) return `off-screen (${side}: ${prop(cs, side)})`;
       }
     }
+    for (const side of ['margin-left', 'margin-top']) {
+      const px = cssPx(prop(cs, side));
+      if (px !== null && px <= -999) return `off-screen (${side}: ${prop(cs, side)})`;
+    }
+    if (translatedAway(prop(cs, 'transform')) || translatedAway(prop(cs, 'translate'))) return `off-screen (transform: ${prop(cs, 'transform') || prop(cs, 'translate')})`;
     const indent = cssPx(prop(cs, 'text-indent'));
     if (indent !== null && indent <= -999) return `off-screen (text-indent: ${prop(cs, 'text-indent')})`;
     if (clipHides(prop(cs, 'clip-path'))) return `clip-path: ${prop(cs, 'clip-path')}`;
@@ -150,7 +266,7 @@ export function hiddenReason(w, el) {
     if (/hidden|clip/.test(overflow)) {
       for (const dim of ['height', 'max-height', 'width', 'max-width']) {
         const px = cssPx(prop(cs, dim));
-        if (px !== null && px <= 0.5) return `${dim}: ${prop(cs, dim)} with overflow hidden`;
+        if (px !== null && px < 8) return `${dim}: ${prop(cs, dim)} with overflow hidden`; // no line of text fits
       }
     }
     const fs = cssPx(prop(cs, 'font-size'));
@@ -160,8 +276,15 @@ export function hiddenReason(w, el) {
       if (c && c !== 'inherit' && c !== 'currentcolor') {
         colourSettled = true;
         if (isTransparent(c)) return `transparent text (color: ${c})`;
+        ink = parseColour(c);
       }
     }
+    if (!ground) {
+      const bg = parseColour(prop(cs, 'background-color'));
+      if (bg && bg[3] >= 0.95) ground = bg;
+    }
   }
+  // Text the colour of what is behind it (contrast under 1.5:1, far below the 4.5:1 floor) is not shown.
+  if (ink && ground && ink[3] >= 0.95 && contrast(ink, ground) < 1.5) return `text the colour of its background (contrast ${contrast(ink, ground).toFixed(2)}:1)`;
   return null;
 }

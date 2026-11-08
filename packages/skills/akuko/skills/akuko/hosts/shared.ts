@@ -1,11 +1,14 @@
 /**
  * akuko — helpers shared by the host adapters: where an asset belongs in the
  * project folder, how its id is derived, and how the returned `Asset` record
- * is built. No I/O here.
+ * is built; and the publishView gate (the caller reads the conformed
+ * lists). No I/O here.
  */
 
+import { fileURLToPath } from 'node:url';
+import { CONFORMED_FORMAT, isConformedHtml, type ConformedFile } from '../decisions/conformed.ts';
 import { AssetSchema, ID_PATTERN, type Asset, type AssetKind, type StageId } from '../schema/akuko-project.ts';
-import type { AssetInput } from './types.ts';
+import type { AssetInput, ViewArtifact } from './types.ts';
 
 /** The stage that produces each asset kind (sets `Asset.stage`). */
 export const STAGE_FOR_KIND: Record<AssetKind, StageId> = {
@@ -117,3 +120,57 @@ export const DECISION_STORE = {
   B: 'decisions/jsonl.ts',
   C: 'decisions/ikenga.ts',
 } as const;
+
+// ─────────────────────────────────────────────────────────────────────────
+// publishView gate (R-12 / C8): a view that writes decisions is published
+// only when its exact HTML is on a conformed-views list.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The skill's own conformed list (views it ships, e.g. the default board). A missing file is an empty list. */
+export const SHIPPED_CONFORMED = fileURLToPath(new URL('../views/conformed.json', import.meta.url));
+
+/** The `<id>@<version>` a view's akuko-view manifest declares (what its decisions carry as `view`), or undefined. */
+export function viewIdOf(html: string): string | undefined {
+  const m = /<script\b[^>]*\bid=["']akuko-view["'][^>]*>([\s\S]*?)<\/script>/i.exec(html);
+  if (!m) return undefined;
+  try {
+    const v = JSON.parse(m[1] ?? '') as { id?: unknown; version?: unknown };
+    return typeof v.id === 'string' && typeof v.version === 'string' ? `${v.id}@${v.version}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Does this view write decisions? Any `data-akuko-action` control (in markup or
+ * built by its scripts), the inlined decision writer, a manifest saying
+ * `writes_decisions: true`, or the caller saying so. Anything else is read-only.
+ */
+export function viewWritesDecisions(v: Pick<ViewArtifact, 'html' | 'writesDecisions'>): boolean {
+  return v.writesDecisions === true
+    || /data-akuko-action/i.test(v.html)
+    || /akuko-decision-writer|akukoDecisions\s*\.\s*emit\b/.test(v.html)
+    || /"writes_decisions"\s*:\s*true/.test(v.html);
+}
+
+/**
+ * Refuse to publish a view that writes decisions unless this exact HTML is
+ * on one of the conformed lists (`decisions/conformed.ts#isConformedHtml`).
+ * `lists` is read only when the view writes decisions, so a read-only view
+ * never depends on a list. Throws an Error naming the view and the fix.
+ */
+export async function assertPublishable(
+  v: Pick<ViewArtifact, 'name' | 'html' | 'writesDecisions'>,
+  lists: () => ConformedFile[] | Promise<ConformedFile[]>,
+): Promise<void> {
+  if (!viewWritesDecisions(v)) return;
+  const id = viewIdOf(v.html);
+  if (id === undefined) {
+    throw new Error(`akuko: refusing to publish view "${v.name}": it writes decisions but has no akuko-view manifest (views/contract.md §2). Add one, then run node scripts/check-view.mjs <view.html> --record <project>/views/conformed.json`);
+  }
+  const all = await lists();
+  const merged: ConformedFile = { format: CONFORMED_FORMAT, version: 1, views: all.flatMap((l) => l.views) };
+  if (!isConformedHtml(merged, id, v.html)) {
+    throw new Error(`akuko: refusing to publish view ${id} ("${v.name}"): it writes decisions, and this exact HTML is not on a conformed-views list. Run node scripts/check-view.mjs <view.html> --record <project>/views/conformed.json (on claude.ai, record the entry in the akuko/conformed doc), then publish the same HTML. A changed page needs a new "version" and a new check.`);
+  }
+}
