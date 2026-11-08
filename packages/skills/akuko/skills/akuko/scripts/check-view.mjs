@@ -23,7 +23,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CHECKER, checkView } from './check-view/check.mjs';
+import { CHECKER, checkView, isShippedList, SHIPPED_LIST } from './check-view/check.mjs';
 
 function parse(argv) {
   const files = [];
@@ -38,6 +38,7 @@ function parse(argv) {
     else files.push(a);
   }
   if (o.ship && o.record && resolve(o.ship) !== resolve(o.record)) throw new Error('--ship names the list it records into; give --ship alone, or the same file to --record');
+  if (o.ship && !isShippedList(o.ship)) throw new Error(`--ship records only into the skill's own list (${SHIPPED_LIST}); record a project's views with --record <project>/views/conformed.json`);
   if (o.ship) o.record = o.ship;
   return { files, ...o };
 }

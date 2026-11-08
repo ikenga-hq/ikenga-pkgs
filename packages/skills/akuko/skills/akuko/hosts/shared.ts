@@ -7,6 +7,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { CONFORMED_FORMAT, isConformedHtml, type ConformedFile } from '../decisions/conformed.ts';
+import { decisionWriteSigns, viewIdOf as manifestViewId } from '../scripts/check-view/predicates.mjs';
 import { AssetSchema, ID_PATTERN, type Asset, type AssetKind, type StageId } from '../schema/akuko-project.ts';
 import type { AssetInput, ViewArtifact } from './types.ts';
 
@@ -129,31 +130,19 @@ export const DECISION_STORE = {
 /** The skill's own conformed list (views it ships, e.g. the default board). A missing file is an empty list. */
 export const SHIPPED_CONFORMED = fileURLToPath(new URL('../views/conformed.json', import.meta.url));
 
-/** The `<id>@<version>` a view's akuko-view manifest declares (what its decisions carry as `view`), or undefined. */
-export function viewIdOf(html: string): string | undefined {
-  const m = /<script\b[^>]*\bid=["']akuko-view["'][^>]*>([\s\S]*?)<\/script>/i.exec(html);
-  if (!m) return undefined;
-  try {
-    const v = JSON.parse(m[1] ?? '') as { id?: unknown; version?: unknown };
-    return typeof v.id === 'string' && typeof v.version === 'string' ? `${v.id}@${v.version}` : undefined;
-  } catch {
-    return undefined;
-  }
-}
+/** The `<id>@<version>` a view's akuko-view manifest declares (one real block; comments ignored), or undefined. */
+export const viewIdOf = (html: string): string | undefined => manifestViewId(html);
 
 /**
- * Does this view write decisions? Any `data-akuko-action` control (in markup or
- * built by its scripts), the inlined decision writer, a manifest saying
- * `writes_decisions: true`, or the caller saying so. Anything else is read-only.
+ * Does this view write decisions? The predicate check-view uses too
+ * (scripts/check-view/predicates.mjs): a `data-akuko-action` control (or
+ * `dataset.akukoAction`), the decision writer, the outbox key, an Ikenga
+ * state post, a write to the decisions collection, a manifest saying
+ * `writes_decisions: true` — or the caller saying so. Reading decisions is
+ * not writing them. Comments never count.
  */
 export function viewWritesDecisions(v: Pick<ViewArtifact, 'html' | 'writesDecisions'>): boolean {
-  const live = v.html.replace(/<!--[\s\S]*?-->/g, ''); // a comment naming a control is not one (as check-view)
-  return v.writesDecisions === true
-    || /data-akuko-action/i.test(live)
-    || /akuko-decision-writer|akukoDecisions/.test(live)
-    // writing a store directly: the Ikenga state key, or the artifact DB's decisions collection
-    || /akuko\.decisions|collection\(\s*["'`]decisions["'`]/.test(live)
-    || /"writes_decisions"\s*:\s*true/.test(live);
+  return v.writesDecisions === true || decisionWriteSigns(v.html).length > 0;
 }
 
 /**
