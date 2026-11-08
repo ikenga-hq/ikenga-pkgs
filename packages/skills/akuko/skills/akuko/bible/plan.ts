@@ -258,8 +258,9 @@ export function jobRan(p: AkukoProject, id: string): boolean {
  * The same units give the same id until that job has run; after a person
  * sends one back, regenerating it is the next `r<n>`, which needs its own approval.
  */
-export function bibleJobId(p: AkukoProject, wave: number, units: string[]): string {
-  const base = `job_bible_w${wave}_${hash8([...units].sort().join('|'))}`;
+export function bibleJobId(p: AkukoProject, wave: number, units: string[], provider = '', model = ''): string {
+  // Provider and model are part of the id (as for key frames): an approval binds to one provider and model, so changing either is a new job with a fresh approval.
+  const base = `job_bible_w${wave}_${hash8([[...units].sort().join('|'), provider, model].join('#'))}`;
   let n = 1;
   while (jobRan(p, `${base}_r${n}`)) n++;
   return `${base}_r${n}`;
@@ -333,7 +334,7 @@ export function buildBibleJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   const units = chosen.map((a) => a.id);
   const counts = BIBLE_ROLES.map((r) => [r, chosen.filter((a) => roleOf(a) === r).length] as const).filter(([, n]) => n > 0);
   const job: Job = {
-    id: bibleJobId(p, wave, units),
+    id: bibleJobId(p, wave, units, o.provider, o.model ?? ''),
     stage: BIBLE_STAGE,
     kind: 'image',
     provider: o.provider,

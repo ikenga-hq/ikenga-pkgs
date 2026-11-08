@@ -446,6 +446,28 @@ describe('LocalHost state + assets', () => {
     assert.equal(r.path, join(dir, 'views', 'default-board.html'));
     assert.equal(readFileSync(r.path ?? '', 'utf8'), '<!doctype html><title>b</title>');
   });
+
+  it('"aux" and "aux_" would share aux_.html, so "aux_" is refused whichever is published first and never overwrites "aux"', async () => {
+    const dir = tmpProject(false);
+    const host = createLocalHost({ projectDir: dir });
+    const refusal = /cannot publish a view named "aux_".*reserved name "aux"/;
+    await assert.rejects(host.publishView({ name: 'aux_', html: '<!doctype html><title>x</title>' }), refusal);
+    assert.equal(existsSync(join(dir, 'views', 'aux_.html')), false, 'refused before anything was written');
+    const r = await host.publishView({ name: 'aux', html: '<!doctype html><title>aux</title>' });
+    await assert.rejects(host.publishView({ name: 'aux_', html: '<!doctype html><title>other</title>' }), refusal);
+    assert.equal(readFileSync(r.path ?? '', 'utf8'), '<!doctype html><title>aux</title>', 'the first view is untouched');
+    // an ordinary trailing underscore is fine
+    assert.ok((await host.publishView({ name: 'board_', html: '<!doctype html><title>b</title>' })).path);
+  });
+
+  it('re-publishing the same view name still replaces it, including a reserved one', async () => {
+    const dir = tmpProject(false);
+    const host = createLocalHost({ projectDir: dir });
+    await host.publishView({ name: 'aux', html: '<!doctype html><title>1</title>' });
+    const r = await host.publishView({ name: 'aux', html: '<!doctype html><title>2</title>' });
+    assert.equal(r.path, join(dir, 'views', 'aux_.html'));
+    assert.equal(readFileSync(r.path ?? '', 'utf8'), '<!doctype html><title>2</title>');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

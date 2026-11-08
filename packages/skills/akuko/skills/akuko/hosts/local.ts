@@ -19,7 +19,7 @@ import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
 import { readJsonlStore } from '../decisions/jsonl.ts';
 import { loadConformedFile } from '../decisions/conformed.ts';
-import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED } from './shared.ts';
+import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED, viewFileStem } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 import { StateConflictError } from './conflict.ts';
 
@@ -130,7 +130,7 @@ async function createExclusive(path: string, content: string): Promise<NodeJS.Er
  * alone (review of #199, C1). A `.takeover` file older than staleMs was
  * left by a process that died during this short step and is removed.
  */
-async function takeOverStale(lock: string, stale: { content: string }, token: string, staleMs: number): Promise<void> {
+async function takeOverStale(lock: string, stale: { content: string }, token: string, staleMs: number): Promise<boolean> {
   const guard = `${lock}.takeover`;
   const err = await createExclusive(guard, token);
   if (err) {
@@ -139,11 +139,15 @@ async function takeOverStale(lock: string, stale: { content: string }, token: st
       const again = await lockState(guard);
       if (again && again.content === g.content) await rm(guard, { force: true });
     }
-    return;
+    return false;
   }
   try {
     const now = await lockState(lock);
-    if (now && now.content === stale.content && Date.now() - now.mtimeMs > staleMs) await rm(lock, { force: true });
+    if (now && now.content === stale.content && Date.now() - now.mtimeMs > staleMs) {
+      await rm(lock, { force: true });
+      return true;
+    }
+    return false;
   } finally {
     if ((await lockState(guard))?.content === token) await rm(guard, { force: true });
   }
@@ -163,7 +167,7 @@ async function takeOverStale(lock: string, stale: { content: string }, token: st
  * EPERM / EACCES while no lock file exists is a permission problem and is
  * reported as one.
  */
-export async function withFileLock<T>(path: string, fn: (held: HeldLock) => Promise<T>, opts: { waitMs?: number; staleMs?: number } = {}): Promise<T> {
+export async function withFileLock<T>(path: string, fn: (held: HeldLock) => Promise<T>, opts: { waitMs?: number; staleMs?: number; sleep?: (ms: number) => Promise<unknown> } = {}): Promise<T> {
   const lock = `${path}.lock`;
   const token = `${process.pid} ${randomUUID()}
 `;
@@ -184,14 +188,16 @@ export async function withFileLock<T>(path: string, fn: (held: HeldLock) => Prom
     } else {
       denied = 0;
       if (Date.now() - held.mtimeMs > staleMs) {
-        await takeOverStale(lock, held, token, staleMs);
-        continue;
+        // Retry at once only if the stale lock was actually removed. Otherwise
+        // (the takeover guard is held, even by a crashed taker's fresh one) fall
+        // through to the deadline check and the sleep instead of spinning.
+        if (await takeOverStale(lock, held, token, staleMs)) continue;
       }
     }
     if (Date.now() > deadline) {
       throw new Error(`akuko: ${path} is locked by another akuko process (${lock}). Wait for it to finish, then try again; if none is running, delete the .lock file.`);
     }
-    await sleep(delay);
+    await (opts.sleep ?? sleep)(delay);
   }
   const stillHeld = async (): Promise<boolean> => (await lockState(lock))?.content === token;
   try {
@@ -314,7 +320,7 @@ export class LocalHost implements HostAdapter {
    */
   async publishView(v: ViewArtifact): Promise<{ url?: string; path?: string }> {
     await assertPublishable(v, () => [loadConformedFile(SHIPPED_CONFORMED), loadConformedFile(join(this.projectDir, VIEWS_DIR, 'conformed.json'))]);
-    const path = join(this.projectDir, VIEWS_DIR, `${safeBasename(v.name).replace(/\.html?$/i, '')}.html`);
+    const path = join(this.projectDir, VIEWS_DIR, `${viewFileStem(v.name)}.html`);
     await writeFileAtomic(path, v.html);
     return { path };
   }

@@ -317,13 +317,9 @@ async function idle(page) {
   ev(w, 'scroll'); ev(d, 'scroll'); ev(w, 'resize'); ev(w, 'focus'); ev(w, 'blur');
   for (const type of ['wheel', 'touchmove', 'touchend', 'contextmenu', 'selectionchange', 'copy']) { ev(d.body, type); ev(d, type); }
   // The same gestures with the fields a handler would test (Wave 3 review,
-  // finding 4): a wheel turn each way, a right click, a touch.
-  for (const el of [d.body, ...d.querySelectorAll('[data-akuko-view], [data-akuko-action], button')].slice(0, 80)) {
-    const at = { bubbles: true, cancelable: true, view: w, clientX: 10, clientY: 10 };
-    for (const deltaY of [120, -120]) { try { el.dispatchEvent(new w.WheelEvent('wheel', { ...at, deltaY, deltaMode: 0 })); } catch { /* ignore */ } }
-    try { el.dispatchEvent(new w.MouseEvent('contextmenu', { ...at, button: 2, buttons: 2 })); } catch { /* ignore */ }
-    for (const type of ['touchstart', 'touchend']) { try { el.dispatchEvent(new w.TouchEvent(type, { bubbles: true, cancelable: true, view: w })); } catch { ev(el, type); } }
-  }
+  // finding 4; Phase 1 follow-up): wheel turns of several sizes, each mouse
+  // button, each pointer type, a real touch list.
+  for (const el of [d.body, ...d.querySelectorAll('[data-akuko-view], [data-akuko-action], button')].slice(0, 80)) gestures(w, el);
   // Leaving the page decides nothing either (F3): hide the tab, fire what a
   // browser fires as the page goes away, then come back.
   Object.defineProperty(d, 'visibilityState', { value: 'hidden', configurable: true });
@@ -344,7 +340,11 @@ async function idle(page) {
   for (const target of [d.body, d.activeElement ?? d.body, d]) {
     for (const [key, code, keyCode, mods = {}] of keys) {
       for (const type of ['keydown', 'keypress', 'keyup']) {
-        try { target.dispatchEvent(new w.KeyboardEvent(type, { key, code, keyCode, bubbles: true, cancelable: true, ...mods })); } catch { /* ignore */ }
+        try {
+          const e = new w.KeyboardEvent(type, { key, code, keyCode, charCode: type === 'keypress' ? keyCode : 0, bubbles: true, cancelable: true, ...mods });
+          if (e.which !== keyCode) Object.defineProperty(e, 'which', { value: keyCode });
+          target.dispatchEvent(e);
+        } catch { /* ignore */ }
       }
     }
   }
@@ -352,6 +352,50 @@ async function idle(page) {
   await settle(w);
   page.rec.advance(10 * 60 * 1000); // ten minutes of the page's timers
   await settle(w);
+}
+
+/**
+ * The gestures a person's hands make on `el` that decide nothing, with every
+ * field a handler might test (Phase 1 follow-up to the Wave 3 review, finding 4):
+ * a wheel turn each way and in small and large steps (a threshold handler sees
+ * both sides), a context menu, mousedown / mouseup with the left and the right
+ * button (`button` 0 and 2), pointer events of every `pointerType`, and touch
+ * events whose `touches`, `targetTouches` and `changedTouches` hold one touch
+ * (a handler testing `touches.length === 1` sees one).
+ */
+function gestures(w, el) {
+  const at = { bubbles: true, cancelable: true, composed: true, view: w, clientX: 10, clientY: 10 };
+  const fire = (make) => { try { el.dispatchEvent(make()); } catch { /* ignore */ } };
+  for (const deltaY of [120, -120, 1, -1, 400, -400]) fire(() => new w.WheelEvent('wheel', { ...at, deltaY, deltaMode: 0 }));
+  fire(() => new w.MouseEvent('contextmenu', { ...at, button: 2, buttons: 2 }));
+  for (const [button, buttons] of [[0, 1], [2, 2]]) {
+    fire(() => new w.MouseEvent('mousedown', { ...at, button, buttons, detail: 1 }));
+    fire(() => new w.MouseEvent('mouseup', { ...at, button, buttons: 0, detail: 1 }));
+  }
+  const P = typeof w.PointerEvent === 'function' ? w.PointerEvent : w.MouseEvent;
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+      fire(() => {
+        const e = new P(type, { ...at, button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' ? 0 : 1, pointerId: 1, isPrimary: true, pointerType });
+        if (e.pointerType !== pointerType) Object.defineProperty(e, 'pointerType', { value: pointerType });
+        return e;
+      });
+    }
+  }
+  for (const type of ['touchstart', 'touchmove', 'touchend']) {
+    fire(() => {
+      const e = new w.TouchEvent(type, { bubbles: true, cancelable: true, composed: true, view: w });
+      const t = { identifier: 0, target: el, clientX: 10, clientY: 10, pageX: 10, pageY: 10, screenX: 10, screenY: 10, radiusX: 1, radiusY: 1, force: 1 };
+      const one = [t];
+      // touchend lists the lifted touch in changedTouches only, as a browser does.
+      Object.defineProperties(e, {
+        touches: { value: type === 'touchend' ? [] : one },
+        targetTouches: { value: type === 'touchend' ? [] : one },
+        changedTouches: { value: one },
+      });
+      return e;
+    });
+  }
 }
 
 async function settle(w, ms = 30, frames = 3) {
@@ -743,6 +787,7 @@ async function sweep(html, p, fail, host = 'A') {
     const before = new Set(decisions(page).keys());
     page.rec.epoch++;
     click(page.w, el);
+    if (!a) gestures(page.w, el); // right button, touch, pen: none of them decides anything on a control that is not a decision control
     const picks = !a && el.matches('select, input[type="checkbox" i], input[type="radio" i], input[type="range" i]');
     if (picks) pickEveryValue(page.w, el);
     await settle(page.w, 0, 1);
@@ -766,6 +811,7 @@ async function sweep(html, p, fail, host = 'A') {
     const before = new Set(decisions(page).keys());
     page.rec.epoch++;
     click(page.w, el);
+    gestures(page.w, el);
     await sleep(0);
     page.rec.advance(TEN_MINUTES);
     await sleep(0);
