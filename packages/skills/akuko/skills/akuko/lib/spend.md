@@ -84,11 +84,19 @@ job submit once, and two jobs cannot overrun the cap together. The lock is
 not held during `submit()`, because the reservation is already written by
 then.
 
-**What the lock does not cover:** other processes, other gate instances on
-the same project, and the manual provider's `ingest()`, which writes state
-on its own. Making those safe needs a host-level compare-and-swap on
-`writeState`. That is a WP-02 follow-up. Until it lands, run one gate per
-project at a time.
+**Other processes and other gates on the same project** are covered by the
+host, not the lock. On B and C, `writeState` takes `akuko.json.lock` and
+writes only if the file is still the one that host last read or wrote;
+otherwise it writes nothing and throws `StateConflictError`
+(`hosts/conflict.ts`). Each step the gate runs under its lock reads state
+first and writes once, at the end, so on a conflict the gate runs that step
+again from a fresh read. The other process's reservation is then counted:
+two jobs that together overrun the cap end as one run and one `over-cap`
+refusal, and the same job started twice runs once (`already-submitted`).
+No ledger entry is lost (`hosts/state-race.test.ts`). Any other writer of
+`akuko.json` (the manual provider's `ingest()`, an action's own write) gets
+the same error instead of overwriting a change it never saw; the step is
+simply run again.
 
 `gate.collect(handle)` polls. When the job finishes it records the outputs
 (see below) and settles the job's ledger entries. It only touches

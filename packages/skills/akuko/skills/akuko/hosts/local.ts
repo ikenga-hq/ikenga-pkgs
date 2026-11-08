@@ -12,14 +12,18 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
 import { readJsonlStore } from '../decisions/jsonl.ts';
 import { loadConformedFile } from '../decisions/conformed.ts';
 import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
+import { StateConflictError } from './conflict.ts';
+
+export { StateConflictError, isStateConflict, STATE_CONFLICT } from './conflict.ts';
 
 export const PROJECT_FILE = 'akuko.json';
 export const VIEWS_DIR = 'views';
@@ -53,6 +57,52 @@ export async function writeFileAtomic(path: string, data: string | Uint8Array): 
   }
 }
 
+const digest = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
+
+/** A lock older than this was left by a process that died holding it; it is taken over. */
+export const LOCK_STALE_MS = 30_000;
+/** How long `writeState` waits for another process's lock before giving up. */
+export const LOCK_WAIT_MS = 10_000;
+
+/**
+ * Run `fn` holding `<path>.lock` (created exclusively; removed after).
+ * Serialises `writeState` across processes on one project folder. A lock
+ * whose mtime is older than LOCK_STALE_MS is removed and retried. (Two
+ * processes taking over the same stale lock in the same instant could both
+ * proceed; the compare-and-swap in `writeState` still runs under each.)
+ */
+export async function withFileLock<T>(path: string, fn: () => Promise<T>, opts: { waitMs?: number; staleMs?: number } = {}): Promise<T> {
+  const lock = `${path}.lock`;
+  const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
+  await mkdir(dirname(path), { recursive: true });
+  for (let delay = 5; ; delay = Math.min(delay * 2, 100)) {
+    try {
+      const fh = await open(lock, 'wx');
+      try { await fh.writeFile(`${process.pid}
+`); } finally { await fh.close(); }
+      break;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // EPERM: on Windows a lock that is being deleted can't be created yet.
+      if (code !== 'EEXIST' && code !== 'EPERM') throw err;
+      const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
+      if (age > (opts.staleMs ?? LOCK_STALE_MS)) {
+        await rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`akuko: ${path} is locked by another akuko process (${lock}). Wait for it to finish, then try again; if none is running, delete the .lock file.`);
+      }
+      await sleep(delay);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(lock, { force: true });
+  }
+}
+
 /** First free `<stem>[-n]<ext>` in `dir`. Existing files are never overwritten. */
 export function freeName(dir: string, basename: string, exists: (p: string) => boolean = existsSync): string {
   if (!exists(join(dir, basename))) return basename;
@@ -70,6 +120,8 @@ export class LocalHost implements HostAdapter {
   protected readonly hints: ProbeHints;
   protected readonly deps: NodeProbeDeps;
   protected readonly now: () => Date;
+  /** sha256 of `akuko.json` as this host last read or wrote it; undefined until it has. */
+  private seen: string | undefined;
 
   constructor(opts: LocalHostOptions) {
     this.projectDir = opts.projectDir;
@@ -90,13 +142,37 @@ export class LocalHost implements HostAdapter {
   /** Read and validate `akuko.json`. Throws when it is missing or invalid. */
   async readState(): Promise<AkukoProject> {
     const raw = await readFile(this.projectFile, 'utf8');
+    this.seen = digest(raw);
     return AkukoProjectSchema.parse(JSON.parse(raw));
   }
 
-  /** Validate, then write `akuko.json` atomically. An invalid project is never written. */
+  /**
+   * Validate, then write `akuko.json` atomically. An invalid project is never written.
+   *
+   * Compare-and-swap (Wave 3 review, finding 1): under `akuko.json.lock`,
+   * the file on disk must still be the one this host last read or wrote;
+   * otherwise another process (or an editor) changed it in between, nothing
+   * is written, and `StateConflictError` is thrown. The spend gate redoes
+   * its read → check → write on that error, so two processes on one project
+   * can't overrun the cap or lose a ledger entry. A host that has never read
+   * the file writes it as before (creating a project).
+   */
   async writeState(p: AkukoProject): Promise<void> {
     const valid = AkukoProjectSchema.parse(p);
-    await writeFileAtomic(this.projectFile, serializeProject(valid));
+    const text = serializeProject(valid);
+    await withFileLock(this.projectFile, async () => {
+      if (this.seen !== undefined) {
+        const now = await readFile(this.projectFile).then(digest, (err: NodeJS.ErrnoException) => {
+          if (err.code === 'ENOENT') return undefined;
+          throw err;
+        });
+        if (now !== this.seen) {
+          throw new StateConflictError(`akuko: ${this.projectFile} changed on disk since akuko read it (another akuko run, or an edit); nothing was written. Run the step again: it starts from the current file.`);
+        }
+      }
+      await writeFileAtomic(this.projectFile, text);
+      this.seen = digest(text);
+    });
   }
 
   /** Write the bytes under the project folder; return the Asset (not yet in akuko.json). */
