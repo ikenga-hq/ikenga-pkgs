@@ -345,6 +345,8 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
   // reads state first and writes at most once, at its end, so on a conflict
   // it is simply run again from a fresh read: the other writer's reservation
   // is then counted, and an overrun becomes a refusal (lib/spend.md).
+  // The host compares against its own last read, so give each gate its own
+  // host instance and don't share it with another read-modify-write.
   const CONFLICT_RETRIES = 8;
   let tail: Promise<unknown> = Promise.resolve();
   function locked<T>(fn: () => Promise<T>): Promise<T> {

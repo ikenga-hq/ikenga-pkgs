@@ -86,17 +86,35 @@ then.
 
 **Other processes and other gates on the same project** are covered by the
 host, not the lock. On B and C, `writeState` takes `akuko.json.lock` and
-writes only if the file is still the one that host last read or wrote;
-otherwise it writes nothing and throws `StateConflictError`
+writes only if the file's bytes are still the ones that host last read or
+wrote; otherwise it writes nothing and throws `StateConflictError`
 (`hosts/conflict.ts`). Each step the gate runs under its lock reads state
 first and writes once, at the end, so on a conflict the gate runs that step
 again from a fresh read. The other process's reservation is then counted:
 two jobs that together overrun the cap end as one run and one `over-cap`
 refusal, and the same job started twice runs once (`already-submitted`).
-No ledger entry is lost (`hosts/state-race.test.ts`). Any other writer of
-`akuko.json` (the manual provider's `ingest()`, an action's own write) gets
-the same error instead of overwriting a change it never saw; the step is
-simply run again.
+Any other writer of `akuko.json` (the manual provider's `ingest()`, an
+action's own write) gets the same error instead of overwriting a change it
+never saw; the step is simply run again.
+
+The lock file holds its owner's pid and a random nonce and is removed only
+by that owner. A lock older than 30 s was left by a process that died; it is
+taken over under a second lock (`akuko.json.lock.takeover`), and only if it
+is still the same stale file, so several processes meeting one stale lock
+still enter one at a time (`hosts/state-race.test.ts`: three processes on a
+stale lock, many trials, no overrun, no lost entry). What is not covered:
+
+- **One host instance per gate.** What `writeState` compares against is
+  the last read *by that host instance*. Two gates sharing one
+  `LocalHost`, or another caller interleaving its own read-modify-write on
+  the gate's host, defeat the check. No shipped caller does either: each CLI
+  run makes one host and one gate.
+- A writer that holds the lock longer than 30 s can have it taken over; it
+  checks just before writing and then refuses (`StateConflictError`), but a
+  write already under way is not stopped. A crash during the brief takeover
+  step itself leaves `.takeover` behind for 30 s.
+- `akuko.json` must be UTF-8. A file saved in another encoding is refused
+  on read with a clear error (re-save it as UTF-8), never read lossily.
 
 `gate.collect(handle)` polls. When the job finishes it records the outputs
 (see below) and settles the job's ledger entries. It only touches
