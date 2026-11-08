@@ -290,10 +290,10 @@ button.stage-in:hover { background: var(--ak-bg-raised); }
 
 /* detail */
 .detail { padding: 4px 20px 26px; background: var(--ak-bg-surface); border-top: 1px solid var(--ak-border-soft); }
-.panel-big { margin-top: 16px; }
+.panel-big { margin-top: 12px; }
 .panel-big svg { display: block; width: 100%; height: auto; border-radius: var(--ak-radius-sm); }
 .panel-cap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 6px; font: 500 12px/1.4 var(--ak-font-sans); color: var(--ak-fg-muted); }
-.review { margin-top: 14px; padding: 14px; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-md); }
+.review { margin-top: 10px; padding: 14px; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-md); }
 .rv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .rv-msg { flex: 1 1 220px; font-size: 14px; color: var(--ak-fg); }
 .rv-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
@@ -432,6 +432,9 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .nt-sys b { color: var(--ak-fg); }
 .warn-bar { margin: 0; padding: 8px 20px; background: var(--ak-achievement-soft); color: var(--ak-fg); border-bottom: 1px solid var(--ak-border); font: 600 13px/1.45 var(--ak-font-sans); }
 .warn-bar[hidden] { display: none; }
+[data-akuko-action][aria-disabled="true"] { opacity: .55; cursor: default; }
+.sample-msg { display: block; flex: 1 1 100%; margin-top: 6px; font: 600 13px/1.4 var(--ak-font-sans); color: var(--ak-fg); }
+@media (min-width: 761px) { .foot { flex-wrap: nowrap; white-space: nowrap; } .foot-id { display: none; } }
 .foot-warn { color: var(--ak-fg); font-weight: 600; }
 
 /* ── footer ── */
@@ -1334,7 +1337,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const aw = awaitingSpend(), pin = $('#rail-pin');
     if (!m) { pin.innerHTML = ''; return; }
     const sum = aw.reduce((x, j) => x + j.estimate, 0);
-    let h = '<p class="pin-line"><b>Spend gate</b> · ' + (aw.length ? '<span class="money">' + money(sum) + '</span> waiting · ' : 'nothing waiting · ') + '<span class="money">' + money(m.left) + '</span> ' + (aw.length ? 'left if you approve' : 'left') + '</p><div class="pin-act">';
+    let h = '<p class="pin-line"><b>Spend gate</b> · ' + (aw.length ? 'estimate <span class="money">' + money(sum) + '</span> · ' : 'nothing waiting · ') + '<span class="money">' + money(m.spent) + '</span> spent of <span class="money">' + money(m.b.cap) + '</span> cap · <span class="money">' + money(m.left) + '</span> ' + (aw.length ? 'left if you approve' : 'left') + '</p><div class="pin-act">';
     if (aw.length === 1) {
       const j = aw[0];
       h += '<button class="btn btn-primary btn-sm" type="button" data-act="spend-ok" data-akuko-action="approve-spend" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="pin-ok:' + j.id + '">Approve spend · ' + money(bound(j)) + '</button>' +
@@ -1454,7 +1457,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     let man = {};
     try { man = JSON.parse($('#ikenga-manifest').textContent); } catch (e) { man = {}; }
     const kind = W.store(), ok = store.ok && W.stored();
-    const saveTxt = kind === 'artifact-db' ? 'Your decisions are saved to this board’s database.' + (ok ? '' : ' This browser blocks local storage, so nothing else is kept here.')
+    const saveTxt = isSample() ? 'Sample project: nothing here is saved.' : kind === 'artifact-db' ? 'Your decisions are saved to this board’s database.' + (ok ? '' : ' This browser blocks local storage, so nothing else is kept here.')
       : kind === 'ikenga' ? 'Your decisions reach akuko on its next action.' + (ok ? '' : ' This browser blocks storage; a reload would lose them.')
       : (ok ? 'Your decisions are saved in this browser. Copy them to akuko when you are done.' : 'Not saved: this browser blocks storage, so changes last until you close the page. Copy them to akuko before you leave.');
     const fk = document.activeElement && $('#foot').contains(document.activeElement) ? document.activeElement.dataset.k : null;
@@ -1467,7 +1470,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     if (wb) { wb.hidden = ok; wb.textContent = ok ? '' : (kind === 'outbox' ? 'This browser blocks storage, so your decisions are not saved here. Copy them to akuko before you close the page.' : 'This browser blocks storage. Your decisions still reach ' + (kind === 'artifact-db' ? 'the board database' : 'Ikenga') + ', but a reload would lose this page’s copy.'); }
     $('#foot').innerHTML = '<span class="' + (ok ? '' : 'foot-warn') + '" id="save-note">' + esc(saveTxt) + '</span>' +
       '<span id="src-note">' + esc(srcText()) + '</span>' +
-      '<span class="mono">' + esc(D.project.slug) + ' · schema ' + esc(D.schema_version) + ' · ' + esc(man.name || '') + ' ' + esc(man.version || '') + '</span><span class="sp"></span>' +
+      '<span class="mono foot-id">' + esc(D.project.slug) + ' · schema ' + esc(D.schema_version) + ' · ' + esc(man.name || '') + ' ' + esc(man.version || '') + '</span><span class="sp"></span>' +
       (kind === 'outbox' ? '<button class="linkbtn" type="button" data-act="export" data-akuko-export data-k="export">Copy decisions for akuko (' + W.all().length + ')</button>' : '') +
       (hostKind() !== 'A' ? '<button class="linkbtn" type="button" data-act="load" data-k="load">Load akuko.json</button>' : '');
     if (fk) { const el = document.querySelector('#foot [data-k="' + fk + '"]'); if (el) el.focus({ preventScroll: true }); }
@@ -1493,6 +1496,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         else if (!el && fallbackFocus) { const fb = document.querySelector('[data-k="' + fallbackFocus + '"]'); if (fb) fb.focus({ preventScroll: true }); }
       }
     }
+    if (isSample()) $$('[data-akuko-action]').forEach(el => el.setAttribute('aria-disabled', 'true'));
     requestAnimationFrame(layoutLining);
     syncStuck();
   }
@@ -1588,8 +1592,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       return;
     }
     const a = t.dataset.act, id = t.dataset.id;
+    if (isSample() && t.hasAttribute('data-akuko-action')) { const msg = 'This is a sample project. Decisions start working once the board can read your project.'; announce(msg); $$('.sample-msg').forEach(n => n.remove()); const sm = document.createElement('span'); sm.className = 'sample-msg'; sm.setAttribute('role', 'status'); sm.textContent = msg; t.insertAdjacentElement('afterend', sm); return; }
     if (t.getAttribute('aria-disabled') === 'true') return;
-    if (isSample() && t.hasAttribute('data-akuko-action')) { announce('This is a sample project. Decisions start working once the board can read your project.'); return; }
     switch (a) {
       case 'sel': selectShot(id, 'row'); break;
       case 'sel-tag': selectShot(id, 'script', { focus: 'tag:' + id }); break;

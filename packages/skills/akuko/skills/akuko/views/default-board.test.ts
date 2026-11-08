@@ -297,6 +297,11 @@ describe('default board: the file as shipped', () => {
     click(p, '#p-spend [data-akuko-action="approve-spend"]');
     await p.tick();
     assert.deepEqual(Array.from(p.w.akukoDecisions.all()), []);
+    const controls: { getAttribute(n: string): string | null }[] = Array.from(p.d.querySelectorAll('[data-akuko-action]'));
+    assert.ok(controls.length > 5);
+    assert.ok(controls.every((c) => c.getAttribute('aria-disabled') === 'true'), 'every decision control is aria-disabled in sample mode');
+    assert.match(p.text('.sample-msg'), /This is a sample project/, 'the message shows next to the clicked control');
+    assert.doesNotMatch(p.text('#foot'), /saved in this browser/);
     p.close();
   });
 
@@ -308,6 +313,16 @@ describe('default board: the file as shipped', () => {
     click(p, '[data-akuko-action="approve"][data-akuko-unit="sc2_sh4"]');
     await p.tick();
     assert.equal(p.num('waiting-shots'), 1);
+    p.close();
+  });
+});
+
+describe('default board: the sticky spend bar', () => {
+  it('whenever it offers Approve spend, it also shows the estimate, spent, cap and left if you approve', async () => {
+    const p = await boot({ host: 'B' });
+    const bar = p.text('#rail-pin');
+    assert.ok(p.d.querySelector('#rail-pin [data-akuko-action="approve-spend"]'));
+    for (const want of ['estimate $0.36', '$0.84 spent', '$15.00 cap', '$13.80 left if you approve']) assert.ok(bar.includes(want), `the bar lacks "${want}": ${bar}`);
     p.close();
   });
 });
