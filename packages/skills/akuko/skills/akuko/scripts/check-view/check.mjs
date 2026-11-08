@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { Ajv } from 'ajv';
 import addFormatsModule from 'ajv-formats';
 import { JSDOM, VirtualConsole } from 'jsdom';
-import { blankComments, conformanceHash, findJsonBlock, PROJECT_BLOCK } from './hash.mjs';
+import { blankComments, conformanceHash, escapeJsonForScript, findJsonBlock, PROJECT_BLOCK } from './hash.mjs';
 import { decisionWriteSigns } from './predicates.mjs';
 import { hiddenReason, smallText } from './hidden.mjs';
 import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
@@ -62,7 +62,7 @@ function jsonBlock(html, id) {
 export function injectProject(html, project) {
   const b = findJsonBlock(html, PROJECT_BLOCK);
   if (b.status !== 'ok') return undefined;
-  return html.slice(0, b.start) + JSON.stringify(project).replace(/</g, '\\u003c') + html.slice(b.end);
+  return html.slice(0, b.start) + escapeJsonForScript(JSON.stringify(project)) + html.slice(b.end);
 }
 
 function scripts(html) {

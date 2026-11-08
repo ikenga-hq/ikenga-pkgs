@@ -18,6 +18,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { escapeJsonForScript } from '../../scripts/check-view/hash.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const AKUKO = resolve(HERE, '..', '..');
@@ -25,7 +26,7 @@ export const AKUKO = resolve(HERE, '..', '..');
 /** The project as the page holds it: `<` is written as < so it can never close the script tag. */
 export function projectBlock(): string {
   const p = JSON.parse(readFileSync(resolve(AKUKO, 'fixtures/the-beating/akuko.json'), 'utf8'));
-  return JSON.stringify(p).replace(/</g, '\\u003c');
+  return escapeJsonForScript(JSON.stringify(p));
 }
 
 /** The canonical decision writer (scripts/check-view/decision-writer.js), exactly as it is on disk (v2). */
