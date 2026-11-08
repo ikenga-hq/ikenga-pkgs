@@ -80,7 +80,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     if (cmd === 'status') {
       const rows = bibleStatus(await host.readState());
       if (rows.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
-      return { code: 0, out: rows.map((r) => `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(', ')}` : ''})`).join('\n') };
+      return { code: 0, out: rows.map((r) => `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(', ')}` : ''}${r.superseded.length ? `; generated against a superseded ${r.superseded.join(', ')} - consider sending it back` : ''})`).join('\n') };
     }
     if (cmd === 'plan') {
       const r = planBible(await host.readState(), clock());

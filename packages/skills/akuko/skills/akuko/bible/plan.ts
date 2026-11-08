@@ -166,7 +166,7 @@ export function dependenciesOf(p: AkukoProject, a: Asset): Asset[] {
 const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted');
 
 export function unitReadiness(p: AkukoProject, a: Asset): Readiness {
-  if (a.status === 'approved') return { state: 'approved', waiting: [] };
+  if (a.status === 'approved' && hasFile(a)) return { state: 'approved', waiting: [] };
   if (hasFile(a) && a.status === 'pending-review') return { state: 'in-review', waiting: [] };
   if (inFlight(p, a)) return { state: 'in-flight', waiting: [] };
   const waiting = dependenciesOf(p, a).filter((d) => !approvedWithFile(d)).map((d) => d.id);
@@ -183,6 +183,8 @@ export interface StatusRow {
   status: Asset['status'];
   state: ReadinessState;
   waiting: string[];
+  /** Refs this image was generated against that have since been sent back or replaced. */
+  superseded: string[];
 }
 
 /** One row per planned image, for the status report. */
@@ -190,7 +192,7 @@ export function bibleStatus(p: AkukoProject): StatusRow[] {
   const kinds = new Map(bibleEntries(p).map((e) => [e.entry.id, e.kind]));
   return bibleAssets(p).map((a) => {
     const r = unitReadiness(p, a);
-    return { entry: a.owner ?? '', entry_kind: kinds.get(a.owner ?? '') ?? 'character', role: roleOf(a), asset: a.id, status: a.status, state: r.state, waiting: r.waiting };
+    return { entry: a.owner ?? '', entry_kind: kinds.get(a.owner ?? '') ?? 'character', role: roleOf(a), asset: a.id, status: a.status, state: r.state, waiting: r.waiting, superseded: supersededRefs(p, a) };
   });
 }
 
@@ -342,6 +344,46 @@ export function buildBibleJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   return { job, wave, units };
 }
 
+/** Short fingerprint of a file: its uri, plus its hash when the host recorded one. */
+const fingerprint = (a: Asset): string => hash8(`${a.file?.uri ?? ''}|${a.file?.hash ?? ''}`);
+const FROM = 'from:';
+
+/**
+ * Record, on each unit of a job, which reference files it is generated from
+ * (`from:<ref id>@<fingerprint>` tags; no schema change). Replaces any earlier
+ * stamp, so it always describes the latest take.
+ */
+export function stampRefs(project: AkukoProject, job: Job): AkukoProject {
+  const p = structuredClone(project);
+  for (const item of job.items) {
+    const a = p.assets.find((x) => x.id === item.unit);
+    if (!a) continue;
+    const stamps = (item.refs ?? [])
+      .map((r) => p.assets.find((x) => x.id === r.id))
+      .filter((r): r is Asset => r !== undefined && r.stage === BIBLE_STAGE && r.tags.includes(BIBLE_TAG) && hasFile(r))
+      .map((r) => `${FROM}${r.id}@${fingerprint(r)}`);
+    a.tags = [...a.tags.filter((t) => !t.startsWith(FROM)), ...stamps];
+  }
+  return p;
+}
+
+/**
+ * Ids of the references a produced image was generated against that are no
+ * longer what it was made from: sent back, no longer approved, or replaced.
+ * Reporting only. A dependent is never changed by code; only a person sends one back.
+ */
+export function supersededRefs(p: AkukoProject, a: Asset): string[] {
+  if (!hasFile(a) || a.status === 'needs-rework' || a.status === 'draft') return [];
+  const out: string[] = [];
+  for (const t of a.tags) {
+    const m = /^from:(.+)@([0-9a-f]{8})$/.exec(t);
+    if (!m) continue;
+    const dep = p.assets.find((x) => x.id === m[1]);
+    if (!dep || !approvedWithFile(dep) || fingerprint(dep) !== m[2]) out.push(m[1]!);
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Status moves an action may make
 // ─────────────────────────────────────────────────────────────────────────
@@ -375,6 +417,44 @@ export function beginUnits(project: AkukoProject, ids: string[], ts: string): Ak
 }
 
 /**
+ * A run was not accepted (the gate refused, or the provider failed before
+ * anything landed): put units that `beginUnits` just moved back exactly as
+ * they were. Only a unit that is still `draft` with no file is touched.
+ */
+export function abandonUnits(current: AkukoProject, before: AkukoProject, ids: string[]): AkukoProject {
+  const p = structuredClone(current);
+  for (const id of ids) {
+    const i = p.assets.findIndex((x) => x.id === id);
+    const old = before.assets.find((x) => x.id === id);
+    const now = p.assets[i];
+    if (i >= 0 && old && now && now.status === 'draft' && !hasFile(now)) p.assets[i] = structuredClone(old);
+  }
+  return p;
+}
+
+/**
+ * A bible image that is `approved` or `pending-review` must have a file. If
+ * one has none (an undo restored a status after the action had cleared the
+ * file for a revision), set it back to `pending` with a comment. This is a
+ * code-side status move, allowed only because there is no image: nothing a
+ * person approved or is reviewing still exists. It never writes `approved`.
+ */
+export function repairFileless(project: AkukoProject, ts: string): { project: AkukoProject; repaired: string[] } {
+  const p = structuredClone(project);
+  const repaired: string[] = [];
+  for (const a of bibleAssets(p)) {
+    if ((a.status === 'approved' || a.status === 'pending-review') && !hasFile(a)) {
+      a.status = 'pending';
+      a.by_stage = { ...(a.by_stage ?? {}), [BIBLE_STAGE]: { status: 'pending' } };
+      a.comments.push({ ts, stage: BIBLE_STAGE, author: 'agent', text: 'Revised: restored without an image; needs generating' });
+      a.updated_at = ts;
+      repaired.push(a.id);
+    }
+  }
+  return { project: p, repaired };
+}
+
+/**
  * Set each entry's `refs[]` to its approved visual assets (lookbook, portrait,
  * turnaround, plate), keeping any ref that is not a bible asset of that entry.
  * Reads statuses; never writes one. An asset a person un-approves drops out.
@@ -403,9 +483,11 @@ export function syncRefs(project: AkukoProject, ts: string): { project: AkukoPro
 /** Keep `stages.bible.state` honest after the units moved. Never touches `approved` or `locked`. */
 export function refreshStageState(project: AkukoProject): AkukoProject {
   const rec = project.stages.bible;
-  if (rec.state === 'approved' || rec.state === 'locked') return project;
+  if (rec.state === 'locked') return project;
   const units = bibleAssets(project);
   if (units.length === 0) return project;
+  // An approved stage stays approved only while every image is approved and has its file.
+  if (rec.state === 'approved' && units.every((a) => a.status === 'approved' && hasFile(a))) return project;
   const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');
   let state: typeof rec.state;
   if (todo.length > 0) {

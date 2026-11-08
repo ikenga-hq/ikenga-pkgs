@@ -30,6 +30,7 @@ import {
   bibleStatus,
   buildBibleJob,
   planBible,
+  unitReadiness,
   refreshStageState,
   syncRefs,
 } from './plan.ts';
@@ -541,15 +542,130 @@ describe('syncRefs and the stage state', () => {
     assert.deepEqual(syncRefs(r.project, NOW).changed, [], 'idempotent');
   });
 
-  it('never touches a stage that is approved or locked', () => {
+  it('leaves a locked stage alone, and an approved one only while every image is approved with its file', () => {
     const p = planBible(breakdownApproved(), NOW).project;
-    p.stages.bible = { state: 'approved' };
-    assert.equal(refreshStageState(p), p);
+    const locked = { ...p, stages: { ...p.stages, bible: { state: 'locked' as const } } };
+    assert.equal(refreshStageState(locked), locked);
+    const all = structuredClone(p);
+    for (const a of bibleAssets(all)) { a.status = 'approved'; a.file = { uri: `${a.id}.png`, mime: 'image/png' }; }
+    all.stages.bible = { state: 'approved' };
+    assert.equal(refreshStageState(all), all);
+    asset(all, 'char_mara_portrait').status = 'pending';
+    assert.equal(refreshStageState(all).stages.bible.state, 'in-progress');
   });
 
   it('is waiting-spend while a bible job awaits approval', () => {
     const p = planBible(breakdownApproved(), NOW).project;
     p.pending_spend.push({ id: 'job_x', stage: 'bible', label: 'Bible', units: ['style_fog-and-lamplight_lookbook'], provider: 'gemini-image', estimate: 0.1, status: 'awaiting-approval' });
     assert.equal(refreshStageState(p).stages.bible.state, 'waiting-spend');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('review fixes: undo across a revision, refused re-runs, superseded references', () => {
+  const LOOK = 'style_fog-and-lamplight_lookbook';
+
+  /** Manual flow: lookbook made; `approved` decides whether a person approved it. */
+  async function withLookbook(approved: boolean) {
+    const r = rig('manual', planBible(breakdownApproved(), NOW).project);
+    const s = await generateBible(deps(r), { provider: 'manual' });
+    if (s.status !== 'handoff') throw new Error(s.status);
+    await ingestBible(deps(r), r.manual, s.job, LOOK, FILE);
+    if (approved) {
+      r.host.set(approve(r.host.peek(), [LOOK], 'bible').project);
+      await finalizeBible(deps(r));
+    }
+    return r;
+  }
+
+  /** The person sends the lookbook back; a revision starts (file cleared); the person then undoes the request. */
+  async function undoAcrossRevision(r: Rig) {
+    const req = decision('request-changes', LOOK, 'bible', { text: 'Colder.' });
+    r.host.set(fold(r.host.peek(), [req]).project);
+    const s = await generateBible(deps(r), { provider: 'manual', units: [LOOK] });
+    assert.equal(s.status, 'handoff');
+    assert.equal(asset(r.host.peek(), LOOK).file, undefined, 'the old take was cleared for the revision');
+    const undone = fold(r.host.peek(), [decision('undo', LOOK, 'bible', { undoes: req.id })]);
+    assert.equal(undone.rejected.length, 0, JSON.stringify(undone.rejected));
+    r.host.set(undone.project);
+    return undone.project;
+  }
+
+  it('D1: an undo that restores "approved" onto a file-less image is repaired, readiness never says approved, and the stage leaves approved', async () => {
+    const r = await withLookbook(true);
+    const restored = await undoAcrossRevision(r);
+    const a = asset(restored, LOOK);
+    assert.equal(a.status, 'approved');
+    assert.equal(a.file, undefined);
+    assert.notEqual(unitReadiness(restored, a).state, 'approved', 'no file, so not approved');
+    // dependents are not left blocked behind a ghost approval
+    r.host.set({ ...restored, stages: { ...restored.stages, bible: { state: 'approved' } } });
+    await finalizeBible(deps(r));
+    const p = r.host.peek();
+    assert.equal(asset(p, LOOK).status, 'pending');
+    assert.ok(asset(p, LOOK).comments.some((c) => c.author === 'agent' && c.text === 'Revised: restored without an image; needs generating'));
+    assert.notEqual(p.stages.bible.state, 'approved');
+    assert.equal(bibleStatus(p).find((x) => x.asset === LOOK)!.state, 'ready');
+    assert.deepEqual(entry(p, 'style_fog-and-lamplight').refs, []);
+    // and it can be generated again
+    assert.equal((await generateBible(deps(r), { provider: 'manual', units: [LOOK] })).status, 'handoff');
+  });
+
+  it('D1: the same for an image that was only pending-review', async () => {
+    const r = await withLookbook(false);
+    const restored = await undoAcrossRevision(r);
+    assert.equal(asset(restored, LOOK).status, 'pending-review');
+    assert.equal(asset(restored, LOOK).file, undefined);
+    await finalizeBible(deps(r));
+    const a = asset(r.host.peek(), LOOK);
+    assert.equal(a.status, 'pending');
+    assert.ok(a.comments.some((c) => c.text.includes('restored without an image')));
+  });
+
+  it('D3: a run the gate does not accept leaves a sent-back image exactly as it was', async () => {
+    const r = await withLookbook(false);
+    const req = decision('request-changes', LOOK, 'bible', { text: 'Colder.' });
+    r.host.set(fold(r.host.peek(), [req]).project);
+    const before = asset(r.host.peek(), LOOK);
+    const refusing = { ...r.gate, run: async () => ({ status: 'refused' as const, refusal: { code: 'over-approved', message: 'the estimate rose above what you approved' } }) } as unknown as SpendGate;
+    const s = await generateBible({ host: r.guarded, gate: refusing, now }, { provider: 'manual', units: [LOOK] });
+    assert.equal(s.status, 'refused');
+    const after = asset(r.host.peek(), LOOK);
+    assert.equal(after.status, 'needs-rework');
+    assert.deepEqual(after.file, before.file);
+    assert.equal(after.comments.filter((c) => c.text.startsWith('Revised:')).length, 0);
+    assert.equal(r.host.peek().stages.bible.state, 'in-progress');
+  });
+
+  async function portraitOnApprovedLookbook() {
+    const r = await withLookbook(true);
+    const s = await generateBible(deps(r), { provider: 'manual', units: ['char_mara_portrait'] });
+    if (s.status !== 'handoff') throw new Error(s.status);
+    await ingestBible(deps(r), r.manual, s.job, 'char_mara_portrait', FILE);
+    return r;
+  }
+
+  it('D2: a portrait made against an approved lookbook is not flagged; the stamp is in tags', async () => {
+    const r = await portraitOnApprovedLookbook();
+    const p = r.host.peek();
+    assert.ok(asset(p, 'char_mara_portrait').tags.some((t) => /^from:style_fog-and-lamplight_lookbook@[0-9a-f]{8}$/.test(t)));
+    assert.deepEqual(bibleStatus(p).find((x) => x.asset === 'char_mara_portrait')!.superseded, []);
+  });
+
+  it('D2: sending the lookbook back flags dependents, and changes nothing on them', async () => {
+    const r = await portraitOnApprovedLookbook();
+    const before = asset(r.host.peek(), 'char_mara_portrait');
+    r.host.set(fold(r.host.peek(), [decision('request-changes', LOOK, 'bible', { text: 'Colder.' })]).project);
+    await finalizeBible(deps(r));
+    const p = r.host.peek();
+    assert.deepEqual(bibleStatus(p).find((x) => x.asset === 'char_mara_portrait')!.superseded, [LOOK]);
+    assert.deepEqual(asset(p, 'char_mara_portrait'), before, 'no code-side change to the dependent');
+  });
+
+  it('D2: replacing the lookbook file flags dependents too', async () => {
+    const r = await portraitOnApprovedLookbook();
+    const p = r.host.peek();
+    asset(p, LOOK).file = { uri: 'bible/style/other-take.png', mime: 'image/png' };
+    assert.deepEqual(bibleStatus(p).find((x) => x.asset === 'char_mara_portrait')!.superseded, [LOOK]);
   });
 });

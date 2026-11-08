@@ -16,7 +16,7 @@
 import type { Job, JobHandle, JobStatus, WaveOneHost } from '../providers/contract.ts';
 import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
-import { beginUnits, buildBibleJob, refreshStageState, syncRefs } from './plan.ts';
+import { abandonUnits, beginUnits, buildBibleJob, refreshStageState, repairFileless, stampRefs, syncRefs } from './plan.ts';
 
 export interface StepDeps {
   host: WaveOneHost;
@@ -46,14 +46,16 @@ const clock = (d: StepDeps): string => (d.now ?? (() => new Date().toISOString()
 export async function finalizeBible(deps: Pick<StepDeps, 'host' | 'now'>): Promise<string[]> {
   const ts = (deps.now ?? (() => new Date().toISOString()))();
   const before = await deps.host.readState();
-  const synced = syncRefs(before, ts);
+  const repaired = repairFileless(before, ts);
+  const synced = syncRefs(repaired.project, ts);
   const after = refreshStageState(synced.project);
-  if (synced.changed.length > 0 || after !== synced.project) await deps.host.writeState(after);
+  if (repaired.repaired.length > 0 || synced.changed.length > 0 || after !== synced.project) await deps.host.writeState(after);
   return synced.changed;
 }
 
 export async function generateBible(deps: StepDeps, o: StepOptions): Promise<StepResult> {
   const { host, gate } = deps;
+  await finalizeBible(deps); // repairs first: an undo may have left an image without its file
   const project = await host.readState();
   const built = buildBibleJob(project, {
     provider: o.provider,
@@ -75,13 +77,19 @@ export async function generateBible(deps: StepDeps, o: StepOptions): Promise<Ste
   }
 
   // Clear to go: the units move to draft (a sent-back one gets its old take cleared so the new one fills it in place).
-  const begun = refreshStageState(beginUnits(await host.readState(), built.units, clock(deps)));
+  // (The old file of a sent-back unit has to go first so the new take fills the same asset; if the
+  // gate does not accept the run, the units are put back exactly as they were.)
+  const before = await host.readState();
+  const begun = refreshStageState(stampRefs(beginUnits(before, built.units, clock(deps)), job));
   await host.writeState(begun);
 
   const r = await gate.run(job);
-  if (r.status === 'awaiting-approval') return { status: 'awaiting-approval', job, estimate: r.cost.amount, confirmation: r.confirmation };
-  if (r.status === 'refused') return { status: 'refused', job, code: r.refusal.code, message: r.refusal.message };
-  if (r.status === 'failed') return { status: 'failed', job, error: r.error };
+  if (r.status !== 'submitted') {
+    await host.writeState(refreshStageState(abandonUnits(await host.readState(), before, built.units)));
+    if (r.status === 'awaiting-approval') return { status: 'awaiting-approval', job, estimate: r.cost.amount, confirmation: r.confirmation };
+    if (r.status === 'refused') return { status: 'refused', job, code: r.refusal.code, message: r.refusal.message };
+    return { status: 'failed', job, error: r.error };
+  }
 
   if (!q.paid) {
     const text = r.handle.handoff?.text ?? '';

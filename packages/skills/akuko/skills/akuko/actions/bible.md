@@ -48,7 +48,7 @@ All commands: `node --experimental-strip-types ../bible/cli.ts <command> --proje
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`, `../lib/state.md` §Decision folding). Tell the person what the report says, including every rejected decision. If the project is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: creates the planned images for every approved checklist entry. Safe to repeat.
-2. **`status`**: one line per image, with what it is waiting for. Report it to the person in plain words.
+2. **`status`**: one line per image, with what it is waiting for. Report it to the person in plain words. If a line says "generated against a superseded portrait/lookbook", tell the person that image was made from a reference that has since changed and that they may want to send it back. Never regenerate or change it yourself.
 3. **Choose the provider** (config and the person decide, not you): `manual` (free; hosts A, B, C), `gemini-image` or `fal` (paid direct API; hosts B and C only, refused on A). A paid provider needs a budget cap from `/akuko setup`; without one the command says so and stops.
 4. **`step --provider <id>`** makes the next wave (the earliest wave with images ready):
    - **Paid:** it prints the spend line. **Show it to the person and wait.** Nothing has been sent. The person approves on the board (or replies in the exact words of the line, `approve <amount> <CURRENCY>`); fold, then run `step` again. It then runs, records the files and marks them `pending-review`. A declined spend sends nothing.
