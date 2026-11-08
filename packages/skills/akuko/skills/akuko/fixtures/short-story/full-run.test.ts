@@ -287,7 +287,7 @@ describe('item 4b (local half): both decision stores fold, undo reverses', () =>
     assert.equal(await statusOf('sc1_sh1'), 'pending-review');
   });
 
-  const foldFromArtifactDb = async (rows: unknown[], tag: string): Promise<{ applied: string[]; rejected: Array<{ id: string; code: string }> }> => {
+  const foldFromArtifactDb = async (rows: unknown[], tag: string): Promise<{ applied: string[]; rejected: Array<{ id: string; code: string }>; changed: boolean }> => {
     const rowsFile = join(dir, `${tag}-rows.json`);
     const out = join(dir, `${tag}-folded.json`);
     await writeFile(rowsFile, JSON.stringify(rows));
@@ -327,6 +327,7 @@ describe('item 4b (local half): both decision stores fold, undo reverses', () =>
   });
 
   let sharedDb: { d: Decision; rows: unknown[] };
+  let dbRows: unknown[] = [];
 
   it('an undo written locally reverses the earlier artifact-database approval', async () => {
     const undo = person.decision('undo', 'sc1_sh2', 'sketch', { undoes: sharedDb.d.id });
@@ -341,18 +342,26 @@ describe('item 4b (local half): both decision stores fold, undo reverses', () =>
   it('an undo from the artifact database reverses the earlier local approval', async () => {
     const first = (await decisionsOf(dir)).find((d) => d.action === 'approve' && d.unit === 'sc1_sh1' && d.stage === 'sketch')!;
     const undo = person.decision('undo', 'sc1_sh1', 'sketch', { undoes: first.id });
-    const rep = await foldFromArtifactDb([...sharedDb.rows, row(undo, undo.id, '2026-11-08T11:05:00.000000Z')], 'db2');
+    dbRows = [...sharedDb.rows, row(undo, undo.id, '2026-11-08T11:05:00.000000Z')];
+    const rep = await foldFromArtifactDb(dbRows, 'db2');
     assert.deepEqual(rep.rejected, []);
     assert.deepEqual(rep.applied, [undo.id]);
     assert.equal(await statusOf('sc1_sh1'), 'pending-review');
   });
 
-  it('folding the same two stores again changes nothing', async () => {
+  it('folding the same two stores again changes nothing (jsonl fold, and fold-file over the same database rows)', async () => {
     const before = await readFile(join(dir, 'akuko.json'));
     const local = await decisionsJson(['fold', dir]);
     assert.equal(local.report.changed, false);
     assert.deepEqual(local.report.applied, []);
     assert.ok(before.equals(await readFile(join(dir, 'akuko.json'))));
+
+    // and the artifact-database store: the same rows through fold-file (host A's fold) change nothing either
+    const db = await foldFromArtifactDb(dbRows, 'db3');
+    assert.equal(db.changed, false);
+    assert.deepEqual(db.applied, []);
+    assert.deepEqual(db.rejected, []);
+    assert.ok(before.equals(await readFile(join(dir, 'akuko.json'))), 'folded project equals the one before');
   });
 
   it('an approval from a view that is not on the conformed list is refused', async () => {
@@ -429,7 +438,7 @@ function render(): string {
   out.push('');
   out.push('## Item 4b (local half)');
   out.push('');
-  out.push('On the short-story project at the sketch stage: a `decisions.jsonl` approval (host B) and an artifact-database approval plus note (host A, rows in the `ArtifactData` list shape) were both folded by `decisions/cli.ts`; an undo written locally reversed the artifact-database approval, an undo from the database reversed the local one, re-folding changed nothing, and an approval from a view not on the conformed list was refused.');
+  out.push('On the short-story project at the sketch stage: a `decisions.jsonl` approval (host B) and an artifact-database approval plus note (host A, rows in the `ArtifactData` list shape) were both folded by `decisions/cli.ts`; an undo written locally reversed the artifact-database approval, an undo from the database reversed the local one, re-folding both stores (`fold` over decisions.jsonl and `fold-file` over the same database rows) changed nothing, and an approval from a view not on the conformed list was refused.');
   out.push('');
   return out.join('\n');
 }

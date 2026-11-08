@@ -68,4 +68,4 @@ On the finished manual project, `breakdown/cli.ts apply` printed "Nothing create
 
 ## Item 4b (local half)
 
-On the short-story project at the sketch stage: a `decisions.jsonl` approval (host B) and an artifact-database approval plus note (host A, rows in the `ArtifactData` list shape) were both folded by `decisions/cli.ts`; an undo written locally reversed the artifact-database approval, an undo from the database reversed the local one, re-folding changed nothing, and an approval from a view not on the conformed list was refused.
+On the short-story project at the sketch stage: a `decisions.jsonl` approval (host B) and an artifact-database approval plus note (host A, rows in the `ArtifactData` list shape) were both folded by `decisions/cli.ts`; an undo written locally reversed the artifact-database approval, an undo from the database reversed the local one, re-folding both stores (`fold` over decisions.jsonl and `fold-file` over the same database rows) changed nothing, and an approval from a view not on the conformed list was refused.
