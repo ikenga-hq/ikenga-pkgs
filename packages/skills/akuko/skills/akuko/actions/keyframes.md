@@ -57,6 +57,8 @@ Folding turns it into `needs-rework` with their words. Run `step --units <asset 
 
 ## Limits to know
 
+- **Background characters get no reference image** (the bible plans none for them). If one is in a shot's `refs`, it is named in the prompt text only; look at that figure in the audit and say so if it drifts.
+- A frame that cannot be built (for example over 14 references) is skipped and reported with its reason; `step` moves to the next ready frame. Tell the person which frame was skipped and why. Changing the model or provider is a new job and needs a new approval.
 - At most **14** reference images per frame (the providers' limit). A frame sends a turnaround per character, a plate and a lookbook, so normally four or fewer. Per-role sublimits (for example 4 character references on a Gemini Flash model) are **not** enforced yet.
 - Continuity is basic here: it comes from sending the same approved references every time. The audit at scale is a later action (WP-14).
 - A frame a provider refuses or fails stays `draft`; say so, and nothing is recorded as made. Money a failed call cost is counted against the cap (`../lib/spend.md`).

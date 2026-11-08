@@ -23,6 +23,8 @@ export interface KeyframeContext {
   /** Characters in frame that have a reference image attached, in reference order. */
   characters: BibleEntry[];
   location: BibleEntry | undefined;
+  /** Characters named by the shot that have no reference image (Background); described in text only. */
+  unreferenced?: BibleEntry[];
 }
 
 const NOTHING = '(not specified)';
@@ -59,6 +61,9 @@ export function keyframePrompt(c: KeyframeContext, asked = ''): string {
   ];
   if (c.characters.length > 0) {
     lines.push(`Characters (each must match the attached reference of the same name exactly): ${c.characters.map((e) => `${e.name}${e.description ? ` - ${bare(e.description)}` : ''}`).join('; ')}.`);
+  }
+  if (c.unreferenced && c.unreferenced.length > 0) {
+    lines.push(`Also in frame, with no reference image (draw from this text only, keep them unobtrusive): ${c.unreferenced.map((e) => `${e.name}${e.description ? ` - ${bare(e.description)}` : ''}`).join('; ')}.`);
   }
   if (c.location) lines.push(`Location (match the attached plate): ${c.location.name}${c.location.description ? ` - ${bare(c.location.description)}` : ''}.`);
   lines.push(`Look (match the attached lookbook): ${bare(c.look) || NOTHING}.`);

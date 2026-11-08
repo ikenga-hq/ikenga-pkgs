@@ -240,6 +240,15 @@ describe('references: the approved turnarounds, plates and lookbook', () => {
     assert.ok(!ids.includes('char_the-woman_turnaround'));
   });
 
+  it('a Background character gets no reference image and is named in the prompt text only', () => {
+    const p = planned();
+    p.bible.characters.push({ id: 'char_crowd', name: 'Dock crowd', role: 'Background', description: 'A few figures far back.', notes: [], refs: [], status: 'approved', stage: 'breakdown', comments: [] });
+    p.shots[0]!.refs.push('char_crowd');
+    const item = buildKeyframeJob(p, { provider: 'manual', units: [kf('sc1_sh1')] }).job.items[0]!;
+    assert.ok(item.refs!.every((r) => !r.id.includes('crowd')));
+    assert.match(item.prompt, /with no reference image .*Dock crowd - A few figures far back./);
+  });
+
   it('a shot that names no style still gets the film\'s lookbook', () => {
     const p = planned();
     p.shots[0]!.refs = p.shots[0]!.refs.filter((r) => !r.startsWith('style_'));
@@ -653,6 +662,101 @@ describe('review fixes carried forward: undo across a revision, refused re-runs,
     assert.deepEqual(supersededRefs(p, asset(p, U)), []);
     asset(p, 'loc_river-pier_plate').file = { uri: 'elsewhere.png', mime: 'image/png' };
     assert.deepEqual(supersededRefs(p, asset(p, U)), ['loc_river-pier_plate']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('an approval binds to the provider and the model', () => {
+  const paidProject = () => planned({ budget: { cap: 20, currency: 'USD' } });
+  const U = kf('sc1_sh1');
+
+  it('the job id changes with the provider or the model, and not otherwise', () => {
+    const p = paidProject();
+    const id = (provider: string, model?: string) => buildKeyframeJob(p, { provider, ...(model ? { model } : {}), units: [U] }).job.id;
+    assert.equal(id('gemini-image', 'gemini-3.1-flash-image'), id('gemini-image', 'gemini-3.1-flash-image'), 'same provider and model: same id');
+    assert.notEqual(id('gemini-image', 'gemini-3.1-flash-image'), id('gemini-image', 'gemini-nano-banana-2.1'));
+    assert.notEqual(id('gemini-image'), id('gemini-image', 'gemini-3.1-flash-image'));
+    assert.notEqual(id('gemini-image'), id('fal'));
+    assert.match(id('fal'), /^job_kf_[0-9a-f]{8}_r1$/);
+  });
+
+  it('an approval for one model does not run the same frame on a cheaper model; asking for it needs a fresh approval', async () => {
+    const r = rig('gemini-image', paidProject());
+    const pricey = { provider: 'gemini-image', model: 'gemini-3.1-flash-image', units: [U] };
+    const first = await generateKeyframes(deps(r), pricey);
+    assert.equal(first.status, 'awaiting-approval');
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'keyframes').project);
+
+    // same units, a cheaper model of the same provider: not covered by that approval
+    const cheaper = await generateKeyframes(deps(r), { provider: 'gemini-image', model: 'gemini-nano-banana-2.1', units: [U] });
+    assert.equal(cheaper.status, 'awaiting-approval');
+    assert.notEqual(cheaper.job.id, first.job.id);
+    assert.equal(r.net!.calls.length, 0, 'nothing was sent');
+    assert.equal(r.host.peek().pending_spend.length, 2, 'a second pending entry, awaiting its own approval');
+
+    // the original model still runs on its own approval
+    const ran = await generateKeyframes(deps(r), pricey);
+    assert.equal(ran.status, 'done');
+    assert.equal(ran.job.id, first.job.id);
+  });
+
+  it('the gate also refuses a different provider under an approved job id', async () => {
+    const r = rig('gemini-image', paidProject());
+    const first = await generateKeyframes(deps(r), { provider: 'gemini-image', units: [U] });
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'keyframes').project);
+    const swapped = { ...first.job, provider: 'fal' };
+    const out = await r.gate.run(swapped);
+    assert.notEqual(out.status, 'submitted');
+    assert.equal(r.net!.calls.length, 0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('a frame that cannot be built is skipped and reported', () => {
+  /** sc1_sh1 gets 15 supplied references, so it can never be built. */
+  function withBadFirstFrame(): AkukoProject {
+    const p = planned();
+    for (let i = 0; i < 15; i++) {
+      p.assets.push({ id: `pic${i}`, stage: 'keyframes', status: 'approved', comments: [], kind: 'reference', owner: 'sc1_sh1', tags: [], file: { uri: `pic${i}.png`, mime: 'image/png' } });
+    }
+    return p;
+  }
+
+  it('the default step moves on to the next ready frame and says what it skipped', () => {
+    const b = buildKeyframeJob(withBadFirstFrame(), { provider: 'manual' });
+    assert.deepEqual(b.units, [kf('sc1_sh2')]);
+    assert.equal(b.skipped.length, 1);
+    assert.equal(b.skipped[0]!.unit, kf('sc1_sh1'));
+    assert.match(b.skipped[0]!.reason, /would send 18 reference images/);
+  });
+
+  it('keeps working every time (it does not throw forever on the first frame)', async () => {
+    const r = rig('manual', withBadFirstFrame());
+    const s = await generateKeyframes(deps(r), { provider: 'manual' });
+    assert.equal(s.status, 'handoff');
+    assert.equal(s.job.items[0]!.unit, kf('sc1_sh2'));
+    assert.deepEqual(s.skipped?.map((x) => x.unit), [kf('sc1_sh1')]);
+    assert.equal(asset(r.host.peek(), kf('sc1_sh1')).status, 'pending', 'the skipped frame was not started');
+  });
+
+  it('a scene batch builds the frames it can and reports the rest', async () => {
+    const r = rig('manual', withBadFirstFrame());
+    const s = await generateKeyframes(deps(r), { provider: 'manual', scene: 'sc1' });
+    assert.deepEqual(s.job.items.map((i) => i.unit), ['sc1_sh2', 'sc1_sh3', 'sc1_sh4'].map(kf));
+    assert.deepEqual(s.skipped?.map((x) => x.unit), [kf('sc1_sh1')]);
+    assert.match(s.skipped![0]!.reason, /reference images/);
+  });
+
+  it('when nothing can be built it says why, per frame', () => {
+    const p = withBadFirstFrame();
+    for (const sh of ['sc1_sh2', 'sc1_sh3', 'sc1_sh4']) {
+      for (let i = 0; i < 15; i++) p.assets.push({ id: `pic${sh}${i}`, stage: 'keyframes', status: 'approved', comments: [], kind: 'reference', owner: sh, tags: [], file: { uri: `p${i}.png`, mime: 'image/png' } });
+    }
+    assert.throws(() => buildKeyframeJob(p, { provider: 'manual', scene: 'sc1' }), (e: Error) => /No ready key frame could be built: sc1_sh1_keyframe: .*reference images/.test(e.message) && e.message.includes('sc1_sh4_keyframe'));
+  });
+
+  it('a frame the person names is still an error, not a skip', () => {
+    assert.throws(() => buildKeyframeJob(withBadFirstFrame(), { provider: 'manual', units: [kf('sc1_sh1')] }), /would send 18 reference images/);
   });
 });
 

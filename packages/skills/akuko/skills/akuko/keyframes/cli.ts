@@ -53,6 +53,12 @@ interface SavedJob { job: Job; handle: JobHandle }
 const jobFile = (dir: string, id: string): string => join(dir, 'keyframes', 'jobs', `${id}.json`);
 
 function describe(r: StepResult): { code: number; out: string } {
+  const o = describeStatus(r);
+  const skipped = (r.skipped ?? []).map((x) => `Skipped ${x.unit}: ${x.reason}`);
+  return skipped.length ? { code: o.code, out: [o.out, ...skipped].join(String.fromCharCode(10)) } : o;
+}
+
+function describeStatus(r: StepResult): { code: number; out: string } {
   switch (r.status) {
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}\nNothing has been sent. Put the amount in front of the person; once they have approved it, run this step again.` };

@@ -214,9 +214,10 @@ export function jobRan(p: AkukoProject, id: string): boolean {
   return p.ledger.some((e) => e.job === id && (e.status === 'submitted' || e.status === 'done')) || p.assets.some((a) => a.tags.includes(jobTag(id)));
 }
 
-/** Deterministic id: `job_kf_<hash>_r<n>`. A regeneration after a send-back is the next `r<n>` with its own approval. */
-export function keyframeJobId(p: AkukoProject, units: string[]): string {
-  const base = `job_kf_${hash8([...units].sort().join('|'))}`;
+/** Deterministic id: `job_kf_<hash of units + provider + model>_r<n>`. A regeneration after a send-back is the next `r<n>` with its own approval. */
+export function keyframeJobId(p: AkukoProject, units: string[], provider = '', model = ''): string {
+  // Provider and model are part of the id: a person's approval binds to one provider and model, so changing either is a new job with a fresh approval.
+  const base = `job_kf_${hash8([[...units].sort().join('|'), provider, model].join('#'))}`;
   let n = 1;
   while (jobRan(p, `${base}_r${n}`)) n++;
   return `${base}_r${n}`;
@@ -231,7 +232,9 @@ export interface BuildOptions {
   scene?: string;
 }
 
-export interface BuiltJob { job: Job; units: string[]; refs: Record<string, string[]> }
+/** A ready key frame that could not be built, and why. */
+export interface Skipped { unit: string; reason: string }
+export interface BuiltJob { job: Job; units: string[]; refs: Record<string, string[]>; skipped: Skipped[] }
 
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`;
 
@@ -270,7 +273,7 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     });
   } else {
     const ready = all.filter((a) => unitReadiness(p, a).state === 'ready' && (o.scene === undefined || shotOf(p, a).scene === o.scene));
-    chosen = o.scene !== undefined ? ready : ready.slice(0, 1);
+    chosen = ready; // the loop below stops after the first buildable one unless a scene was asked for
   }
   if (chosen.length === 0) {
     const stuck = keyframeStatus(p).filter((r) => r.state === 'blocked').map((r) => `${r.asset} (waiting for ${r.waiting.join(', ')})`);
@@ -280,7 +283,7 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
 
   const look = lookText(p);
   const refsOut: Record<string, string[]> = {};
-  const items: JobItem[] = chosen.map((a) => {
+  const buildItem = (a: Asset): JobItem => {
     const shot = shotOf(p, a);
     const needed = neededRefs(p, shot);
     const refs: JobRef[] = needed.map((n) => ({
@@ -304,6 +307,7 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       look,
       characters: needed.filter((n) => n.kind === 'character').map((n) => n.entry),
       location: needed.find((n) => n.kind === 'location')?.entry,
+      unreferenced: entriesOf(p, shot).filter((e) => e.kind === 'character' && !needed.some((n) => n.entry.id === e.entry.id)).map((e) => e.entry),
     };
     const changes = requestedChanges(a);
     const asked = (a.status === 'needs-rework' || a.status === 'draft') && changes !== '' ? changes : '';
@@ -317,11 +321,31 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       ...(shot.seed !== undefined ? { seed: shot.seed } : {}),
       ...(refs.length ? { refs } : {}),
     };
-  });
+  };
+
+  // Explicit units: the person named them, so an unbuildable one is an error. Otherwise a frame that
+  // cannot be built is skipped and reported, and the next ready frame is tried (a batch builds what it can).
+  const items: JobItem[] = [];
+  const skipped: Skipped[] = [];
+  for (const a of chosen) {
+    if (o.units) { items.push(buildItem(a)); continue; }
+    try {
+      items.push(buildItem(a));
+    } catch (e) {
+      skipped.push({ unit: a.id, reason: e instanceof Error ? e.message : String(e) });
+      continue;
+    }
+    if (o.scene === undefined) break; // default: one shot
+  }
+  if (items.length === 0) {
+    throw new KeyframeError(`No ready key frame could be built: ${skipped.map((x) => `${x.unit}: ${x.reason}`).join(' ')}`);
+  }
+  const built = new Set(items.map((i) => i.unit));
+  chosen = chosen.filter((a) => built.has(a.id));
 
   const units = chosen.map((a) => a.id);
   const job: Job = {
-    id: keyframeJobId(p, units),
+    id: keyframeJobId(p, units, o.provider, o.model ?? ''),
     stage: KEYFRAME_STAGE,
     kind: 'image',
     provider: o.provider,
@@ -329,7 +353,7 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     label: `Key frames: ${plural(units.length, 'shot')} (${chosen.map((a) => a.owner).join(', ')})`,
     items,
   };
-  return { job, units, refs: refsOut };
+  return { job, units, refs: refsOut, skipped };
 }
 
 /**

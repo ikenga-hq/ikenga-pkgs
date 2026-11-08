@@ -31,13 +31,17 @@ export interface StepOptions {
   scene?: string;
 }
 
-export type StepResult =
+/** Ready key frames that could not be built this time, with the reason (unit id + why). */
+export interface SkippedInfo { skipped?: Array<{ unit: string; reason: string }> }
+
+export type StepResult = SkippedInfo & (
   | { status: 'awaiting-approval'; job: Job; estimate: number; confirmation: string }
   | { status: 'refused'; job: Job; code: string; message: string; confirmation?: string }
   | { status: 'handoff'; job: Job; handle: JobHandle; text: string }
   | { status: 'running'; job: Job; handle: JobHandle; message: string }
   | { status: 'done'; job: Job; handle: JobHandle; assets: string[]; cost: number }
-  | { status: 'failed'; job: Job; error: string };
+  | { status: 'failed'; job: Job; error: string }
+);
 
 const clock = (d: Pick<StepDeps, 'now'>): string => (d.now ?? (() => new Date().toISOString()))();
 
@@ -60,7 +64,12 @@ export async function generateKeyframes(deps: StepDeps, o: StepOptions): Promise
     ...(o.units !== undefined ? { units: o.units } : {}),
     ...(o.scene !== undefined ? { scene: o.scene } : {}),
   });
-  const job = built.job;
+  const res = await runJob(deps, built.job, built.units);
+  return built.skipped.length > 0 ? { ...res, skipped: built.skipped } : res;
+}
+
+async function runJob(deps: StepDeps, job: Job, units: string[]): Promise<StepResult> {
+  const { host, gate } = deps;
 
   // Price it and, for a paid job, make the pending entry the person approves. Nothing is submitted.
   const q = await gate.quote(job);
@@ -76,12 +85,12 @@ export async function generateKeyframes(deps: StepDeps, o: StepOptions): Promise
   // Clear to go. A sent-back key frame gets its old take cleared so the new one fills it in place;
   // if the gate does not accept the run, the units are put back exactly as they were.
   const before = await host.readState();
-  const begun = refreshStageState(stampRefs(beginUnits(before, built.units, clock(deps)), job));
+  const begun = refreshStageState(stampRefs(beginUnits(before, units, clock(deps)), job));
   await host.writeState(begun);
 
   const r = await gate.run(job);
   if (r.status !== 'submitted') {
-    await host.writeState(refreshStageState(abandonUnits(await host.readState(), before, built.units)));
+    await host.writeState(refreshStageState(abandonUnits(await host.readState(), before, units)));
     if (r.status === 'awaiting-approval') return { status: 'awaiting-approval', job, estimate: r.cost.amount, confirmation: r.confirmation };
     if (r.status === 'refused') return { status: 'refused', job, code: r.refusal.code, message: r.refusal.message };
     return { status: 'failed', job, error: r.error };
