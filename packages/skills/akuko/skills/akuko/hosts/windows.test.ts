@@ -43,7 +43,7 @@ describe('writeFileAtomic: the target is open in another program (finding 5)', (
     writeFileSync(target, 'old\n');
     const fd = openSync(target, 'r');
     try {
-      await assert.rejects(writeFileAtomic(target, 'new\n', { backoff: [5, 5] }), /could not replace .*akuko\.json: another program has it open \((EPERM|EBUSY|EACCES)\)/);
+      await assert.rejects(writeFileAtomic(target, 'new\n', { backoff: [5, 5] }), /could not replace .*akuko\.json \((EPERM|EBUSY|EACCES)\): another program may have it open, or akuko may not be allowed to write there/);
     } finally {
       closeSync(fd);
     }
@@ -56,7 +56,7 @@ describe('writeFileAtomic: the target is open in another program (finding 5)', (
       let calls = 0;
       await assert.rejects(
         renameWithRetry('a.tmp', 'akuko.json', { backoff: [1, 1, 1], rename: async () => { calls++; throw errno(code); } }),
-        (e: NodeJS.ErrnoException) => e.code === code && e.message.includes(`could not replace akuko.json: another program has it open (${code})`),
+        (e: NodeJS.ErrnoException) => e.code === code && e.message.includes(`could not replace akuko.json (${code}): another program may have it open, or akuko may not be allowed to write there`),
       );
       assert.equal(calls, 4, `${code}: one try plus one per wait`);
     }

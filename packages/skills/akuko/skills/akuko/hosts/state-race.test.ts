@@ -2,11 +2,12 @@
 // lock is per process, so `LocalHost.writeState` refuses to write over a
 // change it has not read (compare-and-swap under a lock file) and the gate
 // retries from a fresh read. An overrun becomes a refusal; no ledger entry is
-// lost (Wave 3 second-opinion review, finding 1).
+// lost (Wave 3 second-opinion review, finding 1), including when the
+// processes start by taking over a stale lock (review of #199, C1).
 
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -17,7 +18,7 @@ import { checkIntegrity } from '../schema/integrity.ts';
 import { tinyProject } from '../providers/__fixtures__/fake-host.ts';
 import { FAKE_PAID_ID, FAKE_PRICE } from '../spend/__fixtures__/fake-paid.ts';
 import { ledgerSummary } from '../spend/ledger.ts';
-import { LocalHost, PROJECT_FILE, StateConflictError, serializeProject } from './local.ts';
+import { LocalHost, PROJECT_FILE, StateConflictError, serializeProject, withFileLock } from './local.ts';
 
 const WORKER = fileURLToPath(new URL('./__fixtures__/race-worker.ts', import.meta.url));
 const tmp: string[] = [];
@@ -35,10 +36,21 @@ const approved = (id: string, unit: string): PendingSpend => ({
   status: 'approved',
 });
 
+const UNITS = ['sc1_sh1', 'sc1_sh2', 'sc1_sh3'];
 function project(cap: number, pending: PendingSpend[]): string {
   const dir = tmpDir('akuko-race-');
-  writeFileSync(join(dir, PROJECT_FILE), serializeProject(tinyProject({ budget: { cap, currency: 'USD', spent: 0 }, pending_spend: pending })));
+  const shots = UNITS.map((id) => ({ id, stage: 'sketch' as const, status: 'approved' as const, scene: 'sc1', prompt: `shot ${id}` }));
+  writeFileSync(join(dir, PROJECT_FILE), serializeProject(tinyProject({ budget: { cap, currency: 'USD', spent: 0 }, pending_spend: pending, shots })));
   return dir;
+}
+
+/** A lock file left by a process that died a minute ago. */
+function staleLock(dir: string, content = 'pid 1 (crashed)'): string {
+  const lock = join(dir, `${PROJECT_FILE}.lock`);
+  writeFileSync(lock, content);
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(lock, old, old);
+  return lock;
 }
 
 interface WorkerOut { job: string; status: string; code?: string; providerCalls?: number; error?: string }
@@ -88,6 +100,102 @@ describe('two akuko processes on one project folder', { timeout: 120_000 }, () =
   });
 });
 
+describe('three processes that all start by taking over a stale lock (review of #199, C1)', { timeout: 280_000 }, () => {
+  it('never two holders: in every trial one job runs, the others are refused over-cap, and its reservation is on disk', async () => {
+    const TRIALS = 12;
+    const bad: string[] = [];
+    for (let t = 0; t < TRIALS; t++) {
+      // cap 0.08: any one 0.05 job fits, two do not. Every worker reads, waits for the others, then all
+      // reach writeState together and find the same stale lock.
+      const dir = project(0.08, UNITS.map((u, i) => approved(`job_${i}`, u)));
+      staleLock(dir);
+      const out = await race(dir, UNITS.map((u, i) => [`job_${i}`, u]));
+      const state = await new LocalHost({ projectDir: dir }).readState();
+      const ran = out.filter((o) => o.status === 'submitted').map((o) => o.job);
+      const s = ledgerSummary(state);
+      const ok = ran.length === 1
+        && out.filter((o) => o.status === 'refused' && o.code === 'over-cap' && o.providerCalls === 0).length === 2
+        && JSON.stringify(state.ledger.map((e) => e.job)) === JSON.stringify(ran)
+        && s.reserved <= 0.08 + 1e-9
+        && !existsSync(join(dir, `${PROJECT_FILE}.lock`)) && !existsSync(join(dir, `${PROJECT_FILE}.lock.takeover`));
+      if (!ok) bad.push(`trial ${t}: ${JSON.stringify(out)} ledger=${JSON.stringify(state.ledger.map((e) => e.job))}`);
+    }
+    assert.deepEqual(bad, [], `${bad.length}/${TRIALS} trials overran the cap or lost a reservation`);
+  });
+});
+
+describe('withFileLock', () => {
+  it('many holders in one process, all starting at a stale lock: never two inside at once', async () => {
+    const dir = tmpDir('akuko-lock-');
+    const path = join(dir, PROJECT_FILE);
+    staleLock(dir);
+    let inside = 0;
+    let most = 0;
+    await Promise.all(Array.from({ length: 8 }, () => withFileLock(path, async () => {
+      inside++;
+      most = Math.max(most, inside);
+      await new Promise((r) => setTimeout(r, 5));
+      inside--;
+    })));
+    assert.equal(most, 1);
+    assert.equal(existsSync(`${path}.lock`), false);
+  });
+
+  it('a holder whose lock was taken over never removes the new holder\'s lock, and knows it lost it', async () => {
+    const dir = tmpDir('akuko-lock-');
+    const path = join(dir, PROJECT_FILE);
+    const lock = `${path}.lock`;
+    let lost: boolean | undefined;
+    await withFileLock(path, async (held) => {
+      writeFileSync(lock, 'someone else'); // as if a successor had taken it over
+      lost = !(await held.stillHeld());
+    });
+    assert.equal(lost, true);
+    assert.equal(readFileSync(lock, 'utf8'), 'someone else', 'the new holder\'s lock is left alone');
+  });
+
+  it('a lock it cannot create for lack of permission is reported as that, not as "locked by another process"', { skip: (process.platform === 'win32' || process.getuid?.() === 0) && 'needs a POSIX non-root user' }, async () => {
+    const dir = tmpDir('akuko-lock-');
+    chmodSync(dir, 0o555);
+    try {
+      await assert.rejects(withFileLock(join(dir, PROJECT_FILE), async () => undefined), /cannot create .*\.lock \((EACCES|EPERM)\): akuko is not allowed to write/);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+});
+
+describe('LocalHost.readState hashes the bytes it read (review of #199, C2)', () => {
+  it('UTF-8 with non-ASCII text, and with a BOM, reads and writes back without a false conflict', async () => {
+    for (const bom of ['', '\ufeff']) {
+      const dir = project(10, []);
+      const file = join(dir, PROJECT_FILE);
+      const p = JSON.parse(readFileSync(file, 'utf8'));
+      p.project.title = 'Café — 夜';
+      writeFileSync(file, bom + JSON.stringify(p, null, 2));
+      const host = new LocalHost({ projectDir: dir });
+      const got = await host.readState();
+      assert.equal(got.project.title, 'Café — 夜');
+      await host.writeState({ ...got, project: { ...got.project, notes: 'written' } });
+      assert.equal((await host.readState()).project.notes, 'written');
+    }
+  });
+
+  it('a Windows-1252 akuko.json is refused with a clear error, not locked out: re-saved as UTF-8 it works again', async () => {
+    const dir = project(10, []);
+    const file = join(dir, PROJECT_FILE);
+    const text = readFileSync(file, 'utf8').replace('"title": "Tiny"', '"title": "Caf\u00e9"');
+    writeFileSync(file, Buffer.from(text, 'latin1')); // é as the single byte 0xE9
+    const host = new LocalHost({ projectDir: dir });
+    await assert.rejects(host.readState(), /is not valid UTF-8.*Re-save it as UTF-8/);
+    writeFileSync(file, text, 'utf8');
+    const p = await host.readState();
+    assert.equal(p.project.title, 'Café');
+    await host.writeState({ ...p, project: { ...p.project, notes: 'ok' } });
+    assert.equal((await host.readState()).project.notes, 'ok');
+  });
+});
+
 describe('LocalHost.writeState compare-and-swap', () => {
   it('refuses to write over a change made since this host read, and leaves the file as the other writer left it', async () => {
     const dir = project(10, []);
@@ -118,11 +226,7 @@ describe('LocalHost.writeState compare-and-swap', () => {
 
   it('a lock file left by a crashed process is taken over once it is stale', async () => {
     const dir = project(10, []);
-    const lock = join(dir, `${PROJECT_FILE}.lock`);
-    writeFileSync(lock, 'pid 1 (crashed)');
-    const old = new Date(Date.now() - 60_000);
-    const { utimesSync } = await import('node:fs');
-    utimesSync(lock, old, old);
+    const lock = staleLock(dir);
     const a = new LocalHost({ projectDir: dir });
     const p = await a.readState();
     await a.writeState({ ...p, project: { ...p.project, title: 'after the crash' } });
