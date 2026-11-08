@@ -74,7 +74,7 @@
       "action": "A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.",
       "duration_s": 6,
       "prompt": "Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro",
-      "script_line": "Every night, about midnight, I turned the latch of his door and opened it — oh so gently!",
+      "script_line": "And every night, about midnight, I turned the latch of his door and opened it—oh, so gently!",
       "characters": [
         "The Narrator"
       ],
@@ -89,7 +89,7 @@
       "action": "His hand turns the latch, a fraction at a time.",
       "duration_s": 4,
       "prompt": "Extreme close-up of a hand slowly turning an iron door latch, lantern light from below",
-      "script_line": "I turned the latch of his door and opened it — oh so gently!",
+      "script_line": "I turned the latch of his door and opened it—oh, so gently!",
       "characters": [
         "The Narrator"
       ],
@@ -104,7 +104,7 @@
       "action": "Through the crack of the door: darkness, and the shape of the old man asleep.",
       "duration_s": 6,
       "prompt": "POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure",
-      "script_line": "I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.",
+      "script_line": "I put in a dark lantern, all closed, closed, that no light shone out, and then I thrust in my head.",
       "characters": [
         "The Old Man"
       ],
@@ -119,7 +119,7 @@
       "action": "The narrator opens the lantern a crack. A single thin ray cuts across the room.",
       "duration_s": 7,
       "prompt": "Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room",
-      "script_line": "I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.",
+      "script_line": "I undid it just so much that a single thin ray fell upon the vulture eye.",
       "characters": [
         "The Narrator",
         "The Old Man"
@@ -135,7 +135,7 @@
       "action": "The eye, pale blue with a film over it, wide open in the ray of light.",
       "duration_s": 4,
       "prompt": "Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam",
-      "script_line": "It was open — wide, wide open — and I grew furious as I gazed upon it.",
+      "script_line": "It was open—wide, wide open—and I grew furious as I gazed upon it.",
       "characters": [
         "The Old Man"
       ],
@@ -150,7 +150,7 @@
       "action": "The old man sits up in bed: 'Who's there?'",
       "duration_s": 5,
       "prompt": "Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified",
-      "script_line": "I heard him sit up in the bed, crying out — \"Who's there?\"",
+      "script_line": "the old man sprang up in bed, crying out—“Who’s there?”",
       "characters": [
         "The Old Man"
       ],
@@ -181,7 +181,7 @@
       "action": "From above: he lifts three planks from the floor.",
       "duration_s": 7,
       "prompt": "Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him",
-      "script_line": "I took up three planks from the flooring of the chamber, and deposited all between the scantlings.",
+      "script_line": "I then took up three planks from the flooring of the chamber, and deposited all between the scantlings.",
       "characters": [
         "The Narrator"
       ],
@@ -211,7 +211,7 @@
       "action": "He places his chair directly over the hidden boards and smiles at the officers.",
       "duration_s": 8,
       "prompt": "Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus",
-      "script_line": "I placed my own seat upon the very spot beneath which reposed the corpse of the victim.",
+      "script_line": "placed my own seat upon the very spot beneath which reposed the corpse of the victim.",
       "characters": [
         "The Narrator",
         "Officers (×3)"
@@ -227,7 +227,7 @@
       "action": "Sweat on his temple. Under the silence, a low, dull, quick sound.",
       "duration_s": 5,
       "prompt": "Extreme close-up of a sweating temple and a twitching eye, cold dawn light",
-      "script_line": "It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.",
+      "script_line": "It was a low, dull, quick sound—much such a sound as a watch makes when enveloped in cotton.",
       "characters": [
         "The Narrator"
       ],
@@ -242,7 +242,7 @@
       "action": "He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'",
       "duration_s": 6,
       "prompt": "Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling",
-      "script_line": "\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"",
+      "script_line": "“Villains!” I shrieked, “dissemble no more! I admit the deed!—tear up the planks!—here, here!—It is the beating of his hideous heart!”",
       "characters": [
         "The Narrator",
         "Officers (×3)"

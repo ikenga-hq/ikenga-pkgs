@@ -81,4 +81,61 @@ describe('evals draft (prep for WP-09)', () => {
       }
     }
   });
+
+  const SKILL = readFileSync(join(HERE, '../SKILL.md'), 'utf8');
+  const STOP = new Set(['this', 'that', 'from', 'make', 'them']);
+
+  /** Parse the SKILL.md routing table into action -> trigger-phrase tokens. */
+  function routing(): Map<string, Set<string>> {
+    const rows = new Map<string, Set<string>>();
+    for (const line of SKILL.split('\n')) {
+      const m = /^\|\s*(.+?)\s*\|\s*\[`actions\/([a-z-]+)\.md`\]/.exec(line);
+      if (!m) continue;
+      const tokens = new Set<string>([m[2]!]);
+      for (const q of m[1]!.matchAll(/"([^"]+)"/g)) {
+        for (const w of q[1]!.toLowerCase().split(/[^a-z]+/)) if (w.length >= 4 && !STOP.has(w)) tokens.add(w);
+      }
+      rows.set(m[2]!, tokens);
+    }
+    return rows;
+  }
+
+  it('routes every eval to an action in the SKILL.md routing table, with a prompt that fits that row', () => {
+    const table = routing();
+    assert.ok(table.size >= 12, `routing table parsed to ${table.size} rows`);
+    const doc = JSON.parse(readFileSync(join(HERE, 'evals.json'), 'utf8')) as EvalsDocument;
+    for (const e of doc.evals) {
+      assert.ok(e.action, `eval ${e.id} must name an action`);
+      const tokens = table.get(e.action!);
+      assert.ok(tokens, `eval ${e.id} action "${e.action}" is not a routed action in SKILL.md`);
+      const prompt = e.prompt.toLowerCase();
+      assert.ok(
+        [...tokens].some((t) => prompt.includes(t)),
+        `eval ${e.id} prompt does not match the "${e.action}" routing row (${[...tokens].join(', ')})`,
+      );
+    }
+  });
+
+  it('states the built behaviour of the keyframes, bible and motion evals', () => {
+    const doc = JSON.parse(readFileSync(join(HERE, 'evals.json'), 'utf8')) as EvalsDocument;
+    const spend = doc.evals.find((e) => e.name === 'spend-gate-no-budget-refusal')!;
+    assert.equal(spend.action, 'bible');
+    assert.ok(spend.assertions.some((a) => a.includes('actions/bible.md')));
+    const gating = doc.evals.find((e) => e.name === 'gating-keyframes-before-bible-approved')!;
+    assert.ok(gating.assertions.some((a) => /bible/i.test(a) && /waiting|locked/i.test(a)));
+    assert.ok(!doc.evals.some((e) => e.action === 'keyframes' && /stub/i.test(e.expected_output)), 'keyframes is built, not a stub');
+    const motion = doc.evals.find((e) => e.action === 'motion')!;
+    assert.match(motion.expected_output, /^Stub ask/);
+  });
+
+  it('trigger evals: exactly 24, unique, 12/12, with film-vocabulary near-misses', () => {
+    const triggers = JSON.parse(readFileSync(join(HERE, 'trigger-evals.json'), 'utf8')) as TriggerEval[];
+    assert.equal(triggers.length, 24);
+    assert.equal(new Set(triggers.map((t) => t.query.trim().toLowerCase())).size, 24, 'queries must be unique');
+    assert.equal(triggers.filter((t) => t.should_trigger).length, 12);
+    assert.equal(triggers.filter((t) => !t.should_trigger).length, 12);
+    const film = /\b(film|movie|video|mp4|scene|screenplay|script|storyboard|shot|frame|cinema)\b/i;
+    const nearMisses = triggers.filter((t) => !t.should_trigger && film.test(t.query));
+    assert.ok(nearMisses.length >= 4, `expected at least 4 film-vocabulary negatives, got ${nearMisses.length}`);
+  });
 });

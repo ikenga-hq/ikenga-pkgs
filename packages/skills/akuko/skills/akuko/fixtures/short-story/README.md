@@ -4,10 +4,10 @@ This fixture provides the inputs needed for a full pipeline run of Edgar Allan P
 
 ## Files
 
-- `source.md`: The full text of Edgar Allan Poe's *The Tell-Tale Heart* (1843, public domain) sourced from Project Gutenberg eBook #2148 (*The Works of Edgar Allan Poe, Volume 2*), stripped of Gutenberg header/footer/licence boilerplate with story text kept exact.
-- `screenplay.fountain`: The adapted Fountain screenplay produced by following the `adapt` route (`actions/intake.md`). Formatted with title page, standard scene headings, visual present-tense action, and exact dialogue quotes.
+- `source.md`: The full text of Edgar Allan Poe's *The Tell-Tale Heart* (1843, public domain) sourced from Project Gutenberg eBook #2148 (*The Works of Edgar Allan Poe, Volume 2*), stripped of Gutenberg header/footer/licence boilerplate with story text kept exact (Gutenberg's underscore emphasis and curly punctuation are kept as published).
+- `screenplay.fountain`: The adapted Fountain screenplay produced by following the `adapt` route (`actions/intake.md`). Formatted with title page, standard scene headings and present-tense action lines. Every narration and dialogue line in it is Poe's exact wording, in the same curly quotes and unspaced em dashes as `source.md`; only the action lines are added.
 - `proposal.json`: The breakdown proposal matching the structure of `breakdown/__fixtures__/proposal-adapt.json`. Defines the 4 scenes, character/location/style checklist, and 12 shots totaling 70 seconds runtime.
-- `short-story.test.ts`: Integration test running intake and breakdown on these fixture inputs in a temp folder, asserting integrity, lint cleanliness, exact shot/scene matches, verbatim script coverage, and idempotency.
+- `short-story.test.ts`: Tests that run intake and breakdown on these inputs in a temp folder (library calls and the `breakdown/cli.ts` commands below), asserting integrity, lint cleanliness, scene and shot ids, per-scene counts and durations against `fixtures/the-beating/akuko.json`, bible counts, that each `script_line` appears in `source.md` and `screenplay.fountain` (compared after whitespace, quote and dash normalisation), tag placement, idempotency and file hygiene.
 
 ## How a run uses these files
 

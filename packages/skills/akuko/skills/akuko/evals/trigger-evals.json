@@ -76,15 +76,15 @@
     "should_trigger": false
   },
   {
-    "query": "Convert this 1080p MP4 recording into a web-optimized 60fps animated GIF",
+    "query": "Edit my existing film's MP4 to cut the first scene and tighten the ending",
     "should_trigger": false
   },
   {
-    "query": "Create an Excel spreadsheet template to calculate equipment rental and catering costs for an indie film shoot",
+    "query": "Generate one storyboard image in Midjourney style for a single frame of my film's opening shot",
     "should_trigger": false
   },
   {
-    "query": "Draw a minimalist SVG vector logo for my film production company called Dark Room Cinema",
+    "query": "Render a title card for my short film as a single image with the title in a serif font",
     "should_trigger": false
   },
   {

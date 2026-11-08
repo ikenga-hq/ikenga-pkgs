@@ -83,12 +83,14 @@
       "id": 6,
       "name": "stage-routing-keyframes",
       "action": "keyframes",
-      "prompt": "Render the keyframes for our scenes. Project state: bible stage is approved, sketch board is approved.",
-      "expected_output": "Routes to actions/keyframes.md. Reads keyframes action doc, identifies that keyframes is a stub (WP-02 / WP-22), informs user it is not built yet, and stops without improvising behavior.",
+      "prompt": "Render the keyframes for shot 1. Project state: intake, breakdown, sketch and bible are all approved; the bible turnarounds and plates are approved with files; a budget cap is set; the keyframes stage is not started.",
+      "expected_output": "Routes to actions/keyframes.md. Folds decisions first, plans one key frame per shot, and builds the prompt from the approved turnarounds, plates and lookbook (the sketch composition goes in as text, not as an SVG). With a paid provider it prints the spend line and waits for approval before anything is sent; nothing is generated until the person approves. The finished frame is audited, recorded as pending-review, and the run stops at the review gate. It never writes approved.",
       "assertions": [
         "Routes to actions/keyframes.md",
-        "Identifies keyframes as a stub action awaiting WP-22",
-        "Refuses to improvise unbuilt behavior and offers status"
+        "Folds decisions first and plans one key frame per shot",
+        "Takes references from the approved turnarounds and plates, with sketch composition as text only",
+        "Prints the spend line and waits for approval before any paid generation",
+        "Audits the frame, marks it pending-review and stops at the review gate without approving it"
       ]
     },
     {
@@ -133,22 +135,24 @@
       "id": 10,
       "name": "gating-keyframes-before-bible-approved",
       "action": "keyframes",
-      "prompt": "Render the key frames for scene 1 now. Project state: sketch board is approved, but bible stage is still in-review with character portraits pending review.",
-      "expected_output": "Routes to actions/keyframes.md and evaluates stage gating rule (lib/state.md §Stages). Refuses to run keyframes because the prerequisite bible stage is not approved. States plainly that the bible stage is waiting for human approval.",
+      "prompt": "Render the key frames for scene 1 now. Project state: breakdown and sketch board are approved, but the bible stage is still in-review with character portraits pending review.",
+      "expected_output": "Routes to actions/keyframes.md. The keyframes stage is locked because it opens only when intake, breakdown, sketch and bible are all approved. Refuses to plan or generate anything, names the bible stage as the one still waiting for a person's approval, points to the review board, and leaves akuko.json and every stage state unchanged.",
       "assertions": [
-        "Evaluates stage gating rule from lib/state.md",
-        "Refuses to advance to keyframes while bible stage is not approved",
-        "Informs the user that bible stage approval is waiting",
+        "Routes to actions/keyframes.md",
+        "Refuses because the key-frame stage is locked until intake, breakdown, sketch and bible are approved",
+        "Names the bible stage as the one that is waiting for approval",
+        "Makes no paid call and creates no key-frame assets",
         "Leaves project state and stage locks unchanged"
       ]
     },
     {
       "id": 11,
       "name": "spend-gate-no-budget-refusal",
-      "action": "setup",
+      "action": "bible",
       "prompt": "Generate the character bible portraits using Gemini image provider. Project state: akuko.json.budget is null (no budget cap set).",
-      "expected_output": "Routes through bible action to spend gate. Spend gate checks budget cap, sees budget is null, refuses the paid job with no-budget code, prints the setup pointer, and directs the user to /akuko setup to record a budget cap.",
+      "expected_output": "Routes to actions/bible.md, which sends the paid generation through the spend gate. The gate checks the budget cap, sees budget is null, refuses the paid job with the no-budget code, prints the setup pointer, and directs the user to /akuko setup to record a budget cap.",
       "assertions": [
+        "Routes to actions/bible.md",
         "Refuses paid provider execution when budget cap is null",
         "Emits the SETUP_POINTER refusal message",
         "Directs user to /akuko setup to configure budget cap",
@@ -173,7 +177,7 @@
       "name": "stub-action-motion-refusal",
       "action": "motion",
       "prompt": "Animate shot 1 and make the motion clip. Project state: keyframes are approved.",
-      "expected_output": "Routes to actions/motion.md. Reads the action doc, sees that motion is marked 'Stub (WP-02)', informs the user that motion is not built yet (Phase 2), offers /akuko status, and stops without improvising motion generation.",
+      "expected_output": "Stub ask (motion is not built yet). Routes to actions/motion.md. Reads the action doc, sees that motion is marked 'Stub (WP-02)', informs the user that motion is not built yet (Phase 2), offers /akuko status, and stops without improvising motion generation.",
       "assertions": [
         "Routes to actions/motion.md",
         "Identifies that motion is a stub action not yet built in Phase 1",
