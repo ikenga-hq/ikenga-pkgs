@@ -11,8 +11,9 @@
 // five renderer rules as far as a machine can. Exit code 0 only if every file
 // passes. A read-only view (manifest writes_decisions: false, no decision
 // control, no decision writer) that is seen to write nothing is reported
-// SKIP (not applicable) and also exits 0. With --record, each passing file is added to a conformed-views list
-// ({view, sha256, checked_at, checker}); folding accepts approvals only from
+// SKIP (not applicable) and also exits 0. With --record, each passing file
+// is added to a conformed-views list ({view, sha256, checked_at, checker});
+// a skipped one is not. Folding accepts approvals only from
 // views on that list (decisions/conformed.ts).
 //
 // Needs the package's dev dependencies (jsdom, ajv, ajv-formats). The page's
