@@ -1,0 +1,118 @@
+/**
+ * akuko — one step of the bible stage, end to end (WP-05).
+ *
+ * `generateBible()` is what the action does for each wave of images:
+ *
+ *   build one job from the units that are ready (plan.ts)
+ *   → quote it at the spend gate (paid: a `pending_spend` entry; the person approves it)
+ *   → only when it is free or already approved: begin the units, `gate.run()`
+ *   → paid: `gate.collect()` records the files; manual: hand the prompt package to the person
+ *   → sync `bible.*[].refs[]` and the stage state
+ *
+ * It never calls a provider's `submit()` itself (only `gate.run()` does), never
+ * writes `approved`, and writes the project only through the host.
+ */
+
+import type { Job, JobHandle, JobStatus, WaveOneHost } from '../providers/contract.ts';
+import type { ManualProvider } from '../providers/manual/index.ts';
+import type { SpendGate } from '../spend/gate.ts';
+import { beginUnits, buildBibleJob, refreshStageState, syncRefs } from './plan.ts';
+
+export interface StepDeps {
+  host: WaveOneHost;
+  gate: SpendGate;
+  now?: () => string;
+  /** Template directory override (tests). */
+  templates?: string;
+}
+
+export interface StepOptions {
+  provider: string;
+  model?: string;
+  units?: string[];
+}
+
+export type StepResult =
+  | { status: 'awaiting-approval'; job: Job; estimate: number; confirmation: string }
+  | { status: 'refused'; job: Job; code: string; message: string; confirmation?: string }
+  | { status: 'handoff'; job: Job; handle: JobHandle; text: string }
+  | { status: 'running'; job: Job; handle: JobHandle; message: string }
+  | { status: 'done'; job: Job; handle: JobHandle; assets: string[]; cost: number }
+  | { status: 'failed'; job: Job; error: string };
+
+const clock = (d: StepDeps): string => (d.now ?? (() => new Date().toISOString()))();
+
+/** Re-read, sync refs and the stage state, write if anything changed. Returns the entries whose refs changed. */
+export async function finalizeBible(deps: Pick<StepDeps, 'host' | 'now'>): Promise<string[]> {
+  const ts = (deps.now ?? (() => new Date().toISOString()))();
+  const before = await deps.host.readState();
+  const synced = syncRefs(before, ts);
+  const after = refreshStageState(synced.project);
+  if (synced.changed.length > 0 || after !== synced.project) await deps.host.writeState(after);
+  return synced.changed;
+}
+
+export async function generateBible(deps: StepDeps, o: StepOptions): Promise<StepResult> {
+  const { host, gate } = deps;
+  const project = await host.readState();
+  const built = buildBibleJob(project, {
+    provider: o.provider,
+    ...(o.model !== undefined ? { model: o.model } : {}),
+    ...(o.units !== undefined ? { units: o.units } : {}),
+    ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
+  });
+  const job = built.job;
+
+  // Price it and, for a paid job, make the pending entry the person approves. Nothing is submitted.
+  const q = await gate.quote(job);
+  // `not-approved` just means the person has not answered yet: that is the normal "waiting" state, not a refusal.
+  if (q.refusal && q.refusal.code !== 'not-approved') {
+    return { status: 'refused', job, code: q.refusal.code, message: q.refusal.message, ...(q.confirmation ? { confirmation: q.confirmation } : {}) };
+  }
+  if (q.paid && q.pending?.status !== 'approved') {
+    await finalizeBible(deps);
+    return { status: 'awaiting-approval', job, estimate: q.cost.amount, confirmation: q.confirmation ?? '' };
+  }
+
+  // Clear to go: the units move to draft (a sent-back one gets its old take cleared so the new one fills it in place).
+  const begun = refreshStageState(beginUnits(await host.readState(), built.units, clock(deps)));
+  await host.writeState(begun);
+
+  const r = await gate.run(job);
+  if (r.status === 'awaiting-approval') return { status: 'awaiting-approval', job, estimate: r.cost.amount, confirmation: r.confirmation };
+  if (r.status === 'refused') return { status: 'refused', job, code: r.refusal.code, message: r.refusal.message };
+  if (r.status === 'failed') return { status: 'failed', job, error: r.error };
+
+  if (!q.paid) {
+    const text = r.handle.handoff?.text ?? '';
+    return { status: 'handoff', job, handle: r.handle, text };
+  }
+  return collectBible(deps, job, r.handle, r.cost.amount);
+}
+
+/** Poll a submitted job; when it is finished the gate records the files, and refs and stage state are synced. */
+export async function collectBible(deps: StepDeps, job: Job, handle: JobHandle, estimate = 0): Promise<StepResult> {
+  const c = await deps.gate.collect(handle);
+  const s: JobStatus = c.status;
+  if (s.state === 'queued' || s.state === 'running' || s.state === 'waiting-for-input') {
+    return { status: 'running', job, handle, message: s.message ?? s.state };
+  }
+  await finalizeBible(deps);
+  if (s.state !== 'done') return { status: 'failed', job, error: s.message ?? `the job ${s.state}` };
+  const cost = Object.values(s.actual ?? {}).reduce((a, b) => a + b, 0) || estimate;
+  return { status: 'done', job, handle, assets: c.assets.map((a) => a.id), cost };
+}
+
+/** The person brought a file back for a manual job. */
+export async function ingestBible(
+  deps: Pick<StepDeps, 'host' | 'now'>,
+  manual: ManualProvider,
+  job: Job,
+  unit: string,
+  file: { filename: string; mime: string; data: Uint8Array },
+  extra: { actual?: number; model?: string } = {},
+): Promise<{ asset: string; warnings: string[]; refs: string[] }> {
+  const r = await manual.ingest({ job, unit, file, ...extra });
+  const refs = await finalizeBible(deps);
+  return { asset: r.asset.id, warnings: r.warnings, refs };
+}
