@@ -105,6 +105,12 @@ const BAD: Record<string, string[]> = {
   'bad-keycode-approve-all.html': ['auto-approve'],
   'bad-wheel-approve-all.html': ['auto-approve'],
   'bad-contextmenu-approve-all.html': ['auto-approve'],
+  // Phase 1 follow-up: gestures whose handlers test button, pointer type, touch count, wheel size, which
+  'bad-rightbutton-mousedown-approve.html': ['auto-approve'],
+  'bad-pointertype-mouse-approve.html': ['auto-approve'],
+  'bad-touch-single-approve.html': ['auto-approve'],
+  'bad-wheel-threshold-approve.html': ['auto-approve'],
+  'bad-which-approve.html': ['auto-approve'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
 const SKIP = ['readonly-cast-sheet.html'];
