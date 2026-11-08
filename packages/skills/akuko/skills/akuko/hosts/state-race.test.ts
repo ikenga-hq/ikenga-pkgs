@@ -154,6 +154,40 @@ describe('withFileLock', () => {
     assert.equal(readFileSync(lock, 'utf8'), 'someone else', 'the new holder\'s lock is left alone');
   });
 
+  it('a stale lock behind a fresh takeover guard waits with sleeps, not a busy loop, and succeeds once the guard goes stale', async () => {
+    const dir = tmpDir('akuko-guard-');
+    const path = join(dir, PROJECT_FILE);
+    const lock = staleLock(dir);
+    const guard = `${lock}.takeover`;
+    writeFileSync(guard, 'pid 2 (crashed taker)'); // fresh: the takeover step can't proceed yet
+    const sleeps: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      sleeps.push(ms);
+      if (sleeps.length === 3) { const old = new Date(Date.now() - 60_000); utimesSync(guard, old, old); }
+      await new Promise((r) => setTimeout(r, 1));
+    };
+    const t0 = Date.now();
+    const ran = await withFileLock(path, async () => 'ok', { waitMs: 1500, staleMs: 1000, sleep });
+    assert.equal(ran, 'ok');
+    // Three sleeps while the guard was fresh, then the guard went stale and was cleared; a busy loop makes none.
+    assert.ok(sleeps.length >= 3 && sleeps.length <= 8, `slept ${sleeps.length} times: ${sleeps.join(',')}`);
+    assert.ok(Date.now() - t0 < 1500, 'did not run into the wait deadline');
+    assert.equal(existsSync(lock), false, 'lock released');
+    assert.equal(existsSync(guard), false, 'guard cleared');
+  });
+
+  it('a fresh takeover guard that never clears ends in the "locked by another process" error at the deadline, with sleeps in between', async () => {
+    const dir = tmpDir('akuko-guard2-');
+    const lock = staleLock(dir);
+    writeFileSync(`${lock}.takeover`, 'pid 2 (alive)');
+    let sleeps = 0;
+    await assert.rejects(
+      withFileLock(join(dir, PROJECT_FILE), async () => 'x', { waitMs: 150, staleMs: 30_000, sleep: async () => { sleeps++; await new Promise((r) => setTimeout(r, 10)); } }),
+      /locked by another akuko process/,
+    );
+    assert.ok(sleeps > 0 && sleeps < 100, `slept ${sleeps} times`);
+  });
+
   it('a lock it cannot create for lack of permission is reported as that, not as "locked by another process"', { skip: (process.platform === 'win32' || process.getuid?.() === 0) && 'needs a POSIX non-root user' }, async () => {
     const dir = tmpDir('akuko-lock-');
     chmodSync(dir, 0o555);
