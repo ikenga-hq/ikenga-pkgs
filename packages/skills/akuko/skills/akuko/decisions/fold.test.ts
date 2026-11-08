@@ -421,6 +421,36 @@ describe('spend decisions', () => {
     assert.equal(r.report.rejected[0]?.code, 'already-ran');
   });
 
+  it('an approval refused for the cap is not revived when the cap is raised: the person is told to approve again, and a fresh approval works', () => {
+    // Wave 3 review, finding 2. lib/state.md §Decision folding: a refused approve-spend never took
+    // effect; the job stays waiting and the person approves again (consent is to an amount, now).
+    const p0 = fixture();
+    p0.budget = { ...p0.budget!, cap: 1 }; // 0.84 spent: 0.16 left, the job is 0.36
+    const d = approve(1);
+    const r = fold(p0, [d]);
+    assert.equal(job(r.project).status, 'awaiting-approval');
+    assert.equal(r.report.rejected[0]?.code, 'spend-refused');
+    assert.match(r.report.rejected[0]!.reason, /Raise the cap/);
+    assert.match(r.report.rejected[0]!.reason, /approve it again on the board/, 'the refusal says the approval was not kept');
+    // setup raises the cap; the store still holds the refused approval and is folded again
+    const raised = structuredClone(r.project);
+    raised.budget = { ...raised.budget!, cap: 15 };
+    const again = fold(raised, [d]);
+    assert.equal(job(again.project).status, 'awaiting-approval', 'a refused approval stays refused');
+    assert.equal(again.report.changed, false);
+    const fresh = approve(2);
+    const ok = fold(raised, [d, fresh]);
+    assert.deepEqual([job(ok.project).status, job(ok.project).decision], ['approved', fresh.id]);
+  });
+
+  it('no budget: the refusal also says to approve again once a cap is set', () => {
+    const p0 = fixture();
+    p0.budget = null;
+    p0.ledger = [];
+    const r = fold(p0, [approve(1)]);
+    assert.match(r.report.rejected[0]!.reason, /setup.*approve it again on the board/s);
+  });
+
   it('no budget, no approval', () => {
     const p0 = fixture();
     p0.budget = null;

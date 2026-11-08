@@ -185,7 +185,7 @@ Every action starts by folding: `readDecisions(since?)` through the host adapter
   - They stay in `decisions[]` (apart from unknown units and early undos, which integrity forbids storing).
   - They are listed in `report.rejected` with a reason. Tell the person.
   - Their unit gets a `Not applied: …` agent comment.
-  - A rejected unit decision stays rejected. A refused `approve-spend` is visible as a waiting job whose latest decision is that approval. The person approves again.
+  - A rejected unit decision stays rejected. A refused `approve-spend` is visible as a waiting job whose latest decision is that approval. The person approves again. A refused approval is not revived when the cap is raised later (consent is to the amount shown, at the time); the over-cap and no-budget refusals say so.
 - **Stale decisions.** A unit decision for a stage the unit has left (`stale-stage`), or on a unit with nothing produced yet (`not-reviewable`), is refused, with a notice.
 
 **Cursors (`since`)** are per store. They only save reading; correctness never depends on them, and none is stored in `akuko.json`.
