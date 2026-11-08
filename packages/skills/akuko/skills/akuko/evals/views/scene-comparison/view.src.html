@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scene comparison</title>
+<!--
+  akuko freehand view (read-only): two scenes side by side. Designed for the ask
+  "compare the bedroom scenes". The two button rows only choose what is shown;
+  nothing is written anywhere (views/contract.md section 2: a read-only view needs no check).
+-->
+<style>
+:root { color-scheme: light dark; --bg: #faf6f1; --surface: #ffffff; --fg: #1d1a17; --muted: #5b4f44; --line: #b9a999; --accent: #a8420c; --on-accent: #ffffff; --warn: #7a5200; --panel: #17120e; --seg1: #a8420c; --seg2: #2b5f8a; --seg3: #6b4a8a; --seg4: #1f6b34; --seg5: #7a5200; --seg6: #5b4f44; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; --accent: #f08a4b; --on-accent: #1a120c; --warn: #f2c46d; --seg1: #f08a4b; --seg2: #7fb6e6; --seg3: #c7a3e6; --seg4: #8fd19e; --seg5: #f2c46d; --seg6: #cfc2b4; } }
+:root[data-theme="dark"] { color-scheme: dark; --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; --accent: #f08a4b; --on-accent: #1a120c; --warn: #f2c46d; --seg1: #f08a4b; --seg2: #7fb6e6; --seg3: #c7a3e6; --seg4: #8fd19e; --seg5: #f2c46d; --seg6: #cfc2b4; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1, h2, h3 { font-weight: 600; line-height: 1.25; margin: 0 0 8px; }
+h1 { font-size: 24px; } h2 { font-size: 18px; } h3 { font-size: 16px; }
+.muted { color: var(--muted); font-size: 14px; }
+.mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+.pick { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 4px 0 12px; }
+button { font: inherit; font-size: 14px; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+.cols { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 14px; vertical-align: top; }
+td.num { font-variant-numeric: tabular-nums; }
+.mix { display: flex; height: 16px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 4px 0; }
+.mix span { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; margin: 0 0 8px; padding: 0; list-style: none; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.strip li { font-size: 13px; }
+svg.panel { width: 100%; height: auto; aspect-ratio: 16 / 9; background: var(--panel); border: 1px solid var(--line); display: block; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<h1 id="title"></h1>
+<div class="pick" role="group" aria-label="Left scene"><span class="muted">Left:</span><span id="pick-l"></span></div>
+<div class="pick" role="group" aria-label="Right scene"><span class="muted">Right:</span><span id="pick-r"></span></div>
+<p class="muted" id="delta" role="status"></p>
+<div class="cols" id="cols" data-akuko-view="shots"></div>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"freehand:scene-comparison","version":"1","title":"Scene comparison","writes_decisions":false,"views":["shots"]}</script>
+<script type="application/json" id="akuko-project">{{PROJECT}}</script>
+<script>
+(function () {
+  'use strict';
+  var P;
+  try { P = JSON.parse(document.getElementById('akuko-project').textContent); } catch (e) { document.getElementById('title').textContent = 'Project data could not be read'; return; }
+  var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var name = {};
+  ['characters', 'locations', 'styles'].forEach(function (k) { P.bible[k].forEach(function (e) { name[e.id] = e.name; }); });
+  var ids = P.scenes.map(function (s) { return s.id; });
+  var S = { l: ids[1] || ids[0], r: ids[3] || ids[ids.length - 1] };
+  var SEGS = ['var(--seg1)', 'var(--seg2)', 'var(--seg3)', 'var(--seg4)', 'var(--seg5)', 'var(--seg6)'];
+  var types = [];
+  P.shots.forEach(function (s) { if (types.indexOf(s.shot_type) < 0) types.push(s.shot_type); });
+  var $ = function (s) { return document.getElementById(s); };
+
+  function stats(id) {
+    var sc = P.scenes.filter(function (s) { return s.id === id; })[0];
+    var shots = P.shots.filter(function (s) { return s.scene === id; });
+    var secs = shots.reduce(function (a, s) { return a + (s.duration_s || 0); }, 0);
+    var by = function (f) { var m = {}; shots.forEach(function (s) { var k = f(s); m[k] = (m[k] || 0) + 1; }); return m; };
+    var refs = {};
+    shots.forEach(function (s) { (s.refs || []).forEach(function (r) { refs[r] = 1; }); });
+    return { sc: sc, shots: shots, secs: secs, types: by(function (s) { return s.shot_type; }), status: by(function (s) { return s.status; }), refs: Object.keys(refs).filter(function (r) { return r.indexOf('style') !== 0; }) };
+  }
+  function panel(s) {
+    return '<svg class="panel" viewBox="0 0 160 90" role="img" aria-label="Sketch panel for ' + esc(s.id) + '"><rect x="0.5" y="0.5" width="159" height="89" fill="none" stroke="#5a4a3c"/>' +
+      (s.blocking || []).map(function (b) { return '<rect x="' + (b.x * 160) + '" y="' + (b.y * 90) + '" width="' + (b.w * 160) + '" height="' + (b.h * 90) + '" fill="none" stroke="#f08a4b"/><text x="' + (b.x * 160 + 2) + '" y="' + (b.y * 90 + 12) + '" fill="#f4ede5" font-size="12">' + esc(b.who) + '</text>'; }).join('') + '</svg>';
+  }
+  function column(id) {
+    var st = stats(id);
+    var total = st.shots.length || 1;
+    var mix = '<div class="mix" role="img" aria-label="Shot types">' + types.map(function (t, i) { return st.types[t] ? '<span style="width:' + (100 * st.types[t] / total) + '%;background:' + SEGS[i % SEGS.length] + '"></span>' : ''; }).join('') + '</div>' +
+      '<ul class="legend">' + types.filter(function (t) { return st.types[t]; }).map(function (t) { return '<li><span class="sw" style="background:' + SEGS[types.indexOf(t) % SEGS.length] + '"></span>' + esc(t) + ' ' + st.types[t] + '</li>'; }).join('') + '</ul>';
+    var statuses = Object.keys(st.status).map(function (k) { return st.status[k] + ' ' + esc(k); }).join(' | ');
+    return '<section data-akuko-field="scene" data-akuko-unit="' + esc(id) + '"><h2>' + esc(st.sc.heading || id) + '</h2><p class="muted">' + esc(st.sc.summary || '') + '</p>' +
+      '<table><tbody><tr><th scope="row">Shots</th><td class="num">' + st.shots.length + '</td></tr>' +
+      '<tr><th scope="row">Runtime</th><td class="num">' + st.secs + ' s</td></tr>' +
+      '<tr><th scope="row">Average shot</th><td class="num">' + (st.shots.length ? (Math.round(st.secs / st.shots.length * 10) / 10) : 0) + ' s</td></tr>' +
+      '<tr><th scope="row">Review</th><td>' + (statuses || 'no shots') + '</td></tr>' +
+      '<tr><th scope="row">Who and where</th><td>' + (st.refs.map(function (r) { return esc(name[r] || r); }).join(', ') || 'unset') + '</td></tr></tbody></table>' +
+      '<h3>Shot types</h3>' + mix +
+      '<ul class="strip">' + st.shots.map(function (s) { return '<li data-akuko-field="shot" data-akuko-unit="' + esc(s.id) + '">' + panel(s) + '<span class="mono">' + esc(s.id) + '</span> ' + esc(s.shot_type) + ', ' + esc(s.duration_s) + ' s, <span data-akuko-field="status" data-akuko-status="' + esc(s.status) + '">' + esc(s.status) + '</span></li>'; }).join('') + '</ul></section>';
+  }
+  function picker(side) {
+    return ids.map(function (id) { return '<button type="button" data-side="' + side + '" data-scene="' + esc(id) + '" aria-pressed="' + (S[side] === id) + '">' + esc(id) + '</button>'; }).join(' ');
+  }
+  function render() {
+    $('title').textContent = 'Scene comparison: ' + P.project.title;
+    $('pick-l').innerHTML = picker('l');
+    $('pick-r').innerHTML = picker('r');
+    var a = stats(S.l), b = stats(S.r);
+    var d = b.secs - a.secs;
+    $('delta').textContent = S.l === S.r ? 'Both sides show the same scene.' : S.r + ' runs ' + (d === 0 ? 'the same length as ' : Math.abs(d) + ' s ' + (d > 0 ? 'longer than ' : 'shorter than ')) + S.l + ' (' + b.shots.length + ' shots against ' + a.shots.length + ').';
+    $('cols').innerHTML = column(S.l) + column(S.r);
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-scene]');
+    if (!t) return;
+    S[t.getAttribute('data-side')] = t.getAttribute('data-scene');
+    render();
+  });
+  render();
+})();
+</script>
+</body>
+</html>
