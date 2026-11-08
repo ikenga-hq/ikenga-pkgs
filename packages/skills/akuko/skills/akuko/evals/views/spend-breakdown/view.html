@@ -147,7 +147,6 @@ table { border-collapse: collapse; width: 100%; } td, th { text-align: left; pad
   if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)
 })();
 /* end akuko-decision-writer */
-/* end akuko-decision-writer */
 </script>
 <script>
 (function () {
@@ -286,14 +285,13 @@ table { border-collapse: collapse; width: 100%; } td, th { text-align: left; pad
 
     // Spend breakdown (read-only, derived from the project; the controls stay in the spend gate below).
     var GROUP = { char: 'Characters', loc: 'Locations', sc: 'Shots' };
-    var byProv = {}, byKind = {}, totalDone = 0;
+    var byProv = {}, byKind = {};
     V.ledger.forEach(function (e) {
       if (e.status !== 'done') return;
       var a = e.actual || 0, k = GROUP[String(e.unit).split('_')[0]] || 'Other';
       byProv[e.provider] = byProv[e.provider] || { n: 0, sum: 0 };
       byProv[e.provider].n++; byProv[e.provider].sum += a;
       byKind[k] = (byKind[k] || 0) + a;
-      totalDone += a;
     });
     var cap = b ? b.cap : 0;
     var left = b ? b.cap - b.spent - sunk - flight - committed - awaiting : 0;

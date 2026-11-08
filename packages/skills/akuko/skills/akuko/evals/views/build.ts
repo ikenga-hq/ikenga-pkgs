@@ -31,11 +31,16 @@ export function projectBlock(): string {
 /** The canonical decision writer (scripts/check-view/decision-writer.js), at its v2 form whatever is on disk. */
 export function decisionWriterV2(): string {
   let w = readFileSync(resolve(AKUKO, 'scripts/check-view/decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '');
-  w = w.replace(
+  const swap = (from: string, to: string) => {
+    if (w.includes(to)) return; // the canonical file is already v2
+    if (!w.includes(from)) throw new Error(`build: decision-writer.js changed shape, cannot find ${JSON.stringify(from.slice(0, 70))}`);
+    w = w.replace(from, () => to);
+  };
+  swap(
     '/* akuko-decision-writer v1 — views/contract.md §Decision writer. Inline this block verbatim. */',
     '/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */',
   );
-  w = w.replace(
+  swap(
     '  // Host C: re-publish the outbox after a pane reload.\n  toIkenga();',
     '  // Host C: re-publish the outbox after a pane reload.\n  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)',
   );
@@ -66,14 +71,13 @@ const BREAKDOWN_HTML = `<section id="breakdown" aria-labelledby="h-break"></sect
 
 const BREAKDOWN_JS = `    // Spend breakdown (read-only, derived from the project; the controls stay in the spend gate below).
     var GROUP = { char: 'Characters', loc: 'Locations', sc: 'Shots' };
-    var byProv = {}, byKind = {}, totalDone = 0;
+    var byProv = {}, byKind = {};
     V.ledger.forEach(function (e) {
       if (e.status !== 'done') return;
       var a = e.actual || 0, k = GROUP[String(e.unit).split('_')[0]] || 'Other';
       byProv[e.provider] = byProv[e.provider] || { n: 0, sum: 0 };
       byProv[e.provider].n++; byProv[e.provider].sum += a;
       byKind[k] = (byKind[k] || 0) + a;
-      totalDone += a;
     });
     var cap = b ? b.cap : 0;
     var left = b ? b.cap - b.spent - sunk - flight - committed - awaiting : 0;
@@ -109,7 +113,7 @@ export function buildSpendBreakdown(): string {
   h = replaceOnce(
     h,
     /\/\* akuko-decision-writer v\d[\s\S]*?\/\* end akuko-decision-writer \*\//,
-    `${decisionWriterV2()}\n/* end akuko-decision-writer */`,
+    decisionWriterV2(),
     'the inlined decision writer',
   );
   h = replaceOnce(h, '<div class="grid">', `${BREAKDOWN_HTML}<div class="grid">`, 'the grid');

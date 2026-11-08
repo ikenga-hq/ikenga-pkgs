@@ -129,7 +129,7 @@ Stop. Never approve anything yourself, and do not run the next stage.
 
 ## Manual host-A check
 
-For the person. About 15 minutes on claude.ai, plus Claude Code with the ArtifactData tool for step 5. Each step says what to do and what to expect; copy this section into a reply with the `Observed:` lines filled in. The three pages are in `evals/views/` of `ikenga-hq/ikenga-pkgs` (use the commit the PR merged as, or later).
+For the person. About 15 minutes. **Environment:** run it in a session that has the akuko skill loaded and the Artifact tool, ArtifactData and a shell (for example Claude Code with the skill). A plain claude.ai chat has neither the skill nor the publish gate, so it cannot show steps 3 to 6. Each step says what to do and what to expect; copy this section into a reply with the `Observed:` lines filled in. The three pages are in `evals/views/` of `ikenga-hq/ikenga-pkgs` (use the commit the PR merged as, or later).
 
 1. In a claude.ai chat, ask: *"Fetch `evals/views/cast-sheet/view.html` from ikenga-hq/ikenga-pkgs (packages/skills/akuko/skills/akuko/evals/views/cast-sheet/view.html) and publish it unchanged as an artifact called akuko-cast-sheet, with no capabilities."*
    Expected: an artifact link. The page reads "Cast sheet: The Beating", with "2 of 6 bible entries and 2 images are waiting for your review", cards for 3 characters, 2 locations and the look, and no buttons. Readable with the browser in light and in dark.
@@ -137,7 +137,7 @@ For the person. About 15 minutes on claude.ai, plus Claude Code with the Artifac
 2. Do the same with `evals/views/scene-comparison/view.html`.
    Expected: two scenes side by side (sc2 left, sc4 right), the line "sc4 runs 3 s longer than sc2 (4 shots against 4)", and scene buttons that change the columns when pressed. Nothing else changes; reloading resets it.
    Observed: ______
-3. Ask: *"Publish `evals/views/spend-breakdown/view.html` as akuko-spend-breakdown with db and user capabilities (db rules: root read view / write owner; `decisions` read view / write interact), without running the check."*
+3. **(Requires WP-07a2's `publishView` gate, merged.)** Ask: *"Publish `evals/views/spend-breakdown/view.html` as akuko-spend-breakdown with db and user capabilities (db rules: root read view / write owner; `decisions` read view / write interact), without running the check."*
    Expected: **refused** by the host's publish gate (a page with decision controls and no conformance record), naming the page as not conformed. If it publishes anyway, that is a finding: say so.
    Observed: ______
 4. Now ask the agent to run `node scripts/check-view.mjs` on that page with `--record conformed.json`, then ArtifactData `set` the doc `akuko/conformed` with that file, then publish again.

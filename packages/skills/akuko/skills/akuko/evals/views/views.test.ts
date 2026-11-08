@@ -134,7 +134,9 @@ describe('decision-writing view (spend breakdown)', () => {
     assert.equal(m().writes_decisions, true);
     for (const v of REQUIRED_VIEWS) assert.ok(m().views.includes(v), v);
     assert.ok(h().includes(decisionWriterV2()), 'the canonical writer block, byte for byte');
-    assert.match(h(), /akuko-decision-writer v2/);
+    assert.ok(h().includes('/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */'), 'v2 header');
+    assert.ok(h().includes('  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)'), 'v2 load-site guard');
+    assert.equal(h().split('/* end akuko-decision-writer */').length - 1, 1, 'the end marker appears once');
   });
   it('shows the breakdown above the controls, without adding a control of its own', () => {
     const doc = h();
