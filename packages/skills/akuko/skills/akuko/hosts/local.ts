@@ -19,7 +19,7 @@ import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from
 import { classifyHost, defaultNodeDeps, probeNode, type NodeProbeDeps, type ProbeHints } from './detect.ts';
 import { readJsonlStore } from '../decisions/jsonl.ts';
 import { loadConformedFile } from '../decisions/conformed.ts';
-import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED } from './shared.ts';
+import { assertPublishable, assetDir, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED, viewFileStem } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 import { StateConflictError } from './conflict.ts';
 
@@ -320,7 +320,7 @@ export class LocalHost implements HostAdapter {
    */
   async publishView(v: ViewArtifact): Promise<{ url?: string; path?: string }> {
     await assertPublishable(v, () => [loadConformedFile(SHIPPED_CONFORMED), loadConformedFile(join(this.projectDir, VIEWS_DIR, 'conformed.json'))]);
-    const path = join(this.projectDir, VIEWS_DIR, `${safeBasename(v.name).replace(/\.html?$/i, '')}.html`);
+    const path = join(this.projectDir, VIEWS_DIR, `${viewFileStem(v.name)}.html`);
     await writeFileAtomic(path, v.html);
     return { path };
   }

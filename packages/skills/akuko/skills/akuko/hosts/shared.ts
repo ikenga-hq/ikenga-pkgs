@@ -92,6 +92,23 @@ export function safeBasename(filename: string): string {
   return DOS_DEVICE.test(stem) ? `${stem}_${cleaned.slice(stem.length)}` : cleaned;
 }
 
+/**
+ * The file stem (no `.html`) a view named `name` is published under. Refuses a
+ * name that would land on another view's file: `safeBasename` turns the reserved
+ * device name `aux` into `aux_`, so a view literally named `aux_` would share
+ * its file and silently overwrite it. Only the literal `<device>_` is refused,
+ * so `aux` keeps working and the outcome does not depend on publish order.
+ */
+export function viewFileStem(name: string): string {
+  const stem = safeBasename(name).replace(/\.html?$/i, '');
+  const first = stem.split('.')[0] ?? '';
+  const asTyped = (name.split(/[\/]/).pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '').split('.')[0] ?? '';
+  if (first.endsWith('_') && DOS_DEVICE.test(first.slice(0, -1)) && !DOS_DEVICE.test(asTyped)) {
+    throw new Error(`akuko: cannot publish a view named "${name}": its file would be the same as the one for the reserved name "${first.slice(0, -1)}" (a Windows device name is stored with a trailing underscore). Pick another view name.`);
+  }
+  return stem;
+}
+
 /** Asset id from the input id, else from the filename stem. Always matches `ID_PATTERN`. */
 export function assetId(a: Pick<AssetInput, 'id' | 'filename'>): string {
   if (a.id !== undefined) {
