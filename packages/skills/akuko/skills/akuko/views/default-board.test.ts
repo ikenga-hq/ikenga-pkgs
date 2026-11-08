@@ -1,6 +1,6 @@
 // WP-07b: the shipped default board (views/default-board.html, D-01 "script desk").
 //
-// - provenance: the file's sha256 is the one recorded on views/conformed.json,
+// - provenance: the file's conformance hash (viewHash: ignores the project block) is the one recorded on views/conformed.json,
 //   so any edit forces a re-record and a version bump (R-12);
 // - the file passes scripts/check-view.mjs and inlines the canonical decision writer;
 // - readability: contrast >= 4.5:1 for body text, money and "your move" in both themes;
@@ -10,12 +10,11 @@
 
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { isConformedHtml, parseConformedFile } from '../decisions/conformed.ts';
+import { isConformedHtml, parseConformedFile, viewHash } from '../decisions/conformed.ts';
 
 const SKILL = fileURLToPath(new URL('..', import.meta.url));
 const HTML = readFileSync(join(SKILL, 'views', 'default-board.html'), 'utf8');
@@ -32,9 +31,9 @@ describe('default board: provenance', () => {
     assert.equal(manifest.id, 'default-board');
     const view = `${manifest.id}@${manifest.version}`;
     const entry = CONFORMED.views.find((v) => v.view === view);
-    assert.ok(entry, `${view} is not on views/conformed.json: run node scripts/check-view.mjs views/default-board.html --record views/conformed.json`);
-    assert.equal(entry.sha256, createHash('sha256').update(HTML, 'utf8').digest('hex'), `views/default-board.html changed since ${view} was recorded: bump "version" in its akuko-view manifest and record it again`);
-    assert.equal(entry.checker, 'check-view@1');
+    assert.ok(entry, `${view} is not on views/conformed.json: run node scripts/check-view.mjs views/default-board.html --ship views/conformed.json`);
+    assert.equal(entry.sha256, viewHash(HTML), `views/default-board.html changed since ${view} was recorded: bump "version" in its akuko-view manifest and record it again`);
+    assert.match(entry.checker ?? '', /^check-view@\d+$/);
     assert.ok(isConformedHtml(CONFORMED, view, HTML));
   });
 

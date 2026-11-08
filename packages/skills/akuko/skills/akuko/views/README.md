@@ -39,20 +39,19 @@ The footer says where the data came from and when it was last read.
 
 The file opens offline on a **sample project** (the project block carries `"_sample": true`). While it shows the sample it says so at the top and its Approve / note / spend buttons do nothing, so nobody can approve a unit of a real project by clicking through the sample.
 
-- **Host A (claude.ai):** publish `default-board.html` **unchanged**, so the hash on `conformed.json` names exactly what was published, with
+- **Host A (claude.ai):** publish `default-board.html` **unchanged**, so the hash on `conformed.json` names what was published, with
   `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`.
   Then write the project to the doc `akuko/project`; the board reads it and replaces the sample.
-- **Host B / C:** write the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and save the page next to `akuko.json` (`<project>/views/default-board.html`). Changing the block changes the file's hash; folding accepts the board by its view id (`default-board@0.1`), so approvals still count.
+- **Host B / C:** write the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and save the page next to `akuko.json` (`<project>/views/default-board.html`). Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.1`).
 
 ### Changing the board
 
-The hash on `conformed.json` covers the whole file, so any edit has to be recorded again:
+The conformance hash covers the page but ignores the content of the `akuko-project` block, so publishing the board with a real project in that block keeps it conformed. Any other edit has to be recorded again:
 
 1. Edit `default-board.html`. Bump `"version"` in its `akuko-view` manifest (`default-board@0.2`, …).
-2. `node scripts/check-view.mjs views/default-board.html` must pass.
-3. Record it: `node scripts/check-view.mjs views/default-board.html --record views/conformed.json`.
+2. From the skill folder: `node scripts/check-view.mjs views/default-board.html --ship views/conformed.json`. It runs the check and, only if the page passes, writes the `default-board@<version>` entry (this is also how a shipped id is recorded the first time).
 
-`check-view` reserves the `default-board@` ids: a page whose id is not on `conformed.json` fails with `id-collision`. For the **first** record of a new `default-board@<version>`, add its entry by hand with the file's sha256 (`node -e "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync('views/default-board.html','utf8')).digest('hex'))"`), then run the check with `--record`: it only keeps the entry if the page really passes, and re-writes it with the check's own timestamp. `default-board.test.ts` fails whenever the file and its recorded hash disagree.
+`default-board.test.ts` fails whenever the file and its recorded hash disagree.
 
 ### Design notes
 
