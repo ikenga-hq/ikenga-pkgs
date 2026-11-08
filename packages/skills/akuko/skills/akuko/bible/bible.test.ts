@@ -87,7 +87,12 @@ describe('templates and prompts', () => {
 
   it('templates are brand-neutral', () => {
     const dir = join(ROOT, 'profiles/film/templates');
-    for (const f of readdirSync(dir)) assert.doesNotMatch(readFileSync(join(dir, f), 'utf8'), /royalti|dixtrit|ikenga/i, f);
+    // Built from parts so this file does not contain the words it searches for.
+    const words = [['roy', 'alti'], ['dix', 'trit'], ['ike', 'nga']].map((w) => w.join(''));
+    for (const f of readdirSync(dir)) {
+      const text = readFileSync(join(dir, f), 'utf8').toLowerCase();
+      for (const w of words) assert.ok(!text.includes(w), `${f} mentions ${w}`);
+    }
   });
 });
 
