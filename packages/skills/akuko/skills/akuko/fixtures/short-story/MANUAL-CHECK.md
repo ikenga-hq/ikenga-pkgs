@@ -19,7 +19,7 @@ Nothing here is needed to merge; it is the sign-off evidence for Phase 1 items 2
 - Claude Code (desktop app Code tab or the CLI) and Node 22.6 or newer.
 - The akuko skill installed: copy `packages/skills/akuko/skills/akuko/` to `~/.claude/skills/akuko/` (or a project's `.claude/skills/akuko/`).
 - `GEMINI_API_KEY` set in the environment that launches Claude Code. **Never paste the key into chat.** Check that it is set with `echo $GEMINI_API_KEY | wc -c` (bash) or `$env:GEMINI_API_KEY.Length` (PowerShell): any number above 1 is fine.
-- A scratch folder, for example `my-film`, **and start Claude Code with that folder as its working directory** (`cd my-film`, then open Claude Code there). Paid steps read earlier approved images by their project-relative path, and today that only works from inside the project folder (see "Known issue" below).
+- A scratch folder, for example `my-film`.
 
 **What it costs.** Prices come from `providers/config.json`: the default model for `gemini-image` is `gemini-nano-banana-2.1` at **0.0336 USD per image**. This check makes the 8 bible images and the key frames for scene 1 only (3 shots):
 
@@ -73,7 +73,6 @@ The cap you set is 1.00 USD, so at most 0.6304 USD is left. (Gemini also bills r
    Expected: it declines and tells you to approve on the board or reply in the exact words `approve <amount> <CURRENCY>`.
    Observed: ______
 
-**Known issue to expect (reported with this work package):** if Claude Code was started somewhere other than the project folder, the second bible job fails with `ENOENT` on a path like `bible/style/style_lookbook_lookbook.png`, because the paid providers' default reference loader resolves the project-relative path against the working directory. If you see it, restart Claude Code inside the project folder and run the step again; it picks up where it was. Money is not spent for the failed job.
 
 ---
 

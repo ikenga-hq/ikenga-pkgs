@@ -222,23 +222,18 @@ export function startRun(o: RunOptions): Run {
 /**
  * Run `fn` with the mocked network and a dummy key in place of a real one, and restore both afterwards.
  *
- * The working directory is the project folder for the run: the paid providers read reference images
- * (earlier approved bible images) by the project-relative path akuko.json holds, and their default
- * loader resolves it against the working directory. (From any other folder the second bible step
- * fails with ENOENT: reported with this work package, see EVIDENCE.md.)
+ * The working directory is left alone: reference images (earlier approved bible images) are loaded
+ * relative to the project folder, so the paid path runs from any cwd.
  */
-export async function withMockedNetwork<T>(net: MockNet, dir: string, fn: () => Promise<T>): Promise<T> {
+export async function withMockedNetwork<T>(net: MockNet, fn: () => Promise<T>): Promise<T> {
   const realFetch = globalThis.fetch;
   const had = Object.prototype.hasOwnProperty.call(process.env, 'GEMINI_API_KEY');
   const prev = process.env.GEMINI_API_KEY;
-  const cwd = process.cwd();
-  process.chdir(dir);
   globalThis.fetch = net.fetch;
   process.env.GEMINI_API_KEY = DUMMY_KEY;
   try {
     return await fn();
   } finally {
-    process.chdir(cwd);
     globalThis.fetch = realFetch;
     if (had) process.env.GEMINI_API_KEY = prev;
     else delete process.env.GEMINI_API_KEY;
@@ -377,7 +372,7 @@ export async function runShortStory(o: RunOptions): Promise<RunEvidence> {
     await driveImages(r, 'keyframes', { ...(o.scenes ? { scenes: o.scenes } : {}) });
     states.keyframes = (await r.read()).stages.keyframes.state;
   };
-  if (r.net) await withMockedNetwork(r.net, o.dir, body);
+  if (r.net) await withMockedNetwork(r.net, body);
   else await body();
 
   const final = await r.read();

@@ -402,6 +402,35 @@ describe('the spend gate is the only way in', () => {
     assert.equal(r.net!.calls.length, 0);
   });
 
+  it('the job id changes with the provider or the model, and not otherwise', () => {
+    const p = paidProject();
+    const id = (provider: string, model?: string) => buildBibleJob(p, { provider, ...(model ? { model } : {}) }).job.id;
+    assert.equal(id('gemini-image', 'gemini-3.1-flash-image'), id('gemini-image', 'gemini-3.1-flash-image'), 'same provider and model: same id');
+    assert.notEqual(id('gemini-image', 'gemini-3.1-flash-image'), id('gemini-image', 'gemini-nano-banana-2.1'));
+    assert.notEqual(id('gemini-image'), id('gemini-image', 'gemini-3.1-flash-image'), 'an unspecified model hashes as empty');
+    assert.notEqual(id('gemini-image'), id('fal'));
+    assert.match(id('fal'), /^job_bible_w1_[0-9a-f]{8}_r1$/);
+  });
+
+  it('an approval for one model does not run the same units on a cheaper model of the same provider', async () => {
+    const r = rig('gemini-image', paidProject());
+    const pricey = { provider: 'gemini-image', model: 'gemini-3.1-flash-image' };
+    const first = await generateBible(deps(r), pricey);
+    assert.equal(first.status, 'awaiting-approval');
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'bible').project);
+
+    const cheaper = await generateBible(deps(r), { provider: 'gemini-image', model: 'gemini-nano-banana-2.1' });
+    assert.equal(cheaper.status, 'awaiting-approval');
+    assert.notEqual(cheaper.job.id, first.job.id);
+    assert.equal(r.net!.calls.length, 0, 'nothing was sent');
+    assert.equal(r.host.peek().pending_spend.length, 2, 'a second pending entry, awaiting its own approval');
+
+    const ran = await generateBible(deps(r), pricey);
+    assert.notEqual(ran.status, 'awaiting-approval');
+    assert.equal(ran.job.id, first.job.id);
+    assert.ok(r.net!.calls.length > 0);
+  });
+
   it('host A refuses a paid direct API (R-11) and sends nothing', async () => {
     const r = rig('gemini-image', paidProject(), 'A');
     const s = await generateBible(deps(r), { provider: 'gemini-image' });
