@@ -69,11 +69,27 @@ export function assetDir(a: Pick<AssetInput, 'kind' | 'owner'>): string {
   }
 }
 
-/** A safe basename: no directories, no characters outside `[A-Za-z0-9._-]`. */
+/**
+ * Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`,
+ * `LPT0`–`LPT9`), reserved whatever the extension and the case: `aux.svg`
+ * and `Con.tar.gz` open the device, not a file, in most Windows programs.
+ */
+const DOS_DEVICE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+
+/**
+ * A safe basename: no directories, no characters outside `[A-Za-z0-9._-]`,
+ * no trailing dots (Windows drops them, so the file on disk would not match
+ * its uri), and no Windows device name as its stem (`con.png` → `con_.png`;
+ * Wave 3 review, finding 6). Works the same on every OS, so a project made on
+ * one opens on another.
+ */
 export function safeBasename(filename: string): string {
   const base = filename.split(/[\\/]/).pop() ?? '';
-  const cleaned = base.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '');
-  return cleaned.length > 0 ? cleaned : 'asset';
+  const cleaned = base.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '').replace(/\.+$/, '');
+  if (cleaned.length === 0) return 'asset';
+  const dot = cleaned.indexOf('.');
+  const stem = dot < 0 ? cleaned : cleaned.slice(0, dot);
+  return DOS_DEVICE.test(stem) ? `${stem}_${cleaned.slice(stem.length)}` : cleaned;
 }
 
 /** Asset id from the input id, else from the filename stem. Always matches `ID_PATTERN`. */

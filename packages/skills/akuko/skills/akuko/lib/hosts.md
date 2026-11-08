@@ -61,7 +61,7 @@ So a run with no tool list falls back to B/C rules and prints a `warning`. **Unv
 |---|---|---|---|
 | `detect()` | `detect.ts --tools <full list>` in the workspace (or inspection if no code runs) → pass as `capabilities` | `probeNode()` + `classifyHost()` | same as B |
 | `readState()` | ArtifactData `get` doc `akuko/project` on the board artifact (load ArtifactData with ToolSearch first — it is deferred); validate | read + validate `<project>/akuko.json` | same as B |
-| `writeState(p)` | validate; ArtifactData `set` doc `akuko/project` | validate; atomic write of `akuko.json` | same as B |
+| `writeState(p)` | validate; ArtifactData `set` doc `akuko/project` | validate; under `akuko.json.lock`, only if the file's bytes are still the ones this host instance last read or wrote (else `StateConflictError`, nothing written; one host instance per gate; `lib/spend.md`); atomic write of `akuko.json`, retried briefly while Windows reports it open | same as B |
 | `storeAsset(a)` | Artifact `publish` with `asset: true` (the page must declare the `assets` capability) → `file.uri` = returned `/_blob/<id>` url | write under the project folder (layout in `lib/state.md`); `file.uri` = relative path + sha256 | same as B now; via the bridge to Studio in WP-16 |
 | `publishView(v)` | Artifact `publish` of the view HTML → `{url}` | write `<project>/views/<name>.html` → `{path}` | same as B now; open in an Ikenga pane in WP-16 |
 | `readDecisions(since)` | `decisions/artifact-db.ts` — ArtifactData `list` / `query` of `decisions` (WP-07a) | `decisions/jsonl.ts` — `<project>/decisions.jsonl` (WP-07a) | `decisions/ikenga.ts` — bridge-published state mirrored to `decisions.jsonl` (WP-07a) |

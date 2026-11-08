@@ -316,6 +316,14 @@ async function idle(page) {
   }
   ev(w, 'scroll'); ev(d, 'scroll'); ev(w, 'resize'); ev(w, 'focus'); ev(w, 'blur');
   for (const type of ['wheel', 'touchmove', 'touchend', 'contextmenu', 'selectionchange', 'copy']) { ev(d.body, type); ev(d, type); }
+  // The same gestures with the fields a handler would test (Wave 3 review,
+  // finding 4): a wheel turn each way, a right click, a touch.
+  for (const el of [d.body, ...d.querySelectorAll('[data-akuko-view], [data-akuko-action], button')].slice(0, 80)) {
+    const at = { bubbles: true, cancelable: true, view: w, clientX: 10, clientY: 10 };
+    for (const deltaY of [120, -120]) { try { el.dispatchEvent(new w.WheelEvent('wheel', { ...at, deltaY, deltaMode: 0 })); } catch { /* ignore */ } }
+    try { el.dispatchEvent(new w.MouseEvent('contextmenu', { ...at, button: 2, buttons: 2 })); } catch { /* ignore */ }
+    for (const type of ['touchstart', 'touchend']) { try { el.dispatchEvent(new w.TouchEvent(type, { bubbles: true, cancelable: true, view: w })); } catch { ev(el, type); } }
+  }
   // Leaving the page decides nothing either (F3): hide the tab, fire what a
   // browser fires as the page goes away, then come back.
   Object.defineProperty(d, 'visibilityState', { value: 'hidden', configurable: true });
@@ -330,11 +338,13 @@ async function idle(page) {
   ev(w, 'pageshow', { bubbles: false });
   ev(d, 'visibilitychange');
   for (const el of [...d.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')].slice(0, 120)) { try { el.focus(); } catch { /* ignore */ } }
-  const keys = [['a'], ['A', { shiftKey: true }], ['a', { ctrlKey: true }], ['a', { metaKey: true }], ['Enter'], [' '], ['Escape'], ['Tab'], ['ArrowDown'], ['ArrowRight'], ['j'], ['k'], ['y'], ['n'], ['1']];
+  // Each key carries `key`, `code` and the legacy `keyCode`, so a handler
+  // testing any of them sees a real key press (Wave 3 review, finding 4).
+  const keys = [['a', 'KeyA', 65], ['A', 'KeyA', 65, { shiftKey: true }], ['a', 'KeyA', 65, { ctrlKey: true }], ['a', 'KeyA', 65, { metaKey: true }], ['Enter', 'Enter', 13], [' ', 'Space', 32], ['Escape', 'Escape', 27], ['Tab', 'Tab', 9], ['ArrowDown', 'ArrowDown', 40], ['ArrowRight', 'ArrowRight', 39], ['j', 'KeyJ', 74], ['k', 'KeyK', 75], ['y', 'KeyY', 89], ['n', 'KeyN', 78], ['1', 'Digit1', 49]];
   for (const target of [d.body, d.activeElement ?? d.body, d]) {
-    for (const [key, mods = {}] of keys) {
+    for (const [key, code, keyCode, mods = {}] of keys) {
       for (const type of ['keydown', 'keypress', 'keyup']) {
-        try { target.dispatchEvent(new w.KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...mods })); } catch { /* ignore */ }
+        try { target.dispatchEvent(new w.KeyboardEvent(type, { key, code, keyCode, bubbles: true, cancelable: true, ...mods })); } catch { /* ignore */ }
       }
     }
   }

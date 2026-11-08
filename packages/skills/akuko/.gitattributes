@@ -1,0 +1,4 @@
+# akuko ships byte-exact text: views are matched to their conformance hash
+# (views/conformed.json), and bash cannot run a CRLF doctor.sh. Keep LF on
+# every checkout, whatever core.autocrlf is (Wave 3 review, finding 7).
+* text=auto eol=lf

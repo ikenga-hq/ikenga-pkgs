@@ -101,6 +101,10 @@ const BAD: Record<string, string[]> = {
   'bad-empties-ikenga-store.html': ['empties-ikenga-store'],
   'bad-iframe-in-view.html': ['iframe-in-view'],
   'bad-readonly-hostc-delayed-post.html': ['read-only-writes'],
+  // the Wave 3 second-opinion review (finding 4): idle gestures with the fields a handler tests
+  'bad-keycode-approve-all.html': ['auto-approve'],
+  'bad-wheel-approve-all.html': ['auto-approve'],
+  'bad-contextmenu-approve-all.html': ['auto-approve'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
 const SKIP = ['readonly-cast-sheet.html'];

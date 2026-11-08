@@ -47,6 +47,7 @@ import { costProblems, isPaid, isTerminal, jobProblems, jobUnits } from '../prov
 import type { AkukoProviderConfig } from '../providers/config.ts';
 import { loadProviderConfig, providerConfig } from '../providers/config.ts';
 import { assertValidProject, recordOutput } from '../providers/outputs.ts';
+import { isStateConflict } from '../hosts/conflict.ts';
 import {
   MONEY_EPSILON,
   entriesForJob,
@@ -338,12 +339,27 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
 
   // Every read -> check -> reserve -> write runs under this lock, so
   // concurrent run() / quote() / collect() calls on one gate see each other's
-  // reservations. It does not cover other processes or other gates on the
-  // same project: a host-level compare-and-swap on writeState is a WP-02
-  // follow-up (lib/spend.md).
+  // reservations. Other processes and other gates on the same project are
+  // covered by the host: LocalHost.writeState refuses to write over a change
+  // it has not read (StateConflictError, hosts/conflict.ts). Each locked step
+  // reads state first and writes at most once, at its end, so on a conflict
+  // it is simply run again from a fresh read: the other writer's reservation
+  // is then counted, and an overrun becomes a refusal (lib/spend.md).
+  // The host compares against its own last read, so give each gate its own
+  // host instance and don't share it with another read-modify-write.
+  const CONFLICT_RETRIES = 8;
   let tail: Promise<unknown> = Promise.resolve();
   function locked<T>(fn: () => Promise<T>): Promise<T> {
-    const result = tail.then(fn, fn);
+    const attempt = async (): Promise<T> => {
+      for (let i = 0; ; i++) {
+        try {
+          return await fn();
+        } catch (err) {
+          if (!isStateConflict(err) || i >= CONFLICT_RETRIES) throw err;
+        }
+      }
+    };
+    const result = tail.then(attempt, attempt);
     tail = result.catch(() => undefined);
     return result;
   }

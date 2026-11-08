@@ -474,7 +474,11 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
     } else if (now.action === 'approve-spend') {
       const refusal = canApprove(p, job.id, now);
       if (refusal) {
-        reject(now, 'spend-refused', refusal.message);
+        // A refused approval never takes effect, and it is not revived when the
+        // budget changes later: the person approves again, for the amount shown
+        // then (lib/state.md §Decision folding). Say so where the fix is elsewhere.
+        const retry = refusal.code === 'over-cap' || refusal.code === 'no-budget' ? ' This approval was not kept: once that is done, approve it again on the board.' : '';
+        reject(now, 'spend-refused', `${refusal.message}${retry}`);
         continue;
       }
       job.status = 'approved';
