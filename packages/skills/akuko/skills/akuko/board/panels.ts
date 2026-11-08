@@ -36,16 +36,31 @@ export type PanelShot = Pick<Shot, 'id' | 'shot_type' | 'camera_move' | 'blockin
 
 // ── escaping and numbers ────────────────────────────────────────────────
 
+/**
+ * Drop what XML 1.0 forbids: C0 controls except tab/newline/return, lone
+ * surrogates (a JSON � escape produces one), U+FFFE and U+FFFF. Such a
+ * character in a script name would make the stored .svg unparseable.
+ */
+export function xmlSafe(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    const ok = cp === 0x9 || cp === 0xa || cp === 0xd || (cp >= 0x20 && cp <= 0xd7ff) || (cp >= 0xe000 && cp <= 0xfffd) || cp >= 0x10000;
+    if (ok) out += ch;
+  }
+  return out;
+}
+
 /** Escape text for SVG/HTML text and attribute values. Every label from a script goes through this. */
 export function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'));
+  return xmlSafe(s).replace(/[&<>"']/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'));
 }
 
 /** At most two decimals, no trailing zeros, never `-0`. */
 const num = (x: number): string => String(Math.round(x * 100) / 100 || 0);
 
 function clip(s: string, max: number): string {
-  const chars = [...s.replace(/\s+/g, ' ').trim()];
+  const chars = [...xmlSafe(s).replace(/\s+/g, ' ').trim()];
   return chars.length <= max ? chars.join('') : `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
 }
 
@@ -129,9 +144,9 @@ const STYLE = [
   '.pg{fill:none;stroke:#7d766b;stroke-width:.45;stroke-dasharray:1.4 1.8}',
   '.ps{fill:none;stroke:#7d766b;stroke-width:.4}',
   '.pb{fill:#fffdf8;stroke:#3d3830;stroke-width:.9}',
-  '.pt{font:600 6px ui-sans-serif,system-ui,sans-serif;fill:#1d1a15}',
-  '.pk{font:700 6px ui-sans-serif,system-ui,sans-serif;letter-spacing:.5px;fill:#4a443b}',
-  '.pd{font:500 5.2px ui-monospace,Menlo,Consolas,monospace;fill:#4a443b}',
+  '.pt{font:600 7px ui-sans-serif,system-ui,sans-serif;fill:#1d1a15}',
+  '.pk{font:700 7px ui-sans-serif,system-ui,sans-serif;letter-spacing:.5px;fill:#4a443b}',
+  '.pd{font:500 6.5px ui-monospace,Menlo,Consolas,monospace;fill:#4a443b}',
   '.pm{fill:none;stroke:#1d1a15;stroke-width:.8;stroke-dasharray:2.2 1.6}',
   '.pa{fill:none;stroke:#1d1a15;stroke-width:1;stroke-linecap:round}',
   '.pah{fill:#1d1a15}',
@@ -158,7 +173,7 @@ export function describePanel(shot: PanelShot): string {
 /** The framing diagram for one shot, as a standalone SVG document string. Deterministic. */
 export function panelSvg(shot: PanelShot, opts: PanelOptions = {}): string {
   const { W, H } = panelSize(opts.aspect);
-  const maxText = Math.floor((W - 30) / 3.2);
+  const maxText = Math.floor((W - 48) / 3.9);
   const parts: string[] = [];
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(describePanel(shot))}" data-akuko-panel="${esc(shot.id)}">`);
   parts.push(`<title>${esc(describePanel(shot))}</title><style>${STYLE}</style>`);
@@ -178,8 +193,8 @@ export function panelSvg(shot: PanelShot, opts: PanelOptions = {}): string {
       parts.push(`<rect class="pb" x="${num(x)}" y="${num(y)}" width="${num(bw)}" height="${num(bh)}" rx=".8"><title>${esc(b.who)}</title></rect>`);
     }
     if (label !== '') {
-      const fits = label.length * 3.4 <= bw - 1 && bh >= 7;
-      const ty = fits ? cy : Math.max(14, cy - bh / 2 - 2);
+      const fits = label.length * 4.2 <= bw - 1 && bh >= 9;
+      const ty = fits ? cy : Math.max(17, cy - bh / 2 - 2);
       parts.push(`<text class="pt" x="${num(cx)}" y="${num(ty)}" text-anchor="middle"${fits ? ' dominant-baseline="central"' : ''}>${esc(label)}</text>`);
     }
   }
@@ -206,7 +221,7 @@ export const panelFileName = (shotId: string): string => `${shotId}-sketch.svg`;
 
 // ── lint ────────────────────────────────────────────────────────────────
 
-export type BoardRule = 'no-blocking' | 'blocking-out-of-frame' | 'blocking-unlabelled' | 'blocking-duplicate-label';
+export type BoardRule = 'no-blocking' | 'blocking-out-of-frame' | 'blocking-unlabelled' | 'blocking-duplicate-label' | 'blocking-zero-size';
 export interface BoardIssue { severity: 'warning'; rule: BoardRule; shot: string; message: string }
 
 /** Sketch lint. Warnings only: a panel is always drawn, and blocking is never invented. */
@@ -224,6 +239,7 @@ export function lintBoard(project: Pick<AkukoProject, 'shots'>): BoardIssue[] {
       if (label === '') warn('blocking-unlabelled', s.id, `${s.id} has a blocking box with no label.`);
       else if (seen.has(label)) warn('blocking-duplicate-label', s.id, `${s.id} labels two boxes "${label}".`);
       seen.add(label);
+      if (b.w === 0 || b.h === 0) warn('blocking-zero-size', s.id, `${s.id}: "${label || 'unlabelled'}" has zero width or height and cannot be seen.`);
       const [x0, x1, y0, y1] = b.shape === 'ellipse'
         ? [b.x - b.w / 2, b.x + b.w / 2, b.y - b.h / 2, b.y + b.h / 2]
         : [b.x, b.x + b.w, b.y, b.y + b.h];
@@ -248,9 +264,10 @@ export class BoardError extends Error {
 export type BlockingProposal = Record<string, unknown>;
 
 /**
- * Set blocking from a proposal. Pure. Allowed on a shot that has not been drawn
- * yet (stage `breakdown`) or that a person sent back (`needs-rework`); a drawn
- * panel under review or approved is not silently changed: send it back first.
+ * Set blocking from a proposal. Pure. Allowed only on an approved breakdown
+ * shot that has not been drawn yet, or on a sketch shot a person sent back
+ * (`needs-rework`). Anything else (still in breakdown review, a panel under
+ * review or approved, a send-back at a later stage) is refused.
  * Unknown shots, unknown fields and out-of-range numbers are refused (nothing
  * is applied). The agent writes the proposal only from what the script and the
  * shot's action say.
@@ -259,11 +276,15 @@ export function applyBlocking(project: AkukoProject, proposal: BlockingProposal,
   const problems: string[] = [];
   const out = structuredClone(project);
   const at = (opts.now ?? (() => new Date()))().toISOString();
+  if (typeof proposal !== 'object' || proposal === null || Array.isArray(proposal)) {
+    throw new BoardError(['the blocking proposal must be an object keyed by shot id, e.g. { "sc1_sh1": [ {who, shape, x, y, w, h} ] }']);
+  }
   for (const [id, raw] of Object.entries(proposal)) {
     const shot = out.shots.find((s) => s.id === id);
     if (!shot) { problems.push(`${id}: no such shot`); continue; }
-    if (shot.stage !== 'breakdown' && shot.status !== 'needs-rework') {
-      problems.push(`${id}: its panel is ${shot.status} at ${shot.stage}; a person must send it back before its blocking changes`);
+    const open = (shot.stage === 'breakdown' && shot.status === 'approved') || (shot.stage === 'sketch' && shot.status === 'needs-rework');
+    if (!open) {
+      problems.push(`${id}: it is ${shot.status} at ${shot.stage}; blocking can change only on an approved breakdown shot not yet drawn, or on a sketch panel a person sent back (send it back first)`);
       continue;
     }
     const parsed = BlockingSchema.array().safeParse(raw);

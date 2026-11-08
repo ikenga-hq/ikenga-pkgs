@@ -196,6 +196,83 @@ describe('blocking proposal', () => {
   });
 });
 
+describe('blocking guard', () => {
+  it('refuses a breakdown shot still in review, a send-back at a later stage, and a bad proposal', () => {
+    const p = readyForSketch();
+    const pending = structuredClone(p);
+    pending.shots[0]!.status = 'pending-review';
+    assert.throws(() => applyBlocking(pending, { sc1_sh1: [box('Z')] }), /pending-review at breakdown/);
+    const draft = structuredClone(p);
+    draft.shots[0]!.status = 'draft';
+    assert.throws(() => applyBlocking(draft, { sc1_sh1: [box('Z')] }), /draft at breakdown/);
+    const later = structuredClone(p);
+    later.shots[0]!.stage = 'keyframes';
+    later.shots[0]!.status = 'needs-rework';
+    assert.throws(() => applyBlocking(later, { sc1_sh1: [box('Z')] }), /needs-rework at keyframes/);
+    const sent = structuredClone(p);
+    sent.shots[0]!.stage = 'sketch';
+    sent.shots[0]!.status = 'needs-rework';
+    assert.equal(applyBlocking(sent, { sc1_sh1: [box('Z')] }).shots[0]!.blocking[0]!.who, 'Z');
+    for (const bad of [null, [], 'x', 3]) assert.throws(() => applyBlocking(p, bad as never), /must be an object keyed by shot id/);
+  });
+  it('lint warns on a zero-size box', () => {
+    const shots = [{ id: 'a', blocking: [{ who: 'X', shape: 'rect', x: 0.1, y: 0.1, w: 0, h: 0.2 }] }] as unknown as Shot[];
+    assert.deepEqual(lintBoard({ shots }).map((i) => i.rule), ['blocking-zero-size']);
+  });
+});
+
+/** A tiny XML 1.0 well-formedness check: legal characters, balanced tags, quoted attributes, known entities. */
+function assertWellFormed(xml: string, what: string): void {
+  for (const ch of xml) {
+    const cp = ch.codePointAt(0)!;
+    assert.ok(cp === 9 || cp === 10 || cp === 13 || (cp >= 0x20 && cp <= 0xd7ff) || (cp >= 0xe000 && cp <= 0xfffd) || cp >= 0x10000, `${what}: illegal character U+${cp.toString(16)}`);
+  }
+  const stack: string[] = [];
+  let last = 0;
+  const text = (t: string) => {
+    assert.ok(!t.includes('<'), `${what}: stray <`);
+    assert.ok(!/&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/.test(t), `${what}: bad entity`);
+  };
+  for (const m of xml.matchAll(/<(\/?)([A-Za-z][\w:-]*)((?:\s+[\w:-]+="[^"<]*")*)\s*(\/?)>/g)) {
+    text(xml.slice(last, m.index));
+    last = m.index! + m[0].length;
+    if (m[1]) assert.equal(stack.pop(), m[2], `${what}: mismatched </${m[2]}>`);
+    else if (!m[4]) stack.push(m[2]!);
+  }
+  text(xml.slice(last));
+  assert.deepEqual(stack, [], `${what}: unclosed tags`);
+}
+
+describe('panels: well-formed XML', () => {
+  it('survives control characters and lone surrogates in names and notes', () => {
+    // C0 controls, lone surrogates (what a JSON "\ud800" escape yields), U+FFFE/U+FFFF, then markup characters
+    const nasty = [0, 1, 8, 0xb, 0xc, 0x1f, 0xd800, 0xdfff, 0xfffe, 0xffff].map((c) => `x${String.fromCharCode(c)}`).join('') + '<&>';
+    assert.equal(JSON.parse('"\\ud800"').length, 1, 'a JSON escape really produces a lone surrogate');
+    const s: PanelInput = { id: 'sc1_sh1', shot_type: 'ws', camera: nasty, camera_move: 'pan', duration_s: 6, blocking: [box(nasty), box(nasty, 0.7)] };
+    const svg = panelSvg(s);
+    assertWellFormed(svg, 'panel');
+    assert.match(svg, /xxxxxxxxxx&lt;&amp;&gt;/);
+    const p = beating();
+    p.shots[0]!.blocking = [box(nasty)];
+    for (const b of buildBeatBoards(p)) {
+      assert.doesNotMatch(b.html, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff￾￿]/);
+      for (const cell of b.html.match(/<svg[\s\S]*?<\/svg>/g) ?? []) assertWellFormed(cell, `${b.file} panel`);
+    }
+  });
+  it('the committed samples are well-formed', () => {
+    for (const f of readdirSync(join(FIX, 'panels'))) assertWellFormed(readFileSync(join(FIX, 'panels', f), 'utf8'), f);
+  });
+});
+
+describe('panels: label size', () => {
+  it('every text is at least 12 px in a 312 px beat-board cell (1.95 px per unit)', () => {
+    const svg = panelSvg(beating().shots[0]!);
+    const sizes = [...svg.matchAll(/font:\d+ ([\d.]+)px/g)].map((m) => Number(m[1]));
+    assert.equal(sizes.length, 3);
+    for (const u of sizes) assert.ok(u * (312 / 160) >= 12, `${u} units is too small`);
+  });
+});
+
 describe('beat boards', () => {
   it('lay nine panels per board in shot order, one board per scene, spare cells empty', () => {
     const boards = buildBeatBoards(beating());
