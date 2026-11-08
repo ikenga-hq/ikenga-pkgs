@@ -214,7 +214,7 @@ node scripts/check-view.mjs views/default-board.html --ship views/conformed.json
 
 Exit code 0 only if every file passes or is skipped.
 
-**Read-only views are skipped.** A page whose manifest says `writes_decisions: false`, with no `data-akuko-action` control and no inlined decision writer (HTML comments aside), is opened on every host, left idle, and has everything clicked, set and double-clicked. If nothing is written (no decision in any store, no project write), it prints `SKIP <file> (<id@version>) · read-only (not applicable)` and counts as a pass; `--record` never records it. If anything is written, the page fails with `read-only-writes` and is held to the whole contract: a manifest can't buy a page out of the check (`bad-readonly-writes-decision.html`).
+**Read-only views are skipped.** A page whose manifest says `writes_decisions: false` and that shows no sign of writing decisions (the predicate the publish gate uses, §8; HTML comments aside) is opened on every host (claude.ai, Ikenga, a local file), left idle with ten minutes of its clock, and has everything clicked, set, double-clicked and its clock run again on each host. It must also embed no frame. If nothing is written (no decision in any store, no project write), it prints `SKIP <file> (<id@version>) · read-only (not applicable)` and counts as a pass; `--record` never records it. A page that says `writes_decisions: false` but shows a sign of writing fails `read-only-writes` at once. If anything is written, the page fails with `read-only-writes` and is held to the whole contract: a manifest can't buy a page out of the check (`bad-readonly-writes-decision.html`).
 
 `scripts/check-view.test.ts` pins:
 
