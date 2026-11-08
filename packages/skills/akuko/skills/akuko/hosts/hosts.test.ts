@@ -582,6 +582,19 @@ describe('publishView', () => {
     assert.match(SHIPPED_CONFORMED.replace(/\\/g, '/'), /\/views\/conformed\.json$/);
   });
 
+  it('a read-only view that reads decisions publishes; the honest ways of writing one are gated (shared predicate, B8)', async () => {
+    const reads = readOnly.replace('render();\n})();', "if (window.claude) window.claude.use('db').then(function (db) { return db && db.collection('decisions').get(); });\n  render();\n})();");
+    assert.notEqual(reads, readOnly);
+    assert.equal(viewWritesDecisions({ html: reads }), false);
+    const host = createLocalHost({ projectDir: tmpProject(false) });
+    assert.ok((await host.publishView({ name: 'decision-log', html: reads })).path);
+    for (const code of ["b.dataset.akukoAction = 'approve';", "localStorage.setItem('akuko-outbox:the-beating', '[]');", "parent.postMessage({__iyke: true, kind: 'state', payload: {key: k, value: []}}, '*');"]) {
+      const html = readOnly.replace('render();\n})();', `${code}\n  render();\n})();`);
+      assert.equal(viewWritesDecisions({ html }), true, code);
+      await assert.rejects(host.publishView({ name: 'mistake', html }), /refusing to publish view freehand:cast-sheet@1/, code);
+    }
+  });
+
   it('assertPublishable reads the lists only for a decision-writing view, and accepts an entry on any list', async () => {
     let reads = 0;
     const lists = () => { reads++; return [{ format: 'akuko-conformed-views' as const, version: 1 as const, views: [] }, listFor('test-board@1', board)]; };

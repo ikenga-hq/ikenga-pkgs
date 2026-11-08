@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -37,9 +37,9 @@ async function pooled<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { running--; queue.shift()?.(); }
 }
 
-function exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function exec(args: string[], env: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return pooled(() => new Promise((resolve, reject) => {
-    execFile(process.execPath, [CLI, ...args], { cwd: SKILL, timeout: 480_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(process.execPath, [CLI, ...args], { cwd: SKILL, timeout: 480_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...env } }, (err, stdout, stderr) => {
       if (err && typeof (err as { code?: unknown }).code !== 'number') return reject(err);
       resolve({ code: err ? Number((err as { code: number }).code) : 0, stdout, stderr });
     });
@@ -91,6 +91,16 @@ const BAD: Record<string, string[]> = {
   'bad-raf-auto-approve.html': ['auto-approve'],
   'bad-dblclick-approves.html': ['unmarked-control-writes'],
   'bad-readonly-writes-decision.html': ['read-only-writes'],
+  // the WP-07a2 review (C1–C6, B7)
+  'bad-hostc-auto-approve.html': ['auto-approve'],
+  'bad-delayed-other-unit.html': ['writes-other-unit'],
+  'bad-observer-auto-approve.html': ['auto-approve'],
+  'bad-card-click-approves.html': ['unmarked-control-writes'],
+  'bad-early-close-project-block.html': ['auto-approve'],
+  'bad-project-block-decoy.html': ['bad-project-block'],
+  'bad-empties-ikenga-store.html': ['empties-ikenga-store'],
+  'bad-iframe-in-view.html': ['iframe-in-view'],
+  'bad-readonly-hostc-delayed-post.html': ['read-only-writes'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
 const SKIP = ['readonly-cast-sheet.html'];
@@ -250,7 +260,8 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
     const board = (version: string, title = 'akuko · minimal review board') => asView(tiny, 'default-board').replace('"version":"1"', `"version":"${version}"`).replace('<title>akuko · minimal review board</title>', `<title>${title}</title>`);
     writeFileSync(join(dir, 'board-02.html'), board('0.2'));
     writeFileSync(join(dir, 'freehand.html'), asView(tiny, 'freehand:sheet'));
-    const first = await exec([join(dir, 'board-02.html'), join(dir, 'freehand.html'), '--ship', ship, '--json']);
+    const env = { AKUKO_CHECK_VIEW_SHIPPED_LIST: ship }; // stands in for the skill's views/conformed.json
+    const first = await exec([join(dir, 'board-02.html'), join(dir, 'freehand.html'), '--ship', ship, '--json'], env);
     const r1 = JSON.parse(first.stdout) as Result[];
     assert.equal(r1[0]!.ok, true, JSON.stringify(r1[0]!.failures));
     assert.ok(r1[1]!.failures.some((f) => f.code === 'id-collision' && /freehand view; --ship records only/.test(f.message)));
@@ -263,7 +274,7 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
     seeded.views.push({ view: 'default-board@0.3', sha256: 'b'.repeat(64), checked_at: '2026-11-07T00:00:00Z', checker: 'check-view@1' });
     writeFileSync(ship, JSON.stringify(seeded));
     writeFileSync(join(dir, 'board-03.html'), board('0.3'));
-    const second = await exec([join(dir, 'board-02-edited.html'), join(dir, 'board-03.html'), '--ship', ship, '--json']);
+    const second = await exec([join(dir, 'board-02-edited.html'), join(dir, 'board-03.html'), '--ship', ship, '--json'], env);
     const r2 = JSON.parse(second.stdout) as Result[];
     assert.ok(r2[0]!.failures.some((f) => f.code === 'id-collision' && /default-board@0\.2, a view id the skill already uses for different HTML/.test(f.message)));
     assert.equal(r2[1]!.ok, true, JSON.stringify(r2[1]!.failures));
@@ -271,6 +282,15 @@ describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
     assert.deepEqual(after.map((v) => [v.view, v.checker]).sort(), [['default-board@0.2', 'check-view@2'], ['default-board@0.3', 'check-view@2']]);
     assert.equal(after.find((v) => v.view === 'default-board@0.3')!.sha256, r2[1]!.sha256);
     assert.equal(after.find((v) => v.view === 'default-board@0.2')!.sha256, r1[0]!.sha256, 'the 0.2 record is untouched');
+  });
+
+  it('--ship refuses any list but the skill\'s own views/conformed.json', async () => {
+    const dir = tmpDir('akuko-ship-x-');
+    const project = join(dir, 'views', 'conformed.json');
+    const r = await exec([join(FX, 'tiny-board.html'), '--ship', project]);
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /--ship records only into the skill's own list .*views[\\/]conformed\.json\); record a project's views with --record/);
+    assert.equal(existsSync(project), false);
   });
 
   it('money with more than four decimals: exact means "as the spend gate prints it" (G-VIEW C2)', async () => {

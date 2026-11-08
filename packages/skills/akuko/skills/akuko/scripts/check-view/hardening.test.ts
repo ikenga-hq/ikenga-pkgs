@@ -9,7 +9,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { staleWriter, WRITER_VERSION } from './check.mjs';
 import { hiddenReasons, loadWriter } from './harness.mjs';
-import { conformanceHash, conformanceText } from './hash.mjs';
+import { conformanceHash, conformanceText, findJsonBlock } from './hash.mjs';
+import { decisionWriteSigns, viewIdOf } from './predicates.mjs';
 import { isConformedHtml, viewHash } from '../../decisions/conformed.ts';
 import { smallText, substituteVars } from './hidden.mjs';
 
@@ -85,6 +86,17 @@ describe('decision writer v2 (host C remount guard)', () => {
     assert.match(staleWriter(tiny.replace(/akuko-decision-writer v2 —/, 'akuko-decision-writer —')) ?? '', /an unversioned copy/);
   });
 
+  it('stale-writer also catches a writer without its header, two copies, and a second writer beside the canonical one (C6)', () => {
+    const FX = join(HERE, '..', '..', 'views', '__fixtures__');
+    const tiny = readFileSync(join(FX, 'tiny-board.html'), 'utf8');
+    const headless = WRITER_V1.trim().split('\n').filter((l) => !/akuko-decision-writer/.test(l)).join('\n');
+    assert.match(staleWriter(tiny.replace(WRITER.trim(), headless)) ?? '', /a decision writer of its own \(it defines window\.akukoDecisions\)/);
+    assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER.trim()}\n</script></body>`)) ?? '', /inlines the decision writer 2 times/);
+    assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER_V1.trim()}\n</script></body>`)) ?? '', /defines another decision writer beside the canonical v2 block/);
+    assert.match(staleWriter(tiny.replace('</body>', '<script>window.akukoDecisions = { emit: function () {} };</script></body>')) ?? '', /another decision writer/);
+    assert.equal(staleWriter(tiny.replace('</body>', '<script>var W = window.akukoDecisions; W.onChange(function () {});</script></body>')), null, 'using the writer is not defining one');
+  });
+
   it('outside Ikenga nothing is posted at all', () => {
     const page = loadWriter({ writer: WRITER, outbox: stored, ikenga: false });
     assert.deepEqual(page.onLoad, []);
@@ -121,10 +133,87 @@ describe('the conformance hash ignores the embedded project, and nothing else', 
     }
   });
 
+  // 07a2 review C1: the block is found the way a browser parses it, and anything ambiguous fails closed.
+  const EVIL = "setTimeout(function(){akukoDecisions.emit({action:'approve',unit:'sc2_sh4',stage:'sketch'})},1000);";
+  const BLOCK_END = '"decisions":[]}</script>';
+
+  it('a script smuggled after an early-closed project block is hashed (</script >, </script\\n>, </script/>, </script x>)', () => {
+    assert.ok(tiny.includes(BLOCK_END));
+    for (const close of ['</script >', '</script\n>', '</script/>', '</script x>']) {
+      const benign = tiny.replace(BLOCK_END, `"decisions":[]}${close}<script>/*benign*/</script>`);
+      const evil = tiny.replace(BLOCK_END, `"decisions":[]}${close}<script>${EVIL}</script>`);
+      assert.notEqual(conformanceHash(evil), conformanceHash(benign), JSON.stringify(close));
+      assert.equal(findJsonBlock(evil, 'akuko-project').status, 'ok', 'the block itself still ends where a browser ends it');
+    }
+  });
+
+  it('decoy openers fail closed: the block is "bad" and the raw page is hashed', () => {
+    const at = '<header class="move"';
+    const decoys: Record<string, string> = {
+      noscript: '<noscript><script type="application/json" id="akuko-project"></noscript>',
+      textarea: '<textarea hidden><script type="application/json" id="akuko-project"></textarea>',
+      'svg CDATA': '<svg><![CDATA[<script type="application/json" id="akuko-project">]]></svg>',
+      'attribute value': `<div title='<script type="application/json" id="akuko-project">'></div>`,
+      'untyped decoy': '<noscript><script id="akuko-project"></noscript>',
+    };
+    for (const [what, decoy] of Object.entries(decoys)) {
+      const benign = tiny.replace(at, `${decoy}<script>/*benign*/</script>${at}`);
+      const evil = tiny.replace(at, `${decoy}<script>${EVIL}</script>${at}`);
+      assert.equal(findJsonBlock(benign, 'akuko-project').status, 'bad', what);
+      assert.equal(conformanceText(benign), benign, `${what}: nothing is left out of the hash`);
+      assert.notEqual(conformanceHash(evil), conformanceHash(benign), what);
+    }
+  });
+
+  it('only a real id on a type="application/json" block counts; JSON content only', () => {
+    const dataId = tiny.replace('<header class="move"', `<script data-id="akuko-project">/*x*/</script><header class="move"`);
+    assert.notEqual(conformanceHash(dataId), conformanceHash(dataId.replace('/*x*/', EVIL)), 'data-id is not an id');
+    const untyped = tiny.replace('<script type="application/json" id="akuko-project">', '<script id="akuko-project">');
+    assert.equal(findJsonBlock(untyped, 'akuko-project').status, 'bad');
+    assert.notEqual(conformanceHash(untyped), conformanceHash(untyped.replace(/("decisions":\[\]\})/, `$1;${EVIL}`)), 'an executable block is hashed whole');
+    const code = withProject(tiny, EVIL);
+    assert.equal(findJsonBlock(code, 'akuko-project').status, 'bad', 'content that is not JSON');
+    assert.equal(findJsonBlock(withProject(tiny, '{"a":"<!--"}'), 'akuko-project').status, 'bad', '"<!--" in the block');
+    assert.equal(findJsonBlock(withProject(tiny, ''), 'akuko-project').status, 'ok', 'an empty block is fine');
+    const twice = tiny.replace('</body>', '<script type="application/json" id="akuko-project">{}</script></body>');
+    assert.equal(findJsonBlock(twice, 'akuko-project').status, 'bad', 'two blocks');
+  });
+
   it('a comment that quotes the data block is not mistaken for it', () => {
     // tiny-board's header comment mentions <script id="akuko-project">; the manifest after it still counts
     assert.match(tiny.slice(0, tiny.indexOf('-->')), /<script id="akuko-project">/);
     assert.ok(conformanceText(tiny).includes('"id":"test-board","version":"1"'));
+  });
+});
+
+describe('one "writes decisions" predicate for check-view and the publish gate (B8)', () => {
+  const page = (code: string) => `<!doctype html><title>x</title><script>${code}</script>`;
+  it('reading decisions is not writing them', () => {
+    for (const code of [
+      "db.collection('decisions').get().then(render)",
+      'db.collection("decisions").onSnapshot(render)',
+      "db.collection('decisions').where('unit','==',u).get()",
+    ]) assert.deepEqual(decisionWriteSigns(page(code)), [], code);
+  });
+  it('every honest way of writing one is a sign', () => {
+    const cases: Record<string, RegExp> = {
+      "b.dataset.akukoAction = 'approve'": /decision control/,
+      "b.setAttribute('data-akuko-action', 'approve')": /decision control/,
+      "localStorage.setItem('akuko-outbox:' + slug, s)": /outbox/,
+      "parent.postMessage({__iyke: true, kind: 'state', payload: {key: k, value: v}}, '*')": /bridge state post/,
+      "parent.postMessage({key: 'akuko.decisions'}, '*')": /decisions key/,
+      "db.collection('decisions').doc(d.id).set(d)": /decisions collection/,
+      "db.collection(`decisions`).add(d)": /decisions collection/,
+      "db.doc('decisions/' + d.id).set(d)": /decisions\/<id> document/,
+      'window.akukoDecisions.emit(f)': /decision writer/,
+    };
+    for (const [code, want] of Object.entries(cases)) assert.match(decisionWriteSigns(page(code)).join(' | '), want, code);
+    assert.match(decisionWriteSigns('<script type="application/json" id="akuko-view">{ "writes_decisions" : true }</script>').join(), /writes_decisions: true/);
+  });
+  it('comments never count, and the manifest is the real one', () => {
+    assert.deepEqual(decisionWriteSigns('<!-- data-akuko-action akukoDecisions akuko-outbox --><p>x</p>'), []);
+    const decoy = '<!-- <script type="application/json" id="akuko-view">{"id":"default-board","version":"1"}</script> --><script type="application/json" id="akuko-view">{"id":"mine","version":"1"}</script>';
+    assert.equal(viewIdOf(decoy), 'mine@1');
   });
 });
 
