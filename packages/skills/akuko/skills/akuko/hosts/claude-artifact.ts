@@ -27,11 +27,14 @@
 import { AkukoProjectSchema, type AkukoProject, type Asset, type Decision } from '../schema/akuko-project.ts';
 import { classifyHost, normalizeCapabilities } from './detect.ts';
 import { readArtifactDbStore } from '../decisions/artifact-db.ts';
-import { assetId, buildAsset, safeBasename } from './shared.ts';
+import { loadConformedFile, parseConformedFile } from '../decisions/conformed.ts';
+import { assertPublishable, assetId, buildAsset, safeBasename, SHIPPED_CONFORMED } from './shared.ts';
 import type { AssetInput, Capabilities, HostAdapter, HostLevel, ViewArtifact } from './types.ts';
 
 /** Doc path that holds the project (collection `akuko`, doc `project`). */
 export const PROJECT_DOC = 'akuko/project';
+/** Doc path of the board's conformed-views list (owner-written; views/contract.md §8). */
+export const CONFORMED_DOC = 'akuko/conformed';
 /** Collection the review surface writes decisions to (owned by WP-07a). */
 export const DECISIONS_COLLECTION = 'decisions';
 
@@ -100,8 +103,18 @@ export class ClaudeArtifactHost implements HostAdapter {
     return buildAsset(a, { uri: up.url }, id, now);
   }
 
-  /** Publish the view as a Claude artifact (writing views need the `db` capability — WP-07a/07c). */
+  /**
+   * Publish the view as a Claude artifact (writing views need the `db`
+   * capability — WP-07a/07c). A view that writes decisions is refused unless
+   * its exact HTML is on the skill's `views/conformed.json` or the board's
+   * `akuko/conformed` doc (ArtifactData get; C8). Missing lists are empty.
+   * Read-only views publish freely.
+   */
   async publishView(v: ViewArtifact): Promise<{ url?: string; path?: string }> {
+    await assertPublishable(v, async () => {
+      const doc = await this.b.getDoc(CONFORMED_DOC);
+      return [loadConformedFile(SHIPPED_CONFORMED), ...(doc === undefined ? [] : [parseConformedFile(doc)])];
+    });
     const { url } = await this.b.publish(v);
     return { url };
   }
