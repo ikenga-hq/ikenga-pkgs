@@ -26,9 +26,9 @@ interface Report {
 interface Mod {
   toolCalls(o: string): Array<{ name: string; input: Record<string, unknown> }>;
   detectTrigger(o: string): { triggered: boolean; method: string };
-  detectAction(o: string): { action: string | null; method: string };
+  detectAction(o: string): { action: string | null; actions: string[]; method: string };
   scoreTrigger(i: TriggerItem, o: string): { pass: boolean; triggered: boolean };
-  scoreRouting(i: StageItem, o: string): { pass: boolean; routed_action: string | null };
+  scoreRouting(i: StageItem, o: string): { pass: boolean; routed_action: string | null; actions_read: string[]; reason?: string };
   rate(rows: Array<{ pass: boolean }>): number | null;
   verdict(t: Array<{ pass: boolean }>, r: Array<{ pass: boolean }>, th?: number): { verdict: string; trigger_rate: number | null; routing_rate: number | null };
   loadEvals(dir?: string): { triggers: TriggerItem[]; stages: StageItem[] };
@@ -69,11 +69,11 @@ describe('reading a trace', () => {
   it('with plain text only, falls back to mentions and says so', () => {
     assert.deepEqual(m.detectTrigger('I will use Skill(akuko) and read actions/bible.md'), { triggered: true, method: 'text' });
     assert.deepEqual(m.detectTrigger('Here is your story.'), { triggered: false, method: 'text' });
-    assert.deepEqual(m.detectAction('open /skills/akuko/actions/board.md first'), { action: 'board', method: 'text' });
+    assert.deepEqual(m.detectAction('open /skills/akuko/actions/board.md first'), { action: 'board', actions: ['board'], method: 'text' });
   });
 
   it('routing is the first akuko action file opened, and other skills\' actions do not count', () => {
-    assert.deepEqual(m.detectAction(loadsSkill), { action: 'keyframes', method: 'trace' });
+    assert.deepEqual(m.detectAction(loadsSkill), { action: 'keyframes', actions: ['keyframes'], method: 'trace' });
     assert.deepEqual(m.detectAction(trace(use('Read', { file_path: `${SK}/SKILL.md` }), use('Read', { file_path: `${SK}/actions/setup.md` }), use('Read', { file_path: `${SK}/actions/doctor.md` }))).action, 'setup');
     assert.equal(m.detectAction(loadsOther).action, null);
     assert.equal(m.detectAction(trace(use('Bash', { command: `cat ${SK}\\actions\\bible.md` }))).action, 'bible', 'a Windows path in a command counts');
@@ -87,6 +87,26 @@ describe('scoring', () => {
     assert.equal(m.scoreTrigger({ query: 'turn this short story into a short film', should_trigger: true }, loadsNothing).pass, false);
     assert.equal(m.scoreTrigger({ query: 'write me a short story', should_trigger: false }, loadsNothing).pass, true);
     assert.equal(m.scoreTrigger({ query: 'write me a short story', should_trigger: false }, loadsSkill).pass, false);
+  });
+
+  it('routing fails when the model opened more than one different action file, and says why', () => {
+    const item = { id: 6, name: 'stage-routing-keyframes', action: 'keyframes', prompt: 'make the key frames', assertions: [] };
+    const hedge = trace(use('Skill', { skill: 'akuko' }), use('Read', { file_path: `${SK}/actions/bible.md` }), use('Read', { file_path: `${SK}/actions/keyframes.md` }));
+    const d = m.detectAction(hedge);
+    assert.equal(d.action, 'bible', 'first opened');
+    assert.deepEqual(d.actions, ['bible', 'keyframes'], 'every distinct action, in order');
+    const r = m.scoreRouting(item, hedge);
+    assert.equal(r.pass, false, 'the expected action was among them, still a fail');
+    assert.deepEqual(r.actions_read, ['bible', 'keyframes']);
+    assert.match(r.reason!, /opened 2 different action files (bible, keyframes)/);
+    // the same action read twice is one action
+    const twice = trace(use('Read', { file_path: `${SK}/actions/keyframes.md` }), use('Read', { file_path: `${SK}/actions/keyframes.md` }));
+    assert.equal(m.scoreRouting(item, twice).pass, true);
+    assert.deepEqual(m.scoreRouting(item, twice).actions_read, ['keyframes']);
+    // wrong single action and no action each carry a reason
+    assert.match(m.scoreRouting(item, trace(use('Read', { file_path: `${SK}/actions/bible.md` }))).reason!, /opened bible, expected keyframes/);
+    assert.match(m.scoreRouting(item, loadsNothing).reason!, /no akuko action file/);
+    assert.equal(m.scoreRouting(item, loadsSkill).reason, undefined);
   });
 
   it('a routing eval passes when the model opened the expected action file', () => {

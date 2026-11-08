@@ -120,17 +120,18 @@ export function detectTrigger(output, skill = SKILL_NAME) {
 /** The first action file the model opened (`actions/<name>.md`), or null. */
 export function detectAction(output) {
   const calls = toolCalls(output);
+  const seen = [];
+  const add = (n) => { if (!seen.includes(n)) seen.push(n); };
   for (const c of calls) {
     const target = String(c.input.file_path ?? c.input.path ?? c.input.command ?? c.input.pattern ?? '');
     const m = ACTION_PATH.exec(target);
     // Only this skill's actions count (another skill may also keep files under actions/).
-    if (m && /akuko/i.test(target)) return { action: m[1].toLowerCase(), method: 'trace' };
+    if (m && /akuko/i.test(target)) add(m[1].toLowerCase());
   }
-  if (calls.length === 0 && !isTrace(output)) {
-    const m = /actions[\\/]([a-z][a-z-]*)\.md/i.exec(String(output));
-    if (m) return { action: m[1].toLowerCase(), method: 'text' };
-  }
-  return { action: null, method: calls.length > 0 || isTrace(output) ? 'trace' : 'text' };
+  const trace = calls.length > 0 || isTrace(output);
+  if (!trace) for (const m of String(output).matchAll(/actions[\\/]([a-z][a-z-]*)\.md/gi)) add(m[1].toLowerCase());
+  // `action` is the first one opened; `actions` is every distinct one, in order.
+  return { action: seen[0] ?? null, actions: seen, method: trace ? 'trace' : 'text' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -151,14 +152,23 @@ export function scoreTrigger(item, output) {
 
 export function scoreRouting(item, output) {
   const d = detectAction(output);
+  // Passes only when exactly one distinct akuko action file was opened and it is the expected one:
+  // a model that reads several actions to hedge is not routing.
+  const pass = d.actions.length === 1 && d.actions[0] === item.action;
+  let reason;
+  if (d.actions.length === 0) reason = 'opened no akuko action file';
+  else if (d.actions.length > 1) reason = `opened ${d.actions.length} different action files (${d.actions.join(', ')}); routing needs exactly one`;
+  else if (!pass) reason = `opened ${d.actions[0]}, expected ${item.action}`;
   return {
     kind: 'routing',
     id: item.id,
     name: item.name,
     expected_action: item.action,
     routed_action: d.action,
+    actions_read: d.actions,
     method: d.method,
-    pass: d.action === item.action,
+    pass,
+    ...(reason ? { reason } : {}),
     // The assertions are for a person (or a grader model) to check; this script scores routing only.
     assertions: item.assertions,
   };
