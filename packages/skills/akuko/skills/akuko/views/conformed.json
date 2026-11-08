@@ -1,0 +1,12 @@
+{
+  "format": "akuko-conformed-views",
+  "version": 1,
+  "views": [
+    {
+      "view": "default-board@0.1",
+      "sha256": "791824280a755994bedda74a1a1b3e1115424b9e3815b8e26da256b6d14526d3",
+      "checked_at": "2026-11-08T10:41:13Z",
+      "checker": "check-view@2"
+    }
+  ]
+}
