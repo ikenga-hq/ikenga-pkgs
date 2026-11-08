@@ -98,7 +98,7 @@ describe('scoring', () => {
     const r = m.scoreRouting(item, hedge);
     assert.equal(r.pass, false, 'the expected action was among them, still a fail');
     assert.deepEqual(r.actions_read, ['bible', 'keyframes']);
-    assert.match(r.reason!, /opened 2 different action files (bible, keyframes)/);
+    assert.match(r.reason!, /opened 2 different action files \(bible, keyframes\)/);
     // the same action read twice is one action
     const twice = trace(use('Read', { file_path: `${SK}/actions/keyframes.md` }), use('Read', { file_path: `${SK}/actions/keyframes.md` }));
     assert.equal(m.scoreRouting(item, twice).pass, true);
