@@ -26,6 +26,7 @@ import { pathToFileURL } from 'node:url';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
 import { createFalImageProvider } from '../providers/fal/index.ts';
+import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createGeminiImageProvider } from '../providers/gemini-image/index.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { createSpendGate } from '../spend/gate.ts';
@@ -95,7 +96,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     // Commands below talk to providers, always through the gate.
     const level = (await host.detect()).level;
     const manual = createManualProvider(host, { now: clock });
-    const providers: Provider[] = [manual.provider, createGeminiImageProvider(host, { now: clock }), createFalImageProvider(host, { now: clock })];
+    const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
+    const providers: Provider[] = [manual.provider, createGeminiImageProvider(host, { now: clock, loadRef }), createFalImageProvider(host, { now: clock, loadRef })];
     const gate = createSpendGate({ host, providers, level, now: clock });
     const deps = { host, gate, now: clock };
 

@@ -5,6 +5,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { Asset } from '../../schema/akuko-project.ts';
@@ -40,7 +41,13 @@ export const EXT_BY_MIME: Record<string, string> = {
 /** Reads a reference file's bytes. Hosts with their own storage supply one; the default reads data:, http(s): and local paths. */
 export type RefLoader = (uri: string) => Promise<LoadedRef>;
 
-export function defaultRefLoader(f?: FetchLike): RefLoader {
+/**
+ * `baseDir` is the project folder: a relative, non-URL uri (the project stores
+ * them like `bible/style/x.png`) is read from there, never from the process
+ * working directory, and one that resolves outside it is refused. Absolute
+ * paths, `file:`, `data:` and `https:` uris behave as without it.
+ */
+export function defaultRefLoader(f?: FetchLike, baseDir?: string): RefLoader {
   return async (uri) => {
     if (uri.startsWith('data:')) {
       const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(uri);
@@ -57,7 +64,15 @@ export function defaultRefLoader(f?: FetchLike): RefLoader {
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(uri) && !uri.startsWith('file://')) {
       throw new ImageJobError(`reference image ${uri} is not readable from this provider; pass a loadRef option that can read it, or use a file path, data: or https: URI`);
     }
-    const path = uri.startsWith('file://') ? fileURLToPath(uri) : uri;
+    let path = uri.startsWith('file://') ? fileURLToPath(uri) : uri;
+    if (baseDir !== undefined && !uri.startsWith('file://') && !isAbsolute(uri)) {
+      const abs = resolve(baseDir, uri);
+      const rel = relative(resolve(baseDir), abs);
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+        throw new ImageJobError(`reference image ${uri} is outside the project folder; only files inside it can be used as references`);
+      }
+      path = abs;
+    }
     const data = await readFile(path);
     const mime = MIME_BY_EXT[path.split('.').pop()?.toLowerCase() ?? ''];
     if (!mime) throw new ImageJobError(`reference image ${path}: unknown image type`);
