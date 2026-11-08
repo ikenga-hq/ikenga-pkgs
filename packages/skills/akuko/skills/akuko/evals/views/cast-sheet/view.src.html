@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cast sheet</title>
+<!--
+  akuko freehand view (read-only): who is in the film and what is still waiting
+  on them. Designed for the ask "show me the cast". It writes nothing, so it
+  needs no conformance check (views/contract.md section 2). Everything shown is
+  derived from the akuko-project block below; the publisher replaces that block.
+-->
+<style>
+:root { color-scheme: light dark; --bg: #faf6f1; --surface: #ffffff; --fg: #1d1a17; --muted: #5b4f44; --line: #b9a999; --accent: #a8420c; --ok: #1f6b34; --warn: #7a5200; --tile: #efe6db; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; --accent: #f08a4b; --ok: #8fd19e; --warn: #f2c46d; --tile: #2f241b; } }
+:root[data-theme="dark"] { color-scheme: dark; --bg: #17120e; --surface: #221a14; --fg: #f4ede5; --muted: #cfc2b4; --line: #5a4a3c; --accent: #f08a4b; --ok: #8fd19e; --warn: #f2c46d; --tile: #2f241b; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1, h2, h3 { font-weight: 600; line-height: 1.25; margin: 0 0 8px; }
+h1 { font-size: 24px; } h2 { font-size: 18px; margin-top: 20px; } h3 { font-size: 16px; }
+.muted { color: var(--muted); font-size: 14px; }
+.summary { border-left: 4px solid var(--accent); padding: 4px 12px; margin: 8px 0 0; }
+.cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; display: grid; grid-template-columns: 72px 1fr; gap: 12px; }
+.tile { width: 72px; height: 72px; background: var(--tile); border: 1px solid var(--line); border-radius: 8px; display: block; color: var(--fg); }
+.badge { display: inline-block; font-size: 12px; font-weight: 600; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
+.badge[data-status="approved"] { color: var(--ok); }
+.badge[data-status="pending-review"], .badge[data-status="needs-rework"] { color: var(--warn); }
+.badge[data-status="pending"], .badge[data-status="draft"] { color: var(--muted); }
+dl { margin: 8px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 14px; }
+dt { color: var(--muted); } dd { margin: 0; }
+ul.notes { margin: 4px 0 0; padding-left: 20px; }
+:focus-visible { outline: 3px solid var(--warn); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<h1 id="title"></h1>
+<p class="muted" id="logline"></p>
+<p class="summary" id="summary" role="status"></p>
+<main id="cast" data-akuko-view="bible"></main>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"freehand:cast-sheet","version":"1","title":"Cast sheet","writes_decisions":false,"views":["bible"]}</script>
+<script type="application/json" id="akuko-project">{{PROJECT}}</script>
+<script>
+(function () {
+  'use strict';
+  var P;
+  try { P = JSON.parse(document.getElementById('akuko-project').textContent); } catch (e) { document.getElementById('title').textContent = 'Project data could not be read'; return; }
+  var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var initials = function (n) { return String(n).replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).slice(0, 2).map(function (w) { return w[0].toUpperCase(); }).join(''); };
+  var GROUPS = [['characters', 'Characters'], ['locations', 'Locations'], ['styles', 'Look']];
+
+  function appearances(id) { return P.shots.filter(function (s) { return (s.refs || []).indexOf(id) >= 0; }); }
+  function entry(kind, e) {
+    var shots = appearances(e.id);
+    var secs = shots.reduce(function (a, s) { return a + (s.duration_s || 0); }, 0);
+    var assets = P.assets.filter(function (a) { return a.owner === e.id; });
+    var waiting = assets.filter(function (a) { return a.status === 'pending-review'; }).length;
+    var scenes = Object.keys(shots.reduce(function (m, s) { m[s.scene] = 1; return m; }, {}));
+    var tile = '<svg class="tile" viewBox="0 0 72 72" role="img" aria-label="' + esc(e.name) + ' (no image yet)"><text x="36" y="43" text-anchor="middle" font-size="22" font-weight="600" fill="currentColor">' + esc(initials(e.name)) + '</text></svg>';
+    return '<article class="card" data-akuko-field="bible-entry" data-akuko-unit="' + esc(e.id) + '" data-akuko-status="' + esc(e.status) + '">' + tile + '<div>' +
+      '<h3>' + esc(e.name) + '</h3><span class="badge" data-status="' + esc(e.status) + '">' + esc(e.status) + '</span>' +
+      (e.role ? ' <span class="muted">' + esc(e.role) + '</span>' : '') +
+      (e.description ? '<p>' + esc(e.description) + '</p>' : '') +
+      (kind === 'styles' ? '<ul class="notes">' + (e.notes || []).map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>' :
+        '<dl><dt>In</dt><dd>' + (shots.length ? shots.length + ' shots, ' + secs + ' s on screen' : 'no shots yet') + '</dd>' +
+        '<dt>Scenes</dt><dd>' + (scenes.length ? esc(scenes.join(', ')) : 'none') + '</dd>' +
+        '<dt>Images</dt><dd>' + (assets.length ? assets.length + ' (' + waiting + ' waiting for review)' : 'none yet') + '</dd></dl>') +
+      '</div></article>';
+  }
+
+  document.getElementById('title').textContent = 'Cast sheet: ' + P.project.title;
+  document.getElementById('logline').textContent = P.project.logline || '';
+  var all = [];
+  GROUPS.forEach(function (g) { all = all.concat(P.bible[g[0]]); });
+  var waitingEntries = all.filter(function (e) { return e.status === 'pending-review'; }).length;
+  var waitingAssets = P.assets.filter(function (a) { return a.status === 'pending-review'; }).length;
+  document.getElementById('summary').textContent = waitingEntries + ' of ' + all.length + ' bible entries and ' + waitingAssets + ' images are waiting for your review. Review them on the board; this page changes nothing.';
+  document.getElementById('cast').innerHTML = GROUPS.map(function (g) {
+    return '<h2>' + g[1] + '</h2><div class="cards">' + P.bible[g[0]].map(function (e) { return entry(g[0], e); }).join('') + '</div>';
+  }).join('');
+})();
+</script>
+</body>
+</html>
