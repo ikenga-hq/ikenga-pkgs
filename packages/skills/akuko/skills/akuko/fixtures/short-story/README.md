@@ -38,3 +38,10 @@ A real run on host B/C exercises the breakdown CLI over these files:
    node --experimental-strip-types breakdown/cli.ts lint --project ./my-film
    ```
    `tag` appends `[[sc<N>_sh<M>]]` Fountain notes to each shot's originating paragraph in `script/screenplay.fountain`. `lint` verifies that all shots satisfy timing limits (≤ 10 s), principal character limits (≤ 2), and tag alignments with zero errors.
+
+## Phase 1 verification files (WP-09)
+
+- `harness.ts`: drives the fixture through intake, breakdown, sketch board, bibles and key frames using each stage's command line. The manual provider runs for free; a paid provider runs on a mocked network with a dummy key (no live call is possible). Every approval is a decision written as a person through the default board (`default-board@0.1`) and folded; the harness fails if any command approves something itself.
+- `full-run.test.ts`: the automated half of Phase 1 items 2, 4b (local half) and 5. Spend lines with estimates before every paid call, nothing sent before approval, the ledger, the cap, both decision stores with an undo, and a second breakdown run that creates nothing.
+- `EVIDENCE.md`: generated from those runs (`AKUKO_UPDATE_EVIDENCE=1` regenerates it).
+- `MANUAL-CHECK.md`: the live parts for a person to run: real keys with a tiny cap, claude.ai, the claude.ai half of 4b, and the eval run.
