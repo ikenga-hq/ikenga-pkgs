@@ -1,0 +1,94 @@
+<!--
+  Stat — one number that counts up, with a kicker, a unit and a line of context.
+  Variables (data-variable-values on the host):
+    kicker         string  small label above the number
+    value          number  where the counter lands
+    from           number  where it starts (default 0)
+    decimals       number  digits after the point (default 0)
+    unit           string  after the number ("min", "%", "")
+    context        string  one line under the number
+    countStart     number  s into the block when counting starts (default 0.3)
+    countDuration  number  s the count takes (default 1.8)
+  Motion: card enters on `settle` at 0.2 s; kicker, unit, context on `snap`; the number
+  `bloom`s once when the count lands. The digits are a pure function of block time: a linear
+  clock tween writes them on every render, seeks included (no onUpdate-only text).
+  Host: <div id="stat" data-composition-id="stat" data-composition-src="compositions/stat.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: block; src: url("fonts/inter-latin-400-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Newsreader"; font-style: normal; font-weight: 700; font-display: block; src: url("fonts/newsreader-latin-700-normal.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: block; src: url("fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .stat-card {
+      width: 760px; padding: 56px 64px 52px; border-radius: 28px;
+      background: #14110f; border: 1px solid #2e2824;
+      display: flex; flex-direction: column; align-items: center; gap: 18px;
+    }
+    .stat-kicker {
+      font-family: "JetBrains Mono", monospace; font-weight: 600; font-size: 28px;
+      letter-spacing: 0.24em; text-transform: uppercase; color: #d9a441;
+    }
+    .stat-hero { display: flex; align-items: baseline; gap: 16px; }
+    .stat-number {
+      font-family: "Newsreader", serif; font-weight: 700; font-size: 168px; line-height: 1;
+      font-variant-numeric: tabular-nums; color: #efe8df;
+    }
+    .stat-unit { font-family: "Inter", sans-serif; font-weight: 500; font-size: 56px; color: #9a9087; }
+    .stat-context { font-family: "Inter", sans-serif; font-weight: 400; font-size: 32px; color: #9a9087; text-align: center; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="stat"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"kicker","type":"string","label":"Kicker","default":"Estimated runtime"},
+      {"id":"value","type":"number","label":"Value","default":20},
+      {"id":"from","type":"number","label":"Count from","default":0},
+      {"id":"decimals","type":"number","label":"Decimals","default":0,"min":0,"max":3,"step":1},
+      {"id":"unit","type":"string","label":"Unit","default":"min"},
+      {"id":"context","type":"string","label":"Context","default":"From script breakdown to picture lock"},
+      {"id":"countStart","type":"number","label":"Count starts (s)","default":0.3,"min":0},
+      {"id":"countDuration","type":"number","label":"Count takes (s)","default":1.8,"min":0.1}
+    ]'
+  >
+    <div id="stat-card" class="stat-card">
+      <div id="stat-kicker" class="stat-kicker" data-var-text="kicker">Estimated runtime</div>
+      <div class="stat-hero">
+        <span id="stat-number" class="stat-number">0</span>
+        <span id="stat-unit" class="stat-unit" data-var-text="unit">min</span>
+      </div>
+      <div id="stat-context" class="stat-context" data-var-text="context">From script breakdown to picture lock</div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const to = Number(v.value ?? 20);
+      const from = Number(v.from ?? 0);
+      const decimals = Math.max(0, Math.min(3, Math.round(Number(v.decimals ?? 0))));
+      const start = Number(v.countStart ?? 0.3);
+      const span = Math.max(0.1, Number(v.countDuration ?? 1.8));
+      const ease = gsap.parseEase("power2.out");
+      const numberEl = document.getElementById("stat-number");
+      const valueAt = (t) => from + (to - from) * ease(Math.min(1, Math.max(0, (t - start) / span)));
+      const tl = gsap.timeline({ paused: true });
+
+      tl.fromTo("#stat-card", { opacity: 0, scale: 0.85, y: 60 }, { opacity: 1, scale: 1, y: 0, duration: MOTION.settle.duration, ease: MOTION.settle.ease }, 0.2);
+      tl.fromTo("#stat-kicker", { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, 0.4);
+      tl.fromTo("#stat-unit", { opacity: 0 }, { opacity: 1, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, 0.6);
+      tl.fromTo("#stat-context", { opacity: 0, y: 15 }, { opacity: 1, y: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, 0.8);
+
+      // Digits as a pure function of time: GSAP writes `t` on every render (seeks included).
+      const clock = { get t() { return 0; }, set t(time) { numberEl.textContent = valueAt(time).toFixed(decimals); } };
+      tl.fromTo(clock, { t: 0 }, { t: start + span + 1, duration: start + span + 1, ease: "none", immediateRender: true }, 0);
+
+      tl.fromTo("#stat-number", { scale: 1 }, { scale: MOTION.bloom.scale, duration: MOTION.bloom.duration, ease: MOTION.bloom.ease, yoyo: true, repeat: 1 }, start + span);
+
+      window.__timelines["stat"] = tl;
+    })();
+  </script>
+</template>

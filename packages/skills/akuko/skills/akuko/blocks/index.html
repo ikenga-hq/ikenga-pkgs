@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  Block showcase: mounts every akuko block once, one after another, so `hyperframes lint`
+  and `hyperframes check` can run over all of them. Not a film; a test bench.
+  Each host's id, data-composition-id and the block's timeline key are the same.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>akuko blocks</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0d0b0a; }
+      #ground { position: absolute; inset: 0; background: #0d0b0a; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="40" data-width="1920" data-height="1080" data-fps="30">
+      <div id="ground"></div>
+      <div id="stat" data-composition-id="stat" data-composition-src="compositions/stat.html" data-start="0" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="reveal-list" data-composition-id="reveal-list" data-composition-src="compositions/reveal-list.html" data-start="5" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="highlight-words" data-composition-id="highlight-words" data-composition-src="compositions/highlight-words.html" data-start="10" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="ken-burns" data-composition-id="ken-burns" data-composition-src="compositions/ken-burns.html" data-start="15" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="annotation" data-composition-id="annotation" data-composition-src="compositions/annotation.html" data-start="20" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="chat-bubble" data-composition-id="chat-bubble" data-composition-src="compositions/chat-bubble.html" data-start="25" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="avatar-badge" data-composition-id="avatar-badge" data-composition-src="compositions/avatar-badge.html" data-start="30" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+      <div id="caption-bar" data-composition-id="caption-bar" data-composition-src="compositions/caption-bar.html" data-start="35" data-duration="5" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"></div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

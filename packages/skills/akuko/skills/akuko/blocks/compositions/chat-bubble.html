@@ -1,0 +1,70 @@
+<!--
+  ChatBubble — a short message thread, bubbles arriving one by one.
+  Variables:
+    msg1..msg4  string  the messages; an empty one is left out
+    sides       string  comma list of left/right per message (default "left,right,left,right")
+    at          number  s into the block when the first bubble arrives (default 0.4)
+    gap         number  s between bubbles (default 0.8)
+  Motion: each bubble arrives on `settle` (scale 0.92 -> 1, y 16 -> 0), growing from its own
+  corner. Which bubbles exist is fixed at load from the variables.
+  Host: <div id="chat-bubble" data-composition-id="chat-bubble" data-composition-src="compositions/chat-bubble.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: block; src: url("fonts/inter-latin-400-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .cb-thread { width: 1100px; display: flex; flex-direction: column; gap: 22px; }
+    .cb-bubble {
+      max-width: 760px; padding: 24px 32px; border-radius: 30px;
+      font-family: "Inter", sans-serif; font-weight: 400; font-size: 38px; line-height: 1.3;
+    }
+    .cb-bubble[data-side="left"] { align-self: flex-start; background: #221e1b; color: #efe8df; border-bottom-left-radius: 8px; transform-origin: 0% 100%; }
+    .cb-bubble[data-side="right"] { align-self: flex-end; background: #6b3a22; color: #f6efe6; border-bottom-right-radius: 8px; transform-origin: 100% 100%; }
+    .cb-bubble[data-empty="true"] { display: none; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="chat-bubble"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"msg1","type":"string","label":"Message 1","default":"Can we see shot 4 before we spend on it?"},
+      {"id":"msg2","type":"string","label":"Message 2","default":"Here is the key frame, and what the clip would cost."},
+      {"id":"msg3","type":"string","label":"Message 3","default":"Good. Go ahead."},
+      {"id":"msg4","type":"string","label":"Message 4","default":""},
+      {"id":"sides","type":"string","label":"Sides","default":"left,right,left,right"},
+      {"id":"at","type":"number","label":"First bubble at (s)","default":0.4,"min":0},
+      {"id":"gap","type":"number","label":"Between bubbles (s)","default":0.8,"min":0}
+    ]'
+  >
+    <div class="cb-thread">
+      <div id="cb-msg-1" class="cb-bubble" data-side="left" data-var-text="msg1">Can we see shot 4 before we spend on it?</div>
+      <div id="cb-msg-2" class="cb-bubble" data-side="right" data-var-text="msg2">Here is the key frame, and what the clip would cost.</div>
+      <div id="cb-msg-3" class="cb-bubble" data-side="left" data-var-text="msg3">Good. Go ahead.</div>
+      <div id="cb-msg-4" class="cb-bubble" data-side="right" data-var-text="msg4"></div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const sides = String(v.sides ?? "left,right,left,right").split(",").map((s) => (s.trim() === "right" ? "right" : "left"));
+      const at = Number(v.at ?? 0.4);
+      const gap = Number(v.gap ?? 0.8);
+      const bubbles = [1, 2, 3, 4]
+        .map((i) => {
+          const el = document.getElementById(`cb-msg-${i}`);
+          const text = String(v[`msg${i}`] ?? el.textContent ?? "").trim();
+          el.setAttribute("data-side", sides[i - 1] ?? "left");
+          el.setAttribute("data-empty", text === "" ? "true" : "false");
+          return text === "" ? null : el;
+        })
+        .filter(Boolean);
+      const tl = gsap.timeline({ paused: true });
+      bubbles.forEach((el, i) => {
+        tl.fromTo(el, { opacity: 0, scale: 0.92, y: 16 }, { opacity: 1, scale: 1, y: 0, duration: MOTION.settle.duration, ease: MOTION.settle.ease }, at + i * gap);
+      });
+      window.__timelines["chat-bubble"] = tl;
+    })();
+  </script>
+</template>

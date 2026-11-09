@@ -1,0 +1,75 @@
+<!--
+  HighlightWords — a line of body text where marked words take the accent.
+  Variables:
+    text   string  the line; wrap each word or phrase to highlight in *asterisks*
+    at     number  s into the block when the highlights start (default 1.0)
+    gap    number  s between highlights (default 0.25)
+  Motion: the line enters on `snap`; each marked phrase gets an accent bar that grows on
+  `snap` and its text turns accent, one after another, then `bloom`s once.
+  The words are laid out once at load from the variable; nothing about them depends on time.
+  Host: <div id="highlight-words" data-composition-id="highlight-words" data-composition-src="compositions/highlight-words.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Newsreader"; font-style: normal; font-weight: 400; font-display: block; src: url("fonts/newsreader-latin-400-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Newsreader"; font-style: normal; font-weight: 600; font-display: block; src: url("fonts/newsreader-latin-600-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .hw-line {
+      width: 1400px; text-align: center;
+      font-family: "Newsreader", serif; font-weight: 400; font-size: 76px; line-height: 1.3; color: #efe8df;
+    }
+    .hw-mark { position: relative; display: inline-block; font-weight: 600; }
+    .hw-bar {
+      position: absolute; left: -6px; right: -6px; top: 18%; bottom: 8%;
+      border-radius: 8px; background: #3a2d14; transform-origin: 0% 50%;
+    }
+    .hw-word { position: relative; display: inline-block; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="highlight-words"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"text","type":"string","label":"Text (*marked* words)","default":"Every shot ties back to *the line* it came from, and *nothing moves* until you say so."},
+      {"id":"at","type":"number","label":"Highlights start (s)","default":1.0,"min":0},
+      {"id":"gap","type":"number","label":"Between highlights (s)","default":0.25,"min":0}
+    ]'
+  >
+    <p id="hw-line" class="hw-line">Every shot ties back to the line it came from, and nothing moves until you say so.</p>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const text = String(v.text ?? "");
+      const at = Number(v.at ?? 1.0);
+      const gap = Number(v.gap ?? 0.25);
+      const line = document.getElementById("hw-line");
+      // Lay out once: plain text nodes and one span per *marked* phrase.
+      line.textContent = "";
+      text.split(/(\*[^*]+\*)/).forEach((part, i) => {
+        if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+          const mark = document.createElement("span");
+          mark.className = "hw-mark";
+          mark.id = `hw-mark-${i}`;
+          mark.innerHTML = '<span class="hw-bar"></span><span class="hw-word"></span>';
+          mark.lastChild.textContent = part.slice(1, -1);
+          line.appendChild(mark);
+        } else if (part) {
+          line.appendChild(document.createTextNode(part));
+        }
+      });
+      const marks = Array.from(line.querySelectorAll(".hw-mark"));
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#hw-line", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, 0.2);
+      marks.forEach((mark, i) => {
+        const t = at + i * gap;
+        tl.fromTo(mark.querySelector(".hw-bar"), { scaleX: 0 }, { scaleX: 1, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, t);
+        tl.fromTo(mark.querySelector(".hw-word"), { color: "#efe8df" }, { color: "#f2c66d", duration: MOTION.snap.duration, ease: MOTION.snap.ease }, t);
+        tl.fromTo(mark, { scale: 1 }, { scale: MOTION.bloom.scale, duration: MOTION.bloom.duration, ease: MOTION.bloom.ease, yoyo: true, repeat: 1 }, t + MOTION.snap.duration);
+      });
+      window.__timelines["highlight-words"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,71 @@
+<!--
+  KenBurns — a slow, constant push (and drift) on a still.
+  Variables:
+    src        string  image path inside the project (e.g. "assets/still.jpg"); empty = the built-in plate
+    fromScale  number  start scale (default 1.0)
+    toScale    number  end scale (default 1.15)
+    x          number  horizontal drift in px over the move (default -40)
+    y          number  vertical drift in px over the move (default -20)
+    duration   number  s the move takes; match the host's data-duration (default 5)
+  Motion: linear (`ease: "none"`): constant speed is the point of a Ken Burns move, so it uses
+  none of the vocabulary eases. The move is on a wrapper, never on the image itself; the wrapper is
+  oversized on purpose (data-layout-allow-overflow) so the push never shows an edge.
+  Host: <div id="ken-burns" data-composition-id="ken-burns" data-composition-src="compositions/ken-burns.html" ...>
+-->
+<template>
+  <style>
+    #root { position: absolute; inset: 0; overflow: hidden; background: #070605; }
+    .kb-move { position: absolute; inset: -60px; transform-origin: 45% 45%; }
+    .kb-plate {
+      position: absolute; inset: 0;
+      background:
+        linear-gradient(180deg, #1d1a24 0%, #3b2a2a 38%, #6b3a22 52%, #2a1d16 53%, #14100d 100%);
+    }
+    .kb-ridge { position: absolute; left: 0; right: 0; bottom: 40%; height: 18%; background: #120e0c; clip-path: polygon(0 100%, 0 55%, 12% 30%, 24% 62%, 38% 20%, 52% 58%, 66% 26%, 80% 60%, 92% 35%, 100% 50%, 100% 100%); }
+    .kb-sun { position: absolute; left: 58%; top: 34%; width: 160px; height: 160px; border-radius: 50%; background: #d9a441; }
+    .kb-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="ken-burns"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"src","type":"string","label":"Image (project path)","default":""},
+      {"id":"fromScale","type":"number","label":"Start scale","default":1.0,"min":0.5,"max":3,"step":0.01},
+      {"id":"toScale","type":"number","label":"End scale","default":1.15,"min":0.5,"max":3,"step":0.01},
+      {"id":"x","type":"number","label":"Drift x (px)","default":-40},
+      {"id":"y","type":"number","label":"Drift y (px)","default":-20},
+      {"id":"duration","type":"number","label":"Move takes (s)","default":5,"min":0.1}
+    ]'
+  >
+    <div id="kb-move" class="kb-move" data-layout-allow-overflow>
+      <div id="kb-plate" class="kb-plate"><div class="kb-sun"></div><div class="kb-ridge"></div></div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const src = String(v.src ?? "").trim();
+      if (src) {
+        const img = document.createElement("img");
+        img.id = "kb-image";
+        img.className = "kb-image";
+        img.alt = "";
+        img.src = src;
+        document.getElementById("kb-move").appendChild(img);
+      }
+      const duration = Math.max(0.1, Number(v.duration ?? 5));
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo(
+        "#kb-move",
+        { scale: Number(v.fromScale ?? 1), x: 0, y: 0 },
+        { scale: Number(v.toScale ?? 1.15), x: Number(v.x ?? -40), y: Number(v.y ?? -20), duration, ease: "none" },
+        0,
+      );
+      void MOTION;
+      window.__timelines["ken-burns"] = tl;
+    })();
+  </script>
+</template>
