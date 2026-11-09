@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  HYPERFRAMES_GSAP_VERSION,
   HYPERFRAMES_VERSION,
+  MEASURED,
   HyperframesError,
   check,
   engineEnv,
@@ -59,10 +61,25 @@ describe('invocation', () => {
     assert.equal(quoteForCmd('C:\\My Films\\scene 1'), '"C:\\My Films\\scene 1"');
     assert.equal(quoteForCmd('a"b'), '"a""b"');
     assert.equal(quoteForCmd(''), '""');
+    // cmd.exe expands %VAR% even inside quotes; such an argument is refused, not mangled.
+    assert.throws(() => quoteForCmd('C:\\100%\\scene'), /cmd\.exe would expand %/);
   });
 });
 
 describe('HYPERFRAMES_BROWSER_PATH on Windows', () => {
+  it('turns HyperFrames telemetry off unless the caller opts in', () => {
+    const off = engineEnv({ env: { PATH: 'p' }, platform: 'linux' }).env;
+    assert.equal(off.HYPERFRAMES_NO_TELEMETRY, '1');
+    assert.equal(off.DO_NOT_TRACK, '1');
+    const on = engineEnv({ env: { PATH: 'p' }, platform: 'linux', telemetry: true }).env;
+    assert.equal(on.HYPERFRAMES_NO_TELEMETRY, undefined);
+    assert.equal(on.DO_NOT_TRACK, undefined);
+  });
+
+  it('pins the GSAP version HyperFrames 0.9.19 vendors (else renders fetch it from the network)', () => {
+    assert.equal(HYPERFRAMES_GSAP_VERSION, '3.15.0');
+  });
+
   it('passes the variable through untouched', () => {
     const { env, warnings } = engineEnv({ env: { HYPERFRAMES_BROWSER_PATH: CHROME, PATH: 'p' }, platform: 'win32' });
     assert.equal(env.HYPERFRAMES_BROWSER_PATH, CHROME);
@@ -236,9 +253,27 @@ describe('render-time estimate (R-10)', () => {
     assert.throws(() => estimateRender({ durationSeconds: 0 }), RangeError);
   });
 
-  it('calibrates seconds per frame from a finished render', () => {
-    assert.ok(Math.abs((secondsPerFrameFrom({ frames: 180, renderedInSeconds: 84 }, 30) ?? 0) - 0.3) < 1e-9);
-    assert.equal(secondsPerFrameFrom({ frames: null, renderedInSeconds: 84 }), null);
-    assert.ok(Math.abs((secondsPerFrameFrom({ frames: null, videoSeconds: 6, renderedInSeconds: 84 }, 30) ?? 0) - 0.3) < 1e-9);
+  it('calibrates from wall clock, the quantity MEASURED was fitted to', () => {
+    assert.ok(Math.abs((secondsPerFrameFrom({ ms: 84000, frames: 180 }, { setupSeconds: 30 }) ?? 0) - 0.3) < 1e-9);
+    assert.equal(secondsPerFrameFrom({ ms: 84000, frames: null }), null);
+    // An MP4 summary gives video length; the profile's frame rate turns it into frames.
+    assert.ok(Math.abs((secondsPerFrameFrom({ ms: 84000, frames: null, videoSeconds: 6 }, { setupSeconds: 30 }) ?? 0) - 0.3) < 1e-9);
+    assert.ok(Math.abs((secondsPerFrameFrom({ ms: 57000, frames: null, videoSeconds: 6 }, { setupSeconds: 30, profile: 'draft' }) ?? 0) - 0.3) < 1e-9);
+  });
+
+  it('round-trips: calibrating on the two measured renders and estimating again gives back their wall clock', () => {
+    const measured = [
+      { profile: 'final' as const, ms: 72540, videoSeconds: 6 },
+      { profile: 'draft' as const, ms: 55230, videoSeconds: 6 },
+    ];
+    for (const m of measured) {
+      const spf = secondsPerFrameFrom({ ms: m.ms, frames: null, videoSeconds: m.videoSeconds }, { profile: m.profile });
+      assert.ok(spf !== null);
+      const back = estimateRender({ durationSeconds: 6, profile: m.profile, secondsPerFrame: spf });
+      assert.ok(Math.abs(back.seconds - m.ms / 1000) < 1e-6, `${m.profile}: ${back.seconds}`);
+      // and the fitted defaults land within 3 s of each measured run
+      assert.ok(Math.abs(estimateRender({ durationSeconds: 6, profile: m.profile }).seconds - m.ms / 1000) < 3, m.profile);
+    }
+    assert.deepEqual({ ...MEASURED }, { secondsPerFrame: 0.2, setupSeconds: 38 });
   });
 });

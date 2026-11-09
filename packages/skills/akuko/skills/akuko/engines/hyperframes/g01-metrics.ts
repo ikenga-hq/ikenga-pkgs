@@ -2,13 +2,23 @@
 // unit-test the measurement and the pass/fail decision without Chrome or FFmpeg.
 // The harness itself is g01.ts (needs Chrome + FFmpeg + HyperFrames; CI never runs it).
 
-/** The bar G-01 must clear (plan Round 5). Fixed before any frame was measured. */
+/**
+ * The bar G-01 must clear (plan Round 5). framePsnrDb and inkIoU were fixed before any frame
+ * was measured (run 1, 2026-11-09). regionMaxDelta was added after the gate review: a staged
+ * one-character chip change ("Step 2" -> "Step 3") passed ink IoU at 0.956. It was set from
+ * the reviewer's measurements (genuine pair 66, MP4 65, wrong digit 123) before run 3, and
+ * was not tuned on run 3.
+ */
 export const G01_THRESHOLDS = {
   /** Whole-frame PSNR, RGB average, preview vs reference, per pair. */
   framePsnrDb: 35,
   /** Text/state check: ink IoU inside each text region, per pair. */
   inkIoU: 0.95,
+  /** Text/state check: largest |Δ luma| (0–255) at any pixel inside each text region. */
+  regionMaxDelta: 96,
 } as const;
+
+export type Thresholds = { framePsnrDb: number; inkIoU: number; regionMaxDelta: number };
 
 /** Five probe times (s) from the plan. All land exactly on a 30 fps frame. */
 export const G01_TIMES = [0.5, 1.5, 3.0, 4.5, 5.9] as const;
@@ -86,6 +96,22 @@ export function psnr8(a: Uint8Array, b: Uint8Array): number {
   return 10 * Math.log10((255 * 255) / mse);
 }
 
+/**
+ * Largest absolute difference at any one pixel of two equally sized 8-bit grey regions.
+ * Anti-aliasing differences stay on glyph edges and are partial (about 66 at most here);
+ * a different glyph puts full ink against ground (about 120 or more for this palette).
+ * That catches a one-character change that barely moves ink IoU.
+ */
+export function maxAbsDelta(a: Uint8Array, b: Uint8Array): number {
+  if (a.length !== b.length) throw new Error(`maxAbsDelta: size mismatch ${a.length} vs ${b.length}`);
+  let max = 0;
+  for (let i = 0; i < a.length; i++) {
+    const d = Math.abs((a[i] as number) - (b[i] as number));
+    if (d > max) max = d;
+  }
+  return max;
+}
+
 export interface InkComparison {
   /** |A ∩ B| / |A ∪ B| over ink pixels; 1 when both regions hold no ink. */
   iou: number;
@@ -120,6 +146,8 @@ export interface RegionResult {
   name: string;
   iou: number;
   psnrDb: number;
+  /** Largest |Δ luma| in the region (maxAbsDelta). */
+  maxDelta: number;
 }
 
 export interface PairResult {
@@ -135,7 +163,7 @@ export interface PairVerdict {
   reasons: string[];
 }
 
-export function judgePair(pair: PairResult, t: { framePsnrDb: number; inkIoU: number } = G01_THRESHOLDS): PairVerdict {
+export function judgePair(pair: PairResult, t: Thresholds = G01_THRESHOLDS): PairVerdict {
   const reasons: string[] = [];
   const psnrOk = pair.framePsnrDb >= t.framePsnrDb;
   if (!psnrOk) reasons.push(`frame PSNR ${fmtDb(pair.framePsnrDb)} < ${t.framePsnrDb} dB`);
@@ -145,6 +173,10 @@ export function judgePair(pair: PairResult, t: { framePsnrDb: number; inkIoU: nu
     if (!(r.iou >= t.inkIoU)) {
       textOk = false;
       reasons.push(`${r.name} ink IoU ${r.iou.toFixed(3)} < ${t.inkIoU}`);
+    }
+    if (!(r.maxDelta <= t.regionMaxDelta)) {
+      textOk = false;
+      reasons.push(`${r.name} max Δluma ${r.maxDelta} > ${t.regionMaxDelta}`);
     }
   }
   return { pass: psnrOk && textOk, psnrOk, textOk, reasons };
@@ -156,7 +188,7 @@ export interface SetVerdict {
 }
 
 /** A set passes only when every pair passes. */
-export function judgeSet(pairs: PairResult[], t: { framePsnrDb: number; inkIoU: number } = G01_THRESHOLDS): SetVerdict {
+export function judgeSet(pairs: PairResult[], t: Thresholds = G01_THRESHOLDS): SetVerdict {
   const failedTimes = pairs.filter((p) => !judgePair(p, t).pass).map((p) => p.time);
   return { pass: pairs.length > 0 && failedTimes.length === 0, failedTimes };
 }
@@ -239,6 +271,16 @@ export const ONUPDATE_COUNTER = `/* COUNTER:BEGIN (negative control: spike's onU
         onUpdate: function () { numEl.textContent = Math.round(counter.val); }
       }, 0.3);
       /* COUNTER:END */`;
+
+/**
+ * Negative control NC-3 (gate review): the caption chip at 3.0 s reads "Step 3" instead of
+ * "Step 2". One character, nothing else changes. Its preview must fail against the genuine render.
+ */
+export function makeChipVariant(html: string): string {
+  const from = '<span class="cap-step">Step 2</span>';
+  if (html.split(from).length !== 2) throw new Error('makeChipVariant: expected exactly one "Step 2" chip');
+  return html.replace(from, '<span class="cap-step">Step 3</span>');
+}
 
 /** Swap the seek-safe counter for the onUpdate-only one; nothing else changes. */
 export function makeOnUpdateVariant(html: string): string {

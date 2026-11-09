@@ -16,7 +16,9 @@ import {
   inkIoU,
   judgePair,
   judgeSet,
+  makeChipVariant,
   makeOnUpdateVariant,
+  maxAbsDelta,
   parsePsnr,
   parseReferenceBackground,
   pngSequenceName,
@@ -60,6 +62,14 @@ describe('psnr8', () => {
   });
 });
 
+describe('maxAbsDelta (text/state check)', () => {
+  it('is the largest single-pixel difference', () => {
+    assert.equal(maxAbsDelta(new Uint8Array([10, 200, 30]), new Uint8Array([12, 77, 30])), 123);
+    assert.equal(maxAbsDelta(new Uint8Array([5, 5]), new Uint8Array([5, 5])), 0);
+    assert.throws(() => maxAbsDelta(new Uint8Array(1), new Uint8Array(2)), /size mismatch/);
+  });
+});
+
 describe('inkIoU (text/state check)', () => {
   it('is 1 for the same glyphs and for two empty regions', () => {
     const glyph = new Uint8Array([0, 255, 255, 0, 0, 200, 0, 0]);
@@ -86,13 +96,20 @@ describe('inkIoU (text/state check)', () => {
 const pair = (over: Partial<PairResult> = {}): PairResult => ({
   time: 3,
   framePsnrDb: 44,
-  regions: [{ name: 'counter', iou: 0.99, psnrDb: 40 }, { name: 'caption', iou: 0.98, psnrDb: 41 }],
+  regions: [{ name: 'counter', iou: 0.99, psnrDb: 40, maxDelta: 40 }, { name: 'caption', iou: 0.98, psnrDb: 41, maxDelta: 66 }],
   ...over,
 });
 
 describe('judgePair / judgeSet (the G-01 bar)', () => {
-  it('keeps the bar from the plan: 35 dB and ink IoU 0.95', () => {
-    assert.deepEqual({ ...G01_THRESHOLDS }, { framePsnrDb: 35, inkIoU: 0.95 });
+  it('keeps the bar: 35 dB and ink IoU 0.95 (plan), max |Δ luma| 96 (gate review)', () => {
+    assert.deepEqual({ ...G01_THRESHOLDS }, { framePsnrDb: 35, inkIoU: 0.95, regionMaxDelta: 96 });
+  });
+
+  it('fails a one-character change that ink IoU lets through (the review: a "Step 3" chip)', () => {
+    const v = judgePair(pair({ framePsnrDb: 44.02, regions: [{ name: 'counter', iou: 1, psnrDb: 70, maxDelta: 30 }, { name: 'caption', iou: 0.956, psnrDb: 33, maxDelta: 123 }] }));
+    assert.equal(v.pass, false);
+    assert.equal(v.psnrOk, true);
+    assert.match(v.reasons.join(), /caption max Δluma 123 > 96/);
   });
 
   it('passes a pair over both bars', () => {
@@ -107,14 +124,15 @@ describe('judgePair / judgeSet (the G-01 bar)', () => {
   });
 
   it('fails on text alone even when PSNR is high (a counter can change few pixels)', () => {
-    const v = judgePair(pair({ regions: [{ name: 'counter', iou: 0.31, psnrDb: 22 }, { name: 'caption', iou: 1, psnrDb: 50 }] }));
+    const v = judgePair(pair({ regions: [{ name: 'counter', iou: 0.31, psnrDb: 22, maxDelta: 60 }, { name: 'caption', iou: 1, psnrDb: 50, maxDelta: 10 }] }));
     assert.equal(v.pass, false);
     assert.equal(v.psnrOk, true);
     assert.match(v.reasons.join(), /counter ink IoU 0\.310/);
   });
 
   it('fails a NaN measurement and a pair with no text regions', () => {
-    assert.equal(judgePair(pair({ regions: [{ name: 'counter', iou: Number.NaN, psnrDb: 0 }] })).pass, false);
+    assert.equal(judgePair(pair({ regions: [{ name: 'counter', iou: Number.NaN, psnrDb: 0, maxDelta: 0 }] })).pass, false);
+    assert.equal(judgePair(pair({ regions: [{ name: 'counter', iou: 1, psnrDb: 60, maxDelta: Number.NaN }] })).pass, false);
     assert.equal(judgePair(pair({ regions: [] })).pass, false);
   });
 
@@ -169,6 +187,17 @@ describe('makeOnUpdateVariant (negative control)', () => {
     assert.doesNotMatch(nc, /set t\(time\)/);
     const strip = (s: string) => s.replace(/\/\* COUNTER:BEGIN[\s\S]*?COUNTER:END \*\//, '');
     assert.equal(strip(nc), strip(html));
+  });
+
+  it('NC-3 changes exactly one character of the composition', async () => {
+    const html = await readFile(join(here, 'g01', 'index.html'), 'utf8');
+    const nc = makeChipVariant(html);
+    assert.equal(nc.length, html.length);
+    let diff = 0;
+    for (let i = 0; i < html.length; i++) if (html[i] !== nc[i]) diff++;
+    assert.equal(diff, 1);
+    assert.ok(nc.includes('<span class="cap-step">Step 3</span><span>Sketch board and key frames</span>'));
+    assert.throws(() => makeChipVariant('<p></p>'), /exactly one/);
   });
 
   it('refuses a composition without the marked block', () => {

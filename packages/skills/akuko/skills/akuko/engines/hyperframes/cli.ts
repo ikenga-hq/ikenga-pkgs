@@ -13,6 +13,14 @@ import { HYPERFRAMES_BROWSER_ENV } from '../../setup/setup.ts';
 /** HyperFrames version this wrapper was built and G-01-tested against (engines/hyperframes/G-01.md). */
 export const HYPERFRAMES_VERSION = '0.9.19';
 
+/**
+ * The GSAP that HYPERFRAMES_VERSION vendors (dist/vendor/npm/gsap@<this>). Compositions must
+ * name exactly this version's jsDelivr URL (blocks.ts GSAP_URL): HyperFrames answers only that
+ * URL from its own copy; any other version would be fetched from the network at render time.
+ * Bump the two together.
+ */
+export const HYPERFRAMES_GSAP_VERSION = '3.15.0';
+
 export interface SpawnResult {
   code: number;
   stdout: string;
@@ -39,6 +47,11 @@ export interface EngineOptions {
   browserPath?: string;
   /** Base environment. Default process.env. */
   env?: Record<string, string | undefined>;
+  /**
+   * Let HyperFrames send its CLI telemetry. Default false: the wrapper sets
+   * HYPERFRAMES_NO_TELEMETRY=1 and DO_NOT_TRACK=1 for every spawned process.
+   */
+  telemetry?: boolean;
   /** Default process.platform; tests set it. */
   platform?: NodeJS.Platform;
   cwd?: string;
@@ -76,9 +89,16 @@ export function resolveInvocation(opts: Pick<EngineOptions, 'bin' | 'version' | 
   return win ? { command: 'npx.cmd', prefix: ['--yes', pkg], shell: true } : { command: 'npx', prefix: ['--yes', pkg], shell: false };
 }
 
-/** Quote one argument for cmd.exe (used only when spawning a .cmd shim through the shell). */
+/**
+ * Quote one argument for cmd.exe (used only when spawning a .cmd shim through the shell).
+ * cmd.exe expands %VAR% even inside double quotes and has no escape for it on a command line,
+ * so an argument containing % is refused: set `bin` to hyperframes.mjs (no shell) instead.
+ */
 export function quoteForCmd(arg: string): string {
-  if (arg !== '' && !/[\s"&|<>^%(),;!]/.test(arg)) return arg;
+  if (arg.includes('%')) {
+    throw new RangeError(`cannot pass "${arg}" through npx.cmd (cmd.exe would expand %); set the engine's bin to hyperframes.mjs`);
+  }
+  if (arg !== '' && !/[\s"&|<>^(),;!]/.test(arg)) return arg;
   return `"${arg.replace(/"/g, '""')}"`;
 }
 
@@ -87,10 +107,17 @@ export interface EngineEnv {
   warnings: string[];
 }
 
-/** The environment a HyperFrames process gets: HYPERFRAMES_BROWSER_PATH passed through (or set from browserPath). */
-export function engineEnv(opts: Pick<EngineOptions, 'env' | 'browserPath' | 'platform'> = {}): EngineEnv {
+/**
+ * The environment a HyperFrames process gets: HYPERFRAMES_BROWSER_PATH passed through (or set
+ * from browserPath), and telemetry off unless the caller opts in.
+ */
+export function engineEnv(opts: Pick<EngineOptions, 'env' | 'browserPath' | 'platform' | 'telemetry'> = {}): EngineEnv {
   const env = { ...(opts.env ?? process.env) };
   const warnings: string[] = [];
+  if (opts.telemetry !== true) {
+    env.HYPERFRAMES_NO_TELEMETRY = '1';
+    env.DO_NOT_TRACK = '1';
+  }
   if (opts.browserPath) env[HYPERFRAMES_BROWSER_ENV] = opts.browserPath;
   if ((opts.platform ?? process.platform) === 'win32' && !env[HYPERFRAMES_BROWSER_ENV]) {
     warnings.push(
@@ -413,16 +440,27 @@ export function estimateRender(i: EstimateInput): RenderEstimate {
   return { frames, seconds, text };
 }
 
+export interface CalibrateInput {
+  /** The profile the render used; sets the frame rate when `fps` is not given (draft 15, final 30). */
+  profile?: RenderProfile;
+  /** The frame rate the render used, when it was not the profile's. */
+  fps?: number;
+  /** Fixed cost to take off before dividing. Default MEASURED.setupSeconds. */
+  setupSeconds?: number;
+}
+
 /**
- * Seconds per frame from a finished render, to calibrate the estimate on this machine.
- * Uses the frame count HyperFrames printed, or video length × fps (default 30) for a video.
+ * Seconds per frame from a finished render, to calibrate estimateRender() on this machine.
+ * Uses the render call's wall clock (`ms`), the same quantity MEASURED was fitted to, never
+ * HyperFrames' shorter "rendered in" figure. Frames are what HyperFrames printed, or the video
+ * length × the profile's frame rate.
  */
 export function secondsPerFrameFrom(
-  r: Pick<RenderResult, 'frames' | 'renderedInSeconds'> & { videoSeconds?: number | null },
-  setupSeconds: number = MEASURED.setupSeconds,
-  fps = 30,
+  r: Pick<RenderResult, 'ms' | 'frames'> & { videoSeconds?: number | null },
+  c: CalibrateInput = {},
 ): number | null {
+  const fps = c.fps ?? (c.profile === 'draft' ? DRAFT_FPS : 30);
   const frames = r.frames ?? (r.videoSeconds ? Math.round(r.videoSeconds * fps) : null);
-  if (!frames || r.renderedInSeconds === null) return null;
-  return Math.max(0, r.renderedInSeconds - setupSeconds) / frames;
+  if (!frames || !(r.ms > 0)) return null;
+  return Math.max(0, r.ms / 1000 - (c.setupSeconds ?? MEASURED.setupSeconds)) / frames;
 }

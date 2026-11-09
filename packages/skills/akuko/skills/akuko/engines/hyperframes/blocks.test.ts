@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { BLOCKS, GSAP_URL, fontFiles, hostHtml, inlineMotion } from './blocks.ts';
+import { HYPERFRAMES_GSAP_VERSION } from './cli.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const blocksDir = join(here, '..', '..', 'blocks');
@@ -74,6 +75,10 @@ describe('block files', () => {
         assert.doesNotMatch(script, /onUpdate|onComplete|onStart/, 'no state set only in a callback');
         assert.doesNotMatch(script, /offsetWidth|offsetHeight|getBoundingClientRect/, 'no geometry from measured text');
       });
+
+      it('has no CSS motion, which runs on the wall clock rather than the timeline', () => {
+        assert.doesNotMatch(html, /@keyframes|transition|animations*:/);
+      });
     });
   }
 });
@@ -87,6 +92,17 @@ describe('showcase (blocks/index.html)', () => {
   });
   it('loads GSAP from the URL HyperFrames serves from its own vendored copy', () => {
     assert.ok(html.includes(`<script src="${GSAP_URL}">`));
+  });
+
+  it('names the GSAP version the pinned HyperFrames vendors, everywhere', () => {
+    assert.equal(GSAP_URL, `https://cdn.jsdelivr.net/npm/gsap@${HYPERFRAMES_GSAP_VERSION}/dist/gsap.min.js`);
+    const g01 = readFileSync(join(here, 'g01', 'index.html'), 'utf8');
+    for (const doc of [html, g01]) {
+      const versions = [...doc.matchAll(/gsap@([0-9.]+)/g)].map((m) => m[1]);
+      assert.ok(versions.length > 0);
+      for (const v of versions) assert.equal(v, HYPERFRAMES_GSAP_VERSION);
+    }
+    assert.match(read('README.md'), new RegExp(`gsap@${HYPERFRAMES_GSAP_VERSION.replace(/./g, '\.')}`));
   });
 });
 

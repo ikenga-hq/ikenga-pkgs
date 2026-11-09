@@ -8,15 +8,17 @@
 //   (Windows: set HYPERFRAMES_BROWSER_PATH to system Chrome first; see G-01.md.)
 //
 // Steps (all outputs under --out, nothing written into the repo):
-//   1. stage   work/g01 (the composition + blocks/fonts as fonts/) and work/nc-onupdate (same
-//              composition, counter swapped for the spike's onUpdate-only one).
+//   1. stage   work/g01 (the composition + blocks/fonts as fonts/), work/nc-onupdate (same
+//              composition, counter swapped for the spike's onUpdate-only one) and work/nc-chip
+//              (same composition, the 3 s caption chip reads "Step 3" instead of "Step 2").
 //   2. preview `hyperframes snapshot --at <times> --no-end` (HyperFrames' own seek path).
 //   3. render  `hyperframes render --format png-sequence` (lossless reference frames).
 //   4. control hand-rolled previews the way the spike took them (plain Chrome, tl.seek(t)),
 //              one with the onUpdate counter, one with the vendored fonts blocked.
-//   5. compare whole-frame PSNR (FFmpeg psnr filter) + ink IoU in the text regions, per pair.
-//   6. report  results.json, results.md, SHA256SUMS. Exit 0 only when G-01 passes AND both
-//              negative controls fail.
+//   5. compare whole-frame PSNR (FFmpeg psnr filter) + ink IoU and max |Δ luma| in the text
+//              regions, per pair.
+//   6. report  results.json, results.md, SHA256SUMS. Exit 0 only when G-01 passes AND all
+//              three negative controls fail.
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -38,7 +40,9 @@ import {
   inkIoU,
   judgePair,
   judgeSet,
+  makeChipVariant,
   makeOnUpdateVariant,
+  maxAbsDelta,
   parsePsnr,
   parseReferenceBackground,
   pngSequenceName,
@@ -46,6 +50,8 @@ import {
   type PairResult,
   type Region,
 } from './g01-metrics.ts';
+import { GSAP_URL } from './blocks.ts';
+import { HYPERFRAMES_GSAP_VERSION } from './cli.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const akukoRoot = resolve(here, '..', '..');
@@ -115,7 +121,7 @@ function runBuffer(cmd: string, args: string[]): Promise<Buffer> {
 
 // ---------------------------------------------------------------- staging
 
-async function stage(out: string): Promise<{ g01: string; nc: string }> {
+async function stage(out: string): Promise<{ g01: string; nc: string; chip: string }> {
   const src = await readFile(join(here, 'g01', 'index.html'), 'utf8');
   const fontsSrc = join(akukoRoot, 'blocks', 'fonts');
   const fonts = (await readdir(fontsSrc)).filter((f) => f.endsWith('.woff2'));
@@ -127,7 +133,11 @@ async function stage(out: string): Promise<{ g01: string; nc: string }> {
     for (const f of fonts) await copyFile(join(fontsSrc, f), join(dir, 'fonts', f));
     return dir;
   };
-  return { g01: await make('g01', src), nc: await make('nc-onupdate', makeOnUpdateVariant(src)) };
+  return {
+    g01: await make('g01', src),
+    nc: await make('nc-onupdate', makeOnUpdateVariant(src)),
+    chip: await make('nc-chip', makeChipVariant(src)),
+  };
 }
 
 // ---------------------------------------------------------------- HyperFrames runs
@@ -196,7 +206,14 @@ interface PuppeteerModule {
   launch(o: Record<string, unknown>): Promise<PuppeteerBrowser>;
 }
 
-const GSAP_CDN = 'https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js';
+const GSAP_CDN = GSAP_URL;
+
+/** HyperFrames' vendored copy of the GSAP the compositions name; throws if this install lacks it. */
+function vendoredGsap(hf: string): string {
+  const file = join(dirname(hf), '..', 'dist', 'vendor', 'npm', `gsap@${HYPERFRAMES_GSAP_VERSION}`, 'dist', 'gsap.min.js');
+  if (!existsSync(file)) throw new Error(`this HyperFrames does not vendor gsap@${HYPERFRAMES_GSAP_VERSION} (${file}); renders would fetch GSAP from the network`);
+  return file;
+}
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.woff2': 'font/woff2' };
 
 async function loadPuppeteer(hf: string): Promise<PuppeteerModule> {
@@ -214,7 +231,7 @@ async function handRolledCapture(a: Args, project: string, outDir: string, block
   if (!a.browser) throw new Error('hand-rolled capture needs --browser or HYPERFRAMES_BROWSER_PATH');
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
-  const gsapFile = join(dirname(a.hf), '..', 'dist', 'vendor', 'npm', 'gsap@3.15.0', 'dist', 'gsap.min.js');
+  const gsapFile = vendoredGsap(a.hf);
   const gsap = await readFile(gsapFile);
   const server = http.createServer((req, res) => {
     const p = decodeURIComponent((req.url ?? '/').split('?')[0] ?? '/');
@@ -292,7 +309,7 @@ async function comparePair(time: number, preview: string, reference: string): Pr
   const regions = [];
   for (const r of G01_REGIONS) {
     const [ga, gb] = await Promise.all([grayRegion(preview, r), grayRegion(reference, r)]);
-    regions.push({ name: r.name, iou: inkIoU(ga, gb).iou, psnrDb: psnr8(ga, gb) });
+    regions.push({ name: r.name, iou: inkIoU(ga, gb).iou, psnrDb: psnr8(ga, gb), maxDelta: maxAbsDelta(ga, gb) });
   }
   return { time, framePsnrDb: await framePsnr(preview, reference), regions };
 }
@@ -324,14 +341,14 @@ function table(set: SetReport, out: string): string {
   const rows = set.pairs.map((p) => {
     const c = p.regions.find((r) => r.name === 'counter');
     const k = p.regions.find((r) => r.name === 'caption');
-    return `| ${p.time.toFixed(1)} | ${frameIndexFor(p.time, G01_FPS)} | ${expectedCounter(p.time)} / ${expectedCaption(p.time) || '—'} | ${fmtDb(p.framePsnrDb)} | ${c?.iou.toFixed(3)} (${fmtDb(c?.psnrDb ?? Number.NaN)} dB) | ${k?.iou.toFixed(3)} (${fmtDb(k?.psnrDb ?? Number.NaN)} dB) | ${p.verdict.pass ? 'pass' : `**fail**: ${p.verdict.reasons.join('; ')}`} |`;
+    return `| ${p.time.toFixed(1)} | ${frameIndexFor(p.time, G01_FPS)} | ${expectedCounter(p.time)} / ${expectedCaption(p.time) || '—'} | ${fmtDb(p.framePsnrDb)} | ${c?.iou.toFixed(3)} / ${c?.maxDelta} (${fmtDb(c?.psnrDb ?? Number.NaN)} dB) | ${k?.iou.toFixed(3)} / ${k?.maxDelta} (${fmtDb(k?.psnrDb ?? Number.NaN)} dB) | ${p.verdict.pass ? 'pass' : `**fail**: ${p.verdict.reasons.join('; ')}`} |`;
   });
   return [
     `### ${set.id} — ${set.what}`,
     '',
     `Expected: **${set.expect}** · Result: **${set.pass ? 'pass' : 'fail'}** · previews in \`${relative(out, dirname(set.pairs[0]?.preview ?? out)).replaceAll('\\', '/')}\``,
     '',
-    '| t (s) | frame | expected counter / caption | frame PSNR (dB) | counter ink IoU (region PSNR) | caption ink IoU (region PSNR) | pair |',
+    '| t (s) | frame | expected counter / caption | frame PSNR (dB) | counter ink IoU / max Δluma (region PSNR) | caption ink IoU / max Δluma (region PSNR) | pair |',
     '|---|---|---|---|---|---|---|',
     ...rows,
     '',
@@ -345,6 +362,7 @@ async function main(): Promise<void> {
   if (a.browser) env.HYPERFRAMES_BROWSER_PATH = a.browser;
   const log = (m: string) => console.log(`[g01] ${m}`);
 
+  vendoredGsap(a.hf); // fail fast when this HyperFrames does not vendor the GSAP the compositions name
   log('staging compositions');
   const work = await stage(a.out);
 
@@ -356,6 +374,8 @@ async function main(): Promise<void> {
   const ncPreview = await hfSnapshot(a, env, work.nc, join(a.out, 'nc-onupdate', 'preview-hf'));
   log('nc-onupdate: HyperFrames render');
   const ncRef = await hfRenderPngs(a, env, work.nc, join(a.out, 'nc-onupdate', 'ref'));
+  log('nc-chip: HyperFrames snapshot');
+  const chipPreview = await hfSnapshot(a, env, work.chip, join(a.out, 'nc-chip', 'preview-hf'));
   log('controls: hand-rolled captures');
   const ncHand = await handRolledCapture(a, work.nc, join(a.out, 'nc-onupdate', 'preview-handrolled'), false);
   const g01NoFonts = await handRolledCapture(a, work.g01, join(a.out, 'g01', 'preview-handrolled-nofonts'), true);
@@ -376,13 +396,14 @@ async function main(): Promise<void> {
     await compareSet('G-01', 'compliant composition · HyperFrames snapshot vs HyperFrames PNG render', 'pass', g01Preview.files, g01Flat),
     await compareSet('NC-1', "spike's onUpdate-only counter · hand-rolled tl.seek(t) preview vs HyperFrames render", 'fail', ncHand, ncFlat),
     await compareSet('NC-2', 'compliant composition, vendored fonts blocked · hand-rolled preview vs HyperFrames render', 'fail', g01NoFonts, g01Flat),
+    await compareSet('NC-3', 'one-character caption change ("Step 3" chip at 3.0 s) · HyperFrames snapshot vs the genuine HyperFrames render', 'fail', chipPreview.files, g01Flat),
     await compareSet('I-1', "spike's onUpdate-only counter · HyperFrames snapshot vs HyperFrames render", 'info', ncPreview.files, ncFlat),
     await compareSet('I-2', 'compliant composition · hand-rolled tl.seek(t) preview (fonts loaded) vs HyperFrames render', 'info', g01Hand, g01Flat),
     await compareSet('I-3', 'sensitivity · HyperFrames snapshot at t vs the render frame one step later (t + 1/30 s)', 'info', g01Preview.files, g01FlatNext),
   ];
 
   const g01Pass = sets[0]?.pass === true;
-  const controlsCaught = sets[1]?.pass === false && sets[2]?.pass === false;
+  const controlsCaught = sets[1]?.pass === false && sets[2]?.pass === false && sets[3]?.pass === false;
   const verdict = g01Pass && controlsCaught ? 'PASS' : 'FAIL';
 
   const hfVersion = (await run(process.execPath, [a.hf, '--version'], env)).stdout.trim();
@@ -425,8 +446,8 @@ async function main(): Promise<void> {
   const md = [
     `# G-01 run — ${verdict}`,
     '',
-    `G-01 set ${g01Pass ? 'passes' : 'fails'}; negative controls ${controlsCaught ? 'both fail (caught)' : 'NOT both caught'}.`,
-    `Bar: frame PSNR ≥ ${G01_THRESHOLDS.framePsnrDb} dB and ink IoU ≥ ${G01_THRESHOLDS.inkIoU} in every text region, every pair.`,
+    `G-01 set ${g01Pass ? 'passes' : 'fails'}; negative controls ${controlsCaught ? 'all three fail (caught)' : 'NOT all caught'}.`,
+    `Bar: frame PSNR ≥ ${G01_THRESHOLDS.framePsnrDb} dB, and in every text region ink IoU ≥ ${G01_THRESHOLDS.inkIoU} and max |Δ luma| ≤ ${G01_THRESHOLDS.regionMaxDelta}, every pair.`,
     '',
     ...sets.map((s) => table(s, a.out)),
   ].join('\n');

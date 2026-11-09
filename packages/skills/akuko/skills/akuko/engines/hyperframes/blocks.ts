@@ -1,5 +1,7 @@
 // The akuko block set (blocks/compositions/*.html) and how to mount one on its own. Pure; no I/O.
 
+import { HYPERFRAMES_GSAP_VERSION } from './cli.ts';
+
 /** Every block, by file stem. The stem is also its host id, composition id and timeline key. */
 export const BLOCKS = [
   'stat',
@@ -15,7 +17,7 @@ export const BLOCKS = [
 export type BlockId = (typeof BLOCKS)[number];
 
 /** GSAP as HyperFrames expects it: this URL is served from HyperFrames' own vendored copy. */
-export const GSAP_URL = 'https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js';
+export const GSAP_URL = `https://cdn.jsdelivr.net/npm/gsap@${HYPERFRAMES_GSAP_VERSION}/dist/gsap.min.js`;
 
 export interface MountOptions {
   /** Slot length in seconds. Default 5. */
