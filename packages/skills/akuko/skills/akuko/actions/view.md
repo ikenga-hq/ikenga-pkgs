@@ -95,7 +95,7 @@ Every publish goes through `publishView({name, html, title, writesDecisions})` (
 | Host | What `publishView()` does | Notes |
 |---|---|---|
 | **A** claude.ai | Publishes the HTML as a Claude artifact → `{url}` | **Read-only:** no capabilities are needed (the page holds a snapshot). **Decision-writing:** publish with `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}` so reviewers can add decisions, and only the owner writes `akuko/project` and `akuko/conformed`. Load ArtifactData with ToolSearch; write `akuko/conformed` and seed `akuko/project` after publishing. |
-| **B** Claude Code | Writes `<project>/views/<name>.html` → `{path}` | Tell the person to open the file in a browser. A local file can't write files: its decisions stay in the page's outbox, and the page's **Copy decisions for akuko** control (the decision writer's `data-akuko-export` pattern) gives them lines to paste into chat. A B project may also publish through host A's artifact path when the desktop app has ArtifactData. |
+| **B** Claude Code | Writes `<project>/views/<name>.html` → `{path}` | **Default board:** `node --experimental-strip-types views/publish.ts --project <folder>` embeds the current `akuko.json` into the board and publishes it through `publishView()`, then prints the path. In the Claude desktop app, when the built-in browser tools (`mcp__Claude_Browser__*`) are available, open the file in that pane by default and read the person's clicks with `window.akukoDecisions.jsonl()` (`./review.md` §1; read them before you republish or reload: the pane keeps no storage). Otherwise tell the person to open the file in a browser. A local file can't write files: its decisions stay in the page's outbox, and the page's **Copy decisions for akuko** control (the decision writer's `data-akuko-export` pattern) gives them lines to paste into chat. A B project may also publish through host A's artifact path when the desktop app has ArtifactData. |
 | **C** Ikenga | Same as B now; opens in an Ikenga pane | Build the page to the `ikenga-artifact-builder` pattern when that skill is present (a self-contained HTML file that also lights up with live data in the shell). The decision writer already posts `akuko.decisions` to the bridge; the agent mirrors it into `decisions.jsonl` on read (`./review.md` §1). |
 
 **Inline views.** Where a chat can render HTML inline, a read-only view may be shown there, still through `publishView()`'s output, never as a one-off paste. A decision-writing view is never inline: decisions need a store (the host's DB, file or bridge).
@@ -116,7 +116,7 @@ Never bypass the gate: no raw publish, no hand-edited conformed list, no strippi
 
 - What the view shows and where it is (link or path).
 - Whether it can record decisions. If yes: it passed `check-view` (name the view id and version) and its decisions reach akuko the way the host stores them (`views/contract.md` §5). If no: say it only shows things and decisions are made on the board.
-- On host B (local file): remind them to use **Copy decisions for akuko** and paste the lines back.
+- On host B (local file): if the board is open in the desktop app's built-in browser, say you will read their clicks from it when they tell you they are done. Otherwise remind them to use **Copy decisions for akuko** (it says how many it copied, and leaves out decisions the project already has) and paste the lines back.
 
 Stop. Never approve anything yourself, and do not run the next stage.
 

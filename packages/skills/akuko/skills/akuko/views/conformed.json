@@ -7,6 +7,12 @@
       "sha256": "791824280a755994bedda74a1a1b3e1115424b9e3815b8e26da256b6d14526d3",
       "checked_at": "2026-11-08T10:41:13Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.2",
+      "sha256": "34ce373000472a8910769cfb12f215b9497dabfbd450d5f0761d6b570591ee45",
+      "checked_at": "2026-11-09T15:10:37Z",
+      "checker": "check-view@2"
     }
   ]
 }
