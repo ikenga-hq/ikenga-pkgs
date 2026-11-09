@@ -117,7 +117,19 @@ if is_windows && ! browser_path_ok; then
   echo "      (doctor never changes your environment; \`/akuko setup\` shows the same steps)"
 fi
 
+# Runtime packages first, without importing them: an installed skill has no node_modules,
+# and every TypeScript step below would crash with "Cannot find package 'zod'".
+deps_ok=0
 if node_ok; then
+  echo "runtime dependencies:"
+  node "$SKILL_DIR/scripts/doctor/deps.mjs" | sed 's/^/  /'
+  deps_ok=${PIPESTATUS[0]}
+  if [ "$deps_ok" -ne 0 ]; then req_missing=1; fi
+fi
+
+if node_ok && [ "$deps_ok" -ne 0 ]; then
+  echo "provider and project checks skipped: install the runtime packages above, then run doctor again."
+elif node_ok; then
   node --experimental-strip-types --disable-warning=ExperimentalWarning \
     "$SKILL_DIR/scripts/doctor/cli.ts" "$PROJECT_DIR"
   cli_status=$?

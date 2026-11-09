@@ -23,6 +23,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { ledgerCostLine } from '../setup/cost-line.ts';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
 import { createFalImageProvider } from '../providers/fal/index.ts';
@@ -53,7 +54,7 @@ const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg'
 interface SavedJob { job: Job; handle: JobHandle }
 const jobFile = (dir: string, id: string): string => join(dir, 'bible', 'jobs', `${id}.json`);
 
-function describe(r: StepResult): { code: number; out: string } {
+function describe(r: StepResult, costLine?: string): { code: number; out: string } {
   switch (r.status) {
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}\nNothing has been sent. Put the amount in front of the person; once they have approved it, run this step again.` };
@@ -64,7 +65,7 @@ function describe(r: StepResult): { code: number; out: string } {
     case 'running':
       return { code: 0, out: `Job ${r.job.id} is still running (${r.message}). Run collect --job ${r.job.id} later.` };
     case 'done':
-      return { code: 0, out: `Done: ${r.assets.length} image${r.assets.length === 1 ? '' : 's'} recorded (${r.assets.join(', ')}), cost ${Number(r.cost.toFixed(4))}. They are waiting for the person's review.` };
+      return { code: 0, out: `Done: ${r.assets.length} image${r.assets.length === 1 ? '' : 's'} recorded (${r.assets.join(', ')}), ${costLine ?? `cost ${Number(r.cost.toFixed(4))}`}. They are waiting for the person's review.` };
     case 'handoff':
       return { code: 0, out: `${r.text}\n\nJob ${r.job.id}. When the files are back: ingest --job ${r.job.id} --unit <asset id> --file <path> for each.` };
   }
@@ -120,7 +121,10 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const file = jobFile(dir, jobId);
       if (!existsSync(file)) return { code: 1, out: `akuko: no saved job ${jobId}; run step first.` };
       const saved = JSON.parse(await readFile(file, 'utf8')) as SavedJob;
-      if (cmd === 'collect') return describe(await collectBible(deps, saved.job, saved.handle));
+      if (cmd === 'collect') {
+        const r = await collectBible(deps, saved.job, saved.handle);
+        return describe(r, r.status === 'done' ? ledgerCostLine(await host.readState(), saved.job.id, r.cost) : undefined);
+      }
       const unit = str(opt.get('unit'));
       const path = str(opt.get('file'));
       if (!unit || !path) return { code: 2, out: 'akuko: --unit and --file are required.' };

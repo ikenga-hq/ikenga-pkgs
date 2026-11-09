@@ -17,6 +17,8 @@ import { createFakeHost, tinyProject } from '../providers/__fixtures__/fake-host
 import { SETUP_POINTER, createSpendGate } from '../spend/gate.ts';
 import { FAKE_PAID_ID, FAKE_PRICE, createFakePaid, testConfig } from '../spend/__fixtures__/fake-paid.ts';
 import { ManifestSchema, serializeManifest, writeManifest } from './manifest.ts';
+import { createLocalHost } from '../hosts/local.ts';
+import { AkukoProjectSchema } from '../schema/akuko-project.ts';
 import { SetupError, applySetup, browserAdvice, defaultKeyEnvName, keyPresence } from './setup.ts';
 
 const NOW = '2026-11-07T10:00:00Z';
@@ -295,5 +297,44 @@ describe('setup: key names come from providers/config.json', () => {
     const bad = JSON.parse(JSON.stringify(real));
     bad.providers.fal.key_env = 'FAL KEY=x';
     assert.throws(() => parseProviderConfig(bad));
+  });
+});
+
+describe('setup before intake (A-2): no akuko.json yet', () => {
+  it('creates the minimal project with the cap and the detected host, instead of crashing with ENOENT', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akuko-setup-new-'));
+    try {
+      const host = createLocalHost({ projectDir: join(dir, 'film') });
+      const hostRecord = { level: 'B' as const, label: 'local', capabilities: { shell: true } };
+      const r = await applySetup({ cap: 1, title: 'The Last Ferry' }, { host, config: realConfig, env: {}, platform: 'linux', now: () => NOW, hostRecord });
+      assert.equal(r.project.budget?.cap, 1);
+      const onDisk = AkukoProjectSchema.parse(JSON.parse(readFileSync(join(dir, 'film', 'akuko.json'), 'utf8')));
+      assert.deepEqual(onDisk.budget, { cap: 1, currency: 'USD', spent: 0 });
+      assert.equal(onDisk.project.title, 'The Last Ferry');
+      assert.equal(onDisk.current_stage, 'intake');
+      assert.deepEqual(onDisk.host, hostRecord, 'host recorded at creation');
+      // A second run finds the project and keeps it (and its host), only changing the cap.
+      const again = await applySetup({ cap: 2 }, { host: createLocalHost({ projectDir: join(dir, 'film') }), config: realConfig, env: {}, platform: 'linux', now: () => NOW });
+      assert.equal(again.project.budget?.cap, 2);
+      assert.equal(again.project.project.title, 'The Last Ferry');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses without a cap, and creates nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akuko-setup-new-'));
+    try {
+      const host = createLocalHost({ projectDir: dir });
+      await assert.rejects(applySetup({} as never, { host, config: realConfig, now: () => NOW }), SetupError);
+      assert.equal(existsSync(join(dir, 'akuko.json')), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a real read error other than a missing file is not swallowed', async () => {
+    const host = { readState: async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); }, writeState: async () => {} };
+    await assert.rejects(applySetup({ cap: 1 }, { host, config: realConfig, now: () => NOW }), /denied/);
   });
 });
