@@ -20,11 +20,12 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync, readdirSync } from 'node:fs';
+import { copyFile, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AkukoProject } from '../schema/akuko-project.ts';
+import { writeFileAtomic } from '../hosts/local.ts';
 import { audioTracks, renderAudioEdl, renderVideoEdl } from './edl.ts';
 import { FCPXML_VERSION, renderFcpxml } from './fcpxml.ts';
 import { buildPlan, type ExportPlan, type MediaFile } from './plan.ts';
@@ -54,7 +55,7 @@ export interface ExportResult {
   written: string[];
   unchanged: string[];
   removed: string[];
-  /** Stale files of ours the person changed since: left in place. */
+  /** Files of ours the person has changed since akuko wrote them (a stale file, or one the new export would replace): left exactly as they are. */
   keptModified: string[];
 }
 
@@ -92,6 +93,10 @@ export async function planFromFolder(o: Pick<ExportOptions, 'project' | 'project
       const p = localPath(o.projectDir, uri);
       return p === undefined ? {} : probeFile(p, (x) => readFile(x));
     },
+    list: (dir) => {
+      const p = localPath(o.projectDir, dir);
+      return p !== undefined && existsSync(p) ? readdirSync(p) : [];
+    },
   });
 }
 
@@ -109,7 +114,7 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
   L.push(`# ${plan.title}: DaVinci Resolve handoff`, '');
   L.push(`${plan.shots.length} shot${plan.shots.length === 1 ? '' : 's'}, ${total} (${frames(plan.totalFrames)}) at ${fps.label} fps, ${plan.width} x ${plan.height}. Written by akuko; only material a person approved is on the timeline.`, '');
   if (o.timelineOnly) {
-    L.push('**This is a timeline-only export.** No media was copied. `DOWNLOAD-LIST.md` names every file to download, and the name to save it as, into `media/` and `audio/` next to the timeline, before you import. Clip lengths were not checked against the files.', '');
+    L.push('**This is a timeline-only export.** No media was copied. `DOWNLOAD-LIST.md` names every file to download, and the name to save it as, into `media/` and `audio/` next to the timeline, before you import. Clip lengths were not checked against the files, and the picture and sound files are not in this folder: the paths inside the timeline point here, so **the clips will open offline in Resolve until you relink them** (Media Pool > select the clips > right-click > Relink Selected Clips) to the folder where you saved the downloads.', '');
   }
   L.push('## Import into Resolve (FCPXML, the main file)', '');
   L.push(
@@ -127,7 +132,9 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
       '',
       `1. Import everything in \`media/\` and \`audio/\` into the Media Pool first (File > Import > Media).`,
       `2. Set the timeline frame rate to ${fps.label} (as above).`,
-      `3. File > Import > Timeline... > \`edl/video.edl\`${o.edlFiles.length > 1 ? ', then each `edl/audio-N.edl` into the same timeline or its own' : ''}. Reel names are the shot numbers (\`001\`); the file name is in each event's \`FROM CLIP NAME\` comment. If Resolve cannot match them, use its reel-name options in Project Settings > General Options > Conform Options.`,
+      '3. Project Settings > General Options > Conform Options: tick **Assist using reel names from the** and pick **Source clip filename**. (Resolve\'s manual lists this checkbox and its choices: Source clip file pathname, Pattern, Mediapool folder name, Embedding in source clip file, Source clip filename.) Set it before importing: changing it afterwards does not re-conform a timeline that is already imported.',
+      `4. File > Import > Timeline... > \`edl/video.edl\`. Importing an EDL makes a **new timeline**.${o.edlFiles.length > 1 ? ' Each `edl/audio-N.edl` becomes its own new timeline the same way: open it, select its audio clips, copy them, and paste them onto an audio track of the main timeline at 01:00:00:00 (the record timecodes already match).' : ''}`,
+      '5. Reel names are one per file and never shared: `V001` is the video of shot 1, `A001` its voice-over, `MUS01` and `SFX01` the music and effects; the file name is in each event\'s `FROM CLIP NAME` comment. **Unverified:** with "Source clip filename" Resolve takes a clip\'s reel from its file name, so reels like `V001` may not match by themselves. If clips come in offline, use the FCPXML, or place them by hand from the Timeline table below.',
       '',
     );
   }
@@ -138,6 +145,9 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
   }
   L.push('');
   L.push('Durations are whole frames: a shot\'s seconds times the frame rate, rounded to the nearest frame (halves up, at least one frame), shot by shot, so the timeline is exactly the sum of its shots. A clip longer than its shot is cut at the shot\'s end; one that is shorter is followed by a gap and named in LEFT-OUT.md. Nothing is stretched.', '');
+  if (fps.num === 1001) {
+    L.push(`At ${fps.label} fps akuko counts frames in the nominal ${fps.nominal}-frame second, so N frames last 0.1% longer in real time than N/${fps.nominal} s. A clip file that is exactly as long as its shot can end a hair short of the last frame: check the last frame of such shots.`, '');
+  }
   if (plan.audio.length > 0) {
     L.push('## Audio', '', '| Track | File | At | Length |', '|---|---|---|---|');
     for (const a of plan.audio) L.push(`| A${a.track} (${a.role}) | ${a.media.dest.split('/').pop()} | ${timecode(START_FRAMES(fps) + a.recIn, fps)} | ${frames(a.frames)}${a.note ? `, ${a.note}` : ''} |`);
@@ -237,61 +247,112 @@ export async function writeExport(o: ExportOptions): Promise<ExportResult> {
   const ours = new Map((old?.files ?? []).map((f) => [f.path, f]));
 
   // Plan every path first, and stop before writing if one is somebody else's.
-  const wanted = new Map<string, { role: string; text?: string; src?: string }>();
-  for (const [path, text] of texts) wanted.set(path, { role: 'text', text });
-  for (const c of copies) wanted.set(c.m.dest, { role: c.m.role, src: c.src });
-  const conflicts = [...wanted.keys()].filter((p) => existsSync(join(outDir, ...p.split('/'))) && !ours.has(p));
+  const abs = (path: string): string => join(outDir, ...path.split('/'));
+  const wanted = [...texts.keys(), ...copies.map((c) => c.m.dest)];
+  if (!timelineOnly) wanted.push('checksums.sha256');
+  const conflicts = wanted.filter((p) => existsSync(abs(p)) && !ours.has(p));
   if (conflicts.length > 0) {
     throw new HandoffError(`These files already exist in ${outDir} and were not written by akuko, so nothing was exported: ${conflicts.join(', ')}. Choose another --out folder or move them.`);
   }
 
-  const written: string[] = [];
-  const unchanged: string[] = [];
-  const files = new Map<string, ManifestFile>();
-  const place = async (path: string, role: string, hash: string, write: (abs: string) => Promise<void>): Promise<void> => {
-    const abs = join(outDir, ...path.split('/'));
-    await mkdir(dirname(abs), { recursive: true });
-    if (existsSync(abs) && (await sha256File(abs)) === hash) unchanged.push(path);
-    else {
-      await write(abs);
-      written.push(path);
-    }
-    files.set(path, { path, sha256: hash, role });
+  /**
+   * What to do with one of our paths: write it (absent, or exactly as akuko last wrote it), leave it
+   * (already the new content), or keep it (the person changed it since: different from what we wrote AND
+   * from what we would write now). A kept file stays in the manifest with its old hash, so it is reported
+   * on every later run until the person moves it.
+   */
+  type Dispo = { act: 'write' } | { act: 'same' } | { act: 'kept'; disk: string };
+  const decide = async (path: string, hash: string): Promise<Dispo> => {
+    if (!existsSync(abs(path))) return { act: 'write' };
+    const disk = await sha256File(abs(path));
+    if (disk === hash) return { act: 'same' };
+    return disk === ours.get(path)?.sha256 ? { act: 'write' } : { act: 'kept', disk };
   };
 
-  await mkdir(outDir, { recursive: true });
-  for (const c of copies) await place(c.m.dest, c.m.role, await sha256File(c.src), (abs) => copyFile(c.src, abs));
-  for (const [path, text] of texts) await place(path, 'text', sha(text), (abs) => writeFile(abs, text, 'utf8'));
+  const copyHash = new Map<string, string>();
+  for (const c of copies) copyHash.set(c.m.dest, await sha256File(c.src));
+  const copyDispo = new Map<string, Dispo>();
+  for (const c of copies) copyDispo.set(c.m.dest, await decide(c.m.dest, copyHash.get(c.m.dest)!));
 
-  // Our own checksum list: media, audio and captions (the texts are regenerated, not checked).
-  const sums = copies.map((c) => `${files.get(c.m.dest)!.sha256}  ${c.m.dest}`).sort((a, b) => a.split('  ')[1]!.localeCompare(b.split('  ')[1]!));
+  // Our own checksum list: what is in the folder for every media, audio and caption file.
   if (!timelineOnly) {
-    const body = `${sums.join('\n')}\n`;
-    await place('checksums.sha256', 'text', sha(body), (abs) => writeFile(abs, body, 'utf8'));
+    const lines = copies.map((c) => {
+      const d = copyDispo.get(c.m.dest)!;
+      return { path: c.m.dest, hash: d.act === 'kept' ? d.disk : copyHash.get(c.m.dest)! };
+    });
+    lines.sort((x, y) => x.path.localeCompare(y.path));
+    texts.set('checksums.sha256', `${lines.map((l) => `${l.hash}  ${l.path}`).join('\n')}\n`);
+  }
+  const textHash = new Map([...texts].map(([p, t]) => [p, sha(t)]));
+  const textDispo = new Map<string, Dispo>();
+  for (const [p] of texts) textDispo.set(p, await decide(p, textHash.get(p)!));
+
+  interface Item { path: string; role: string; hash: string; d: Dispo; src?: string; text?: string }
+  const items: Item[] = [
+    ...copies.map((c): Item => ({ path: c.m.dest, role: c.m.role, hash: copyHash.get(c.m.dest)!, d: copyDispo.get(c.m.dest)!, src: c.src })),
+    ...[...texts].map(([path, text]): Item => ({ path, role: 'text', hash: textHash.get(path)!, d: textDispo.get(path)!, text })),
+  ];
+
+  const files = new Map<string, ManifestFile>();
+  for (const it of items) files.set(it.path, it.d.act === 'kept' ? ours.get(it.path)! : { path: it.path, sha256: it.hash, role: it.role });
+
+  const manifestPath = join(outDir, MANIFEST);
+  const writeManifest = async (entries: Iterable<ManifestFile>): Promise<void> => {
+    const manifest: Manifest = {
+      format: MANIFEST_FORMAT,
+      version: 1,
+      fcpxml_version: FCPXML_VERSION,
+      fps: plan.fps.label,
+      files: [...entries].sort((x, y) => x.path.localeCompare(y.path)),
+    };
+    const mtext = `${JSON.stringify(manifest, null, 2)}\n`;
+    if (!existsSync(manifestPath) || (await readFile(manifestPath, 'utf8')) !== mtext) await writeFileAtomic(manifestPath, mtext);
+  };
+
+  // The manifest goes first: every NEW path is listed before it is written, so a run that dies half way
+  // leaves files the next run recognises as its own, not as somebody else's. (Files are written through a
+  // temp name and renamed, so no half-written file ever sits at a real path.)
+  await mkdir(outDir, { recursive: true });
+  const prior = new Map(ours);
+  for (const it of items) if (!prior.has(it.path) && it.d.act !== 'same') prior.set(it.path, files.get(it.path)!);
+  await writeManifest(prior.values());
+
+  const written: string[] = [];
+  const unchanged: string[] = [];
+  const keptModified: string[] = [];
+  for (const it of items) {
+    if (it.d.act === 'same') unchanged.push(it.path);
+    else if (it.d.act === 'kept') keptModified.push(it.path);
+    else {
+      const target = abs(it.path);
+      await mkdir(dirname(target), { recursive: true });
+      if (it.src !== undefined) {
+        const tmp = `${target}.akuko-tmp`;
+        try {
+          await copyFile(it.src, tmp);
+          await rename(tmp, target);
+        } catch (err) {
+          await rm(tmp, { force: true });
+          throw err;
+        }
+      } else await writeFileAtomic(target, it.text!);
+      written.push(it.path);
+    }
   }
 
   const removed: string[] = [];
-  const keptModified: string[] = [];
   for (const [path, f] of ours) {
     if (files.has(path)) continue;
-    const abs = join(outDir, ...path.split('/'));
-    if (!existsSync(abs)) continue;
-    if ((await sha256File(abs)) === f.sha256) {
-      await rm(abs);
+    if (!existsSync(abs(path))) continue;
+    if ((await sha256File(abs(path))) === f.sha256) {
+      await rm(abs(path));
       removed.push(path);
-    } else keptModified.push(path);
+    } else {
+      keptModified.push(path);
+      files.set(path, f);
+    }
   }
 
-  const manifest: Manifest = {
-    format: MANIFEST_FORMAT,
-    version: 1,
-    fcpxml_version: FCPXML_VERSION,
-    fps: plan.fps.label,
-    files: [...files.values(), ...keptModified.map((p) => ours.get(p)!)].sort((a, b) => a.path.localeCompare(b.path)),
-  };
-  const mtext = `${JSON.stringify(manifest, null, 2)}\n`;
-  const mpath = join(outDir, MANIFEST);
-  if (!existsSync(mpath) || (await readFile(mpath, 'utf8')) !== mtext) await writeFile(mpath, mtext, 'utf8');
-
+  await writeManifest(files.values());
   return { outDir, plan, written, unchanged, removed, keptModified };
 }

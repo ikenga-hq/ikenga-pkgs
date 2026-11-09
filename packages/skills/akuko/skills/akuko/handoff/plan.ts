@@ -44,6 +44,8 @@ export interface MediaFile {
   durationS?: number;
   channels?: number;
   sampleRate?: number;
+  /** A video file that carries a sound track. */
+  hasAudio?: boolean;
 }
 
 export interface VideoEvent {
@@ -114,6 +116,8 @@ export interface PlanInput {
   /** Does the file exist where the asset says? `timelineOnly` runs answer yes for everything. */
   exists(uri: string): boolean;
   probe(uri: string): Promise<Probe>;
+  /** File names in a project folder (`audio/vo`); used to find the newest captions. Absent: only the plain names are tried. */
+  list?(dir: string): string[];
   /** Host A and similar: no files to read, the timeline is built from the project alone. */
   timelineOnly?: boolean;
 }
@@ -173,10 +177,21 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
       ...(pr.durationS !== undefined ? { durationS: pr.durationS } : {}),
       ...(pr.channels !== undefined ? { channels: pr.channels } : {}),
       ...(pr.sampleRate !== undefined ? { sampleRate: pr.sampleRate } : {}),
+      ...(pr.hasAudio ? { hasAudio: true } : {}),
     };
     media.push(f);
     return f;
   };
+
+  // Shots that share a beat: successive shots in akuko's own breakdowns, but in a Studio import cells under one
+  // beat can be alternates of the same moment. All are placed either way; say so when it may matter.
+  const byBeat = new Map<string, Shot[]>();
+  for (const s of p.shots) if (s.beat !== undefined) byBeat.set(s.beat, [...(byBeat.get(s.beat) ?? []), s]);
+  for (const [beat, group] of byBeat) {
+    if (group.length > 1 && group.some((s) => s.studio !== undefined)) {
+      warnings.push(`Check: ${group.map((s) => s.id).join(', ')} share the beat "${beat}" and come from a Studio import, where cells under one beat can be alternate versions of the same moment, not successive shots. All of them are on the timeline, so the film may be longer than intended: delete the alternates in Resolve, or give the ones you do not want no approved material.`);
+    }
+  }
 
   const clips = p.assets.filter(isClip);
   const frames = p.assets.filter(isKeyframe);
@@ -216,6 +231,7 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
     if (usable(clip) && exists(clip.file.uri)) {
       const m = await addMedia({ role: 'clip', asset: clip.id, shot: shot.id, uri: clip.file.uri, dest: `media/${num}_${safe(shot.id)}${ext(clip.file.uri)}`, ...(clip.file.mime ? { mime: clip.file.mime } : {}) });
       const avail = m.durationS !== undefined ? framesAvailable(m.durationS, fps) : undefined;
+      if (m.durationS === undefined && !input.timelineOnly) warnings.push(`${shot.id}: the length of the clip could not be read, so it was not checked against the shot (${slot} frames). If it is shorter, the end of the shot will be empty in Resolve.`);
       if (avail !== undefined && avail < slot) {
         const short = slot - avail;
         pushV({ shot: shot.id, kind: 'clip', media: m, frames: avail, srcIn: 0, note: `clip is ${short} frame${short === 1 ? '' : 's'} shorter than the shot; gap follows` }, t);
@@ -312,9 +328,10 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
     const known = m.durationS !== undefined ? Math.max(1, Math.ceil(m.durationS * fps.nominal - 1e-6)) : undefined;
     let len = known ?? Math.max(1, end - start);
     let note: string | undefined = known === undefined ? `length unknown here; set to its placement (${end - start} frames), trim in Resolve` : undefined;
-    if (start + len > totalFrames) {
-      len = totalFrames - start;
-      note = `trimmed to the end of the film`;
+    // A music bed or effect placed on a shot or scene stops where that shot or scene ends; one on the film, where the film ends.
+    if (start + len > end) {
+      len = end - start;
+      note = where && 'film' in where ? 'cut at the end of the film' : `cut at the end of its ${where && 'shot' in where ? 'shot' : 'scene'} (the file in audio/ is whole)`;
     }
     if (len > 0) found.push({ role, media: m, ...(anchor ? { shot: anchor } : {}), recIn: start, frames: len, srcIn: 0, ...(note ? { note } : {}) });
   }
@@ -333,12 +350,22 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
   const base = [0, lanes[0]!.length, lanes[0]!.length + lanes[1]!.length];
   for (const { e, g, lane } of placed) audio.push({ ...e, n: audio.length + 1, track: base[g]! + lane + 1 });
 
-  // Captions: copied when sound sync wrote them (Resolve imports SRT as subtitles).
+  // Captions: copied when sound sync wrote them (Resolve imports SRT as subtitles). Later syncs write
+  // captions-2.srt, captions-3.srt, ...: the highest number is the newest.
   const captions: MediaFile[] = [];
-  for (const c of [{ uri: 'audio/vo/captions.srt', mime: 'application/x-subrip' }, { uri: 'audio/vo/captions.vtt', mime: 'text/vtt' }]) {
-    if (exists(c.uri) && !input.timelineOnly) {
-      captions.push({ id: `c${captions.length + 1}`, role: 'captions', uri: c.uri, dest: `captions/${c.uri.split('/').pop()}`, mime: c.mime });
+  if (!input.timelineOnly) {
+    const names = input.list?.('audio/vo') ?? ['captions.srt', 'captions.vtt'];
+    for (const [ext2, mime] of [['srt', 'application/x-subrip'], ['vtt', 'text/vtt']] as const) {
+      let best: { name: string; n: number } | undefined;
+      for (const name of names) {
+        const m = new RegExp('^captions(?:-(\\d+))?\\.' + ext2 + '$').exec(name);
+        if (!m) continue;
+        const n = m[1] === undefined ? 1 : Number(m[1]);
+        if (!best || n > best.n) best = { name, n };
+      }
+      if (best && exists(`audio/vo/${best.name}`)) captions.push({ id: `c${captions.length + 1}`, role: 'captions', uri: `audio/vo/${best.name}`, dest: `captions/captions.${ext2}`, mime });
     }
+    if (captions.length > 0) warnings.push('The captions are the ones the latest "sound sync" wrote. If you approved or sent back a voice-over since, run sound sync again before exporting.');
   }
 
   return {

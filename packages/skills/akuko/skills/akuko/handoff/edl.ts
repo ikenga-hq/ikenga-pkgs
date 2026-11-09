@@ -7,15 +7,28 @@
  *   edl/audio-N.edl     one file per audio track
  * Resolve conforms an EDL against media already in the Media Pool (by reel name or clip name and
  * timecode, not by file location), so the person imports `media/` + `audio/` first. See the README
- * an export writes. Reel names are the shot's number (`001`); the file name is in
+ * an export writes. Each file has its own reel name (`reelName`); the file name is in
  * `* FROM CLIP NAME:` and every event carries the shot id.
  *
  * Source timecode runs from 00:00:00:00 (generated media has no embedded timecode). Record
  * timecode starts at 01:00:00:00. Non-drop frame.
  */
 
-import type { AudioEvent, ExportPlan } from './plan.ts';
+import type { AudioEvent, ExportPlan, VideoEvent } from './plan.ts';
 import { START_FRAMES, timecode } from './timecode.ts';
+
+/**
+ * One reel name per file, never shared across kinds, at most 8 characters (the CMX 3600 reel field):
+ * `V001` video of shot 1, `A001` its voice-over, `NAR01` the single narration track, `MUS01`, `SFX01`.
+ */
+export function reelName(plan: ExportPlan, ev: VideoEvent | AudioEvent): string {
+  const shotNo = (shot: string | undefined): string => String(plan.shots.find((s) => s.shot === shot)?.n ?? 0).padStart(3, '0');
+  if ('kind' in ev) return ev.kind === 'gap' ? 'BL' : `V${shotNo(ev.shot)}`;
+  if (ev.role === 'vo') return `A${shotNo(ev.shot)}`;
+  const same = plan.audio.filter((a) => a.role === ev.role);
+  const nn = String(same.indexOf(ev) + 1).padStart(2, '0');
+  return ev.role === 'narration' ? `NAR${nn}` : ev.role === 'music' ? `MUS${nn}` : `SFX${nn}`;
+}
 
 const fileName = (dest: string): string => dest.split('/').pop() ?? dest;
 
@@ -33,8 +46,7 @@ export function renderVideoEdl(plan: ExportPlan): string {
       out.push(eventLine(v.n, 'BL', 'V', timecode(0, fps), timecode(v.frames, fps), rec[0], rec[1]));
       out.push(`* SHOT ${v.shot}: no media here, ${v.note ?? 'gap'}`);
     } else {
-      const reel = String(plan.shots.find((s) => s.shot === v.shot)!.n).padStart(3, '0');
-      out.push(eventLine(v.n, reel, 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));
+      out.push(eventLine(v.n, reelName(plan, v), 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));
       out.push(`* FROM CLIP NAME: ${fileName(v.media!.dest)}`);
       out.push(`* SHOT ${v.shot}${v.kind === 'still' ? ' (still: a key frame held for the shot)' : ''}`);
     }
@@ -58,8 +70,7 @@ export function renderAudioEdl(plan: ExportPlan, events: AudioEvent[], label: st
   const out = [`TITLE: ${plan.title} (${label})`, 'FCM: NON-DROP FRAME', ''];
   events.forEach((a, i) => {
     const track = (a.media.channels ?? 2) === 1 ? 'A' : 'AA';
-    const reel = (a.shot ? String(plan.shots.find((s) => s.shot === a.shot)?.n ?? i + 1) : String(i + 1)).padStart(3, '0');
-    out.push(eventLine(i + 1, reel, track, timecode(a.srcIn, fps), timecode(a.srcIn + a.frames, fps), timecode(start + a.recIn, fps), timecode(start + a.recIn + a.frames, fps)));
+    out.push(eventLine(i + 1, reelName(plan, a), track, timecode(a.srcIn, fps), timecode(a.srcIn + a.frames, fps), timecode(start + a.recIn, fps), timecode(start + a.recIn + a.frames, fps)));
     out.push(`* FROM CLIP NAME: ${fileName(a.media.dest)}`);
     out.push(`* ${a.role.toUpperCase()}${a.shot ? ` ${a.shot}` : ''}${a.note ? ` (${a.note})` : ''}`);
     out.push('');

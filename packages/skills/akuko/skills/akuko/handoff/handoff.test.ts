@@ -20,11 +20,13 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { run as cli } from './cli.ts';
+import { appleFormatName } from './fcpxml.ts';
 import { parseEdl } from './edl.ts';
 import { buildPlan, type ExportPlan } from './plan.ts';
 import { probeMp3, probeMp4 } from './probe.ts';
 import { HandoffError, fcpTime, framesFor, parseFcpTime, parseFps, parseTimecode, timecode, START_FRAMES } from './timecode.ts';
 import { MANIFEST, planFromFolder, writeExport } from './write.ts';
+import { buildBeatingProject } from './__fixtures__/beating.ts';
 import { EXPECT, buildExportProject, miniMp4 } from './__fixtures__/project.ts';
 import { parseDtd, validate } from './__fixtures__/dtd.ts';
 import { find, parseXml, walk, type XmlNode } from './__fixtures__/xml.ts';
@@ -181,6 +183,13 @@ describe('the short-story export', () => {
     assert.equal(sfx.recIn, plan.shots.find((s) => s.shot === 'sc1_sh4')!.recIn);
     assert.equal(sfx.frames, 36);
     assert.deepEqual(plan.notPlaced.map((m) => m.asset), ['loose_music_2']);
+    // Music on a scene stops where the scene ends (sc1 is 6+5+5+8 = 24 s), though its file is 40 s; it overlaps the
+    // film-wide bed, so it takes its own track.
+    const sceneMusic = plan.audio.find((a) => a.media.asset === 'scene_music_3')!;
+    assert.equal(sceneMusic.recIn, 0);
+    assert.equal(sceneMusic.frames, 24 * 24);
+    assert.match(sceneMusic.note ?? '', /end of its scene/);
+    assert.notEqual(sceneMusic.track, music.track);
     assert.ok(plan.audio.every((a) => a.track >= 1));
     assert.ok(plan.captions.length === 2);
   });
@@ -260,15 +269,54 @@ describe('the short-story export', () => {
       assert.equal(parseTimecode(e.srcOut, fps24) - parseTimecode(e.srcIn, fps24), pv.frames);
       if (pv.media) {
         assert.equal(e.clipName, pv.media.dest.split('/').pop());
-        assert.equal(e.reel, String(plan.shots.find((s) => s.shot === pv.shot)!.n).padStart(3, '0'));
+        assert.equal(e.reel, `V${String(plan.shots.find((s) => s.shot === pv.shot)!.n).padStart(3, '0')}`);
       } else assert.equal(e.reel, 'BL');
     });
     assert.equal(at - START_FRAMES(fps24), plan.totalFrames);
     const a1 = parseEdl(readFileSync(join(out, 'edl', 'audio-1.edl'), 'utf8'));
-    assert.deepEqual(a1.events.map((e) => [e.clipName, e.recIn, e.track]), [
-      ['001_sc1_sh1_vo.wav', '01:00:00:00', 'A'],
-      ['002_sc1_sh2_vo.wav', '01:00:06:00', 'A'],
+    assert.deepEqual(a1.events.map((e) => [e.clipName, e.recIn, e.track, e.reel]), [
+      ['001_sc1_sh1_vo.wav', '01:00:00:00', 'A', 'A001'],
+      ['002_sc1_sh2_vo.wav', '01:00:06:00', 'A', 'A002'],
     ]);
+  });
+
+  it('EDL reel names: one per file, never shared across video, voice-over, music and SFX, at most 8 characters', () => {
+    const out = join(dir, 'export', 'resolve');
+    const byReel = new Map<string, Set<string>>();
+    const files = readdirSync(join(out, 'edl')).filter((f) => f.endsWith('.edl'));
+    assert.ok(files.length >= 4, 'video plus voice-over, music and SFX tracks');
+    for (const f of files) {
+      for (const e of parseEdl(readFileSync(join(out, 'edl', f), 'utf8')).events) {
+        assert.ok(e.reel.length <= 8, `${e.reel} is longer than 8 characters`);
+        if (e.reel === 'BL') continue;
+        byReel.set(e.reel, (byReel.get(e.reel) ?? new Set()).add(e.clipName!));
+      }
+    }
+    for (const [reel, names] of byReel) assert.equal(names.size, 1, `reel ${reel} names ${[...names].join(' and ')}`);
+    assert.ok(byReel.has('V001') && byReel.has('A001') && byReel.has('MUS01') && byReel.has('SFX01'));
+  });
+
+  it('the newest captions are exported, and the person is told to sync again if approvals changed', () => {
+    const out = join(dir, 'export', 'resolve');
+    assert.match(readFileSync(join(out, 'captions', 'captions.srt'), 'utf8'), /The ferry was very late\./);
+    assert.match(readFileSync(join(out, 'captions', 'captions.vtt'), 'utf8'), /The ferry was very late\./);
+    assert.match(readFileSync(join(out, 'captions', 'captions_timeline_01h.srt'), 'utf8'), /very late/);
+    assert.equal(plan.captions.find((c) => c.dest.endsWith('.srt'))!.uri, 'audio/vo/captions-2.srt');
+    assert.ok(plan.warnings.some((w) => /sound sync/.test(w) && /captions/.test(w)));
+  });
+
+  it('a clip with its own sound track keeps it in the timeline', () => {
+    const out = join(dir, 'export', 'resolve');
+    const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
+    const assets = find(find(root, 'resources')[0]!, 'asset');
+    const sh4 = assets.find((a) => a.attrs['name'] === '004_sc1_sh4')!;
+    assert.equal(sh4.attrs['hasVideo'], '1');
+    assert.equal(sh4.attrs['hasAudio'], '1');
+    assert.equal(sh4.attrs['audioSources'], '1');
+    assert.equal(sh4.attrs['audioChannels'], '1');
+    assert.equal(sh4.attrs['audioRate'], '48000');
+    const sh1 = assets.find((a) => a.attrs['name'] === '001_sc1_sh1')!;
+    assert.equal(sh1.attrs['hasAudio'], undefined, 'a clip without sound is not given any');
   });
 
   it('changes nothing in the project: akuko.json and every file are exactly as before', () => {
@@ -383,5 +431,151 @@ describe('command line', () => {
     assert.equal(bad.code, 1);
     assert.match(bad.out, /not supported/);
     assert.equal((await cli(['export', '--project', d, '--format', 'xml'])).code, 2);
+  });
+});
+
+describe('review fixes', () => {
+  it('mp4: a sound track is detected, with its channels and rate; none is invented', async () => {
+    const d = await scratch('probe-audio');
+    await writeFile(join(d, 'with.mp4'), miniMp4(4, true));
+    await writeFile(join(d, 'without.mp4'), miniMp4(4, false));
+    const w = await probeMp4(join(d, 'with.mp4'));
+    assert.deepEqual([w.durationS, w.hasAudio, w.channels, w.sampleRate], [4, true, 1, 48000]);
+    const wo = await probeMp4(join(d, 'without.mp4'));
+    assert.equal(wo.hasAudio, undefined);
+    assert.equal(wo.durationS, 4);
+  });
+
+  it('format name only for standard sizes: 1:1 and 9:16 get none', async () => {
+    assert.equal(appleFormatName(1920, 1080, '24'), 'FFVideoFormat1080p24');
+    assert.equal(appleFormatName(1280, 720, '23.976'), 'FFVideoFormat720p2398');
+    assert.equal(appleFormatName(3840, 2160, '25'), 'FFVideoFormat3840x2160p25');
+    assert.equal(appleFormatName(1080, 1080, '24'), undefined);
+    assert.equal(appleFormatName(1080, 1920, '24'), undefined);
+    for (const [aspect, w, h] of [['1:1', 1080, 1080], ['9:16', 1080, 1920], ['16:9', 1920, 1080]] as const) {
+      const p2 = structuredClone(project);
+      p2.project.aspect_ratio = aspect;
+      const out = await scratch(`fmt-${w}`);
+      await writeExport({ project: p2, projectDir: dir, outDir: out });
+      const f = find(find(parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8')), 'resources')[0]!, 'format')[0]!;
+      assert.equal(f.attrs['width'], String(w));
+      assert.equal(f.attrs['height'], String(h));
+      if (aspect === '16:9') assert.equal(f.attrs['name'], 'FFVideoFormat1080p24');
+      else assert.equal(f.attrs['name'], undefined, `${aspect} must not be called 1080p`);
+    }
+  });
+
+  it('a re-run keeps what the person edited at akuko\'s own paths, and says so', async () => {
+    const out = await scratch('edited');
+    await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    await writeFile(join(out, 'README.md'), 'my own notes');
+    await writeFile(join(out, 'media', '001_sc1_sh1.mp4'), 'a graded version');
+    const entries = (): Record<string, string> => Object.fromEntries((JSON.parse(readFileSync(join(out, MANIFEST), 'utf8')) as { files: Array<{ path: string; sha256: string }> }).files.map((f) => [f.path, f.sha256]));
+    const recorded = entries();
+    const r = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    assert.deepEqual([...r.keptModified].sort(), ['README.md', 'media/001_sc1_sh1.mp4']);
+    assert.ok(!r.written.includes('README.md') && !r.written.includes('media/001_sc1_sh1.mp4'));
+    assert.equal(readFileSync(join(out, 'README.md'), 'utf8'), 'my own notes');
+    assert.equal(readFileSync(join(out, 'media', '001_sc1_sh1.mp4'), 'utf8'), 'a graded version');
+    // still reported next time, and the manifest still describes what akuko wrote
+    const now = entries();
+    assert.equal(now['README.md'], recorded['README.md']);
+    assert.equal(now['media/001_sc1_sh1.mp4'], recorded['media/001_sc1_sh1.mp4']);
+    const r2 = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    assert.deepEqual([...r2.keptModified].sort(), ['README.md', 'media/001_sc1_sh1.mp4']);
+    // the checksum list describes the folder as it is, graded file included
+    const sums = readFileSync(join(out, 'checksums.sha256'), 'utf8');
+    assert.ok(sums.includes(`${createHash('sha256').update('a graded version').digest('hex')}  media/001_sc1_sh1.mp4`));
+    // the command line reports it
+    const text = await cli(['export', '--project', dir, '--out', out, '--format', 'both']);
+    assert.match(text.out, /kept \(you changed them since the last export\): .*media\/001_sc1_sh1\.mp4/);
+    // once the person deletes theirs, the next export writes akuko's again
+    await rm(join(out, 'README.md'));
+    const r3 = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    assert.ok(r3.written.includes('README.md'));
+  });
+
+  it('a run that dies half way leaves files the next run knows as its own', async () => {
+    const out = await scratch('crash');
+    await mkdir(join(out, 'media', '003_sc1_sh3.mp4.akuko-tmp'), { recursive: true }); // the third copy cannot be written
+    await assert.rejects(writeExport({ project, projectDir: dir, outDir: out }));
+    assert.ok(existsSync(join(out, 'media', '001_sc1_sh1.mp4')), 'the first copies were made before the failure');
+    const m = JSON.parse(readFileSync(join(out, MANIFEST), 'utf8')) as { files: Array<{ path: string }> };
+    assert.ok(m.files.some((f) => f.path === 'media/001_sc1_sh1.mp4'));
+    assert.ok(m.files.some((f) => f.path === 'media/003_sc1_sh3.mp4'), 'a path is listed before it is written');
+    await rm(join(out, 'media', '003_sc1_sh3.mp4.akuko-tmp'), { recursive: true });
+    const r = await writeExport({ project, projectDir: dir, outDir: out }); // no "not written by akuko" refusal
+    assert.ok(r.written.includes('timeline.fcpxml'));
+    assert.deepEqual(readdirSync(join(out, 'media')).filter((f) => f.endsWith('.akuko-tmp')), []);
+  });
+
+  it('shots that share a beat in a Studio import are flagged; akuko\'s own are not', async () => {
+    const shared = project.shots.filter((s) => s.beat === 'sc3_b2').map((s) => s.id);
+    assert.deepEqual(shared, ['sc3_sh2', 'sc3_sh3']);
+    assert.ok(!plan.warnings.some((w) => w.startsWith('Check:')), 'no Studio data, no warning');
+    const p2 = structuredClone(project);
+    for (const s of p2.shots) if (shared.includes(s.id)) (s as { studio?: unknown }).studio = { index: 1 };
+    const pl = await buildPlan({ project: p2, fps: fps24, exists: () => true, probe: async () => ({ durationS: 100 }) });
+    const w = pl.warnings.find((x) => x.startsWith('Check:'))!;
+    assert.match(w, /sc3_sh2, sc3_sh3 share the beat "sc3_b2"/);
+    assert.match(w, /alternate/);
+    assert.equal(pl.totalFrames, plan.totalFrames, 'all of them are still placed');
+  });
+
+  it('warns when a clip\'s length cannot be read', async () => {
+    const pl = await buildPlan({ project, fps: fps24, exists: () => true, probe: async () => ({}) });
+    assert.ok(pl.warnings.some((w) => w.startsWith('sc1_sh1:') && /could not be read/.test(w)));
+    const ok = await buildPlan({ project, fps: fps24, exists: () => true, probe: async () => ({ durationS: 100 }) });
+    assert.ok(!ok.warnings.some((w) => /could not be read/.test(w)));
+  });
+
+  it('the timeline-only export says the clips open offline until relinked', async () => {
+    const out = await scratch('tl-readme');
+    await writeExport({ project, projectDir: join(dir, 'nowhere'), outDir: out, timelineOnly: true });
+    assert.match(readFileSync(join(out, 'README.md'), 'utf8'), /open offline in Resolve until you relink them/);
+  });
+
+  it('the README names the exact EDL conform setting and says an EDL import makes a new timeline', () => {
+    const readme = readFileSync(join(dir, 'export', 'resolve', 'README.md'), 'utf8');
+    assert.match(readme, /Assist using reel names from the\*\* and pick \*\*Source clip filename\*\*/);
+    assert.match(readme, /Importing an EDL makes a \*\*new timeline\*\*/);
+    assert.match(readme, /Each `edl\/audio-N\.edl` becomes its own new timeline/);
+  });
+});
+
+describe('The Beating', () => {
+  it('exports 12 shots, 1680 frames at 24 fps, with the right mix of clips, stills and gaps', async () => {
+    const d = await scratch('beating');
+    const p = await buildBeatingProject(d);
+    const out = join(d, 'export', 'resolve');
+    const before = tree(d);
+    const r = await writeExport({ project: p, projectDir: d, outDir: out, format: 'both' });
+    const pl = r.plan;
+    assert.equal(pl.shots.length, 12);
+    assert.equal(pl.totalFrames, 1680);
+    assert.deepEqual(pl.shots.map((s) => s.uses), ['clip', 'clip', 'clip', 'clip', 'still', 'still', 'still', 'gap', 'still', 'still', 'still', 'still']);
+    assert.deepEqual(pl.shots.map((s) => s.frames), [144, 96, 144, 168, 96, 120, 144, 168, 144, 192, 120, 144]);
+    const left = new Map(pl.leftOut.map((x) => [x.unit, x.why]));
+    assert.match(left.get('sc2_sh2_clip') ?? '', /pending-review/);
+    assert.match(left.get('sc3_sh1_keyframe') ?? '', /needs-rework/);
+    assert.match(left.get('sc3_sh1') ?? '', /missing/);
+    // the 3.5 s clip in a 6 s shot: 84 frames, then a 60 frame gap
+    assert.deepEqual(pl.video.filter((v) => v.shot === 'sc1_sh3').map((v) => [v.kind, v.frames]), [['clip', 84], ['gap', 60]]);
+    assert.ok(pl.warnings.some((w) => w.startsWith('sc1_sh3:')));
+    // FCPXML: contiguous, the total the sum
+    const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
+    const seq = find(find(find(find(root, 'library')[0]!, 'event')[0]!, 'project')[0]!, 'sequence')[0]!;
+    let at = START_FRAMES(fps24);
+    for (const item of find(seq, 'spine')[0]!.children) {
+      assert.equal(parseFcpTime(item.attrs['offset']!, fps24), at);
+      at += parseFcpTime(item.attrs['duration']!, fps24);
+    }
+    assert.equal(at - START_FRAMES(fps24), 1680);
+    // the EDL agrees, and nothing in the project changed
+    const e = parseEdl(readFileSync(join(out, 'edl', 'video.edl'), 'utf8'));
+    assert.equal(parseTimecode(e.events.at(-1)!.recOut, fps24) - START_FRAMES(fps24), 1680);
+    assert.deepEqual(tree(d, 'export'), before);
+    const dtdPath = process.env['AKUKO_FCPXML_DTD'];
+    if (dtdPath) assert.deepEqual(validate(root, parseDtd(readFileSync(dtdPath, 'utf8'))), []);
   });
 });

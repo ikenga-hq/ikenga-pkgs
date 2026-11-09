@@ -6,8 +6,8 @@
  * the timeline formats it imports, a project exchange format that carries each shot's file
  * location, so Resolve relinks the media with no reel-name setup. Users report that Resolve
  * rejects the newest FCPXML versions (1.12 on Resolve 18.6/19) and accepts 1.11 and older, so the
- * file is written as 1.8, the oldest version whose `asset` carries a plain `src` URL: every newer
- * Resolve reads it, and it needs nothing a later version added.
+ * file is written as 1.8, the newest version whose `asset` carries a plain `src` URL (1.9 moved it into
+ * `media-rep`): a newer Resolve is expected to read it, and it needs nothing a later version added.
  *
  * Shape (the same one Final Cut Pro exports; checked against Apple's `FCPXMLv1_8.dtd`):
  *   resources:  one `format` (the project's size and frame rate) and one `asset` per file;
@@ -41,6 +41,18 @@ const stem = (dest: string): string => {
   return i > 0 ? base.slice(0, i) : base;
 };
 
+/**
+ * Apple's name for a standard format (`FFVideoFormat1080p24`), or undefined: the name is optional, and a
+ * made-up one (a 1:1 or 9:16 picture is not `1080p`) would describe the wrong picture.
+ */
+export function appleFormatName(w: number, h: number, rate: string): string | undefined {
+  const r = ({ '23.976': '2398', '29.97': '2997', '59.94': '5994' } as Record<string, string>)[rate] ?? rate;
+  if (w === 1280 && h === 720) return `FFVideoFormat720p${r}`;
+  if (w === 1920 && h === 1080) return `FFVideoFormat1080p${r}`;
+  if (w === 3840 && h === 2160) return `FFVideoFormat3840x2160p${r}`;
+  return undefined;
+}
+
 export interface FcpxmlOptions {
   /** `file://` URL for a media file's place in the export folder. */
   fileUrl(dest: string): string;
@@ -50,7 +62,7 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   const { fps } = plan;
   const t = (frames: number): string => fcpTime(frames, fps);
   const start = START_FRAMES(fps);
-  const formatName = `FFVideoFormat${plan.height}p${({ '23.976': '2398', '29.97': '2997', '59.94': '5994' } as Record<string, string>)[fps.label] ?? fps.label}`;
+  const formatName = appleFormatName(plan.width, plan.height, fps.label);
   const lines: string[] = [];
   const push = (indent: number, s: string): void => void lines.push(`${'  '.repeat(indent)}${s}`);
 
@@ -58,7 +70,7 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   push(0, '<!DOCTYPE fcpxml>');
   push(0, `<fcpxml version="${FCPXML_VERSION}">`);
   push(1, '<resources>');
-  push(2, `<format id="r1" name="${esc(formatName)}" frameDuration="${fcpFrameDuration(fps)}" width="${plan.width}" height="${plan.height}" colorSpace="1-1-1 (Rec. 709)"/>`);
+  push(2, `<format id="r1"${formatName ? ` name="${esc(formatName)}"` : ''} frameDuration="${fcpFrameDuration(fps)}" width="${plan.width}" height="${plan.height}" colorSpace="1-1-1 (Rec. 709)"/>`);
 
   // One asset per file; its length is the file's own, else the longest event that uses it.
   const used = new Map<string, number>();
@@ -68,7 +80,11 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   for (const m of assets) {
     const dur = m.role === 'still' ? '0s' : m.durationS !== undefined ? seconds(m.durationS) : t(used.get(m.id)!);
     const a: string[] = [`id="${m.id}"`, `name="${esc(stem(m.dest))}"`, `src="${esc(o.fileUrl(m.dest))}"`, 'start="0s"', `duration="${dur}"`];
-    if (m.role === 'clip' || m.role === 'still') a.push('hasVideo="1"', 'format="r1"');
+    if (m.role === 'clip' || m.role === 'still') {
+      a.push('hasVideo="1"', 'format="r1"');
+      // A clip with a sound track of its own (a motion clip made with audio) keeps it.
+      if (m.hasAudio) a.push('hasAudio="1"', 'audioSources="1"', `audioChannels="${m.channels ?? 2}"`, `audioRate="${m.sampleRate ?? 48000}"`);
+    }
     else a.push('hasAudio="1"', 'audioSources="1"', `audioChannels="${m.channels ?? 2}"`, `audioRate="${m.sampleRate ?? 48000}"`);
     push(2, `<asset ${a.join(' ')}/>`);
   }

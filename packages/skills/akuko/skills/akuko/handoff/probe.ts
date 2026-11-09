@@ -5,8 +5,9 @@
  * shorter than the shot is reported, never stretched or hidden), and a placed audio
  * file needs a duration on the timeline. Three container families cover what akuko stores:
  *
- *   mp4 / mov / m4a   `moov` > `mvhd` (timescale + duration); the top-level boxes are walked
- *                     with small reads, so a 500 MB clip is never loaded.
+ *   mp4 / mov / m4a   `moov` > `mvhd` (timescale + duration), and whether a `soun` track exists with
+ *                     its channel count and sample rate; the top-level boxes are walked with
+ *                     small reads, so a 500 MB clip is never loaded.
  *   wav               `sound/wav.ts` (16-bit PCM; other WAV flavours report no length).
  *   mp3               the frames are walked (MPEG-1/2/2.5, Layer III), so VBR files are exact.
  *
@@ -20,9 +21,11 @@ import { isWav, parseWav } from '../sound/wav.ts';
 export interface Probe {
   /** Seconds; undefined when the length cannot be read here. */
   durationS?: number;
-  /** Audio only. */
+  /** Audio files, and video files that carry a sound track. */
   channels?: number;
   sampleRate?: number;
+  /** mp4 / mov only: the file has a sound track (`soun`). */
+  hasAudio?: boolean;
 }
 
 const u32 = (b: Uint8Array, o: number): number => ((b[o]! << 24) | (b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!) >>> 0;
@@ -59,21 +62,48 @@ export async function probeMp4(path: string): Promise<Probe> {
   }
 }
 
-function mvhdIn(moov: Uint8Array): Probe {
-  let o = 0;
-  while (o + 8 <= moov.length) {
-    const size = u32(moov, o);
-    if (size < 8) return {};
-    if (fourcc(moov, o + 4) === 'mvhd') {
-      const v = moov[o + 8]!;
-      const base = o + 12; // after size, type, version + flags
-      const timescale = v === 1 ? u32(moov, base + 16) : u32(moov, base + 8);
-      const duration = v === 1 ? u32(moov, base + 20) * 2 ** 32 + u32(moov, base + 24) : u32(moov, base + 12);
-      return timescale > 0 ? { durationS: duration / timescale } : {};
-    }
+/** The boxes directly inside `body`: [type, content start, content end]. */
+function boxes(b: Uint8Array, from = 0, to = b.length): Array<[string, number, number]> {
+  const out: Array<[string, number, number]> = [];
+  let o = from;
+  while (o + 8 <= to) {
+    const size = u32(b, o);
+    if (size < 8 || o + size > to) break;
+    out.push([fourcc(b, o + 4), o + 8, o + size]);
     o += size;
   }
-  return {};
+  return out;
+}
+const child = (b: Uint8Array, parent: [string, number, number] | undefined, type: string): [string, number, number] | undefined =>
+  parent ? boxes(b, parent[1], parent[2]).find((x) => x[0] === type) : undefined;
+
+function mvhdIn(moov: Uint8Array): Probe {
+  const top = boxes(moov);
+  const mvhd = top.find((x) => x[0] === 'mvhd');
+  if (!mvhd) return {};
+  const o = mvhd[1];
+  const v = moov[o]!;
+  const base = o + 4; // after version + flags
+  const timescale = v === 1 ? u32(moov, base + 16) : u32(moov, base + 8);
+  const duration = v === 1 ? u32(moov, base + 20) * 2 ** 32 + u32(moov, base + 24) : u32(moov, base + 12);
+  const r: Probe = timescale > 0 ? { durationS: duration / timescale } : {};
+  // A sound track: `trak` > `mdia` > `hdlr` says `soun`; its first sample entry has channels and rate.
+  for (const trak of top.filter((x) => x[0] === 'trak')) {
+    const mdia = child(moov, trak, 'mdia');
+    const hdlr = child(moov, mdia, 'hdlr');
+    if (!hdlr || fourcc(moov, hdlr[1] + 8) !== 'soun') continue;
+    r.hasAudio = true;
+    const stsd = child(moov, child(moov, child(moov, mdia, 'minf'), 'stbl'), 'stsd');
+    if (stsd) {
+      const e = stsd[1] + 8; // version/flags + entry count, then the first entry
+      if (e + 36 <= stsd[2]) {
+        r.channels = (moov[e + 24]! << 8) | moov[e + 25]!;
+        r.sampleRate = ((moov[e + 32]! << 8) | moov[e + 33]!); // 16.16 fixed point: the integer part
+      }
+    }
+    break;
+  }
+  return r;
 }
 
 const MP3_BITRATES_V1_L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];

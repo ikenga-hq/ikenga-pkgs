@@ -34,19 +34,56 @@ import { approve, keyframesApproved } from '../../sound/__fixtures__/project.ts'
 
 const NOW = '2026-11-08T10:00:00Z';
 
-/** A small valid ISO-BMFF file: `ftyp` + `moov/mvhd` (version 0, timescale 1000) + a little `mdat`. */
-export function miniMp4(seconds: number): Uint8Array {
+/**
+ * A small valid ISO-BMFF file: `ftyp` + `moov/mvhd` (version 0, timescale 1000) + a little `mdat`.
+ * With `audio`, `moov` also holds a sound `trak` (mono, 48 kHz) so the file reads as having sound.
+ */
+export function miniMp4(seconds: number, audio = false): Uint8Array {
   const u32 = (n: number): number[] => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
-  const box = (type: string, body: number[]): number[] => [...u32(8 + body.length), ...[...type].map((c) => c.charCodeAt(0)), ...body];
-  const mvhd = box('mvhd', [0, 0, 0, 0, ...u32(0), ...u32(0), ...u32(1000), ...u32(Math.round(seconds * 1000)), ...new Array(80).fill(0)]);
-  return new Uint8Array([...box('ftyp', [...[...'isom'].map((c) => c.charCodeAt(0)), ...u32(512)]), ...box('mdat', [1, 2, 3, 4]), ...box('moov', mvhd)]);
+  const u16 = (n: number): number[] => [(n >>> 8) & 255, n & 255];
+  const cc = (t: string): number[] => [...t].map((c) => c.charCodeAt(0));
+  const box = (type: string, ...body: number[][]): number[] => {
+    const b = body.flat();
+    return [...u32(8 + b.length), ...cc(type), ...b];
+  };
+  const mvhd = box('mvhd', [0, 0, 0, 0], u32(0), u32(0), u32(1000), u32(Math.round(seconds * 1000)), new Array(80).fill(0));
+  const entry = box('mp4a', new Array(6).fill(0), u16(1), u16(0), u16(0), u32(0), u16(1), u16(16), u16(0), u16(0), u32(48000 * 65536));
+  const stsd = box('stsd', [0, 0, 0, 0], u32(1), entry);
+  const hdlr = box('hdlr', [0, 0, 0, 0], u32(0), cc('soun'), new Array(12).fill(0), [0]);
+  const trak = box('trak', box('mdia', hdlr, box('minf', box('stbl', stsd))));
+  return new Uint8Array([...box('ftyp', cc('isom'), u32(512)), ...box('mdat', [1, 2, 3, 4]), ...box('moov', mvhd, audio ? trak : [])]);
 }
 
 /** A silent mono 16-bit WAV `seconds` long at 24 kHz. */
 export const silentWav = (seconds: number, rate = 24000): Uint8Array => wavBytes(new Uint8Array(Math.round(seconds * rate) * 2), rate);
 
-export const srt = (): string => '1\n00:00:00,000 --> 00:00:02,000\nThe ferry was late.\n\n';
-export const vtt = (): string => 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nThe ferry was late.\n';
+/** Captions as an older sync wrote them (n = 1) and as the latest sync did (`captions-2`): the export must take the latest. */
+export const srt = (n = 1): string => `1
+00:00:00,000 --> 00:00:02,000
+${n === 1 ? 'The ferry was late.' : 'The ferry was very late.'}
+
+`;
+export const vtt = (n = 1): string => `WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+${n === 1 ? 'The ferry was late.' : 'The ferry was very late.'}
+`;
+
+/** Makes the fixture's media. The unit tests use tiny placeholders; the manual check uses real, playable files. */
+export interface MediaMaker {
+  png(shot: string, index: number): Promise<Uint8Array>;
+  mp4(shot: string, seconds: number, audio: boolean): Promise<Uint8Array>;
+  wav(kind: 'vo' | 'music' | 'sfx', id: string, seconds: number): Promise<Uint8Array>;
+}
+
+export const placeholderMedia: MediaMaker = {
+  png: async () => PNG_BYTES,
+  mp4: async (_shot, seconds, audio) => miniMp4(seconds, audio),
+  wav: async (_kind, _id, seconds) => silentWav(seconds),
+};
+
+/** Shots whose clip carries its own sound track in the fixture. */
+export const CLIP_WITH_AUDIO = ['sc1_sh4'];
 
 export interface FixtureExpectations {
   /** Shot ids in document order. */
@@ -74,13 +111,13 @@ const file = (a: Asset, uri: string, mime: string): void => {
 };
 
 /** Build the project in memory (statuses and file records) and the real files under `dir`. */
-export async function buildExportProject(dir: string): Promise<AkukoProject> {
+export async function buildExportProject(dir: string, media: MediaMaker = placeholderMedia): Promise<AkukoProject> {
   let p = keyframesApproved();
 
   // Key frames: real PNG files; sc3_sh2's key frame is sent back, so that shot has nothing approved.
-  for (const a of p.assets.filter((x) => x.kind === 'keyframe')) {
+  for (const [i, a] of p.assets.filter((x) => x.kind === 'keyframe').entries()) {
     file(a, `board/keyframes/${a.id}.png`, 'image/png');
-    await put(dir, a.file!.uri, PNG_BYTES);
+    await put(dir, a.file!.uri, await media.png(a.owner!, i));
   }
   p.assets.find((a) => a.id === 'sc3_sh2_keyframe')!.status = 'needs-rework';
 
@@ -91,7 +128,7 @@ export async function buildExportProject(dir: string): Promise<AkukoProject> {
     const a = p.assets.find((x) => x.id === `${shot}_clip`)!;
     file(a, `motion/${shot}/${shot}_clip.mp4`, 'video/mp4');
     a.status = 'pending-review';
-    await put(dir, a.file!.uri, miniMp4(secs));
+    await put(dir, a.file!.uri, await media.mp4(shot, secs, CLIP_WITH_AUDIO.includes(shot)));
   }
   p = approve(p, ['sc1_sh1_clip', 'sc1_sh2_clip', 'sc1_sh3_clip', 'sc1_sh4_clip'], 'motion').project;
 
@@ -103,9 +140,9 @@ export async function buildExportProject(dir: string): Promise<AkukoProject> {
     a.status = 'pending-review';
     return a;
   };
-  await put(dir, vo('sc1_sh1', 4).file!.uri, silentWav(4));
-  await put(dir, vo('sc1_sh2', 3).file!.uri, silentWav(3));
-  await put(dir, vo('sc1_sh3', 2).file!.uri, silentWav(2));
+  await put(dir, vo('sc1_sh1', 4).file!.uri, await media.wav('vo', 'sc1_sh1', 4));
+  await put(dir, vo('sc1_sh2', 3).file!.uri, await media.wav('vo', 'sc1_sh2', 3));
+  await put(dir, vo('sc1_sh3', 2).file!.uri, await media.wav('vo', 'sc1_sh3', 2));
   const extra = (id: string, kind: 'music' | 'sfx', uri: string, tags: string[], owner?: string): void => {
     p.assets.push({
       id, kind, stage: 'sound', status: 'pending-review', comments: [], updated_at: NOW, name: id,
@@ -114,17 +151,21 @@ export async function buildExportProject(dir: string): Promise<AkukoProject> {
     } as Asset);
   };
   extra('film_music_1', 'music', 'audio/music/film_music_1.wav', ['placement:film']);
+  extra('scene_music_3', 'music', 'audio/music/scene_music_3.wav', ['placement:scene:sc1']);
   extra('loose_music_2', 'music', 'audio/music/loose_music_2.wav', []);
   extra('sc1_sh4_sfx_1', 'sfx', 'audio/sfx/sc1_sh4_sfx_1.wav', ['placement:shot:sc1_sh4'], 'sc1_sh4');
   extra('sc2_sfx_2', 'sfx', 'audio/sfx/sc2_sfx_2.wav', ['placement:scene:sc2']);
-  await put(dir, 'audio/music/film_music_1.wav', silentWav(40));
-  await put(dir, 'audio/music/loose_music_2.wav', silentWav(10));
-  await put(dir, 'audio/sfx/sc1_sh4_sfx_1.wav', silentWav(1.5));
-  await put(dir, 'audio/sfx/sc2_sfx_2.wav', silentWav(1));
-  p = approve(p, ['sc1_sh1_vo', 'sc1_sh2_vo', 'film_music_1', 'loose_music_2', 'sc1_sh4_sfx_1'], 'sound').project;
+  await put(dir, 'audio/music/film_music_1.wav', await media.wav('music', 'film_music_1', 40));
+  await put(dir, 'audio/music/scene_music_3.wav', await media.wav('music', 'scene_music_3', 40));
+  await put(dir, 'audio/music/loose_music_2.wav', await media.wav('music', 'loose_music_2', 10));
+  await put(dir, 'audio/sfx/sc1_sh4_sfx_1.wav', await media.wav('sfx', 'sc1_sh4_sfx_1', 1.5));
+  await put(dir, 'audio/sfx/sc2_sfx_2.wav', await media.wav('sfx', 'sc2_sfx_2', 1));
+  p = approve(p, ['sc1_sh1_vo', 'sc1_sh2_vo', 'film_music_1', 'scene_music_3', 'loose_music_2', 'sc1_sh4_sfx_1'], 'sound').project;
 
   await put(dir, 'audio/vo/captions.srt', srt());
   await put(dir, 'audio/vo/captions.vtt', vtt());
+  await put(dir, 'audio/vo/captions-2.srt', srt(2));
+  await put(dir, 'audio/vo/captions-2.vtt', vtt(2));
 
   p = AkukoProjectSchema.parse(p);
   await createLocalHost({ projectDir: dir, now: () => new Date(NOW) }).writeState(p);
