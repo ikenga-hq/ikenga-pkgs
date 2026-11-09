@@ -473,6 +473,21 @@ describe('default board: copy decisions (A-4)', () => {
     p.close();
   });
 
+  it('when the clipboard fails it lists the decisions in a read-only box, and the toast is not read out twice', async () => {
+    const p = await boot({ host: 'B' });
+    p.w.navigator.clipboard.writeText = async () => { throw new Error('denied'); };
+    click(p, '[data-akuko-action="approve"][data-akuko-unit="sc2_sh4"]');
+    await p.tick();
+    click(p, '[data-akuko-export]');
+    await p.tick();
+    const ta = p.d.querySelector('#copy-fallback');
+    assert.equal(ta.hidden, false);
+    assert.ok(ta.readOnly && !ta.hasAttribute('data-akuko-action'));
+    assert.equal(JSON.parse(ta.value.trim()).unit, 'sc2_sh4');
+    assert.equal(p.d.querySelector('#toast').getAttribute('aria-hidden'), 'true');
+    p.close();
+  });
+
   it('with nothing new it says so and copies nothing', async () => {
     const folded = clone(FIXTURE);
     folded.decisions = [mine];

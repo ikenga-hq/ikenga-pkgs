@@ -10,8 +10,8 @@
     },
     {
       "view": "default-board@0.2",
-      "sha256": "fdc49c9b0485c87bcb48cdba21fa0c7e39fef43a29de2c8c6798ee9bf18b1f23",
-      "checked_at": "2026-11-09T14:40:01Z",
+      "sha256": "34ce373000472a8910769cfb12f215b9497dabfbd450d5f0761d6b570591ee45",
+      "checked_at": "2026-11-09T15:10:37Z",
       "checker": "check-view@2"
     }
   ]

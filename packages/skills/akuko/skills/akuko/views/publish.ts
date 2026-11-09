@@ -5,7 +5,7 @@
  *
  * Hosts B and C (a local project folder). It reads `<folder>/akuko.json`,
  * writes it into the board's `<script id="akuko-project">` block (every `<`
- * as `<`, the same escape the publishers and check-view use) and
+ * as `\u003c`, the same escape the publishers and check-view use) and
  * publishes the page through `LocalHost.publishView()`, so the host's
  * conformance gate still applies. Embedding the project does not change the
  * conformance hash. Prints the path of `<folder>/views/default-board.html`.
