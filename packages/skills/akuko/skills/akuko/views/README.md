@@ -6,7 +6,8 @@ A view is a page that shows an akuko project and hands back the person's decisio
 |---|---|
 | `contract.md` | The view contract: required views and fields, the decision format, the five renderer rules, where decisions land per host. |
 | `views.schema.json` · `decision.schema.json` | Machine-readable parts of the contract. |
-| `default-board.html` | **The default board**: one self-contained page, `default-board@0.1`. |
+| `default-board.html` | **The default board**: one self-contained page, `default-board@0.2`. |
+| `publish.ts` | `node --experimental-strip-types views/publish.ts --project <folder>`: embeds `<folder>/akuko.json` in the board's `akuko-project` block (escaped) and publishes it through `LocalHost.publishView()`; prints the path. |
 | `conformed.json` | The list of views that passed `scripts/check-view.mjs`, with the sha256 of the exact HTML. Folding accepts approvals only from views on it. |
 | `default-board.test.ts` | Pins the board: its hash is the recorded one, it passes the check, the text is readable in both themes, it reads live data. |
 | `__fixtures__/` | The minimal board, the locked design with its marks, and one page per broken rule. |
@@ -19,7 +20,9 @@ The "script desk": the screenplay on the left with every shot lined to the line 
 - **Money is exact.** The estimate, the cap, what is spent and what is left if you approve are printed to up to four decimals, never rounded. `Approve spend` writes the amount it showed (`approve 0.36 USD`), which is what folding checks.
 - **Light and dark**, 390 px to wide desktops. The spend gate stays reachable while you read the Bible or the Ledger: once it scrolls away, a bar at the top of the right column keeps the money and the two buttons in view.
 - **Undo** reverses exactly the decision you just made.
-- **Without a store it still works.** On a plain local file decisions stay in the page's outbox; **Copy decisions for akuko** puts them on the clipboard to paste into chat.
+- **Without a store it still works.** On a plain local file decisions stay in the page's outbox; **Copy decisions for akuko** puts the ones the project does not have yet on the clipboard to paste into chat, and says so on screen ("Copied 3 decisions"). Decisions already in the project's `decisions` are left out of the copy (and counted as "already in your project"); nothing is ever deleted from the outbox.
+- **Reading decisions from code.** `window.akukoDecisions.jsonl()` returns every decision this page holds, one JSON object per line (`all()` returns the same as objects). On host B in the Claude desktop app the agent runs it through the built-in browser's JavaScript tool instead of asking for a paste, then appends the lines with `decisions/cli.ts append` (it skips ids already there). That pane has no storage and loads the file as a `data:` URL, so decisions live only until the page reloads: read them before republishing. They are still the person's clicks; the agent never clicks approve.
+- **The pipeline strip** is a button only where the board has a section to open: Intake opens the script, Breakdown and Sketch the shots, Bibles the bible, and a stage with a paid job waiting opens the spend gate. A locked or not-started stage is plain text with a tooltip ("Locked: approve Breakdown first", "Not started") and no hover or pointer.
 
 ### How it gets its data, and why it never needs republishing
 
@@ -42,13 +45,13 @@ The file opens offline on a **sample project** (the project block carries `"_sam
 - **Host A (claude.ai):** publish `default-board.html` **unchanged**, so the hash on `conformed.json` names what was published, with
   `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`.
   Then write the project to the doc `akuko/project`; the board reads it and replaces the sample.
-- **Host B / C:** write the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and save the page next to `akuko.json` (`<project>/views/default-board.html`). Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.1`).
+- **Host B / C:** run `node --experimental-strip-types views/publish.ts --project <folder>`. It writes the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and saves the page as `<project>/views/default-board.html`. Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.2`; decisions written by `@0.1` boards still fold, because both ids stay on `conformed.json`).
 
 ### Changing the board
 
 The conformance hash covers the page but ignores the content of the `akuko-project` block, so publishing the board with a real project in that block keeps it conformed. Any other edit has to be recorded again:
 
-1. Edit `default-board.html`. Bump `"version"` in its `akuko-view` manifest (`default-board@0.2`, …).
+1. Edit `default-board.html`. Bump `"version"` in its `akuko-view` manifest (`default-board@0.3`, …). Keep the earlier ids on `conformed.json`: decisions already written by an older board have to keep folding.
 2. From the skill folder: `node scripts/check-view.mjs views/default-board.html --ship views/conformed.json`. It runs the check and, only if the page passes, writes the `default-board@<version>` entry (this is also how a shipped id is recorded the first time).
 
 `default-board.test.ts` fails whenever the file and its recorded hash disagree.

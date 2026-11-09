@@ -27,7 +27,11 @@ requires_capabilities:
 Detect the host first (`../lib/hosts.md`). Then:
 
 - **B (local).** Decisions are in `<project>/decisions.jsonl`.
-  - If the person pasted lines copied from a local view ("Copy decisions for akuko"), append them first, exactly as given: `node --experimental-strip-types decisions/cli.ts append <project> -` (it validates and skips ids already there). Never write decision lines yourself, except for the chat case below.
+  - **In the Claude desktop app with the built-in browser** (`mcp__Claude_Browser__*` tools are available): open the board there by default (publish it first: `node --experimental-strip-types views/publish.ts --project <folder>`, then open `file:///…/views/default-board.html`) and read the person's clicks yourself. With the browser's JavaScript tool run `window.akukoDecisions.jsonl()` and save the lines to a file, then `node --experimental-strip-types decisions/cli.ts append <project> <file>` and fold as below.
+    - The pane shows the file as a `data:` URL with storage turned off, so decisions live only until the page reloads. **Read them before you republish or reload the board**, and again when the person says they are done.
+    - These are still the person's own clicks. Never click Approve, Approve spend or any decision control on the board yourself, and never write an `approve` line yourself.
+    - Fall back to copy and paste when those tools are missing, or when only Claude in Chrome is connected (it can't open `file://`): the person uses **Copy decisions for akuko** and pastes the lines into chat.
+  - If the person pasted lines copied from a local view ("Copy decisions for akuko"), append them first, exactly as given: `node --experimental-strip-types decisions/cli.ts append <project> -` (it validates and skips ids already there). The board only copies decisions the project does not have yet, and says how many it copied. Never write decision lines yourself, except for the chat case below.
   - Then: `node --experimental-strip-types decisions/cli.ts fold <project>`.
 - **C (Ikenga).** The board's pane publishes `akuko.decisions` to the bridge.
   - Save `iyke iframe-state <pane>` to a file, then run `node --experimental-strip-types decisions/cli.ts fold <project> --iframe-state <file>`. That mirrors the decisions into `decisions.jsonl` before folding: a pane reload clears the iframe state, the mirror keeps them.

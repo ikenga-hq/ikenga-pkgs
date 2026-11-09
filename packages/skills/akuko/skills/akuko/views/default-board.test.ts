@@ -398,3 +398,101 @@ describe('default board: decisions and hosts', () => {
     p.close();
   });
 });
+
+describe('default board: pipeline strip (A-9)', () => {
+  it('every stage is either a working button or plainly idle with a reason', async () => {
+    const p = await boot({ host: 'B' });
+    const stages = Array.from(p.d.querySelectorAll('#stages > li.stage')) as any[];
+    assert.equal(stages.length, 9);
+    for (const li of stages) {
+      const id = li.getAttribute('data-akuko-stage');
+      const btn = li.querySelector('button.stage-in');
+      const idle = li.querySelector('div.stage-in.stage-idle');
+      assert.ok(Boolean(btn) !== Boolean(idle), `${id}: exactly one of button or idle cell`);
+      if (idle) {
+        assert.ok((idle.getAttribute('title') ?? '').length > 0, `${id}: idle cell says why`);
+        assert.ok(!idle.hasAttribute('tabindex') && !idle.hasAttribute('role') && !idle.hasAttribute('data-act'), `${id}: idle cell is not interactive`);
+      }
+    }
+    const kind = (id: string) => (p.d.querySelector(`[data-akuko-stage="${id}"] .stage-in`) as any).tagName;
+    // approved intake and breakdown, the sketch stage, the bible and the stage with spend all have a section to open
+    for (const id of ['intake', 'breakdown', 'sketch', 'bible', 'keyframes']) assert.equal(kind(id), 'BUTTON', id);
+    // locked stages do nothing and say what unlocks them
+    assert.equal(kind('motion'), 'DIV');
+    assert.equal(p.d.querySelector('[data-akuko-stage="motion"] .stage-in').getAttribute('title'), 'Locked: approve Key frames first');
+    assert.equal(p.d.querySelector('[data-akuko-stage="export"] .stage-in').getAttribute('title'), 'Locked: approve Assemble first');
+    p.close();
+  });
+
+  it('intake opens the script and breakdown opens the shots', async () => {
+    const p = await boot({ host: 'B' });
+    const asked: string[] = [];
+    for (const id of ['script', 'shots']) { const h = p.d.getElementById(`h-${id}`); h.scrollIntoView = () => { asked.push(id); }; h.getBoundingClientRect = () => ({ top: -500, bottom: -400 }); }
+    click(p, '[data-akuko-stage="intake"] button.stage-in');
+    await p.tick();
+    click(p, '[data-akuko-stage="breakdown"] button.stage-in');
+    await p.tick();
+    assert.deepEqual(asked, ['script', 'shots']);
+    p.close();
+  });
+});
+
+describe('default board: copy decisions (A-4)', () => {
+  const clip = (p: Page) => { const got: string[] = []; p.w.navigator.clipboard.writeText = async (t: string) => { got.push(t); }; return got; };
+  const toast = (p: Page) => p.d.querySelector('#toast') as El;
+  const mine = { id: uuid(7), action: 'approve', unit: 'sc2_sh4', stage: 'sketch', by: 'you', at: '2026-11-08T10:07:00Z', view: 'default-board@0.1' };
+
+  it('says it copied, how many, and keeps the live region', async () => {
+    const p = await boot({ host: 'B' });
+    const got = clip(p);
+    click(p, '[data-akuko-action="approve"][data-akuko-unit="sc2_sh4"]');
+    await p.tick();
+    assert.match(p.text('[data-akuko-export]'), /\(1\)/);
+    click(p, '[data-akuko-export]');
+    await p.tick();
+    assert.equal(got.length, 1);
+    assert.equal(got[0]?.trim().split('\n').length, 1);
+    assert.equal(toast(p).hidden, false);
+    assert.match(toast(p).textContent ?? '', /^Copied 1 decision\./);
+    assert.match(p.text('#announce'), /Copied 1 decision/);
+    p.close();
+  });
+
+  it('leaves out decisions the project already has, and never drops one it does not', async () => {
+    const fresh = { id: uuid(8), action: 'note', unit: 'sc4_sh2', stage: 'sketch', text: 'closer', by: 'you', at: '2026-11-08T10:08:00Z', view: 'default-board@0.1' };
+    const folded = clone(FIXTURE);
+    folded.decisions = [mine];
+    const p = await boot({ host: 'B', project: folded, outbox: [mine, fresh] });
+    const got = clip(p);
+    assert.match(p.text('[data-akuko-export]'), /\(1\)/);
+    click(p, '[data-akuko-export]');
+    await p.tick();
+    assert.deepEqual((got[0] ?? '').trim().split('\n').map((l) => JSON.parse(l).id), [fresh.id]);
+    assert.match(toast(p).textContent ?? '', /Copied 1 decision \(1 already in your project\)/);
+    assert.equal(p.w.akukoDecisions.all().length, 2, 'the outbox itself is untouched');
+    p.close();
+  });
+
+  it('with nothing new it says so and copies nothing', async () => {
+    const folded = clone(FIXTURE);
+    folded.decisions = [mine];
+    const p = await boot({ host: 'B', project: folded, outbox: [mine] });
+    const got = clip(p);
+    click(p, '[data-akuko-export]');
+    await p.tick();
+    assert.deepEqual(got, []);
+    assert.match(toast(p).textContent ?? '', /Nothing new to copy: 1 decision already in your project/);
+    p.close();
+  });
+
+  it('window.akukoDecisions.jsonl() hands a reader (the desktop app) every decision made on the page', async () => {
+    const p = await boot({ host: 'B' });
+    click(p, '[data-akuko-action="approve"][data-akuko-unit="sc2_sh4"]');
+    await p.tick();
+    const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].action, 'approve');
+    assert.equal(lines[0].view, 'default-board@0.2');
+    p.close();
+  });
+});
