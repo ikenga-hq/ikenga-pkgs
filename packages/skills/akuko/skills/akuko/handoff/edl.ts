@@ -31,7 +31,7 @@ export function renderVideoEdl(plan: ExportPlan): string {
     const rec = [timecode(start + v.recIn, fps), timecode(start + v.recIn + v.frames, fps)] as const;
     if (v.kind === 'gap') {
       out.push(eventLine(v.n, 'BL', 'V', timecode(0, fps), timecode(v.frames, fps), rec[0], rec[1]));
-      out.push(`* SHOT ${v.shot}: no media here (${v.note ?? 'gap'})`);
+      out.push(`* SHOT ${v.shot}: no media here, ${v.note ?? 'gap'}`);
     } else {
       const reel = String(plan.shots.find((s) => s.shot === v.shot)!.n).padStart(3, '0');
       out.push(eventLine(v.n, reel, 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));

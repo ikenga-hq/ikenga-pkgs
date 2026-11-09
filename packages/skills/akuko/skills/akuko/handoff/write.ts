@@ -97,6 +97,11 @@ export async function planFromFolder(o: Pick<ExportOptions, 'project' | 'project
 
 const frames = (n: number): string => `${n} frame${n === 1 ? '' : 's'}`;
 
+/** Move every cue of an SRT forward by whole hours (the timeline starts at 01:00:00:00; the SRT starts at 0). */
+export function shiftSrt(srt: string, hours = 1): string {
+  return srt.replace(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/g, (_m, h: string, m: string, sec: string, ms: string) => `${String(Number(h) + hours).padStart(2, '0')}:${m}:${sec},${ms}`);
+}
+
 export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; timelineOnly: boolean; edlFiles: string[] }): string {
   const { fps } = plan;
   const total = timecode(plan.totalFrames, fps);
@@ -108,11 +113,11 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
   }
   L.push('## Import into Resolve (FCPXML, the main file)', '');
   L.push(
-    `1. Make a new Resolve project. Before importing anything, set **Timeline frame rate to ${fps.label}** and the timeline resolution to ${plan.width} x ${plan.height} (Project Settings > Master Settings). Resolve locks the timeline frame rate once the project has media, and an FCPXML does not carry the settings you want over a project that already has other media.`,
+    `1. Make a new Resolve project. Before importing anything, set **Timeline frame rate to ${fps.label}** and the timeline resolution to ${plan.width} x ${plan.height} (Project Settings > Master Settings). Resolve's manual says the timeline frame rate is locked once the project has media in the Media Pool, so set it first.`,
     '2. File > Import > Timeline... and choose `timeline.fcpxml`.',
-    '3. In the dialog keep **Automatically import source clips into media pool** ticked. Untick *Automatically set project settings* if you set them yourself in step 1.',
+    '3. In the dialog keep **Automatically import source clips into media pool** ticked. Untick *Automatically set project settings* if you set them yourself in step 1 (option names can differ a little between Resolve versions).',
     `4. The timeline starts at 01:00:00:00. Shot ${plan.shots[0]?.shot ?? ''} is first; every shot sits back to back at its own length.`,
-    '5. If a clip shows as offline (you moved this folder after exporting): Media Pool > select the clips > right-click > **Relink Selected Clips** and point at this folder. Files are matched by name; they are named in shot order, so the match is exact.',
+    '5. If a clip shows as offline (you moved this folder after exporting): Media Pool > select the clips > right-click > **Relink Selected Clips** and point at this folder. Files are matched by file name, and every name here is unique.',
     '',
   );
   if (o.format !== 'fcpxml') {
@@ -139,7 +144,12 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
     L.push('');
   }
   if (plan.captions.length > 0) {
-    L.push('## Captions', '', 'Subtitles are in `captions/`. In Resolve: right-click in the Media Pool > Import Media for `captions.srt`, drag it onto a subtitle track; or File > Import > Subtitle.', '');
+    L.push(
+      '## Captions',
+      '',
+      'Subtitles are in `captions/`. `captions.srt` and `captions.vtt` start at 0. This timeline starts at 01:00:00:00, and an SRT that starts at 0 does not line up with it, so use `captions_timeline_01h.srt` (the same cues, one hour later). In Resolve: File > Import > Subtitle, then drag it onto a subtitle track on the timeline.',
+      '',
+    );
   }
   L.push('See `LEFT-OUT.md` for what is not on the timeline and why, and `checksums.sha256` to check the copies. Re-running the export replaces only the files listed in `export-manifest.json`.', '');
   return L.join('\n');
@@ -174,7 +184,7 @@ export function renderDownloadList(plan: ExportPlan): string {
 }
 
 /** Everything the export writes as text, by path. */
-export function renderTexts(plan: ExportPlan, outDir: string, o: { format: TimelineFormat; timelineOnly: boolean }): Map<string, string> {
+export function renderTexts(plan: ExportPlan, outDir: string, o: { format: TimelineFormat; timelineOnly: boolean; srt?: string }): Map<string, string> {
   const t = new Map<string, string>();
   const fileUrl = (dest: string): string => pathToFileURL(join(outDir, ...dest.split('/'))).href;
   if (o.format !== 'edl') t.set('timeline.fcpxml', renderFcpxml(plan, { fileUrl }));
@@ -188,6 +198,7 @@ export function renderTexts(plan: ExportPlan, outDir: string, o: { format: Timel
       edlFiles.push(f);
     });
   }
+  if (o.srt !== undefined) t.set('captions/captions_timeline_01h.srt', shiftSrt(o.srt));
   t.set('README.md', renderReadme(plan, { ...o, edlFiles }));
   t.set('LEFT-OUT.md', renderLeftOut(plan));
   if (o.timelineOnly) t.set('DOWNLOAD-LIST.md', renderDownloadList(plan));
@@ -210,7 +221,9 @@ export async function writeExport(o: ExportOptions): Promise<ExportResult> {
   const timelineOnly = o.timelineOnly === true;
   const outDir = resolve(o.outDir);
   const plan = await planFromFolder(o);
-  const texts = renderTexts(plan, outDir, { format, timelineOnly });
+  const srtPath = plan.captions.find((c) => c.dest.endsWith('.srt'));
+  const srt = srtPath && !timelineOnly ? await readFile(localPath(o.projectDir, srtPath.uri)!, 'utf8') : undefined;
+  const texts = renderTexts(plan, outDir, { format, timelineOnly, ...(srt !== undefined ? { srt } : {}) });
   const copies: Array<{ m: MediaFile; src: string }> = [];
   if (!timelineOnly) {
     for (const m of [...new Map([...plan.media, ...plan.captions].map((x) => [x.dest, x])).values()]) {

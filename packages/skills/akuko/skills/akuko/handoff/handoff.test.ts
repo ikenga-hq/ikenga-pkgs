@@ -190,6 +190,9 @@ describe('the short-story export', () => {
     const r = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
     assert.ok(r.written.includes('timeline.fcpxml'));
     for (const m of plan.media) assert.ok(existsSync(join(out, ...m.dest.split('/'))), m.dest);
+    // The captions start at 0; the timeline starts at 01:00:00:00, so a shifted copy is written too.
+    assert.match(readFileSync(join(out, 'captions', 'captions.srt'), 'utf8'), /^1\n00:00:00,000 --> 00:00:02,000/);
+    assert.match(readFileSync(join(out, 'captions', 'captions_timeline_01h.srt'), 'utf8'), /^1\n01:00:00,000 --> 01:00:02,000/);
 
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     assert.equal(root.name, 'fcpxml');

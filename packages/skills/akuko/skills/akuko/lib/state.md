@@ -142,7 +142,11 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 *WP-13 / WP-15 fill this.*
 
 ### 8 export
-*WP-15 fills this (Phase 3).*
+*Action: `actions/export.md`; code `../handoff/` (WP-23). Free.*
+
+- **A by-product, not a review unit.** The export moves no stage or unit status and writes nothing to `akuko.json`. It does not wait for `assemble` or `sound` to be approved: it exports what is `approved` now and lists the rest. `stages.export` is left as it is; nothing sets it `approved` yet (that belongs to the parked FFmpeg master, plan Round 7).
+- Writes `<project>/export/resolve/` (media in shot order, `timeline.fcpxml`, optional EDLs, README, LEFT-OUT, checksums, `export-manifest.json`). A re-run replaces only the files the manifest lists.
+- The frame rate is not in the project; it is chosen at export (`--fps`, default 24).
 
 ## Status transitions
 
