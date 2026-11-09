@@ -6,10 +6,12 @@
  *   plan                      create a planned clip for every shot (idempotent); says which shots are at the retry cap
  *   status                    one line per clip: its status, what it waits for, paid attempts and money spent
  *   step    --provider <id>   the next clip (one shot) through the spend gate: manual | fal-video
- *           [--model <id>] [--units a,b] [--scene sc1] [--audio] [--max-attempts N]
+ *           [--model <id>] [--units a,b] [--scene sc1] [--audio] [--fit cover|nearest] [--max-attempts N]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
  *             manual: prints the prompt package and stops; bring files back with `ingest`
  *             --audio       ask for the model's own sound (off by default; costs more; a new approval)
+ *             --fit         cover (default): a clip at least as long as the shot; nearest: the closest
+ *                           length the model makes (cheaper, may be shorter than the shot)
  *             --max-attempts  paid tries allowed per shot (default 3). Pass it ONLY when the person
  *                             asked for more tries in their own words.
  *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>]
@@ -18,8 +20,9 @@
  *   sync                      repair and refresh the stage state, after decisions were folded
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
- * Everything goes through the local host adapter. On host A import the functions
- * from `plan.ts` / `run.ts` and pass the project read from the artifact database.
+ * Everything goes through the local host adapter. On host A the same Node code runs in
+ * the claude.ai workspace (lib/hosts.md); paid providers are still refused there, so use
+ * the manual provider.
  */
 
 import { mkdir, readFile } from 'node:fs/promises';
@@ -28,10 +31,11 @@ import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
+import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
 import { createFalVideoProvider } from '../providers/fal-video/index.ts';
 import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
-import { createSpendGate } from '../spend/gate.ts';
+import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
 import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion } from './plan.ts';
 import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
 
@@ -73,7 +77,11 @@ function describeStatus(r: StepResult): CliResult {
     case 'running':
       return { code: 0, out: `Job ${r.job.id} is still running (${r.message}). Run collect --job ${r.job.id} later.` };
     case 'done':
-      return { code: 0, out: `Done: ${r.assets.length} clip${r.assets.length === 1 ? '' : 's'} recorded (${r.assets.join(', ')}), cost ${Number(r.cost.toFixed(4))}. They are waiting for the person's review.` };
+      return {
+        code: 0,
+        out: `Done: ${r.assets.length} clip${r.assets.length === 1 ? '' : 's'} recorded (${r.assets.join(', ')}), cost ${Number(r.cost.toFixed(4))}. They are waiting for the person's review.` +
+          (r.missing?.length ? `${NL}NOT MADE: ${r.missing.join(', ')} (${r.message ?? 'the provider failed them'}). They stay draft and were not billed; tell the person, and only if they agree run step again for them: that is a new job with its own spend line and approval.` : ''),
+      };
     case 'handoff':
       return { code: 0, out: `${r.text}${NL}${NL}Job ${r.job.id}. When the clips are back: ingest --job ${r.job.id} --unit <clip id> --file <path> for each.` };
   }
@@ -126,6 +134,13 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const units = str(opt.get('units'))?.split(',').filter(Boolean);
       const scene = str(opt.get('scene'));
       const max = str(opt.get('max-attempts'));
+      const fit = str(opt.get('fit'));
+      if (fit !== undefined && fit !== 'cover' && fit !== 'nearest') return { code: 2, out: 'akuko: --fit takes cover or nearest.' };
+      // A missing key is a setup problem, not an attempt: say so before the gate is touched.
+      if (provider !== MANUAL_PROVIDER_ID) {
+        const env = providerKeyEnv(loadProviderConfig(), provider);
+        if (env && !process.env[env]) return { code: 1, out: `Setup needed: ${env} is not set, so ${provider} cannot be used. Nothing was sent and nothing was counted. Set the key (see /akuko setup), or use --provider manual.` };
+      }
       if (max !== undefined && !/^[1-9][0-9]*$/.test(max)) return { code: 2, out: 'akuko: --max-attempts takes a whole number of 1 or more.' };
       const r = await generateClips(deps, {
         provider,
@@ -134,6 +149,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(scene ? { scene } : {}),
         ...(opt.get('audio') === true ? { audio: true } : {}),
         ...(max !== undefined ? { maxAttempts: Number(max) } : {}),
+        ...(fit !== undefined ? { fit } : {}),
       });
       if (r.status === 'handoff' || r.status === 'running') {
         await mkdir(join(dir, 'motion', 'jobs'), { recursive: true });

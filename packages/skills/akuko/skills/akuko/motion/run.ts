@@ -33,6 +33,8 @@ export interface StepOptions {
   audio?: boolean;
   /** Paid attempts allowed per shot (default 3). Only when the person asked for more, in their own words. */
   maxAttempts?: number;
+  /** `cover` (default) or `nearest`: see buildMotionJob. */
+  fit?: 'cover' | 'nearest';
 }
 
 /** Ready clips that could not be built this time, with the reason (unit id + why). */
@@ -43,7 +45,7 @@ export type StepResult = SkippedInfo & (
   | { status: 'refused'; job: Job; code: string; message: string; confirmation?: string }
   | { status: 'handoff'; job: Job; handle: JobHandle; text: string }
   | { status: 'running'; job: Job; handle: JobHandle; message: string }
-  | { status: 'done'; job: Job; handle: JobHandle; assets: string[]; cost: number }
+  | { status: 'done'; job: Job; handle: JobHandle; assets: string[]; cost: number; /** Clips of a batch the provider did not make (they stay draft; a new job with its own approval remakes them). */ missing?: string[]; message?: string }
   | { status: 'failed'; job: Job; error: string }
 );
 
@@ -69,6 +71,7 @@ export async function generateClips(deps: StepDeps, o: StepOptions): Promise<Ste
     ...(o.scene !== undefined ? { scene: o.scene } : {}),
     ...(o.audio !== undefined ? { audio: o.audio } : {}),
     ...(o.maxAttempts !== undefined ? { maxAttempts: o.maxAttempts } : {}),
+    ...(o.fit !== undefined ? { fit: o.fit } : {}),
   });
   const res = await runJob(deps, built.job, built.units);
   return { ...res, ...(built.skipped.length > 0 ? { skipped: built.skipped } : {}), ...(built.notes.length > 0 ? { notes: built.notes } : {}) };
@@ -115,8 +118,12 @@ export async function collectClips(deps: StepDeps, job: Job, handle: JobHandle, 
   }
   await finalizeMotion(deps);
   if (s.state !== 'done') return { status: 'failed', job, error: s.message ?? `the job ${s.state}` };
-  const cost = Object.values(s.actual ?? {}).reduce((a, b) => a + b, 0) || estimate;
-  return { status: 'done', job, handle, assets: c.assets.map((a) => a.id), cost };
+  // What this job actually cost: its settled ledger entries (a batch that partly failed settles the missing clips at 0).
+  const settled = (await deps.host.readState()).ledger.filter((e) => e.job === job.id && e.status === 'done');
+  const cost = settled.length ? settled.reduce((sum, e) => sum + (e.actual ?? 0), 0) : estimate;
+  const made = new Set(c.assets.map((a) => a.id));
+  const missing = handle.units.filter((u) => !made.has(u));
+  return { status: 'done', job, handle, assets: [...made], cost, ...(missing.length ? { missing, ...(s.message ? { message: s.message } : {}) } : {}) };
 }
 
 /** The person brought a file back for a manual job. */

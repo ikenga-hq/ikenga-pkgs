@@ -84,6 +84,24 @@ export function snapSeconds(wanted: number, allowed: number[]): { seconds: numbe
   return { seconds: best, changed: best !== wanted };
 }
 
+export type Fit = 'cover' | 'nearest';
+
+/**
+ * The clip length for a shot of `wanted` seconds. `cover` (the default): the
+ * shortest allowed length that is at least the shot, so the clip is never
+ * shorter than the shot (a short clip cannot be stretched in the editor, a long
+ * one is trimmed); if the shot is longer than anything the model makes, the
+ * longest, and `capped` says so. `nearest`: the closest length, ties shorter
+ * (saves money, may be shorter than the shot).
+ */
+export function fitSeconds(wanted: number, allowed: number[], fit: Fit = 'cover'): { seconds: number; changed: boolean; capped: boolean } {
+  if (fit === 'nearest') return { ...snapSeconds(wanted, allowed), capped: wanted > Math.max(...allowed) };
+  const sorted = [...allowed].sort((a, b) => a - b);
+  const cover = sorted.find((x) => x >= wanted);
+  const seconds = cover ?? (sorted[sorted.length - 1] as number);
+  return { seconds, changed: seconds !== wanted, capped: cover === undefined };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 
 export interface FalVideoOptions {
@@ -124,6 +142,10 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
   const config = opts.config ?? loadProviderConfig();
   const loadRef = opts.loadRef ?? defaultRefLoader(opts.fetch);
   const stored = new Map<string, Asset[]>();
+  /** response_url -> video url, read once the queue says COMPLETED (so a bad result fails the poll, not the fetch). */
+  const videoUrls = new Map<string, string>();
+  /** Units whose result was bad when polled; `fetch` leaves them out. */
+  const bad = new Set<string>();
   const entry = providerConfig(config, FAL_VIDEO_PROVIDER_ID);
 
   const keyEnv = providerKeyEnv(config, FAL_VIDEO_PROVIDER_ID);
@@ -156,6 +178,18 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
         throw new FalVideoError(`unit "${item.unit}": ${model} makes clips of ${limits.allowedSeconds.join(' or ')} seconds, not ${item.duration_s}.`);
       }
     }
+  }
+
+  async function readVideoUrl(e: QueuedUnit): Promise<string> {
+    const at = queueUrl(e.response_url);
+    const hit = videoUrls.get(at);
+    if (hit) return hit;
+    const res = await fetchOf(opts.fetch)(at, { headers: headers(false) });
+    if (!res.ok) throw new FalVideoError(`fal result HTTP ${res.status}`);
+    const r = (await res.json()) as { video?: { url?: string } };
+    if (!r.video?.url) throw new FalVideoError('fal returned no video');
+    videoUrls.set(at, r.video.url);
+    return r.video.url;
   }
 
   async function enqueue(model: string, item: JobItem): Promise<QueuedUnit> {
@@ -238,14 +272,29 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
           const s = (await res.json()) as { status?: string; error?: string };
           if (s.status === 'COMPLETED') {
             if (s.error) errors.push(`${e.unit}: ${s.error}`);
-            else done++;
+            else {
+              try {
+                await readVideoUrl(e);
+                done++;
+              } catch (err) {
+                bad.add(e.unit);
+                errors.push(`${e.unit}: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
           } else if (s.status !== 'IN_QUEUE' && s.status !== 'IN_PROGRESS') {
             errors.push(`${e.unit}: unexpected status ${String(s.status)}`);
           }
         }
         const running = live - done - (errors.length - atSubmit);
         if (running > 0) return { state: 'running', progress: live ? done / live : 0, message: `${done} of ${live} clips ready` };
-        if (errors.length) return { state: 'failed', message: errors.join('; ') };
+        if (errors.length && done === 0) return { state: 'failed', message: errors.join('; ') };
+        if (errors.length) {
+          // Some clips are made and billed, some are not. Report done so the made ones are fetched and recorded
+          // (a failed status would discard them); the others settle at 0 (fal bills only finished clips) and stay
+          // draft, so running step again makes a NEW job for them with its own approval.
+          const missing = entries.map((e) => e.unit).filter((u) => errors.some((m) => m.startsWith(`${u}: `)));
+          return { state: 'done', progress: 1, message: `${missing.length} of ${entries.length} clips failed: ${errors.join('; ')}`, actual: Object.fromEntries(missing.map((u) => [u, 0])) };
+        }
         return { state: 'done', progress: 1 };
       },
 
@@ -254,12 +303,9 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
         if (cached) return cached;
         const out: Asset[] = [];
         for (const e of decodeRef(h.ref)) {
-          if (e.error) continue;
-          const res = await fetchOf(opts.fetch)(queueUrl(e.response_url), { headers: headers(false) });
-          if (!res.ok) throw new FalVideoError(`fal result HTTP ${res.status} for ${e.unit}`);
-          const r = (await res.json()) as { video?: { url?: string; content_type?: string } };
-          if (!r.video?.url) throw new FalVideoError(`fal returned no video for ${e.unit}`);
-          const dl = await fetchOf(opts.fetch)(r.video.url);
+          if (e.error || bad.has(e.unit)) continue;
+          const videoUrl = await readVideoUrl(e).catch((err: unknown) => { throw new FalVideoError(`${err instanceof Error ? err.message : String(err)} for ${e.unit}`); });
+          const dl = await fetchOf(opts.fetch)(videoUrl);
           if (!dl.ok) throw new FalVideoError(`could not download the clip for ${e.unit} (HTTP ${dl.status})`);
           const data = new Uint8Array(await dl.arrayBuffer());
           if (data.byteLength === 0) throw new FalVideoError(`the clip for ${e.unit} came back empty`);

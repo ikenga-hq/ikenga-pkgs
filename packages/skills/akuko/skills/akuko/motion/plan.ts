@@ -23,7 +23,7 @@ import { STAGES, type AkukoProject, type Asset, type Shot } from '../schema/akuk
 import type { AkukoProviderConfig } from '../providers/config.ts';
 import { loadProviderConfig, priceFor, providerConfig } from '../providers/config.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
-import { AUDIO_SUFFIX, falVideoLimits, snapSeconds } from '../providers/fal-video/index.ts';
+import { AUDIO_SUFFIX, falVideoLimits, fitSeconds, type Fit } from '../providers/fal-video/index.ts';
 import { requestedChanges } from '../bible/plan.ts';
 import { jobRan } from '../keyframes/plan.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
@@ -123,20 +123,26 @@ export function unitReadiness(p: AkukoProject, a: Asset): Readiness {
 export interface Attempts { count: number; spent: number }
 
 /**
- * Paid attempts on one clip so far: ledger entries for it that finished
- * (`done`) or failed, from a paid provider. Money a failed call cost counts
- * too, so a loop of failures hits the cap like a loop of bad takes. Manual
- * takes are free to akuko and are not counted. `spent` is what they cost
- * (the reported actual, else the estimate).
+ * Paid attempts on one clip so far, and what they cost, by the ledger's own
+ * rules (spend/ledger.ts): a `done` entry cost its `actual`, else its
+ * estimate; a `failed` or `cancelled` entry cost its `actual`, else nothing.
+ * An entry is an **attempt only if it cost money** (amount above 0). So a call
+ * that never reached the provider (no key, a refused frame, a rejected request:
+ * settled `failed` with no actual) is not an attempt and no money is said to
+ * have gone on it, while a finished take, and a failed call that reports a
+ * cost, are. A clip of a batch that fell over (settled done at 0) is not one
+ * either. Manual takes are free to akuko and are not counted.
  */
 export function paidAttempts(p: AkukoProject, unit: string): Attempts {
   let count = 0;
   let spent = 0;
   for (const e of p.ledger) {
     if (e.unit !== unit || e.provider === MANUAL_PROVIDER_ID) continue;
-    if (e.status !== 'done' && e.status !== 'failed') continue;
-    count++;
-    spent += e.actual ?? e.estimate ?? 0;
+    let cost: number;
+    if (e.status === 'done') cost = e.actual ?? e.estimate ?? 0;
+    else if (e.status === 'failed' || e.status === 'cancelled') cost = e.actual ?? 0;
+    else continue;
+    if (cost > 0) { count++; spent += cost; }
   }
   return { count, spent };
 }
@@ -209,6 +215,8 @@ export interface BuildOptions {
   audio?: boolean;
   /** Paid attempts allowed per shot. Default 3; raise only when the person asked in their own words. */
   maxAttempts?: number;
+  /** `cover` (default): a clip at least as long as the shot. `nearest`: the closest length the model makes (cheaper, may be shorter). */
+  fit?: Fit;
   config?: AkukoProviderConfig;
 }
 
@@ -222,6 +230,7 @@ export interface BuiltJob {
 }
 
 interface Limits { allowedSeconds: number[] }
+const fmt = (n: number): string => String(Number(n.toFixed(4)));
 /** What a video provider can make. Unknown providers (and the manual one) have no limit akuko knows about. */
 function limitsFor(provider: string, model: string): Limits | undefined {
   if (provider === 'fal-video') return falVideoLimits(model);
@@ -282,6 +291,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
 
   const notes: string[] = [];
   const seconds: Record<string, number> = {};
+  const wanted: Record<string, number> = {};
   const buildItem = (a: Asset): JobItem => {
     assertAttemptsLeft(p, a.id, max);
     const shot = shotOf(p, a);
@@ -291,11 +301,19 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     }
     let used = want;
     if (limits) {
-      const s = snapSeconds(want, limits.allowedSeconds);
+      const s = fitSeconds(want, limits.allowedSeconds, o.fit ?? 'cover');
       used = s.seconds;
-      if (s.changed) notes.push(`${a.id}: the shot runs ${want} s but ${o.provider} makes ${limits.allowedSeconds.join(' or ')} s clips, so this clip is ${used} s${used < want ? ' (shorter than the shot; trim or extend in assemble)' : ''}.`);
+      if (s.changed) {
+        const lens = limits.allowedSeconds.join(' or ');
+        notes.push(
+          used > want
+            ? `${a.id}: the shot runs ${fmt(want)} s but ${o.provider} makes ${lens} s clips, so this clip is ${used} s (${fmt(used - want)} s longer than the shot, billed; trim it in the editor, or pass --fit nearest to save money with a shorter clip).`
+            : `${a.id}: the shot runs ${fmt(want)} s but ${o.provider} makes ${lens} s clips, so this clip is ${used} s${s.capped ? ' (the longest it makes)' : ''}, ${fmt(want - used)} s SHORTER than the shot. It cannot be stretched in the editor; the shot will need another clip or a cutaway.`,
+        );
+      }
     }
     seconds[a.id] = used;
+    wanted[a.id] = want;
     const kf = p.assets.find((x) => x.id === keyframeIdFor(shot.id)) as Asset;
     const asked = (a.status === 'needs-rework' || a.status === 'draft') ? requestedChanges(a) : '';
     return {
@@ -339,20 +357,25 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     kind: 'video',
     provider: o.provider,
     ...(model !== undefined ? { model } : {}),
-    label: labelFor(config, o.provider, model, chosen, unitSeconds),
+    label: labelFor(config, o.provider, model, chosen, unitSeconds, wanted),
     items,
   };
   return { job, units, skipped, notes: keptNotes };
 }
 
 /** The job label the spend line shows: the per-second arithmetic for each clip. */
-function labelFor(config: AkukoProviderConfig, provider: string, model: string | undefined, chosen: Asset[], seconds: Record<string, number>): string {
+function labelFor(config: AkukoProviderConfig, provider: string, model: string | undefined, chosen: Asset[], seconds: Record<string, number>, wanted: Record<string, number>): string {
   const shots = chosen.map((a) => a.owner).join(', ');
   const head = `Clips: ${plural(chosen.length, 'shot')} (${shots})`;
   if (provider === MANUAL_PROVIDER_ID) return head;
   const price = priceFor(config, provider, model);
   if (price.per !== 'second') return head;
-  const parts = chosen.map((a) => `${a.owner} ${seconds[a.id]} s x ${money(price.amount)} ${price.currency}/s = ${money((seconds[a.id] as number) * price.amount)}`);
+  const parts = chosen.map((a) => {
+    const used = seconds[a.id] as number;
+    const want = wanted[a.id] as number;
+    const extra = used > want ? ` (${money(used)} s billed for a ${money(want)} s shot)` : '';
+    return `${a.owner} ${money(used)} s x ${money(price.amount)} ${price.currency}/s = ${money(used * price.amount)}${extra}`;
+  });
   return `${head}: ${parts.join('; ')}`;
 }
 
