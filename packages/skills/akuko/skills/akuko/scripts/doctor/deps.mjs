@@ -11,6 +11,8 @@
 //
 // Test hook (never set in real use): AKUKO_DOCTOR_HIDE_PKGS="zod,ajv" treats those as not installed.
 
+import { fileURLToPath } from 'node:url';
+
 const PACKAGES = [
   { name: 'zod', range: '^3.23.0', needed: 'every action (the akuko.json schema)', required: true },
   { name: '@ikenga/studio-schema', range: '^0.2.0', needed: 'every action (shared studio types)', required: true },
@@ -19,6 +21,8 @@ const PACKAGES = [
   { name: 'jsdom', range: '29.1.1', needed: 'scripts/check-view.mjs', required: false },
 ];
 
+// An installed copy has no package.json, so --prefix stops npm walking up to a stray one.
+const SKILL_DIR = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
 const hidden = new Set((process.env.AKUKO_DOCTOR_HIDE_PKGS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
 
 function resolves(name) {
@@ -39,8 +43,8 @@ for (const p of PACKAGES) {
 }
 
 if (missing.length > 0) {
-  console.log('fix: with the person\'s OK, run this in the skill folder (nothing else is changed):');
-  console.log(`  npm install --no-save ${missing.map((p) => `${p.name}@${JSON.stringify(p.range).slice(1, -1)}`).join(' ')}`);
+  console.log('fix: with the person\'s OK, run this for the skill folder (nothing else is changed):');
+  console.log(`  npm install --no-save --prefix "${SKILL_DIR}" ${missing.map((p) => `${p.name}@${JSON.stringify(p.range).slice(1, -1)}`).join(' ')}`);
   console.log('note: this is a stop-gap for an installed skill. Bundling these packages with the skill is planned for the v0.x release (WP-20).');
 }
 process.exit(missing.some((p) => p.required) ? 1 : 0);

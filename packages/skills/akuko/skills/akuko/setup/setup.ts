@@ -46,7 +46,7 @@ export interface SetupAnswers {
   brand?: BrandInput | null;
   /** Provider id → env var name, that override the config's `key_env`. */
   keyEnvNames?: Record<string, string>;
-  /** Title for the project setup creates when there is no `akuko.json` yet. Defaults to "Untitled film"; intake can rename it. */
+  /** Title for the project setup creates when there is no `akuko.json` yet. The agent asks the person for the title first and passes it here; "Untitled film" is only a fallback and nothing renames it later. */
   title?: string;
 }
 

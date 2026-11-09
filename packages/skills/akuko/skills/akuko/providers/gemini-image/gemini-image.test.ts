@@ -184,7 +184,7 @@ describe('gemini-image provider', () => {
     const st = await s.provider.poll(r.handle);
     assert.equal(st.state, 'failed');
     assert.match(st.message ?? '', /sc1_sh2.*429.*quota/);
-    assert.match(st.message ?? '', /free tier, or billing is not active/);
+    assert.match(st.message ?? '', /free tier or billing not active.*rate limit/);
     assert.deepEqual(Object.keys(st.actual ?? {}), ['sc1_sh1']);
   });
 

@@ -277,7 +277,7 @@ describe('doctor.sh', { skip: bash === null ? 'no bash available' : false }, () 
     assert.equal(r.status, 1, r.out);
     assert.match(r.out, /zod\s+MISSING \(required\)/);
     assert.match(r.out, /ajv\s+MISSING \(optional\)/);
-    assert.match(r.out, /npm install --no-save zod@\^3\.23\.0 ajv@\^8\.20\.0/);
+    assert.match(r.out, /npm install --no-save --prefix ".*" zod@\^3\.23\.0 ajv@\^8\.20\.0/);
     assert.match(r.out, /WP-20/);
     assert.doesNotMatch(r.out, /Cannot find package/);
     assert.match(r.out, /provider and project checks skipped/);
@@ -286,7 +286,7 @@ describe('doctor.sh', { skip: bash === null ? 'no bash available' : false }, () 
   it('only optional check-view packages missing is a warning, exit 0 (A-1)', () => {
     const r = doctorSh({ ...allOptionalMissing, AKUKO_DOCTOR_HIDE_PKGS: 'ajv,ajv-formats,jsdom' }, emptyDir);
     assert.equal(r.status, 0, r.out);
-    assert.match(r.out, /npm install --no-save ajv@/);
+    assert.match(r.out, /npm install --no-save --prefix ".*" ajv@/);
     assert.match(r.out, /provider keys/);
   });
 

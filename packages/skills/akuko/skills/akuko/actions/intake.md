@@ -38,7 +38,7 @@ requires_capabilities:
 
 1. **Host and state.** Detect the host (`SKILL.md` §Every action starts the same way). `readState()`. Fold decisions first (`../lib/state.md` §Decision folding; if `readDecisions()` still throws `NotImplementedError`, say decisions can't be read yet and go on).
 2. **Is there a project already?**
-   - **No** → continue. Get the film's **title** from the person (or from the source's title line) and offer a one-line logline; both can be changed later. Create it: `node --experimental-strip-types breakdown/cli.ts new --project <folder> --title "<title>"`. On host A, call `createProject()` from `../breakdown/intake.ts` and `writeState()`.
+   - **No** → continue. Get the film's **title** from the person (or from the source's title line) and offer a one-line logline; both can be changed later. Create it: `node --experimental-strip-types breakdown/cli.ts new --project <folder> --title "<title>" --tools <your full tool list, comma-separated>` (so `akuko.json.host` records the real capabilities). On host A, call `createProject()` from `../breakdown/intake.ts` and `writeState()`.
    - **Yes, and `shots[]` is not empty** → stop. The screenplay is now the source of the shots; replacing it would orphan them. Say so and offer `status`, or a new project for a different story.
    - **Yes, intake already in review or approved** → show what is there and ask whether to replace the source. Don't re-adapt silently.
 3. **Read the source.** From the path the person gave, or the text they pasted. Save it unchanged as `script/source.md`. Decide what it is with `detectSourceKind()` (`../breakdown/intake.ts`): `fountain` if it has `INT.` / `EXT.` scene headings, else `prose`. A **treatment** is prose.

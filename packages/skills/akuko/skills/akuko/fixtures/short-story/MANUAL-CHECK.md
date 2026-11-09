@@ -95,7 +95,7 @@ This part covers the whole path, but to keep it about 20 minutes you make the ke
 2. **The board is an artifact.** Expected: after intake and breakdown it gives you a published artifact link (the default board), showing a "Your move" summary with the intake files and then the 12 shots and 6 checklist entries waiting.
    Open it while signed in. Observed: ______
 
-3. **Approve there, and see it read back.** Approve the intake files on the artifact and tell the agent "I reviewed". Repeat for the breakdown (all 12 shots and 8 entries).
+3. **Approve there, and see it read back.** Approve the intake files on the artifact and tell the agent "I reviewed". Repeat for the breakdown (all 12 shots and 6 entries).
    Expected: the agent loads `ArtifactData`, lists the `decisions` collection, folds, and its report matches your clicks exactly (counts of approvals, none rejected). It **does not** say "approved" for anything you did not click. The next stage unlocks.
    Observed: ______
 

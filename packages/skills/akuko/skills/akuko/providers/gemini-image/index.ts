@@ -141,7 +141,7 @@ export function createGeminiImageProvider(host: WaveOneHost, opts: GeminiImageOp
     if (!res.ok) {
       const msg = (body as { error?: { message?: string } } | undefined)?.error?.message ?? text.slice(0, 200);
       const hint = res.status === 429
-        ? ' (this usually means the free tier, or billing is not active for the project this key belongs to: image models need a paid Gemini API account, see https://ai.google.dev/gemini-api/docs/billing)'
+        ? ' (usually the free tier or billing not active for the project this key belongs to, or a rate limit: image models need a paid Gemini API account, see https://ai.google.dev/gemini-api/docs/billing)'
         : '';
       throw new GeminiImageError(`Gemini HTTP ${res.status}: ${msg}${hint}`);
     }
