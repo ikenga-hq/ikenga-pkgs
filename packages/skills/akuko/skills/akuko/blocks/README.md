@@ -22,6 +22,14 @@ not a film.
 These rules come from gap G-01 (plan Round 5, R5-3/4/5). Each one is the reason a preview
 can be trusted to equal the render (`engines/hyperframes/G-01.md`).
 
+**What G-01 signed, and what it did not.** G-01 passed for its own composition on HyperFrames
+0.9.19, on one Windows machine with hardware ANGLE, previewed through HyperFrames' own path
+(`snapshot`). That is the preview this sign-off covers. A previewer that does not go through
+HyperFrames is covered only for blocks that keep rule 3 (state as a pure function of time)
+and rule 2 (fonts that load). The G-01 run showed a naive `tl.seek(t)` preview matching for
+a composition that keeps them, and failing for one that does not (NC-1, NC-2). These blocks
+were not each frame-measured against a render; they were checked by lint, check and eye.
+
 1. **Preview only through HyperFrames' seek path (R5-3).** Stills come from `hyperframes
    snapshot` and video from `hyperframes render`. Both seek with `__player.renderSeek`, so
    callbacks fire the way the renderer fires them. A board or player that shows a block
@@ -43,7 +51,8 @@ can be trusted to equal the render (`engines/hyperframes/G-01.md`).
      variables. It must never come from measured text: text size depends on when the fonts
      load.
    - Not allowed: `Date.now`, unseeded `Math.random`, timers, `requestAnimationFrame`,
-     `fetch`, `repeat: -1`, `play()`.
+     `fetch`, `repeat: -1`, `play()`, and CSS `@keyframes`, `transition` or `animation`.
+     CSS motion runs on the wall clock, not the timeline.
 4. **HyperFrames scene contract.**
    - Styles, markup and script all go inside `<template>`, and the root is styled as `#root`.
    - Element ids carry the block's prefix, since ids must be unique on the assembled page.
@@ -53,6 +62,11 @@ can be trusted to equal the render (`engines/hyperframes/G-01.md`).
 5. **GSAP is referenced, not shipped.** The film's `index.html` loads
    `https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js`. HyperFrames 0.9.19 answers
    that exact URL from its own vendored copy, so renders need no network.
+   - **The version must match the HyperFrames pin.** HyperFrames serves only the GSAP it
+     vendors: 0.9.19 vendors 3.15.0 (`HYPERFRAMES_GSAP_VERSION` in `engines/hyperframes/cli.ts`).
+     Any other version's URL is fetched from the network at render time. The two are bumped
+     together; `blocks.test.ts` checks every composition names the pinned version, and
+     `g01.ts` refuses a HyperFrames install that lacks it.
    - GSAP's files say "Subject to the terms at https://gsap.com/standard-license". That is a
      no-charge licence but not an OSI one.
    - Whether it allows redistribution inside this Apache-2.0 repo was not established, so no
@@ -143,9 +157,18 @@ Render time for the same setup (6 s 1920×1080 G-01 composition, MP4 through
 | final (`--quality delivery`, 30 fps) | 180 frames | 72.5 s | 57.1 s | setup 15.8 s, capture 36.7 s, encode 0.8 s |
 | draft (`--quality draft --fps 15`) | 90 frames | 55.2 s | 41.6 s | setup 15.4 s, capture 22.7 s, encode 0.8 s |
 
-`estimateRender()` is fitted to these two runs: 0.2 s per frame plus 38 s. It is rough
-(R-10). The spike measured 2–3 minutes for the same length on the same machine under
-different load.
+`estimateRender()` is fitted to the **wall clock** of these two runs: 0.2 s per frame plus
+38 s. `secondsPerFrameFrom()` recalibrates from a render's wall clock too, at the frame rate
+of the profile used, never from HyperFrames' shorter "rendered in" figure.
+
+- Draft saves capture time, because it renders half the frames. Encode is under a second
+  either way, and setup (about 15 s inside HyperFrames, about 38 s of wall clock in all) is
+  fixed. On short clips that fixed cost is most of the wait, so draft saves only about a
+  quarter here.
+- The estimate is rough (R-10). The spike measured 2–3 minutes for the same length on the
+  same machine under different load.
+- Telemetry: the wrapper sets `HYPERFRAMES_NO_TELEMETRY=1` and `DO_NOT_TRACK=1` unless the
+  caller passes `telemetry: true`.
 
 ## Out of scope here
 

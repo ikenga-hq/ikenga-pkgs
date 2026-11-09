@@ -23,6 +23,11 @@ c586434ed84e3796d2b748fb5229f1614b54a769450f262e8e561483989e6d9c  g01/ref-flat/r
 f625a12eb7b8c3e13cb66598e378be191bad13d902af69750e0807d2c8b1bfdd  g01/ref-flat/ref-frame_000091.png
 9816a714bf84f33ae3f44a9c81f8d7857dfc4d8b95b79d7ec55af4b86be99bfb  g01/ref-flat/ref-frame_000136.png
 d6f5819a5a5841d44624e02988d4a77a36dce6d3378d5c452a61b9855c87cb83  g01/ref-flat/ref-frame_000178.png
+db209ba8dc181a37c1020aa657d790df4cac92a744d435a162452d4457357a63  nc-chip/preview-hf/frame-00-at-0.5s.png
+24806b85399e55d7e16408a02440c4d73b6881153bcd67422254cb919b06ebf2  nc-chip/preview-hf/frame-01-at-1.5s.png
+759627e2f88f0f612961d182507e8891e4ca58c6c6eb9f304cb5c9bc7729f323  nc-chip/preview-hf/frame-02-at-3s.png
+806eb36576ab98f349f8e1ca7109c3ec5df0f3d4480185e3240e428f81112229  nc-chip/preview-hf/frame-03-at-4.5s.png
+dcd59b9a761d19312cbe9c8735abfd3033104ad0a411ee9e8b73ab1583438823  nc-chip/preview-hf/frame-04-at-5.9s.png
 263d4be75628c0d00c864d6d2d34fc7b757a783e79e764f602a0fb1bb627a1a7  nc-onupdate/preview-handrolled/at-0.5s.png
 bd9681def087b462c0cec0b6e4e6c474a89fbec2af6c7ec696fd73623339e7b8  nc-onupdate/preview-handrolled/at-1.5s.png
 ce13f36bdf3404240e8d74e2ae0f21c0fc40e0e3848e26af1663c83da764abc4  nc-onupdate/preview-handrolled/at-3s.png

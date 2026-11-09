@@ -358,7 +358,7 @@ function table(set: SetReport, out: string): string {
 async function main(): Promise<void> {
   const a = parseArgs(process.argv.slice(2));
   await mkdir(a.out, { recursive: true });
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...process.env, HYPERFRAMES_NO_TELEMETRY: '1', DO_NOT_TRACK: '1' };
   if (a.browser) env.HYPERFRAMES_BROWSER_PATH = a.browser;
   const log = (m: string) => console.log(`[g01] ${m}`);
 
