@@ -465,7 +465,6 @@ describe('manual path: prompt package out, file (and optionally words) back', ()
     personApproves(r);
     const out = await rebuildNarration({ host: r.guarded, readFile: readFile(r), now });
     assert.ok(out.status !== 'nothing');
-    if (out.status === 'nothing') return;
     assert.equal(out.words, 0);
     assert.deepEqual(out.withoutTimings, [vo('sc1_sh1')]);
     assert.equal(out.captions, undefined, 'no captions without timings');
@@ -492,7 +491,7 @@ describe('manual path: prompt package out, file (and optionally words) back', ()
     const out = await rebuildNarration({ host: r.guarded, readFile: readFile(r), now });
     assert.ok(out.status !== 'nothing' && out.trackSkipped && /WAV/.test(out.trackSkipped));
     assert.equal(r.host.peek().audio.narration ?? null, null);
-    if (out.status !== 'nothing') assert.equal(out.captions?.cues, 1);
+    assert.equal(out.captions?.cues, 1);
   });
 });
 
