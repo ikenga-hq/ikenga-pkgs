@@ -16,8 +16,10 @@
  *   - `duration_ms` is the film length (all shot durations), `voice_id` the voice
  *     when every take used the same one, `generated_at` the time of the build.
  *
- * Refused, never fudged: a shot with no duration, a take longer than its shot
- * (its words would run into the next shot), a words file that is not valid.
+ * Refused, never fudged: a shot with no duration, a words file that is not valid.
+ * A take longer than its shot (its audio, or its last word, runs past the slot) is
+ * SKIPPED with a named warning (shot, take length, shot length) and the rest is still
+ * built: its words would run into the next shot. akuko changes neither the text nor the shot.
  * Takes recorded without timings contribute audio but no words; they are listed.
  *
  * Captions (WebVTT and SRT, `audio/vo/captions.{vtt,srt}`) are a pure function of
@@ -29,7 +31,8 @@ import type { AkukoProject, Asset, Shot } from '../schema/akuko-project.ts';
 import type { WaveOneHost } from '../providers/contract.ts';
 import { CAPTION_DEFAULTS, captionsFromWords, formatSrt, formatVtt, type CaptionOptions } from './captions.ts';
 import { NO_WORDS_TAG, VOICE_TAG, WORDS_TAG, WordsError, offsetWords, readWordsFile, type NarrationWord, type WordsFile } from './words.ts';
-import { isWav, mixWav, parseWav, sameFormat, type Placed, type Wav } from './wav.ts';
+import { WavError, isWav, mixWav, parseWav, sameFormat, slotFrames, type Placed, type Wav } from './wav.ts';
+import { fmtSeconds, overrunText } from './fit.ts';
 import { voAssets } from './plan.ts';
 
 export class NarrationError extends WordsError {
@@ -64,14 +67,19 @@ export function shotStarts(shots: Shot[]): { starts: Map<string, number>; durati
   return { starts, durations, totalMs: t };
 }
 
+/** An approved take longer than its shot: skipped by `sync`, never trimmed. */
+export interface Overrun { asset: string; shot: string; takeMs: number; slotMs: number }
+
 export type RebuildResult =
-  | { status: 'nothing'; reason: string }
+  | { status: 'nothing'; reason: string; overrun?: Overrun[] }
   | {
       status: 'built' | 'unchanged';
       /** Words on the film timeline; empty when no approved take has timings. */
       words: number;
       /** Approved takes recorded without word timings: in the audio, but not in the captions. */
       withoutTimings: string[];
+      /** Approved takes left out because they run past their shot (named in `warnings` too). */
+      overrun: Overrun[];
       /** Why the single narration track was not made, when it was not. */
       trackSkipped?: string;
       warnings: string[];
@@ -111,7 +119,9 @@ export async function rebuildNarration(deps: NarrationDeps): Promise<RebuildResu
   const wavs: Placed[] = [];
   let allWav = true;
   const voices = new Set<string>();
+  let used = 0;
 
+  const overrun: Overrun[] = [];
   for (const { asset, shot } of takes) {
     const start = starts.get(shot.id) as number;
     const slot = durations.get(shot.id) as number;
@@ -123,25 +133,41 @@ export async function rebuildNarration(deps: NarrationDeps): Promise<RebuildResu
     } else if (!asset.tags.includes(NO_WORDS_TAG)) {
       warnings.push(`${asset.id} has no words file; treated as recorded without timings.`);
     }
-    if (!wf) withoutTimings.push(asset.id);
 
-    let length: number | undefined = wf?.duration_ms;
+    // How long is the take, and does it fit its slot? Audio is compared in sample frames (a 6000.4 ms
+    // take in a 6000 ms slot overruns); the last word's end is checked too.
+    let wav: Wav | undefined;
     if (isWav(bytes)) {
-      try {
-        const wav: Wav = parseWav(bytes);
-        length = wav.durationMs;
-        wavs.push({ startMs: start, wav });
-      } catch { allWav = false; }
-    } else {
-      allWav = false;
+      try { wav = parseWav(bytes); } catch { wav = undefined; }
     }
-    if (length !== undefined && length > slot) {
-      throw new NarrationError(`${asset.id} runs ${(length / 1000).toFixed(2)}s but ${shot.id} lasts ${(slot / 1000).toFixed(2)}s. Shorten the line, ask for a faster read, or lengthen the shot; the words would run into the next shot.`);
+    const lastWord = wf ? wf.words.at(-1)!.end_ms : 0;
+    let takeMs = Math.max(lastWord, wav ? wav.durationMs : (wf?.duration_ms ?? 0));
+    let over = lastWord > slot;
+    if (wav) {
+      const exact = (wav.frames / wav.sampleRate) * 1000;
+      takeMs = Math.max(lastWord, exact);
+      if (wav.frames > slotFrames(start, slot, wav.sampleRate)) over = true;
+    } else if ((wf?.duration_ms ?? 0) > slot) {
+      over = true;
     }
-    if (length === undefined) warnings.push(`${asset.id}: its length is unknown, so it could not be checked against ${shot.id}'s ${(slot / 1000).toFixed(2)}s.`);
+    if (takeMs === 0) warnings.push(`${asset.id}: its length is unknown, so it could not be checked against ${shot.id}'s ${fmtSeconds(slot)} s.`);
+    if (over) {
+      overrun.push({ asset: asset.id, shot: shot.id, takeMs, slotMs: slot });
+      warnings.push(`${asset.id} is left out: ${overrunText(takeMs, slot)} (${shot.id}). Shorten the line, pick a faster voice or model, or lengthen the shot in breakdown; akuko changes neither.`);
+      continue;
+    }
+
+    if (!wf) withoutTimings.push(asset.id);
+    if (wav) { wavs.push({ startMs: start, wav }); } else allWav = false;
     if (wf) words.push(...offsetWords(wf.words, start));
     const voice = asset.tags.find((t) => t.startsWith(VOICE_TAG))?.slice(VOICE_TAG.length);
     if (voice) voices.add(voice);
+    used++;
+  }
+  if (used === 0) {
+    const cleared = p.audio.narration ? { ...p, audio: { ...p.audio, narration: null } } : p;
+    if (cleared !== p) await host.writeState(cleared);
+    return { status: 'nothing', reason: `No approved voice-over fits its shot: ${overrun.map((o) => `${o.asset}: ${overrunText(o.takeMs, o.slotMs)}`).join('; ')}.${cleared !== p ? ' audio.narration was cleared.' : ''}`, overrun };
   }
 
   // Words never go backwards across shots (each take fits its slot); assert it rather than trust it.
@@ -155,7 +181,8 @@ export async function rebuildNarration(deps: NarrationDeps): Promise<RebuildResu
   if (!allWav) trackSkipped = 'not every approved take is a 16-bit PCM WAV, so one narration track cannot be made here; assemble (WP-13) joins the files with its own tools';
   else if (!sameFormat(wavs.map((w) => w.wav))) trackSkipped = 'the approved takes differ in sample rate or channels, so one narration track cannot be made here';
   if (!trackSkipped) {
-    const track = mixWav(wavs, totalMs);
+    let track: Uint8Array;
+    try { track = mixWav(wavs, totalMs); } catch (err) { throw new NarrationError(err instanceof WavError ? `the approved takes cannot be placed on one track: ${err.message}` : String(err)); }
     const hash = sha(track);
     const old = p.audio.narration;
     const same = old?.audio.hash === hash && old.words.length === words.length && JSON.stringify(old.words) === JSON.stringify(words);
@@ -201,6 +228,7 @@ export async function rebuildNarration(deps: NarrationDeps): Promise<RebuildResu
     status: changed ? 'built' : 'unchanged',
     words: words.length,
     withoutTimings,
+    overrun,
     ...(trackSkipped ? { trackSkipped } : {}),
     warnings,
     ...(captions ? { captions } : {}),

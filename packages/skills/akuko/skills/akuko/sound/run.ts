@@ -23,7 +23,8 @@ import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { assertValidProject } from '../providers/outputs.ts';
 import { SOUND_STAGE, SoundError, abandonUnits, assertOpen, beginUnits, buildSoundJob, refreshStageState, repairFileless, stampTake, textFor } from './plan.ts';
-import { NO_WORDS_TAG, WORDS_TAG, parseWordsFile, serializeWords } from './words.ts';
+import { annotateOverruns } from './fit.ts';
+import { LEN_TAG, NO_WORDS_TAG, WORDS_TAG, parseWordsFile, serializeWords } from './words.ts';
 import { isWav, parseWav } from './wav.ts';
 
 export interface StepDeps {
@@ -54,9 +55,16 @@ const clock = (d: Pick<StepDeps, 'now'>): string => (d.now ?? (() => new Date().
 export async function finalizeSound(deps: Pick<StepDeps, 'host' | 'now'>): Promise<string[]> {
   const before = await deps.host.readState();
   const repaired = repairFileless(before, clock(deps));
-  const after = refreshStageState(repaired.project);
+  // Say, on each take, when its audio runs past its shot (an agent comment the person sees at review).
+  const noted = annotateOverruns(repaired.project, clock(deps));
+  const after = refreshStageState(noted.project);
   if (repaired.repaired.length > 0 || after !== repaired.project) await deps.host.writeState(after);
   return repaired.repaired;
+}
+
+/** The overrun notes that are current for these voice-overs (empty when they all fit). */
+export async function overrunNotes(host: WaveOneHost, ids: string[], ts: string): Promise<string[]> {
+  return annotateOverruns(await host.readState(), ts, ids).notes;
 }
 
 export async function generateVoiceover(deps: StepDeps, o: StepOptions): Promise<StepResult> {
@@ -113,7 +121,9 @@ export async function collectVoiceover(deps: StepDeps, job: Job, handle: JobHand
   await finalizeSound(deps);
   if (s.state !== 'done') return { status: 'failed', job, error: s.message ?? `the job ${s.state}` };
   const cost = Object.values(s.actual ?? {}).reduce((a, b) => a + b, 0) || estimate;
-  return { status: 'done', job, handle, assets: c.assets.map((a) => a.id), cost, ...(s.message ? { message: s.message } : {}) };
+  const notes = await overrunNotes(deps.host, handle.units, clock(deps));
+  const message = [s.message, ...notes].filter(Boolean).join('; ');
+  return { status: 'done', job, handle, assets: c.assets.map((a) => a.id), cost, ...(message ? { message } : {}) };
 }
 
 export interface IngestVoiceoverResult { asset: string; warnings: string[]; timings: boolean }
@@ -140,11 +150,14 @@ export async function ingestVoiceover(
   const warnings = [...r.warnings];
 
   let tag: string;
+  // Length of the take: the larger of its audio (when we can read it) and its last word.
+  let audioMs: number | undefined;
+  if (isWav(file.data)) {
+    try { audioMs = parseWav(file.data).durationMs; } catch { audioMs = undefined; }
+  }
+  const lenMs = Math.max(audioMs ?? 0, wordsFile?.words.at(-1)?.end_ms ?? 0);
   if (wordsFile) {
-    let duration = wordsFile.duration_ms;
-    if (isWav(file.data)) {
-      try { duration = Math.max(duration, parseWav(file.data).durationMs); } catch { /* keep the words' own length */ }
-    }
+    const duration = Math.max(wordsFile.duration_ms, audioMs ?? 0);
     const stored = await deps.host.storeAsset({
       kind: 'vo',
       filename: `${r.asset.id}-words.json`,
@@ -161,10 +174,11 @@ export async function ingestVoiceover(
   const p = await deps.host.readState();
   const next: AkukoProject = {
     ...p,
-    assets: p.assets.map((a): Asset => (a.id === r.asset.id ? { ...a, tags: [...a.tags.filter((t) => !t.startsWith(WORDS_TAG) && t !== NO_WORDS_TAG), tag] } : a)),
+    assets: p.assets.map((a): Asset => (a.id === r.asset.id ? { ...a, tags: [...a.tags.filter((t) => !t.startsWith(WORDS_TAG) && !t.startsWith(LEN_TAG) && t !== NO_WORDS_TAG), tag, ...(lenMs > 0 ? [`${LEN_TAG}${lenMs}`] : [])] } : a)),
   };
   await deps.host.writeState(assertValidProject(next));
   await finalizeSound(deps);
+  warnings.push(...(await overrunNotes(deps.host, [r.asset.id], clock(deps))));
   return { asset: r.asset.id, warnings, timings: wordsFile !== undefined };
 }
 
@@ -175,10 +189,10 @@ export async function ingestVoiceover(
  * not change the take's status, and it never re-files the audio.
  */
 export async function attachWords(
-  deps: Pick<StepDeps, 'host' | 'now'>,
+  deps: Pick<StepDeps, 'host' | 'now'> & { readFile?: (uri: string) => Promise<Uint8Array> },
   unit: string,
   words: { filename: string; data: Uint8Array },
-): Promise<{ asset: string }> {
+): Promise<{ asset: string; notes: string[] }> {
   const p = await deps.host.readState();
   const a = p.assets.find((x) => x.id === unit && x.stage === SOUND_STAGE && x.kind === 'vo');
   if (!a || !a.file) throw new SoundError(`"${unit}" is not a recorded voice-over.`);
@@ -193,12 +207,19 @@ export async function attachWords(
     owner: unit,
   });
   const tag = `${WORDS_TAG}${stored.file?.uri ?? ''}`;
+  // The larger of the words' end and the audio's own length, where the audio can be read.
+  let audioMs = 0;
+  if (deps.readFile) {
+    try { const bytes = await deps.readFile(a.file.uri); if (isWav(bytes)) audioMs = parseWav(bytes).durationMs; } catch { audioMs = 0; }
+  }
+  const lenMs = Math.max(audioMs, parsed.words.at(-1)?.end_ms ?? 0);
   const cur = await deps.host.readState();
   await deps.host.writeState(assertValidProject({
     ...cur,
-    assets: cur.assets.map((x): Asset => (x.id === unit ? { ...x, tags: [...x.tags.filter((t) => !t.startsWith(WORDS_TAG) && t !== NO_WORDS_TAG), tag] } : x)),
+    assets: cur.assets.map((x): Asset => (x.id === unit ? { ...x, tags: [...x.tags.filter((t) => !t.startsWith(WORDS_TAG) && !t.startsWith(LEN_TAG) && t !== NO_WORDS_TAG), tag, `${LEN_TAG}${lenMs}`] } : x)),
   }));
-  return { asset: unit };
+  await finalizeSound(deps);
+  return { asset: unit, notes: await overrunNotes(deps.host, [unit], clock(deps)) };
 }
 
 export interface SoundFileInput {

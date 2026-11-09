@@ -126,8 +126,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const unit = str(opt.get('unit'));
       const path = str(opt.get('file'));
       if (!unit || !path) return { code: 2, out: 'akuko: --unit and --file are required.' };
-      await attachWords({ host, now: clock }, unit, { filename: path, data: new Uint8Array(await readFile(path)) });
-      return { code: 0, out: 'Attached word timings to ' + unit + '. Run sync to rebuild the narration and captions.' };
+      const r = await attachWords({ host, now: clock, readFile: (uri) => readFile(join(dir, uri)) }, unit, { filename: path, data: new Uint8Array(await readFile(path)) });
+      return { code: 0, out: [`Attached word timings to ${unit}. Run sync to rebuild the narration and captions.`, ...r.notes].join(NL) };
     }
     if (cmd === 'add-music' || cmd === 'add-sfx') {
       const path = str(opt.get('file'));

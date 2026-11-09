@@ -27,7 +27,7 @@ import type { Cost, Job, JobHandle, JobItem, JobStatus, Provider, WaveOneHost } 
 import { jobProblems } from '../../contract.ts';
 import { jobTag, planAssetId } from '../../outputs.ts';
 import { sealProvider } from '../../../spend/gate.ts';
-import { NO_WORDS_TAG, VOICE_TAG, WORDS_FORMAT, WORDS_TAG, WordsError, serializeWords, wordsFromAlignment, type WordsFile } from '../../../sound/words.ts';
+import { LEN_TAG, NO_WORDS_TAG, VOICE_TAG, WORDS_FORMAT, WORDS_TAG, WordsError, serializeWords, wordsFromAlignment, type WordsFile } from '../../../sound/words.ts';
 import { isWav, parseWav, wavBytes } from '../../../sound/wav.ts';
 
 export const ELEVENLABS_PROVIDER_ID = 'elevenlabs';
@@ -153,7 +153,7 @@ export function createElevenLabsProvider(host: WaveOneHost, opts: ElevenLabsOpti
           const voice = voiceOf(item)!;
           let durationMs: number;
           try { durationMs = parseWav(r.audio).durationMs; } catch { durationMs = r.words?.at(-1)?.end_ms ?? 0; }
-          const tags = [jobTag(job.id), ELEVENLABS_PROVIDER_ID, `${VOICE_TAG}${voice}`];
+          const tags = [jobTag(job.id), ELEVENLABS_PROVIDER_ID, `${VOICE_TAG}${voice}`, `${LEN_TAG}${Math.max(durationMs, r.words?.at(-1)?.end_ms ?? 0)}`];
           if (r.words) {
             const file: WordsFile = { format: WORDS_FORMAT, version: 1, unit: item.unit, text: item.prompt, voice_id: voice, model, duration_ms: durationMs, words: r.words };
             const wordsAsset = await host.storeAsset({

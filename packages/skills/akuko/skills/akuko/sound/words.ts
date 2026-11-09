@@ -77,8 +77,19 @@ export function wordsFromAlignment(a: unknown): NarrationWord[] {
     if (cur) { cur.text += ch; cur.end = Math.max(cur.end, e); } else cur = { text: ch, start: s, end: e };
   }
   flush();
-  checkWords(words);
-  return words;
+  // A token of punctuation only (a standalone dash) belongs to the word before it.
+  const merged: NarrationWord[] = [];
+  for (const x of words) {
+    const prev = merged[merged.length - 1];
+    if (prev && /^[\p{P}\p{S}]+$/u.test(x.word)) {
+      prev.word = `${prev.word} ${x.word}`;
+      prev.end_ms = Math.max(prev.end_ms, x.end_ms);
+    } else {
+      merged.push(x);
+    }
+  }
+  checkWords(merged);
+  return merged;
 }
 
 /** Words must be whole milliseconds, start no later than they end, and run in order. */
@@ -145,3 +156,6 @@ export const WORDS_TAG = 'words:';
 /** Tag on a voice-over asset recorded without timings (captions need them). */
 export const NO_WORDS_TAG = 'no-words';
 export const VOICE_TAG = 'voice:';
+
+/** Tag on a voice-over asset: the take's length in ms, the larger of its audio and its last word (`len-ms:<n>`). */
+export const LEN_TAG = 'len-ms:';

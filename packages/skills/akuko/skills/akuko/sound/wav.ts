@@ -17,7 +17,10 @@ export interface Wav {
   bits: number;
   /** Raw sample bytes. */
   pcm: Uint8Array;
+  /** Rounded to the nearest ms. Compare lengths in `frames`, not this. */
   durationMs: number;
+  /** Sample frames in the data. */
+  frames: number;
 }
 
 const u16 = (b: Uint8Array, o: number): number => b[o]! | (b[o + 1]! << 8);
@@ -45,7 +48,7 @@ export function parseWav(b: Uint8Array): Wav {
       const pcm = b.subarray(body, body + size);
       const frame = fmt.channels * 2;
       const frames = Math.floor(pcm.length / frame);
-      return { ...fmt, pcm: pcm.subarray(0, frames * frame), durationMs: Math.round((frames / fmt.sampleRate) * 1000) };
+      return { ...fmt, pcm: pcm.subarray(0, frames * frame), durationMs: Math.round((frames / fmt.sampleRate) * 1000), frames };
     }
     o = body + size + (size % 2);
   }
@@ -64,6 +67,10 @@ export function wavBytes(pcm: Uint8Array, sampleRate: number, channels = 1): Uin
   out.set(pcm, 44);
   return out;
 }
+
+/** Frames from `startMs` to `startMs + slotMs`, counted the way `mixWav` places clips (so a clip that fits here cannot overlap the next one). */
+export const slotFrames = (startMs: number, slotMs: number, sampleRate: number): number =>
+  Math.round(((startMs + slotMs) * sampleRate) / 1000) - Math.round((startMs * sampleRate) / 1000);
 
 export interface Placed { startMs: number; wav: Wav }
 

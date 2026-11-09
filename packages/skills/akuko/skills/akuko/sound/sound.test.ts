@@ -21,7 +21,7 @@ import { SETUP_POINTER, createSpendGate, type SpendGate } from '../spend/gate.ts
 import { bibleApproved } from '../keyframes/__fixtures__/project.ts';
 import { planKeyframes } from '../keyframes/plan.ts';
 import { captionsFromNarration, formatSrt, formatVtt } from './captions.ts';
-import { rebuildNarration, shotStarts, NarrationError } from './narration.ts';
+import { rebuildNarration, shotStarts } from './narration.ts';
 import {
   SoundError,
   assertOpen,
@@ -31,8 +31,8 @@ import {
   soundStatus,
   voAssets,
 } from './plan.ts';
-import { collectVoiceover, finalizeSound, generateVoiceover, ingestSoundFile, ingestVoiceover, type StepResult } from './run.ts';
-import { parseWav } from './wav.ts';
+import { attachWords, collectVoiceover, finalizeSound, generateVoiceover, ingestSoundFile, ingestVoiceover, type StepResult } from './run.ts';
+import { parseWav, wavBytes } from './wav.ts';
 import { WordsError } from './words.ts';
 import { silentWav, mockElevenLabs, type MockEleven } from './__fixtures__/audio.ts';
 import { approve, approveSpend, decision, fold, keyframesApproved } from './__fixtures__/project.ts';
@@ -208,6 +208,21 @@ describe('the job: one voice-over per shot, text exact, voice chosen by the pers
     assert.notEqual(buildSoundJob(edited, { provider: 'elevenlabs', voice: VOICE }).job.id, base);
   });
 
+  it('the default model is resolved before hashing: another default is a new job id; an explicit model equal to the default is the same job', () => {
+    const p = ready({ scriptLines: 'all' });
+    const cfg = structuredClone(config);
+    const base = buildSoundJob(p, { provider: 'elevenlabs', voice: VOICE }).job.id;
+    assert.equal(buildSoundJob(p, { provider: 'elevenlabs', voice: VOICE, model: config.providers['elevenlabs']!.default_model }).job.id, base);
+    cfg.providers['elevenlabs']!.default_model = 'eleven_multilingual_v2';
+    assert.notEqual(buildSoundJob(p, { provider: 'elevenlabs', voice: VOICE, config: cfg }).job.id, base);
+  });
+
+  it('units planned from a script line carry the agent comment that the person confirmed it in chat', () => {
+    const a = planSound(keyframesApproved(), NOW, { scriptLines: ['sc1_sh1'] }).project;
+    assert.deepEqual(asset(a, vo('sc1_sh1')).comments.map((c) => [c.author, c.text]), [['agent', 'Narration from script line, confirmed by you in chat']]);
+    assert.ok(!a.assets.some((x) => x.id === vo('sc1_sh2')), 'sc1_sh2 was not confirmed');
+  });
+
   it('a paid provider needs a voice the person chose; akuko picks none', () => {
     assert.throws(() => buildSoundJob(ready({ scriptLines: 'all' }), { provider: 'elevenlabs' }), /Choose a voice/);
     assert.doesNotThrow(() => buildSoundJob(ready({ scriptLines: 'all' }), { provider: 'manual' }));
@@ -222,7 +237,7 @@ describe('the job: one voice-over per shot, text exact, voice chosen by the pers
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-describe('paid path on the short-story fixture (TTS mocked): one job per shot through the gate', () => {
+describe('paid path on the test story "The Last Ferry" (TTS mocked): one job per shot through the gate', () => {
   it('quotes characters x price, sends nothing until approved, then records pending-review takes with real timings', async () => {
     const r = rig('elevenlabs', ready({ budget: { cap: 5, currency: 'USD' }, scriptLines: 'all' }));
     const price = priceFor(config, 'elevenlabs').amount;
@@ -327,13 +342,57 @@ describe('paid path on the short-story fixture (TTS mocked): one job per shot th
     console.log('FIRST 3 CAPTION CUES:', JSON.stringify(cues.slice(0, 3)));
   });
 
-  it('refuses a take that runs past its shot (its words would run into the next one), and a shot with no duration', async () => {
-    const r = rig('elevenlabs', ready({ budget: { cap: 5, currency: 'USD' }, scriptLines: ['sc1_sh1'] }), { perCharMs: 200 });
-    await stepOnce(r);
+  it('an overrunning take is flagged when it comes back and skipped by sync with a named warning; the rest still builds', async () => {
+    // sc1_sh1 (6 s) gets a 200 ms/char read that overruns; sc1_sh2 (5 s) fits at 40 ms/char.
+    const net = mockElevenLabs({ wavMs: (t) => (t === ready({ scriptLines: ['sc1_sh1'] }).shots[0]!.script_line!.trim() ? 8400 : t.length * 40) });
+    const r = rig('elevenlabs', ready({ budget: { cap: 5, currency: 'USD' }, scriptLines: ['sc1_sh1', 'sc1_sh2'] }), { net });
+    const first = await stepOnce(r, { units: [vo('sc1_sh1')] });
+    assert.ok(first.step.status === 'done' && /Audio runs 8.4 s; the shot is 6 s/.test(first.step.message ?? ''), JSON.stringify(first.step));
+    const c = asset(r.host.peek(), vo('sc1_sh1')).comments.filter((x) => x.author === 'agent' && x.text.startsWith('Audio runs'));
+    assert.deepEqual(c.map((x) => x.text), ['Audio runs 8.4 s; the shot is 6 s']);
+    await stepOnce(r, { units: [vo('sc1_sh2')] });
+    assert.equal(asset(r.host.peek(), vo('sc1_sh2')).comments.filter((x) => x.text.startsWith('Audio runs')).length, 0);
+    await finalizeSound(deps(r));
+    assert.equal(asset(r.host.peek(), vo('sc1_sh1')).comments.filter((x) => x.text.startsWith('Audio runs')).length, 1, 'not piled up');
+    assert.equal(asset(r.host.peek(), vo('sc1_sh1')).status, 'pending-review', 'status untouched');
     personApproves(r);
-    await assert.rejects(rebuildNarration({ host: r.guarded, readFile: readFile(r), now }), (e: unknown) => e instanceof NarrationError && /runs [\d.]+s but sc1_sh1 lasts 6.00s/.test(e.message));
-    assert.equal(r.host.peek().audio.narration ?? null, null, 'nothing was written');
-    const p = r.host.peek();
+    const res = await rebuildNarration({ host: r.guarded, readFile: readFile(r), now });
+    assert.ok(res.status === 'built', JSON.stringify(res));
+    assert.deepEqual(res.overrun, [{ asset: vo('sc1_sh1'), shot: 'sc1_sh1', takeMs: 8400, slotMs: 6000 }]);
+    assert.ok(res.warnings.some((w) => w.includes(vo('sc1_sh1')) && w.includes('Audio runs 8.4 s; the shot is 6 s') && w.includes('sc1_sh1')));
+    assert.ok(res.captions && res.words > 0, 'captions are still written for the rest');
+    const n = r.host.peek().audio.narration!;
+    const sh2 = asset(r.host.peek(), vo('sc1_sh2'));
+    assert.equal(n.words.length, r.host.peek().shots[1]!.script_line!.trim().split(' ').length);
+    assert.ok(n.words.every((w) => w.start_ms >= 6000), 'nothing from the overrunning take, nothing spilling into shot 2');
+    assert.ok(sh2.status === 'approved');
+  });
+
+  it('the last word past the slot is the same overrun, even when the audio fits; and a 6000.4 ms WAV in a 6000 ms slot is caught', async () => {
+    const r = rig('manual', ready({ scriptLines: ['sc1_sh1'] }));
+    const step = await generateVoiceover(deps(r), { provider: 'manual' });
+    if (step.status !== 'handoff') throw new Error('handoff expected');
+    const words = [{ word: 'late', start_ms: 5900, end_ms: 6100 }];
+    await ingestVoiceover(deps(r), r.manual, step.job, vo('sc1_sh1'), { filename: 't.wav', mime: 'audio/wav', data: silentWav(3000) }, { words: { filename: 'w.json', data: new TextEncoder().encode(JSON.stringify(words)) } });
+    personApproves(r);
+    const out = await rebuildNarration({ host: r.guarded, readFile: readFile(r), now });
+    assert.equal(out.status, 'nothing');
+    assert.match(out.status === 'nothing' ? out.reason : '', /Audio runs 6.1 s; the shot is 6 s/);
+
+    const r2 = rig('manual', ready({ scriptLines: ['sc1_sh1'] }));
+    const s2 = await generateVoiceover(deps(r2), { provider: 'manual' });
+    if (s2.status !== 'handoff') throw new Error('handoff expected');
+    // 6000.4 ms at 24 kHz is 144010 frames; the slot holds 144000
+    const wav = wavBytes(new Uint8Array(144010 * 2), 24000);
+    await ingestVoiceover(deps(r2), r2.manual, s2.job, vo('sc1_sh1'), { filename: 't.wav', mime: 'audio/wav', data: wav });
+    personApproves(r2);
+    const o2 = await rebuildNarration({ host: r2.guarded, readFile: readFile(r2), now });
+    assert.equal(o2.status, 'nothing');
+    assert.match(o2.status === 'nothing' ? o2.reason : '', /Audio runs 6.01 s; the shot is 6 s/);
+  });
+
+  it('a shot with no duration cannot be placed', () => {
+    const p = ready({ scriptLines: 'all' });
     p.shots[3]!.duration_s = undefined;
     assert.throws(() => shotStarts(p.shots), /no duration.*sc1_sh4/);
   });
@@ -469,6 +528,17 @@ describe('manual path: prompt package out, file (and optionally words) back', ()
     assert.deepEqual(out.withoutTimings, [vo('sc1_sh1')]);
     assert.equal(out.captions, undefined, 'no captions without timings');
     assert.deepEqual(r.host.peek().audio.narration?.words, []);
+  });
+
+  it('words attached later: the take length is the larger of the words end and the audio, so an overrun shows', async () => {
+    const r = rig('manual', ready({ scriptLines: ['sc1_sh1'] }));
+    const step = await generateVoiceover(deps(r), { provider: 'manual' });
+    if (step.status !== 'handoff') throw new Error('handoff expected');
+    await ingestVoiceover(deps(r), r.manual, step.job, vo('sc1_sh1'), { filename: 't.wav', mime: 'audio/wav', data: silentWav(7000) });
+    assert.ok(asset(r.host.peek(), vo('sc1_sh1')).comments.some((c) => c.text === 'Audio runs 7 s; the shot is 6 s'));
+    const out = await attachWords({ host: r.guarded, now, readFile: readFile(r) }, vo('sc1_sh1'), { filename: 'w.json', data: new TextEncoder().encode(JSON.stringify([{ word: 'a', start_ms: 0, end_ms: 500 }])) });
+    assert.deepEqual(out.notes.map((n) => n.split('.')[0]), [`${vo('sc1_sh1')}: Audio runs 7 s; the shot is 6 s`]);
+    assert.ok(asset(r.host.peek(), vo('sc1_sh1')).tags.includes('len-ms:7000'), 'not shrunk to the words');
   });
 
   it('a words file that is not timings is refused before anything is recorded', async () => {

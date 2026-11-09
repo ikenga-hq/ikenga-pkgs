@@ -26,11 +26,13 @@ import { STAGES, type AkukoProject, type Asset, type Shot } from '../schema/akuk
 import type { Job, JobItem } from '../providers/contract.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { jobTag } from '../providers/outputs.ts';
-import { NO_WORDS_TAG, VOICE_TAG, WORDS_TAG } from './words.ts';
+import { loadProviderConfig, type AkukoProviderConfig } from '../providers/config.ts';
+import { LEN_TAG, NO_WORDS_TAG, VOICE_TAG, WORDS_TAG } from './words.ts';
 
 export const SOUND_STAGE = 'sound' as const;
 export const VO_TAG = 'vo';
 export const SCRIPT_LINE_TAG = 'text:script_line';
+export const SCRIPT_LINE_NOTE = 'Narration from script line, confirmed by you in chat';
 const TEXT_HASH = 'text-hash:';
 
 export class SoundError extends Error {
@@ -110,7 +112,11 @@ export function planSound(project: AkukoProject, now: string, o: PlanOptions = {
     const fromScript = blank(shot.narration) && !blank(shot.script_line) && confirmed(shot.id);
     if (existing) {
       // A later, explicit confirmation can still turn on the script line for a unit that has none.
-      if (fromScript && !existing.tags.includes(SCRIPT_LINE_TAG)) { existing.tags.push(SCRIPT_LINE_TAG); existing.updated_at = now; }
+      if (fromScript && !existing.tags.includes(SCRIPT_LINE_TAG)) {
+        existing.tags.push(SCRIPT_LINE_TAG);
+        existing.comments.push({ ts: now, stage: SOUND_STAGE, author: 'agent', text: SCRIPT_LINE_NOTE });
+        existing.updated_at = now;
+      }
       continue;
     }
     if (!blank(shot.narration) || fromScript) {
@@ -118,7 +124,7 @@ export function planSound(project: AkukoProject, now: string, o: PlanOptions = {
         id,
         stage: SOUND_STAGE,
         status: 'pending',
-        comments: [],
+        comments: fromScript ? [{ ts: now, stage: SOUND_STAGE, author: 'agent', text: SCRIPT_LINE_NOTE }] : [],
         kind: 'vo',
         owner: shot.id,
         name: `${shot.id} - voice-over`,
@@ -226,6 +232,8 @@ export interface BuildOptions {
   units?: string[];
   /** Every ready voice-over of this scene in one job. */
   scene?: string;
+  /** Provider config used to resolve the default model (tests); defaults to providers/config.json. */
+  config?: AkukoProviderConfig;
 }
 
 export interface Skipped { unit: string; reason: string }
@@ -280,7 +288,7 @@ export function buildSoundJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   const units = chosen.map((a) => a.id);
   const characters = items.reduce((n, i) => n + i.prompt.length, 0);
   const job: Job = {
-    id: soundJobId(p, items.map((i): [string, string] => [i.unit, i.prompt]), o.provider, o.model ?? '', voice),
+    id: soundJobId(p, items.map((i): [string, string] => [i.unit, i.prompt]), o.provider, o.model ?? (o.config ?? loadProviderConfig()).providers[o.provider]?.default_model ?? '', voice),
     stage: SOUND_STAGE,
     kind: 'audio',
     provider: o.provider,
@@ -331,7 +339,7 @@ export function beginUnits(project: AkukoProject, ids: string[], ts: string): Ak
     } else if (a.status === 'needs-rework') {
       const prev = a.file?.uri;
       delete a.file;
-      a.tags = a.tags.filter((t) => !t.startsWith(WORDS_TAG) && t !== NO_WORDS_TAG);
+      a.tags = a.tags.filter((t) => !t.startsWith(WORDS_TAG) && !t.startsWith(LEN_TAG) && t !== NO_WORDS_TAG);
       a.status = 'draft';
       a.comments.push({ ts, stage: SOUND_STAGE, author: 'agent', text: `Revised: re-recording after the requested changes${prev ? `; the previous take stays at ${prev}` : ''}` });
     } else {

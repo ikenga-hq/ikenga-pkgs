@@ -126,3 +126,13 @@ describe('wav', () => {
     assert.equal(at(30), 0);
   });
 });
+
+describe('punctuation-only tokens', () => {
+  it('a standalone dash joins the word before it; one at the very start stays', () => {
+    const words = wordsFromAlignment(alignmentFor('wait — then go', 40));
+    assert.deepEqual(words.map((x) => x.word), ['wait —', 'then', 'go']);
+    assert.deepEqual(words[0], { word: 'wait —', start_ms: 0, end_ms: 240 });
+    assert.deepEqual(wordsFromAlignment(alignmentFor('— go', 40)).map((x) => x.word), ['—', 'go']);
+    assert.deepEqual(captionsFromWords(words).map((c) => c.text), ['wait — then go']);
+  });
+});
