@@ -453,6 +453,10 @@
           "type": "string",
           "description": "Generation prompt."
         },
+        "negative": {
+          "type": "string",
+          "description": "Negative prompt, rebuilt per shot like `prompt` (WP-25 stores the sheet's NEGATIVE here)."
+        },
         "refs": {
           "type": "array",
           "items": {
@@ -502,9 +506,8 @@
           "description": "Part of the film the shot belongs to, e.g. \"P7\"."
         },
         "lighting": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Lighting code from the sheet; the phrase it stands for is in the bible."
+          "$ref": "#/definitions/Id",
+          "description": "Lighting code from the sheet: a bible.styles id whose description holds the phrase (integrity)."
         },
         "tier": {
           "type": "string",
@@ -645,6 +648,10 @@
             "$ref": "#/definitions/Id"
           },
           "default": []
+        },
+        "source": {
+          "$ref": "#/definitions/SheetSource",
+          "description": "The sheet token or lighting row this entry was imported from (WP-25); its id is the entry id."
         }
       },
       "required": [
@@ -706,6 +713,10 @@
         "film": {
           "$ref": "#/definitions/FilmSpan",
           "description": "Where the asset sits on the master clock, in seconds. Required on a card (integrity)."
+        },
+        "source": {
+          "$ref": "#/definitions/SheetSource",
+          "description": "The sheet row this asset was imported from (a card, WP-25)."
         },
         "studio": {
           "$ref": "#/definitions/StudioAssetExt"
@@ -1672,6 +1683,10 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "description": "1-based spreadsheet row, for the person to find it again."
+        },
+        "removed_at": {
+          "$ref": "#/definitions/Timestamp",
+          "description": "Set by a re-import that no longer found this row in the sheet."
         }
       },
       "required": [
@@ -1724,8 +1739,7 @@
           "type": "number"
         },
         "ease": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/definitions/MoveEase"
         }
       },
       "required": [
@@ -1735,6 +1749,15 @@
         "y"
       ],
       "additionalProperties": false
+    },
+    "MoveEase": {
+      "type": "string",
+      "enum": [
+        "none",
+        "ease-in",
+        "ease-out",
+        "ease-in-out"
+      ]
     },
     "MasterAudio": {
       "type": "object",
@@ -1754,7 +1777,7 @@
         "start_tc": {
           "type": "string",
           "pattern": "^\\d{2}:[0-5]\\d:[0-5]\\d:\\d{2}$",
-          "description": "Timecode of the first sample, e.g. \"00:00:00:00\"."
+          "description": "Timecode of the first sample, e.g. \"00:00:00:00\". FF is below the frame rate (integrity, when project.fps is set)."
         },
         "sha256": {
           "$ref": "#/definitions/Sha256",
@@ -1913,6 +1936,17 @@
                     "$ref": "#/definitions/Id",
                     "description": "rules.consent[].id that covers this file."
                   },
+                  "for": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/Id"
+                    },
+                    "description": "Bible entry ids this file may be a reference for. Absent = any."
+                  },
+                  "slices": {
+                    "type": "boolean",
+                    "description": "true: time-slices cut from this exact file may be uploaded too."
+                  },
                   "note": {
                     "type": "string"
                   }
@@ -2016,6 +2050,12 @@
           }
         },
         "scenes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          }
+        },
+        "parts": {
           "type": "array",
           "items": {
             "$ref": "#/definitions/Id"

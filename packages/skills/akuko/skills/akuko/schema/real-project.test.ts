@@ -64,12 +64,12 @@ function sheetProject(): Record<string, any> {
         source: { kind: 'sheet', id: 'S01-010', row: 3 },
         film: { in_s: 0.5, out_s: 4 }, // a gap at the scene start is fine
         tier: 'C', lighting: 'L1', framing: 'WS', motion_note: 'Locked off', treatment: 'still',
-        prompt: 'A quiet harbour at dawn, wide.', refs: ['char_ada', 'style_house'],
+        prompt: 'A quiet harbour at dawn, wide.', negative: 'text, logos', refs: ['ADA-NOW', 'style_house'],
       },
       {
         id: 'S01-020', stage: 'breakdown', status: 'pending-review', scene: 'S01', part: 'P1',
         source: { kind: 'sheet', id: 'S01-020', row: 4 },
-        film: { in_s: 4, out_s: 9.25 }, // in = previous out
+        film: { in_s: 4, out_s: 9.25 }, duration_s: 5.25, // in = previous out; duration = the film span
         tier: 'B', lighting: 'L2', framing: 'MCU', motion_note: 'Slow push-in', treatment: 'still-move',
         move: { from_scale: 1, to_scale: 1.15, x: -40, y: -20 },
       },
@@ -83,13 +83,19 @@ function sheetProject(): Record<string, any> {
         id: 'S02b-010', stage: 'breakdown', status: 'pending-review', scene: 'S02b', part: 'P2',
         source: { kind: 'sheet', id: 'S02b-010' },
         film: { in_s: 14, out_s: 18 }, tier: 'A', treatment: 'lipsync',
-        move: { from_scale: 1.1, to_scale: 1, x: 0, y: 10, ease: 'sine.inOut' },
+        move: { from_scale: 1.1, to_scale: 1, x: 0, y: 10, ease: 'ease-in-out' },
         lines: [{ id: 'L002', kind: 'spoken' }, { id: 'L003', kind: 'thought' }],
       },
     ],
     bible: {
-      characters: [{ id: 'char_ada', stage: 'breakdown', status: 'approved', name: 'Ada (invented)' }],
-      styles: [{ id: 'style_house', stage: 'breakdown', status: 'approved', name: 'House style' }],
+      // Imported tokens keep the sheet token as the bible id.
+      characters: [{ id: 'ADA-NOW', stage: 'breakdown', status: 'approved', name: 'Ada, now (invented)', source: { kind: 'sheet', id: 'ADA-NOW', row: 5 } }],
+      styles: [
+        { id: 'style_house', stage: 'breakdown', status: 'approved', name: 'House style' },
+        // Lighting codes are style entries whose description holds the phrase.
+        { id: 'L1', stage: 'breakdown', status: 'approved', name: 'Lighting L1', description: 'soft overcast daylight', source: { kind: 'sheet', id: 'L1' } },
+        { id: 'L2', stage: 'breakdown', status: 'approved', name: 'Lighting L2', description: 'warm practical lamp, deep shadow', source: { kind: 'sheet', id: 'L2', removed_at: '2026-11-09T09:00:00Z' } },
+      ],
     },
     assets: [
       {
@@ -97,16 +103,22 @@ function sheetProject(): Record<string, any> {
         file: { uri: '../Titles/title.png', mime: 'image/png' }, film: { in_s: 0, out_s: 0.5 },
       },
       {
-        id: 'card_part_2', kind: 'card', stage: 'export', status: 'pending-review', name: 'Part 2 card',
+        id: 'card_P2-CARD', kind: 'card', stage: 'export', status: 'pending-review', name: 'Part 2 card',
         file: { uri: '../Titles/part-2.mov', mime: 'video/quicktime' }, film: { in_s: 9.25, out_s: 10 },
+        source: { kind: 'sheet', id: 'P2-CARD', row: 13 },
       },
       { id: 'S02b-010_lipsync', kind: 'lipsync', stage: 'motion', status: 'pending', owner: 'S02b-010' },
+      {
+        id: 'card_S00-020', kind: 'card', stage: 'export', status: 'pending-review', name: 'Credits',
+        file: { uri: '../Titles/credits.png', mime: 'image/png' }, film: { in_s: 29, out_s: 30.5 },
+        source: { kind: 'sheet', id: 'S00-020', row: 2 },
+      },
     ],
     audio: {
       master: { uri: '../Audio/master.wav', duration_s: 30.5, sample_rate: 48000, start_tc: '00:00:00:00', sha256: SHA_A },
       lines: [
         {
-          id: 'L001', character: 'char_ada', kind: 'spoken', film_in_s: 10.2, film_out_s: 12, clip_uri: '../Lines/L001.wav',
+          id: 'L001', character: 'ADA-NOW', kind: 'spoken', film_in_s: 10.2, film_out_s: 12, clip_uri: '../Lines/L001.wav',
           text: 'Not today.', words: [{ w: 'Not', t_s: 10.2 }, { w: 'today.', t_s: 10.6 }],
         },
         { id: 'L002', character: 'Ada (invented)', kind: 'spoken', film_in_s: 14.5, film_out_s: 16 },
@@ -117,11 +129,16 @@ function sheetProject(): Record<string, any> {
       required: true,
       banned: [{ term: 'gore', except: ['Gore-Tex'], note: 'house rule' }],
       require: [
-        { text: 'seen only as a silhouette', applies_to: 'prompt', scope: { scenes: ['S02b'] } },
+        { text: 'seen only as a silhouette', applies_to: 'prompt', scope: { scenes: ['S02b'], parts: ['P2'] } },
         { text: 'no text, no logos', applies_to: 'negative' },
       ],
-      uploads: { allow: [{ sha256: SHA_B, label: 'Reference photo A', consent_ref: 'consent-1', note: 'location only' }] },
-      never_from_photo: ['char_ada'],
+      uploads: {
+        allow: [
+          { sha256: SHA_B, label: 'Reference photo A', consent_ref: 'consent-1', for: ['style_house'], note: 'location only' },
+          { sha256: SHA_A, label: 'Master mix', slices: true, note: 'line slices for lip-sync' },
+        ],
+      },
+      never_from_photo: ['ADA-NOW'],
       exempt: [{ shots: ['S01-010'], skip: ['house-style'], note: 'reference shot' }],
       consent: [{ id: 'consent-1', who: 'A. Example', what: 'Use of one location photo as a reference', date: '2026-11-01' }],
     },
@@ -204,6 +221,14 @@ describe('real-project fields: shapes Zod (and where it can, the JSON Schema) re
     ['sign-off timestamp without a zone', (d) => { d.gates[0].signed.at = '2026-11-09T12:00:00'; }],
     ['unknown asset kind', (d) => { d.assets[0].kind = 'title'; }],
     ['line word without a time', (d) => { delete d.audio.lines[0].words[0].t_s; }],
+    ['a GSAP ease name instead of a portable one', (d) => { d.shots[3].move.ease = 'sine.inOut'; }],
+    ['removed_at without a zone', (d) => { d.shots[0].source.removed_at = '2026-11-09T09:00:00'; }],
+    ['source on an asset with a "_" id', (d) => { d.assets[1].source.id = 'P2_CARD'; }],
+    ['unknown key in a bible source', (d) => { d.bible.characters[0].source.sheet = 'Tokens'; }],
+    ['slices not a boolean', (d) => { d.rules.uploads.allow[1].slices = 'yes'; }],
+    ['upload for an unsafe id', (d) => { d.rules.uploads.allow[0].for = ['../x']; }],
+    ['rule scope part with a space', (d) => { d.rules.require[0].scope.parts = ['P 2']; }],
+    ['lighting code with a space', (d) => { d.shots[0].lighting = 'L 1'; }],
   ];
   for (const [name, mutate] of both) {
     it(`rejects: ${name}`, () => {
@@ -237,7 +262,25 @@ describe('real-project integrity: each rule has a failing case', () => {
     ['a shot line not in audio.lines', (p) => { p.shots[2]!.lines![0]!.id = 'L999'; }, ['shots[2].lines[0].id']],
     ['a shot line of the wrong kind', (p) => { p.shots[3]!.lines![1]!.kind = 'spoken'; }, ['shots[3].lines[1].kind']],
     ['a repeated line id', (p) => { p.audio.lines!.push({ ...p.audio.lines![2]! }); }, ['audio.lines[3].id']],
-    ['overlapping film times in one scene', (p) => { p.shots[1]!.film = { in_s: 3.5, out_s: 9.25 }; }, ['shots[1].film']],
+    ['overlapping film times in one scene', (p) => { p.shots[1]!.film = { in_s: 3.5, out_s: 8.75 }; }, ['shots[1].film']],
+    ['shots inside a longer shot (0–10, 1–2, 3–4): both are reported', (p) => {
+      p.shots[0]!.film = { in_s: 0, out_s: 10 };
+      p.shots[1]!.film = { in_s: 1, out_s: 2 };
+      delete p.shots[1]!.duration_s;
+      p.shots.push({ ...structuredClone(p.shots[1]!), id: 'S01-030', film: { in_s: 3, out_s: 4 } });
+    }, ['shots[1].film', 'shots[4].film']],
+    ['a duration that is not the film span', (p) => { p.shots[1]!.duration_s = 6; }, ['shots[1].duration_s']],
+    ['a lighting code that is no style entry', (p) => { p.shots[0]!.lighting = 'L9'; }, ['shots[0].lighting']],
+    ['a card with a shot-shaped id', (p) => { p.assets[3]!.id = 'S00-020'; }, ['assets[3].id']],
+    ['a start frame that does not exist at the project rate', (p) => { p.audio.master!.start_tc = '00:00:00:24'; }, ['audio.master.start_tc']],
+    ['times past the end of the master', (p) => {
+      p.shots[3]!.film = { in_s: 14, out_s: 31 };
+      p.assets[1]!.film = { in_s: 9.25, out_s: 31 };
+      p.audio.lines![0]!.words![0]!.t_s = 31;
+      p.audio.lines![2]!.film_out_s = 31;
+    }, ['shots[3].film', 'assets[1].film', 'audio.lines[0].words[0].t_s', 'audio.lines[2].film_out_s']],
+    ['a rule scoped to an unknown part', (p) => { p.rules!.require[0]!.scope!.parts = ['P9']; }, ['rules.require[0].scope.parts[0]']],
+    ['an upload allowed for no bible entry', (p) => { p.rules!.uploads.allow[0]!.for = ['char_ghost']; }, ['rules.uploads.allow[0].for[0]']],
     ['a card without film time', (p) => { delete p.assets[0]!.film; }, ['assets[0].film']],
     ['a card without a file', (p) => { delete p.assets[1]!.file; }, ['assets[1].file']],
     ['a gate scoped to an unknown shot, scene and part', (p) => {
@@ -265,6 +308,26 @@ describe('real-project integrity: each rule has a failing case', () => {
       assert.deepEqual(paths(p), want);
     });
   }
+
+  it('a touching pair from mm:ss.ss sheet times (in == previous out exactly) is fine', () => {
+    const mmss = (t: string): number => { const [m, s] = t.split(':'); return Number(m) * 60 + Number(s); };
+    const p = parse(sheetProject());
+    p.audio.master!.duration_s = 1972.134917;
+    p.shots[0]!.film = { in_s: mmss('18:31.98'), out_s: mmss('18:37.41') };
+    p.shots[1]!.film = { in_s: mmss('18:37.41'), out_s: mmss('18:44.06') };
+    p.shots[1]!.duration_s = mmss('18:44.06') - mmss('18:37.41');
+    assert.deepEqual(checkIntegrity(p), []);
+  });
+
+  it('a start frame below the rate is fine at a fractional rate; no fps means no frame check', () => {
+    const p = parse(sheetProject());
+    p.project.fps = '29.97';
+    p.audio.master!.start_tc = '01:00:00:29';
+    assert.deepEqual(checkIntegrity(p), []);
+    delete p.project.fps;
+    p.audio.master!.start_tc = '01:00:00:59';
+    assert.deepEqual(checkIntegrity(p), []);
+  });
 
   it('gaps between shots, a shot with no scene and touching spans are fine', () => {
     const p = parse(sheetProject());

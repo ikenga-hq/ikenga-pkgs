@@ -94,6 +94,9 @@ export const isCanonicalShotId = (id: string): boolean => CANONICAL_SHOT_ID.test
  *     `<shot>_vo`, `<shot>_lipsync`: `SHOT_UNIT_KINDS`), which always has a `_`;
  *   - a provider output id (`<unit>-<stage>`, `-2`, `-v2`), which has a second `-`;
  *   - a job id (`job_…`).
+ * `isSheetShotId` tests the pattern only; it does not mean "this is a shot".
+ * A sheet's ready-made rows can have the same form (`S00-020`), so a card
+ * keeps its sheet id in `source.id` and is stored as `card_<sheet id>`.
  */
 export const SHEET_SHOT_ID = /^S\d+[a-z]?-\d+[A-Za-z]?$/;
 export const isSheetShotId = (id: string): boolean => SHEET_SHOT_ID.test(id);
@@ -164,13 +167,16 @@ export const FilmSpanSchema = z.object({
 export type FilmSpan = z.infer<typeof FilmSpanSchema>;
 
 /**
- * Where an imported shot or scene came from. Re-import is keyed by `id`
- * (WP-25): text and timing are refreshed, approvals and assets never touched.
+ * Where an imported shot, scene, card or bible entry came from. Re-import is
+ * keyed by `id` (WP-25): text and timing are refreshed, approvals and assets
+ * never touched. A row that has left the sheet is flagged with `removed_at`,
+ * never deleted.
  */
 export const SheetSourceSchema = z.object({
   kind: z.literal('sheet'),
   id: z.string().regex(SHEET_ID_PATTERN, 'a sheet id must be letters, digits, "." or "-" (no "_"), starting with a letter or digit'),
   row: z.number().int().positive().optional().describe('1-based spreadsheet row, for the person to find it again.'),
+  removed_at: TimestampSchema.optional().describe('Set by a re-import that no longer found this row in the sheet.'),
 }).strict();
 export type SheetSource = z.infer<typeof SheetSourceSchema>;
 
@@ -394,15 +400,23 @@ export type ShotTreatment = z.infer<typeof ShotTreatmentSchema>;
  * (`fromScale`, `toScale`, `x`, `y`): scales are a factor of the frame (1 =
  * the whole frame, 1.15 = 15% in), 0.5–3 like the block; `x` / `y` are the
  * drift in pixels of a 1920×1080 frame over the whole move (negative x = left,
- * negative y = up); `ease` a GSAP ease name, absent = `none` (constant speed,
- * as KenBurns). The move runs for the shot's whole length (`film`, else `duration_s`).
+ * negative y = up). The move runs for the shot's whole length (`film`, else
+ * `duration_s`).
+ *
+ * `ease` is one of four portable curves; absent = `none` (constant speed). The
+ * KenBurns block always runs at constant speed today and ignores it; a
+ * renderer that has eases maps them (GSAP `sine.in` / `sine.out` /
+ * `sine.inOut`, FCPXML keyframe `ease in` / `ease out` / `ease in & out`).
  */
+export const MoveEaseSchema = z.enum(['none', 'ease-in', 'ease-out', 'ease-in-out']);
+export type MoveEase = z.infer<typeof MoveEaseSchema>;
+
 export const StillMoveSchema = z.object({
   from_scale: z.number().min(0.5).max(3),
   to_scale: z.number().min(0.5).max(3),
   x: z.number().finite(),
   y: z.number().finite(),
-  ease: z.string().min(1).optional(),
+  ease: MoveEaseSchema.optional(),
 }).strict();
 export type StillMove = z.infer<typeof StillMoveSchema>;
 
@@ -416,6 +430,7 @@ export const ShotSchema = UnitSchema.extend({
   action: z.string().optional().describe('What happens in frame.'),
   duration_s: z.number().nonnegative().optional(),
   prompt: z.string().optional().describe('Generation prompt.'),
+  negative: z.string().optional().describe('Negative prompt, rebuilt per shot like `prompt` (WP-25 stores the sheet\'s NEGATIVE here).'),
   refs: z.array(IdSchema).default([]).describe('Bible entry ids or asset ids this shot must stay consistent with.'),
   seed: z.number().int().optional(),
   script_line: z.string().optional().describe('The screenplay or story text this shot covers.'),
@@ -427,7 +442,7 @@ export const ShotSchema = UnitSchema.extend({
   source: SheetSourceSchema.optional().describe('The sheet row this shot was imported from (WP-25).'),
   film: FilmSpanSchema.optional().describe('Where the shot sits on the master clock (audio.master), in seconds.'),
   part: IdSchema.optional().describe('Part of the film the shot belongs to, e.g. "P7".'),
-  lighting: z.string().min(1).optional().describe('Lighting code from the sheet; the phrase it stands for is in the bible.'),
+  lighting: IdSchema.optional().describe('Lighting code from the sheet: a bible.styles id whose description holds the phrase (integrity).'),
   tier: ShotTierSchema.optional(),
   framing: z.string().min(1).optional().describe('Framing from the sheet, free text.'),
   motion_note: z.string().optional().describe('Motion note from the sheet, free text (e.g. "Slow push-in").'),
@@ -484,8 +499,11 @@ export type StudioAssetExt = z.infer<typeof StudioAssetExtSchema>;
  * a kind, not a flag on another kind, so every existing consumer that selects
  * assets by kind (key frames, clips, references sent to providers, music and
  * SFX placement) skips it, and every exhaustive map over kinds has to place
- * it explicitly. Cards are recorded at stage `export` (nothing after it waits
- * on readiness) and never written `approved` by code: lib/state.md §Real projects.
+ * it explicitly. A card is recorded at stage `export`, status
+ * `pending-review`; a person approves it once on the board (code never writes
+ * `approved`), and the handoff places approved cards and lists the rest as
+ * left out. Its id is `card_<sheet id>`, with the sheet id in `source.id`
+ * (lib/state.md §Real projects).
  */
 export const AssetSchema = UnitSchema.extend({
   kind: AssetKindSchema,
@@ -496,6 +514,7 @@ export const AssetSchema = UnitSchema.extend({
   provider: z.string().optional().describe('Provider that generated it, when generated.'),
   model: z.string().optional(),
   film: FilmSpanSchema.optional().describe('Where the asset sits on the master clock, in seconds. Required on a card (integrity).'),
+  source: SheetSourceSchema.optional().describe('The sheet row this asset was imported from (a card, WP-25).'),
   studio: StudioAssetExtSchema.optional(),
 }).strict();
 export type Asset = z.infer<typeof AssetSchema>;
@@ -510,6 +529,7 @@ export const BibleEntrySchema = UnitSchema.extend({
   description: z.string().optional(),
   notes: z.array(z.string()).default([]),
   refs: z.array(IdSchema).default([]),
+  source: SheetSourceSchema.optional().describe('The sheet token or lighting row this entry was imported from (WP-25); its id is the entry id.'),
 }).strict();
 export type BibleEntry = z.infer<typeof BibleEntrySchema>;
 
@@ -555,7 +575,7 @@ export const MasterAudioSchema = z.object({
   uri: z.string().min(1),
   duration_s: z.number().positive().finite(),
   sample_rate: z.number().int().positive(),
-  start_tc: z.string().regex(TIMECODE_PATTERN, 'start_tc must be HH:MM:SS:FF').describe('Timecode of the first sample, e.g. "00:00:00:00".'),
+  start_tc: z.string().regex(TIMECODE_PATTERN, 'start_tc must be HH:MM:SS:FF').describe('Timecode of the first sample, e.g. "00:00:00:00". FF is below the frame rate (integrity, when project.fps is set).'),
   sha256: Sha256Schema.optional().describe('Digest of the file, to notice a changed master.'),
 }).strict();
 export type MasterAudio = z.infer<typeof MasterAudioSchema>;
@@ -674,10 +694,11 @@ export type DecisionAction = Decision['action'];
 // Project rules (declarative; WP-26 enforces them before the spend gate)
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Shots and/or scenes a rule applies to. Absent scope = the whole film. */
+/** Shots, scenes and/or parts a rule applies to (any match). Absent scope = the whole film. */
 export const RuleScopeSchema = z.object({
   shots: z.array(IdSchema).optional(),
   scenes: z.array(IdSchema).optional(),
+  parts: z.array(IdSchema).optional(),
 }).strict();
 export type RuleScope = z.infer<typeof RuleScopeSchema>;
 
@@ -699,11 +720,18 @@ export const RequiredTextSchema = z.object({
 }).strict();
 export type RequiredText = z.infer<typeof RequiredTextSchema>;
 
-/** A file akuko did not generate that may be uploaded to a provider, identified by content, not path. */
+/**
+ * A file akuko did not generate that may be uploaded to a provider,
+ * identified by content, not path. `for` limits it to references for those
+ * bible entries (absent = any use); `slices: true` also allows time-slices
+ * cut from this exact file (WP-28b's route: a line cut from the master WAV).
+ */
 export const UploadAllowSchema = z.object({
   sha256: Sha256Schema,
   label: z.string().min(1),
   consent_ref: IdSchema.optional().describe('rules.consent[].id that covers this file.'),
+  for: z.array(IdSchema).optional().describe('Bible entry ids this file may be a reference for. Absent = any.'),
+  slices: z.boolean().optional().describe('true: time-slices cut from this exact file may be uploaded too.'),
   note: z.string().optional(),
 }).strict();
 export type UploadAllow = z.infer<typeof UploadAllowSchema>;
@@ -942,6 +970,7 @@ export const Schemas = {
   Sha256: Sha256Schema,
   ShotLine: ShotLineSchema,
   StillMove: StillMoveSchema,
+  MoveEase: MoveEaseSchema,
   MasterAudio: MasterAudioSchema,
   AudioLine: AudioLineSchema,
   Rules: RulesSchema,
