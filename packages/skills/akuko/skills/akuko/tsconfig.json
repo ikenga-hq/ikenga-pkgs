@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["schema/**/*.ts", "fixtures/**/*.ts", "actions/**/*.ts", "hosts/**/*.ts", "providers/**/*.ts", "spend/**/*.ts", "breakdown/**/*.ts", "decisions/**/*.ts", "views/**/*.ts", "scripts/**/*.ts", "setup/**/*.ts", "board/**/*.ts", "bible/**/*.ts", "evals/**/*.ts", "keyframes/**/*.ts"]
+  "include": ["schema/**/*.ts", "fixtures/**/*.ts", "actions/**/*.ts", "hosts/**/*.ts", "providers/**/*.ts", "spend/**/*.ts", "breakdown/**/*.ts", "decisions/**/*.ts", "views/**/*.ts", "scripts/**/*.ts", "setup/**/*.ts", "board/**/*.ts", "bible/**/*.ts", "evals/**/*.ts", "keyframes/**/*.ts", "motion/**/*.ts", "sound/**/*.ts", "audit/**/*.ts", "engines/**/*.ts", "blocks/**/*.ts"]
 }

@@ -109,6 +109,7 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - **Superseded references are flagged, never rewritten.** Each take carries `from:<bible asset id>@<fingerprint>` tags (the bible stage's format) for the images it was made from. `status` flags a key frame whose turnaround, plate or lookbook has since been sent back, un-approved or replaced. Code never changes the key frame; only a person sends it back. The at-scale continuity audit is WP-14 (Phase 2).
 - **Produces** a key-frame asset (`<shot>_keyframe`, `file`, `by_stage.keyframes.output`) owned by each shot. Motion (stage 5) reads the approved asset.
 - Idempotent: `plan` adds only missing assets; asking for a job twice before its file is back gives the same job id and one pending entry.
+- **Continuity audit (WP-14, advisory).** `audit/` (`auditProject(project) → AuditReport`, pure) checks every made key frame structurally (references used, references still current, characters in the prompt, at most 2 principals, one model per scene, the right lookbook) and takes the agent's own visual notes (`audit record`). It writes `board/audit.json` and `board/audit.md`, and the agent's `Audit: ... (audit <run>)` comments on the frames; re-running swaps only those. **It moves no status**: only a person sends a frame back, into the normal `needs-rework` flow. Motion may call the summary.
 
 ### 5 motion
 *WP-10 / WP-11 fill this (Phase 2).*
