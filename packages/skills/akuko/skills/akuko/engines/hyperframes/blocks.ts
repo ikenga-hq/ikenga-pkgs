@@ -1,4 +1,4 @@
-// The akuko block set (blocks/*.html) and how to mount one on its own. Pure; no I/O.
+// The akuko block set (blocks/compositions/*.html) and how to mount one on its own. Pure; no I/O.
 
 /** Every block, by file stem. The stem is also its host id, composition id and timeline key. */
 export const BLOCKS = [
@@ -30,8 +30,8 @@ function attr(s: string): string {
 
 /**
  * A root composition (index.html) that mounts one block for `duration` seconds, for
- * `hyperframes lint` / `check` / `snapshot` / `render` of that block alone. The block file,
- * fonts/ and this index.html go in the same directory.
+ * `hyperframes lint` / `check` / `snapshot` / `render` of that block alone. Lay the project out
+ * like blocks/: this index.html, compositions/<block>.html and fonts/.
  */
 export function hostHtml(block: BlockId, o: MountOptions = {}): string {
   const d = o.duration ?? 5;
@@ -53,7 +53,7 @@ export function hostHtml(block: BlockId, o: MountOptions = {}): string {
   <body>
     <div id="root" data-composition-id="main" data-start="0" data-duration="${d}" data-width="1920" data-height="1080" data-fps="30">
       <div id="ground"></div>
-      <div id="${block}" data-composition-id="${block}" data-composition-src="${block}.html" data-start="0" data-duration="${d}" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"${values}></div>
+      <div id="${block}" data-composition-id="${block}" data-composition-src="compositions/${block}.html" data-start="0" data-duration="${d}" data-track-index="1" data-track-kind="graphics" data-width="1920" data-height="1080"${values}></div>
     </div>
     <script>
       window.__timelines = window.__timelines || {};

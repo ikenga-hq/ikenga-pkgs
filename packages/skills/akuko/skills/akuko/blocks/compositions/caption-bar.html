@@ -1,0 +1,69 @@
+<!--
+  CaptionBar — one short phrase at a time in a bar near the bottom of the frame.
+  Variables:
+    phrase1..3  string  the phrases; an empty one is left out
+    t1..t3      number  s into the block when each phrase arrives (defaults 0.2, 1.8, 3.4)
+  Motion: each phrase arrives on `snap` (y 8 -> 0) and leaves just before the next one, on an
+  exit half as long as the entrance that accelerates out (power3.in). The last phrase stays.
+  The bar sits inside the 80% title-safe box (bottom edge at 972 px).
+  Host: <div id="caption-bar" data-composition-id="caption-bar" data-composition-src="compositions/caption-bar.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; }
+    .cap-bar {
+      position: absolute; left: 360px; width: 1200px; top: 892px; height: 80px;
+      border-radius: 40px; background: #14110f; border: 1px solid #2e2824;
+    }
+    .cap-phrase {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-family: "Inter", sans-serif; font-weight: 500; font-size: 36px; color: #efe8df;
+    }
+    .cap-phrase[data-empty="true"] { display: none; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="caption-bar"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"phrase1","type":"string","label":"Phrase 1","default":"Breakdown and bibles","maxLength":48},
+      {"id":"phrase2","type":"string","label":"Phrase 2","default":"Sketch board and key frames","maxLength":48},
+      {"id":"phrase3","type":"string","label":"Phrase 3","default":"Clips, sound and the final cut","maxLength":48},
+      {"id":"t1","type":"number","label":"Phrase 1 at (s)","default":0.2,"min":0},
+      {"id":"t2","type":"number","label":"Phrase 2 at (s)","default":1.8,"min":0},
+      {"id":"t3","type":"number","label":"Phrase 3 at (s)","default":3.4,"min":0}
+    ]'
+  >
+    <div id="cap-bar" class="cap-bar">
+      <div id="cap-phrase-1" class="cap-phrase" data-var-text="phrase1">Breakdown and bibles</div>
+      <div id="cap-phrase-2" class="cap-phrase" data-var-text="phrase2">Sketch board and key frames</div>
+      <div id="cap-phrase-3" class="cap-phrase" data-var-text="phrase3">Clips, sound and the final cut</div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const exit = { ease: "power3.in", duration: MOTION.snap.duration / 2 };
+      const phrases = [1, 2, 3]
+        .map((i) => {
+          const el = document.getElementById(`cap-phrase-${i}`);
+          const text = String(v[`phrase${i}`] ?? el.textContent ?? "").trim();
+          el.setAttribute("data-empty", text === "" ? "true" : "false");
+          return text === "" ? null : { el, at: Number(v[`t${i}`] ?? [0.2, 1.8, 3.4][i - 1]) };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.at - b.at);
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#cap-bar", { opacity: 0 }, { opacity: 1, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, Math.max(0, (phrases[0]?.at ?? 0.2) - 0.1));
+      phrases.forEach((p, i) => {
+        tl.fromTo(p.el, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, p.at);
+        const next = phrases[i + 1];
+        if (next) tl.fromTo(p.el, { opacity: 1, y: 0 }, { opacity: 0, y: -8, duration: exit.duration, ease: exit.ease, immediateRender: false }, next.at - exit.duration);
+      });
+      window.__timelines["caption-bar"] = tl;
+    })();
+  </script>
+</template>

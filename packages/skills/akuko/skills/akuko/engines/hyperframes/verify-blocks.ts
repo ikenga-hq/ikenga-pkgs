@@ -30,7 +30,8 @@ async function stageBlock(out: string, block: BlockId): Promise<string> {
   const dir = join(out, block);
   await rm(dir, { recursive: true, force: true });
   await stageFonts(dir);
-  await copyFile(join(blocksDir, `${block}.html`), join(dir, `${block}.html`));
+  await mkdir(join(dir, 'compositions'), { recursive: true });
+  await copyFile(join(blocksDir, 'compositions', `${block}.html`), join(dir, 'compositions', `${block}.html`));
   await writeFile(join(dir, 'index.html'), hostHtml(block), 'utf8');
   return dir;
 }
@@ -40,7 +41,8 @@ async function stageShowcase(out: string): Promise<string> {
   await rm(dir, { recursive: true, force: true });
   await stageFonts(dir);
   await copyFile(join(blocksDir, 'index.html'), join(dir, 'index.html'));
-  for (const b of BLOCKS) await copyFile(join(blocksDir, `${b}.html`), join(dir, `${b}.html`));
+  await mkdir(join(dir, 'compositions'), { recursive: true });
+  for (const b of BLOCKS) await copyFile(join(blocksDir, 'compositions', `${b}.html`), join(dir, 'compositions', `${b}.html`));
   return dir;
 }
 

@@ -1,0 +1,90 @@
+<!--
+  Annotation — a label with a drawn arrow pointing at one spot in the frame.
+  Variables:
+    label    string  the note
+    targetX  number  px, the point the arrow ends on (default 1300)
+    targetY  number  px (default 620)
+    labelX   number  px, left edge of the label (default 420; the label is 560 px wide)
+    labelY   number  px, top edge of the label (default 300)
+    at       number  s into the block when it starts (default 0.4)
+  Motion: label on `settle`; the arrow draws on the `snap` ease over 0.6 s (a line draw needs
+  longer than a snap); the target ring `bloom`s when the arrow arrives.
+  The block draws only the note; put it over a scene by layering hosts (z-index).
+  Host: <div id="annotation" data-composition-id="annotation" data-composition-src="compositions/annotation.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 600; font-display: block; src: url("fonts/inter-latin-600-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; }
+    .an-svg { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: visible; }
+    .an-label {
+      position: absolute; width: 560px; padding: 22px 30px; border-radius: 16px;
+      background: #171412; border: 2px solid #d9a441;
+      font-family: "Inter", sans-serif; font-weight: 600; font-size: 40px; line-height: 1.25; color: #efe8df;
+    }
+  </style>
+  <div
+    id="root"
+    data-composition-id="annotation"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"label","type":"string","label":"Label","default":"The key frame this clip starts from"},
+      {"id":"targetX","type":"number","label":"Target x (px)","default":1300},
+      {"id":"targetY","type":"number","label":"Target y (px)","default":620},
+      {"id":"labelX","type":"number","label":"Label x (px)","default":420},
+      {"id":"labelY","type":"number","label":"Label y (px)","default":300},
+      {"id":"at","type":"number","label":"Starts at (s)","default":0.4,"min":0}
+    ]'
+  >
+    <svg id="an-svg" class="an-svg" viewBox="0 0 1920 1080" aria-hidden="true">
+      <path id="an-path" d="M 0 0" fill="none" stroke="#d9a441" stroke-width="5" stroke-linecap="round" />
+      <path id="an-head" d="M 0 0" fill="none" stroke="#d9a441" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      <circle id="an-ring" cx="0" cy="0" r="26" fill="none" stroke="#d9a441" stroke-width="5" />
+    </svg>
+    <div id="an-label" class="an-label" data-var-text="label">The key frame this clip starts from</div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const tx = Number(v.targetX ?? 1300);
+      const ty = Number(v.targetY ?? 620);
+      const lx = Number(v.labelX ?? 420);
+      const ly = Number(v.labelY ?? 300);
+      const at = Number(v.at ?? 0.4);
+      const label = document.getElementById("an-label");
+      label.style.left = `${lx}px`;
+      label.style.top = `${ly}px`;
+      // Geometry comes from the variables only (never from measured text, which depends on
+      // when fonts load): from the label's right edge at its first line to short of the ring.
+      const sx = lx + 560 + 12;
+      const sy = ly + 46;
+      const ang = Math.atan2(ty - sy, tx - sx);
+      const ex = tx - Math.cos(ang) * 36;
+      const ey = ty - Math.sin(ang) * 36;
+      const cx = (sx + ex) / 2 + Math.sin(ang) * -80;
+      const cy = (sy + ey) / 2 - Math.cos(ang) * -80;
+      const path = document.getElementById("an-path");
+      path.setAttribute("d", `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`);
+      const hx = Math.atan2(ey - cy, ex - cx);
+      const head = document.getElementById("an-head");
+      const h = 22;
+      head.setAttribute("d", `M ${ex - h * Math.cos(hx - 0.5)} ${ey - h * Math.sin(hx - 0.5)} L ${ex} ${ey} L ${ex - h * Math.cos(hx + 0.5)} ${ey - h * Math.sin(hx + 0.5)}`);
+      const ring = document.getElementById("an-ring");
+      ring.setAttribute("cx", String(tx));
+      ring.setAttribute("cy", String(ty));
+      const len = path.getTotalLength();
+      path.style.strokeDasharray = `${len}`;
+      const draw = 0.6;
+
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#an-label", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: MOTION.settle.duration, ease: MOTION.settle.ease }, at);
+      tl.fromTo("#an-path", { strokeDashoffset: len }, { strokeDashoffset: 0, duration: draw, ease: MOTION.snap.ease }, at + 0.3);
+      tl.fromTo("#an-head", { opacity: 0 }, { opacity: 1, duration: 0.1, ease: "none" }, at + 0.3 + draw - 0.1);
+      tl.fromTo("#an-ring", { opacity: 0, scale: 0.6, transformOrigin: "50% 50%" }, { opacity: 1, scale: 1, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, at + 0.3 + draw - 0.1);
+      tl.fromTo("#an-ring", { scale: 1 }, { scale: MOTION.bloom.scale, duration: MOTION.bloom.duration, ease: MOTION.bloom.ease, yoyo: true, repeat: 1, immediateRender: false }, at + 0.3 + draw + MOTION.snap.duration);
+      window.__timelines["annotation"] = tl;
+    })();
+  </script>
+</template>

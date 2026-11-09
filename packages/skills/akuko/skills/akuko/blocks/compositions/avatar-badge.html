@@ -1,0 +1,85 @@
+<!--
+  AvatarBadge — a person's reveal: round portrait (or initials), a drawn ring, name and role.
+  Variables:
+    name      string  the person's name
+    role      string  one line under the name
+    initials  string  shown when there is no image (default "AO")
+    src       string  portrait path inside the project; empty = initials
+    at        number  s into the block when it starts (default 0.3)
+  Motion: portrait on `settle` (scale 0 -> 1, rotation -10 -> 0); the ring draws on the `snap`
+  ease over 0.6 s and `bloom`s once; name and role on `snap`, 0.12 s apart.
+  Host: <div id="avatar-badge" data-composition-id="avatar-badge" data-composition-src="compositions/avatar-badge.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: block; src: url("fonts/inter-latin-700-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Newsreader"; font-style: normal; font-weight: 600; font-display: block; src: url("fonts/newsreader-latin-600-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .ab-row { display: flex; align-items: center; gap: 56px; }
+    .ab-portrait { position: relative; width: 280px; height: 280px; }
+    .ab-ring { position: absolute; inset: 0; width: 280px; height: 280px; overflow: visible; }
+    .ab-face {
+      position: absolute; inset: 24px; border-radius: 50%; overflow: hidden; background: #3b2116;
+      display: flex; align-items: center; justify-content: center;
+      font-family: "Newsreader", serif; font-weight: 600; font-size: 96px; color: #efe8df;
+    }
+    .ab-face img { width: 100%; height: 100%; object-fit: cover; }
+    .ab-text { display: flex; flex-direction: column; gap: 14px; }
+    .ab-name { font-family: "Inter", sans-serif; font-weight: 700; font-size: 72px; color: #efe8df; letter-spacing: -0.01em; }
+    .ab-role { font-family: "Inter", sans-serif; font-weight: 500; font-size: 36px; color: #d9a441; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="avatar-badge"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"name","type":"string","label":"Name","default":"Ada Obi"},
+      {"id":"role","type":"string","label":"Role","default":"Director of photography"},
+      {"id":"initials","type":"string","label":"Initials","default":"AO","maxLength":3},
+      {"id":"src","type":"string","label":"Portrait (project path)","default":""},
+      {"id":"at","type":"number","label":"Starts at (s)","default":0.3,"min":0}
+    ]'
+  >
+    <div class="ab-row">
+      <div class="ab-portrait">
+        <svg id="ab-ring" class="ab-ring" viewBox="0 0 280 280" aria-hidden="true">
+          <circle id="ab-ring-circle" cx="140" cy="140" r="134" fill="none" stroke="#d9a441" stroke-width="6" transform="rotate(-90 140 140)" />
+        </svg>
+        <div id="ab-face" class="ab-face"><span id="ab-initials" data-var-text="initials">AO</span></div>
+      </div>
+      <div class="ab-text">
+        <div id="ab-name" class="ab-name" data-var-text="name">Ada Obi</div>
+        <div id="ab-role" class="ab-role" data-var-text="role">Director of photography</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const at = Number(v.at ?? 0.3);
+      const src = String(v.src ?? "").trim();
+      if (src) {
+        const img = document.createElement("img");
+        img.id = "ab-image";
+        img.alt = "";
+        img.src = src;
+        const face = document.getElementById("ab-face");
+        face.textContent = "";
+        face.appendChild(img);
+      }
+      const circle = document.getElementById("ab-ring-circle");
+      const len = 2 * Math.PI * 134;
+      circle.style.strokeDasharray = `${len}`;
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#ab-face", { scale: 0, rotation: -10 }, { scale: 1, rotation: 0, duration: MOTION.settle.duration, ease: MOTION.settle.ease }, at);
+      tl.fromTo("#ab-ring-circle", { strokeDashoffset: len }, { strokeDashoffset: 0, duration: 0.6, ease: MOTION.snap.ease }, at + 0.3);
+      tl.fromTo("#ab-ring", { scale: 1 }, { scale: MOTION.bloom.scale, duration: MOTION.bloom.duration, ease: MOTION.bloom.ease, yoyo: true, repeat: 1 }, at + 0.9);
+      tl.fromTo("#ab-name", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, at + 0.5);
+      tl.fromTo("#ab-role", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, at + 0.62);
+      window.__timelines["avatar-badge"] = tl;
+    })();
+  </script>
+</template>
