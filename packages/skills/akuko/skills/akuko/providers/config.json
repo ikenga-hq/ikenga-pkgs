@@ -80,6 +80,25 @@
         }
       }
     },
+    "elevenlabs": {
+      "label": "ElevenLabs text to speech (voice-over with word timings) — your ElevenLabs key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "ELEVENLABS_API_KEY",
+      "default_model": "eleven_flash_v2_5",
+      "models": {
+        "eleven_flash_v2_5": {
+          "price": { "amount": 0.00004, "per": "character" },
+          "last_verified": "2026-11-09",
+          "source": "https://elevenlabs.io/pricing/api, Text to Speech, row \"Flash / Turbo\": $0.04 per 1K characters, read 2026-11-09. Model id and the 40,000-character request limit: https://elevenlabs.io/docs/overview/models (read 2026-11-09). Endpoint and timing response (alignment.characters / character_start_times_seconds / character_end_times_seconds): https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps (read 2026-11-09). Auth header xi-api-key: https://elevenlabs.io/docs/api-reference/authentication."
+        },
+        "eleven_multilingual_v2": {
+          "price": { "amount": 0.00008, "per": "character" },
+          "last_verified": "2026-11-09",
+          "source": "https://elevenlabs.io/pricing/api, Text to Speech, row \"v2 Multilingual\": $0.08 per 1K characters, read 2026-11-09. Model id and the 10,000-character request limit: https://elevenlabs.io/docs/overview/models (read 2026-11-09). Same with-timestamps endpoint as above."
+        }
+      }
+    },
     "example-direct-image": {
       "label": "EXAMPLE — paid direct image API (placeholder, replaced in WP-06)",
       "billing": "direct-api",
