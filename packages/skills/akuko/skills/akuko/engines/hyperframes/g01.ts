@@ -54,6 +54,8 @@ interface Args {
   hf: string;
   out: string;
   browser: string | undefined;
+  /** Reuse HyperFrames snapshots/renders already in --out (re-runs only the controls and the comparison). */
+  reuse: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -64,10 +66,10 @@ function parseArgs(argv: string[]): Args {
   const hf = get('--hf') ?? process.env.HYPERFRAMES_BIN;
   const out = get('--out');
   if (!hf || !out) {
-    console.error('usage: g01.ts --hf <hyperframes.mjs> --out <dir> [--browser <chrome.exe>]');
+    console.error('usage: g01.ts --hf <hyperframes.mjs> --out <dir> [--browser <chrome.exe>] [--reuse]');
     process.exit(2);
   }
-  return { hf: resolve(hf), out: resolve(out), browser: get('--browser') ?? process.env.HYPERFRAMES_BROWSER_PATH };
+  return { hf: resolve(hf), out: resolve(out), browser: get('--browser') ?? process.env.HYPERFRAMES_BROWSER_PATH, reuse: argv.includes('--reuse') };
 }
 
 interface RunResult {
@@ -131,6 +133,8 @@ async function stage(out: string): Promise<{ g01: string; nc: string }> {
 // ---------------------------------------------------------------- HyperFrames runs
 
 async function hfSnapshot(a: Args, env: NodeJS.ProcessEnv, project: string, outDir: string): Promise<{ files: string[]; ms: number; log: string }> {
+  const saved = `${outDir}.json`;
+  if (a.reuse && existsSync(saved)) return JSON.parse(await readFile(saved, 'utf8')) as { files: string[]; ms: number; log: string };
   await rm(outDir, { recursive: true, force: true });
   const r = await run(
     process.execPath,
@@ -147,17 +151,23 @@ async function hfSnapshot(a: Args, env: NodeJS.ProcessEnv, project: string, outD
     if (!f) throw new Error(`snapshot did not return t=${t}`);
     return f.path;
   });
-  return { files, ms: r.ms, log: r.stderr };
+  const result = { files, ms: r.ms, log: r.stderr };
+  await writeFile(saved, JSON.stringify(result), 'utf8');
+  return result;
 }
 
 async function hfRenderPngs(a: Args, env: NodeJS.ProcessEnv, project: string, outDir: string): Promise<{ dir: string; background: string; ms: number; log: string }> {
+  const saved = `${outDir}.json`;
+  if (a.reuse && existsSync(saved)) return JSON.parse(await readFile(saved, 'utf8')) as { dir: string; background: string; ms: number; log: string };
   await rm(outDir, { recursive: true, force: true });
   const r = await run(process.execPath, [a.hf, 'render', project, '--format', 'png-sequence', '-o', outDir], env, project);
   const log = `${r.stdout}\n${r.stderr}`;
   if (r.code !== 0) throw new Error(`render failed (${r.code})\n${log}`);
   const background = parseReferenceBackground(log);
   if (!background) throw new Error('render did not report a solid reference_background on its @hf-result line');
-  return { dir: outDir, background, ms: r.ms, log };
+  const result = { dir: outDir, background, ms: r.ms, log };
+  await writeFile(saved, JSON.stringify(result), 'utf8');
+  return result;
 }
 
 // ---------------------------------------------------------------- hand-rolled control capture
@@ -166,6 +176,7 @@ interface PuppeteerPage {
   setViewport(v: { width: number; height: number; deviceScaleFactor: number }): Promise<void>;
   setRequestInterception(on: boolean): Promise<void>;
   on(event: 'request', fn: (req: PuppeteerRequest) => void): void;
+  on(event: 'pageerror', fn: (err: unknown) => void): void;
   goto(url: string, o: { waitUntil: string; timeout: number }): Promise<unknown>;
   waitForFunction(fn: string, o: { timeout: number }): Promise<unknown>;
   evaluate(fn: string): Promise<unknown>;
@@ -227,6 +238,7 @@ async function handRolledCapture(a: Args, project: string, outDir: string, block
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+    page.on('pageerror', (e) => console.error(`[g01] page error: ${String(e)}`));
     await page.setRequestInterception(true);
     page.on('request', (r) => {
       const url = r.url();
@@ -235,10 +247,10 @@ async function handRolledCapture(a: Args, project: string, outDir: string, block
       else void r.continue();
     });
     await page.goto(`http://127.0.0.1:${port}/index.html`, { waitUntil: 'networkidle0', timeout: 60000 });
-    await page.waitForFunction('window.__timelines && window.__timelines.main', { timeout: 30000 });
+    await page.waitForFunction('!!(window.__timelines && window.__timelines.main)', { timeout: 30000 });
     await page.evaluate('document.fonts.ready.then(() => document.fonts.status)');
     for (const t of G01_TIMES) {
-      await page.evaluate(`window.__timelines.main.seek(${t})`);
+      await page.evaluate(`void window.__timelines.main.seek(${t})`); // seek() returns the timeline; don't serialise it
       await page.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
       const path = join(outDir, `at-${t}s.png`);
       await page.screenshot({ path });
@@ -317,7 +329,7 @@ function table(set: SetReport, out: string): string {
   return [
     `### ${set.id} — ${set.what}`,
     '',
-    `Expected: **${set.expect}** · Result: **${set.pass ? 'pass' : 'fail'}** · previews in \`${relative(out, dirname(set.pairs[0]?.preview ?? out))}\``,
+    `Expected: **${set.expect}** · Result: **${set.pass ? 'pass' : 'fail'}** · previews in \`${relative(out, dirname(set.pairs[0]?.preview ?? out)).replaceAll('\\', '/')}\``,
     '',
     '| t (s) | frame | expected counter / caption | frame PSNR (dB) | counter ink IoU (region PSNR) | caption ink IoU (region PSNR) | pair |',
     '|---|---|---|---|---|---|---|',

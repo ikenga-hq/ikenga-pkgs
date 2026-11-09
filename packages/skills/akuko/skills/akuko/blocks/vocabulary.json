@@ -1,0 +1,5 @@
+{
+  "settle": { "ease": "back.out(1.5)", "duration": 0.9 },
+  "snap": { "ease": "power3.out", "duration": 0.3 },
+  "bloom": { "ease": "sine.inOut", "duration": 0.2, "scale": 1.06 }
+}

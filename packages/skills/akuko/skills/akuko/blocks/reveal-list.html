@@ -1,0 +1,74 @@
+<!--
+  RevealList — a title and up to four items that arrive one after another.
+  Variables:
+    title     string  heading above the list
+    item1..4  string  the items; an empty item is left out
+    at        number  s into the block when the first item arrives (default 0.6)
+    stagger   number  s between items (default 0.12)
+  Motion: title on `snap`; each item on `settle` (y 30 -> 0, opacity 0 -> 1), staggered.
+  Host: <div id="reveal-list" data-composition-id="reveal-list" data-composition-src="reveal-list.html" ...>
+-->
+<template>
+  <style>
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 500; font-display: block; src: url("fonts/inter-latin-500-normal.woff2") format("woff2"); }
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: block; src: url("fonts/inter-latin-700-normal.woff2") format("woff2"); }
+    #root { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .rl-panel { width: 1120px; display: flex; flex-direction: column; gap: 28px; }
+    .rl-title { font-family: "Inter", sans-serif; font-weight: 700; font-size: 72px; color: #efe8df; letter-spacing: -0.02em; }
+    .rl-items { display: flex; flex-direction: column; gap: 18px; }
+    .rl-item {
+      display: flex; align-items: center; gap: 28px; padding: 26px 34px; border-radius: 20px;
+      background: #171412; border: 1px solid #2e2824;
+      font-family: "Inter", sans-serif; font-weight: 500; font-size: 40px; color: #efe8df;
+    }
+    .rl-mark { flex: none; width: 14px; height: 14px; border-radius: 3px; background: #d9a441; }
+    .rl-item[data-empty="true"] { display: none; }
+  </style>
+  <div
+    id="root"
+    data-composition-id="reveal-list"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"title","type":"string","label":"Title","default":"What the board shows"},
+      {"id":"item1","type":"string","label":"Item 1","default":"Every shot beside its line"},
+      {"id":"item2","type":"string","label":"Item 2","default":"What it costs before you spend"},
+      {"id":"item3","type":"string","label":"Item 3","default":"What waits on you"},
+      {"id":"item4","type":"string","label":"Item 4","default":""},
+      {"id":"at","type":"number","label":"First item at (s)","default":0.6,"min":0},
+      {"id":"stagger","type":"number","label":"Stagger (s)","default":0.12,"min":0}
+    ]'
+  >
+    <div class="rl-panel">
+      <div id="rl-title" class="rl-title" data-var-text="title">What the board shows</div>
+      <div class="rl-items">
+        <div id="rl-item-1" class="rl-item"><span class="rl-mark"></span><span data-var-text="item1">Every shot beside its line</span></div>
+        <div id="rl-item-2" class="rl-item"><span class="rl-mark"></span><span data-var-text="item2">What it costs before you spend</span></div>
+        <div id="rl-item-3" class="rl-item"><span class="rl-mark"></span><span data-var-text="item3">What waits on you</span></div>
+        <div id="rl-item-4" class="rl-item"><span class="rl-mark"></span><span data-var-text="item4"></span></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const MOTION = {"settle":{"ease":"back.out(1.5)","duration":0.9},"snap":{"ease":"power3.out","duration":0.3},"bloom":{"ease":"sine.inOut","duration":0.2,"scale":1.06}};
+      const v = window.__hyperframes.getVariables();
+      const at = Number(v.at ?? 0.6);
+      const stagger = Number(v.stagger ?? 0.12);
+      // Which slots are filled is fixed at load (from the variables), never from time.
+      const items = [1, 2, 3, 4]
+        .map((i) => document.getElementById(`rl-item-${i}`))
+        .filter((el) => {
+          const text = String(v[`item${el.id.slice(-1)}`] ?? el.textContent ?? "").trim();
+          el.setAttribute("data-empty", text === "" ? "true" : "false");
+          return text !== "";
+        });
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#rl-title", { opacity: 0, y: -12 }, { opacity: 1, y: 0, duration: MOTION.snap.duration, ease: MOTION.snap.ease }, 0.2);
+      items.forEach((el, i) => {
+        tl.fromTo(el, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: MOTION.settle.duration, ease: MOTION.settle.ease }, at + i * stagger);
+      });
+      window.__timelines["reveal-list"] = tl;
+    })();
+  </script>
+</template>
