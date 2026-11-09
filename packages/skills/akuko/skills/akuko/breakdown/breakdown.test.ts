@@ -394,6 +394,8 @@ describe('command line (host B / C)', () => {
       if (route === 'adapt') await writeFile(join(dir, 'script', 'screenplay.fountain'), screenplay);
 
       assert.equal((await run(['new', '--project', dir, '--title', 'The Last Ferry'], T0)).code, 0);
+      const created = JSON.parse(await readFile(join(dir, 'akuko.json'), 'utf8')) as AkukoProject;
+      assert.ok(['A', 'B', 'C'].includes(created.host?.level ?? ''), 'new records the detected host');
       assert.equal((await run(['new', '--project', dir, '--title', 'again'], T0)).code, 1, 'will not overwrite');
       assert.equal((await run(['apply', '--project', dir, '--proposal', proposalFile], T0)).code, 1, 'locked before intake is approved');
       assert.equal((await run(['intake', '--project', dir, '--route', route], T0)).code, 0);

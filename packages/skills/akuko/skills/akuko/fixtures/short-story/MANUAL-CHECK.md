@@ -47,7 +47,7 @@ The cap you set is 1.00 USD, so at most 0.6304 USD is left. (Gemini also bills r
    Expected: the agent appends them with `decisions/cli.ts append`, folds, and tells you what applied; breakdown unlocks. It did not approve anything itself.
    Observed: ______
 
-4. **Breakdown.** Say: "Apply the breakdown in proposal.json (copy it from fixtures/short-story/) instead of writing your own, so the cost is predictable." Approve all 12 shots and the 8 checklist entries on the board, copy, paste.
+4. **Breakdown.** Say: "Apply the breakdown in proposal.json (copy it from fixtures/short-story/) instead of writing your own, so the cost is predictable." Approve all 12 shots and the 6 checklist entries on the board, copy, paste.
    Expected: 4 scenes, 12 shots, tags added to the screenplay, lint clean; the breakdown stage becomes approved only after your decisions are folded.
    Observed: ______
 
@@ -92,10 +92,10 @@ This part covers the whole path, but to keep it about 20 minutes you make the ke
    Expected: the agent says it is on **host A (claude.ai)**, creates the project in an artifact database rather than a folder, and will use the **manual provider only** (it must say it cannot call a paid image API from here).
    Observed: ______
 
-2. **The board is an artifact.** Expected: after intake and breakdown it gives you a published artifact link (the default board), showing a "Your move" summary with the intake files and then the 12 shots and 8 checklist entries waiting.
+2. **The board is an artifact.** Expected: after intake and breakdown it gives you a published artifact link (the default board), showing a "Your move" summary with the intake files and then the 12 shots and 6 checklist entries waiting.
    Open it while signed in. Observed: ______
 
-3. **Approve there, and see it read back.** Approve the intake files on the artifact and tell the agent "I reviewed". Repeat for the breakdown (all 12 shots and 8 entries).
+3. **Approve there, and see it read back.** Approve the intake files on the artifact and tell the agent "I reviewed". Repeat for the breakdown (all 12 shots and 6 entries).
    Expected: the agent loads `ArtifactData`, lists the `decisions` collection, folds, and its report matches your clicks exactly (counts of approvals, none rejected). It **does not** say "approved" for anything you did not click. The next stage unlocks.
    Observed: ______
 

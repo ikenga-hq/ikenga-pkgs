@@ -157,6 +157,24 @@ describe('doctor, node half', () => {
     }
   });
 
+  it('says a set key does not prove the account can buy images, naming billing for gemini and fal (A-6)', () => {
+    const prev = { g: process.env.GEMINI_API_KEY, f: process.env.FAL_KEY };
+    process.env.GEMINI_API_KEY = 'x'.repeat(10);
+    process.env.FAL_KEY = 'y'.repeat(10);
+    try {
+      const lines: string[] = [];
+      run([tmpdir()], (l) => lines.push(l));
+      const out = lines.join('\n');
+      assert.match(out, /does not prove the account can buy images/);
+      assert.match(out, /gemini-image: .*free tier.*ai\.google\.dev\/gemini-api\/docs\/billing/);
+      assert.match(out, /fal: .*fal\.ai\/dashboard\/usage-billing\/billing/);
+      assert.ok(!out.includes('xxxxxxxxxx') && !out.includes('yyyyyyyyyy'));
+    } finally {
+      if (prev.g === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = prev.g;
+      if (prev.f === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prev.f;
+    }
+  });
+
   it('reports a key as set when exactly the configured variable is set', () => {
     const keep = { ...process.env };
     for (const k of ['FAL_KEY', 'FAL_API_KEY', 'GEMINI_API_KEY']) delete process.env[k];
@@ -252,6 +270,24 @@ describe('doctor.sh', { skip: bash === null ? 'no bash available' : false }, () 
     assert.match(r.out, /HYPERFRAMES_BROWSER_PATH\s+MISSING \(optional\)/);
     assert.match(r.out, /setx HYPERFRAMES_BROWSER_PATH/);
     assert.equal(r.status, 0);
+  });
+
+  it('names a missing runtime package and prints the install command, without crashing (A-1)', () => {
+    const r = doctorSh({ ...allOptionalMissing, AKUKO_DOCTOR_HIDE_PKGS: 'zod,ajv' }, emptyDir);
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /zod\s+MISSING \(required\)/);
+    assert.match(r.out, /ajv\s+MISSING \(optional\)/);
+    assert.match(r.out, /npm install --no-save --prefix ".*" zod@\^3\.23\.0 ajv@\^8\.20\.0/);
+    assert.match(r.out, /WP-20/);
+    assert.doesNotMatch(r.out, /Cannot find package/);
+    assert.match(r.out, /provider and project checks skipped/);
+  });
+
+  it('only optional check-view packages missing is a warning, exit 0 (A-1)', () => {
+    const r = doctorSh({ ...allOptionalMissing, AKUKO_DOCTOR_HIDE_PKGS: 'ajv,ajv-formats,jsdom' }, emptyDir);
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, /npm install --no-save --prefix ".*" ajv@/);
+    assert.match(r.out, /provider keys/);
   });
 
   it('reports orphan reservations and drift from a project folder, exit 0', () => {

@@ -27,7 +27,8 @@ export const MONEY_EPSILON = 1e-9;
 
 /** Sum of `actual` over done entries — what `budget.spent` must equal. */
 export function spentFromLedger(p: AkukoProject): number {
-  return p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + (e.actual ?? 0) : sum), 0);
+  // Summed in integer micro-units so budget.spent is stored as 0.88, not 0.8799999999999999 (Part A, A-8).
+  return p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + Math.round((e.actual ?? 0) * 1e6) : sum), 0) / 1e6;
 }
 
 /** Sum of `actual` over failed and cancelled entries: money a call cost although it produced nothing. */

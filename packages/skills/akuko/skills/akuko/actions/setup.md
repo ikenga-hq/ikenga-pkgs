@@ -52,6 +52,10 @@ Say the cap and currency back to the person, then call `applySetup(answers, { ho
 
 The cap lives in `akuko.json.budget.cap`, never under `.atelier/`.
 
+## No project yet
+
+Setup may run before intake. When there is no `akuko.json`, `applySetup()` creates the same minimal project `breakdown/cli.ts new` does (intake open, later stages locked; ask the person for the film's title first and pass it as `answers.title`; "Untitled film" is only a fallback, and nothing renames it later), with the detected host recorded in `akuko.json.host`, and puts the cap in it. It never overwrites an existing project: a re-run only updates the cap and defaults.
+
 ## Finish
 
 Run `doctor` (`./doctor.md`) once, then offer `/akuko intake` if there is no script yet.

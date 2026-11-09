@@ -3,7 +3,7 @@
  *
  *   node --experimental-strip-types breakdown/cli.ts <command> --project <dir> [options]
  *
- *   new     --title <t> [--logline <l>] [--source <credit>] [--runtime <s>]
+ *   new     --title <t> [--logline <l>] [--source <credit>] [--runtime <s>] [--tools <a,b,…>]
  *           create <dir>/akuko.json (refuses to overwrite one)
  *   intake  --route screenplay|adapt|direct
  *           record script/source.md (+ script/screenplay.fountain) and put intake in review
@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { detectHostRecord } from '../setup/host-record.ts';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import { applyBreakdown, planRetag, ProposalError } from './apply.ts';
 import { completeIntake, createProject, SCREENPLAY_PATH, SOURCE_PATH, type IntakeRoute } from './intake.ts';
@@ -66,7 +67,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(runtime !== undefined && { runtime_s: Number(runtime) }),
       });
       await mkdir(dirname(host.projectFile), { recursive: true });
-      await host.writeState(p);
+      await host.writeState({ ...p, host: detectHostRecord(str(opt.get('tools'))?.split(',').filter(Boolean)) });
       return { code: 0, out: `Created ${host.projectFile} (${p.project.slug}).` };
     }
 

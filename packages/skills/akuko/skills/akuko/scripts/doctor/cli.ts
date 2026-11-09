@@ -16,6 +16,12 @@ import { loadProviderConfig } from '../../providers/config.ts';
 import { keyPresence } from '../../setup/setup.ts';
 import { checkProject, configFindings, formatFinding, type Finding } from './project-checks.ts';
 
+/** Where to check that a key can actually buy images (no network call is made). */
+export const BILLING_HINT: Record<string, string> = {
+  'gemini-image': 'Gemini image models need a paid tier: on the free tier they answer HTTP 429. Check billing / tier at https://ai.google.dev/gemini-api/docs/billing',
+  fal: 'fal bills per image from your account balance. Check it at https://fal.ai/dashboard/usage-billing/billing',
+};
+
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
@@ -40,6 +46,11 @@ export function run(args: string[], out: (line: string) => void = console.log): 
   for (const id of ids) {
     const k = keys[id];
     if (k) out(`  ${id.padEnd(22)} ${k.env}: ${k.present ? 'set' : 'not set (optional until you use that provider)'}`);
+  }
+
+  if (Object.values(keys).some((k) => k.present)) {
+    out('  note: a key being set does not prove the account can buy images (doctor makes no network call).');
+    for (const id of ids) if (keys[id]?.present && BILLING_HINT[id]) out(`    ${id}: ${BILLING_HINT[id]}`);
   }
 
   if (configFindings(config, now).length === 0) out(`provider config: all model prices verified within ${config.stale_after_days} days`);

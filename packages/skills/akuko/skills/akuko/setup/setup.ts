@@ -14,7 +14,8 @@
  */
 
 import { existsSync } from 'node:fs';
-import type { AkukoProject } from '../schema/akuko-project.ts';
+import type { AkukoProject, Host } from '../schema/akuko-project.ts';
+import { createProject } from '../breakdown/intake.ts';
 import type { HostAdapter } from '../hosts/types.ts';
 import type { AkukoProviderConfig } from '../providers/config.ts';
 import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
@@ -27,6 +28,7 @@ import {
   type BrandInput,
   type Manifest,
 } from './manifest.ts';
+import { detectHostRecord } from './host-record.ts';
 
 export class SetupError extends Error {
   override name = 'SetupError';
@@ -44,6 +46,8 @@ export interface SetupAnswers {
   brand?: BrandInput | null;
   /** Provider id → env var name, that override the config's `key_env`. */
   keyEnvNames?: Record<string, string>;
+  /** Title for the project setup creates when there is no `akuko.json` yet. The agent asks the person for the title first and passes it here; "Untitled film" is only a fallback and nothing renames it later. */
+  title?: string;
 }
 
 export interface SetupDeps {
@@ -54,6 +58,8 @@ export interface SetupDeps {
   now?: () => string;
   /** Existence check for the HyperFrames browser path; tests replace it. */
   exists?: (path: string) => boolean;
+  /** The `host` record written when setup creates the project; tests replace it. Defaults to host detection. */
+  hostRecord?: Host;
 }
 
 export interface BrowserAdvice {
@@ -146,7 +152,16 @@ export async function applySetup(answers: SetupAnswers, deps: SetupDeps): Promis
     brand = parsed.data;
   }
 
-  const current = await deps.host.readState();
+  // Setup may run before intake (SKILL.md), so there may be no akuko.json yet. Create the
+  // same minimal project `breakdown/cli.ts new` does (intake open, later stages locked),
+  // with the detected host recorded, so the cap has somewhere to live.
+  let current: AkukoProject;
+  try {
+    current = await deps.host.readState();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    current = { ...createProject({ title: answers.title ?? 'Untitled film', now: () => new Date(now) }), host: deps.hostRecord ?? detectHostRecord() };
+  }
   const prev = current.budget;
   const currency = config.currency;
   const committed = committedFromLedger(current);

@@ -165,7 +165,8 @@ The schema doc calls the ledger "append-only". The real rule is narrower:
   entries with the next attempt number.
 - `budget.spent` always equals the sum of `actual` over `done` entries,
   which is how the WP-01 schema and integrity check define it. Every ledger
-  change recomputes it.
+  change recomputes it, summed in whole micro-units so it is stored as 0.88,
+  not 0.8799999999999999.
 - A `failed` or `cancelled` entry can still carry a real `actual`: a call
   that cost money and produced nothing. That money is **sunk**. It is not in
   `budget.spent`, but it counts against the cap exactly like spent money

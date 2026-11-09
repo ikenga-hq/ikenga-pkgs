@@ -98,7 +98,7 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
   });
 
   if (p.budget) {
-    const spent = p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + (e.actual ?? 0) : sum), 0);
+    const spent = p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + Math.round((e.actual ?? 0) * 1e6) : sum), 0) / 1e6; // micro-units, same as spentFromLedger()
     if (Math.abs(spent - p.budget.spent) > MONEY_EPSILON) {
       add('budget.spent', `budget.spent is ${p.budget.spent} but done ledger entries sum to ${spent}`);
     }

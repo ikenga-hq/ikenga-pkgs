@@ -27,6 +27,25 @@ const base = () => ({
 });
 
 describe('ledger', () => {
+  it('integrity agrees with spentFromLedger for an actual with more than 6 decimals', () => {
+    const e = { id: 'j.u1.1', ts: TS, provider: 'p', unit: 'u1', job: 'j', estimate: 0.1, actual: 0.00000049, status: 'done' as const };
+    const p = { ...base(), ledger: [e] };
+    const spent = spentFromLedger(p);
+    assert.deepEqual(checkIntegrity({ ...p, budget: { cap: 1, currency: 'USD', spent } }).filter((i) => i.path === 'budget.spent'), []);
+  });
+
+  it('stores budget.spent without float noise (A-8): 11 × 0.08 is 0.88, 0.1 + 0.2 is 0.3', () => {
+    const entries = (amounts: number[]) => amounts.map((a, i) => ({ id: `j.u${i}.1`, ts: TS, provider: 'p', unit: `u${i}`, job: 'j', estimate: a, actual: a, status: 'done' as const }));
+    assert.equal(spentFromLedger({ ...base(), ledger: entries(Array(11).fill(0.08)) }), 0.88);
+    assert.equal(spentFromLedger({ ...base(), ledger: entries([0.1, 0.2]) }), 0.3);
+    const p = settleEntry(
+      openEntries({ ...base(), ledger: entries(Array(5).fill(0.08)) }, { job: 'job1', provider: 'p', ts: TS, units: [{ unit: 'sc1_sh1', estimate: 0.08 }] }).project,
+      'job1.sc1_sh1.1',
+      { status: 'done' },
+    );
+    assert.equal(p.budget?.spent, 0.48, 'what is written to akuko.json, not 0.48000000000000004');
+  });
+
   it('opens one submitted entry per unit, then settles each in place by id', () => {
     const { project, ids } = openEntries(base(), {
       job: 'job1', provider: 'p', model: 'm', ts: TS,
