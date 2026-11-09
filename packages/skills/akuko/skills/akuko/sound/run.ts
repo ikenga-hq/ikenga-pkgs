@@ -22,7 +22,7 @@ import { ACCEPT } from '../providers/manual/package.ts';
 import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { assertValidProject } from '../providers/outputs.ts';
-import { SOUND_STAGE, SoundError, abandonUnits, assertOpen, beginUnits, buildSoundJob, refreshStageState, repairFileless, stampTake } from './plan.ts';
+import { SOUND_STAGE, SoundError, abandonUnits, assertOpen, beginUnits, buildSoundJob, refreshStageState, repairFileless, stampTake, textFor } from './plan.ts';
 import { NO_WORDS_TAG, WORDS_TAG, parseWordsFile, serializeWords } from './words.ts';
 import { isWav, parseWav } from './wav.ts';
 
@@ -166,6 +166,39 @@ export async function ingestVoiceover(
   await deps.host.writeState(assertValidProject(next));
   await finalizeSound(deps);
   return { asset: r.asset.id, warnings, timings: wordsFile !== undefined };
+}
+
+/**
+ * Attach a words file to a take that was recorded without timings (or replace its
+ * timings), for example when the person finds the file after the take was filed.
+ * The file is the person's own: the same shapes `ingestVoiceover` accepts. It does
+ * not change the take's status, and it never re-files the audio.
+ */
+export async function attachWords(
+  deps: Pick<StepDeps, 'host' | 'now'>,
+  unit: string,
+  words: { filename: string; data: Uint8Array },
+): Promise<{ asset: string }> {
+  const p = await deps.host.readState();
+  const a = p.assets.find((x) => x.id === unit && x.stage === SOUND_STAGE && x.kind === 'vo');
+  if (!a || !a.file) throw new SoundError(`"${unit}" is not a recorded voice-over.`);
+  const shot = p.shots.find((s) => s.id === a.owner);
+  const parsed = parseWordsFile(words.data, unit, (shot ? textFor(shot, a)?.text : undefined) ?? '');
+  const stored = await deps.host.storeAsset({
+    kind: 'vo',
+    filename: `${unit}-words.json`,
+    mime: 'application/json',
+    data: serializeWords(parsed),
+    tags: ['words-file'],
+    owner: unit,
+  });
+  const tag = `${WORDS_TAG}${stored.file?.uri ?? ''}`;
+  const cur = await deps.host.readState();
+  await deps.host.writeState(assertValidProject({
+    ...cur,
+    assets: cur.assets.map((x): Asset => (x.id === unit ? { ...x, tags: [...x.tags.filter((t) => !t.startsWith(WORDS_TAG) && t !== NO_WORDS_TAG), tag] } : x)),
+  }));
+  return { asset: unit };
 }
 
 export interface SoundFileInput {

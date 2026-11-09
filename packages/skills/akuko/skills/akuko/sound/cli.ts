@@ -15,6 +15,8 @@
  *   ingest --job <id> --unit <asset id> --file <audio> [--words <words.json>] [--actual <n>]
  *            record a take the person made for a manual job; without --words it is recorded
  *            without timings (never guessed)
+ *   words  --unit <asset id> --file <words.json>
+ *            attach (or replace) word timings on a take already recorded
  *   collect --job <id>        poll a paid job submitted earlier and record its files
  *   sync [--captions]         repair the stage state, then rebuild audio.narration and the
  *                             caption files (audio/vo/captions.vtt|srt) from the APPROVED takes
@@ -35,7 +37,7 @@ import { createElevenLabsProvider } from '../providers/tts/elevenlabs/index.ts';
 import { createSpendGate } from '../spend/gate.ts';
 import { rebuildNarration } from './narration.ts';
 import { SoundError, planSound, soundStatus } from './plan.ts';
-import { collectVoiceover, finalizeSound, generateVoiceover, ingestSoundFile, ingestVoiceover, type StepResult } from './run.ts';
+import { attachWords, collectVoiceover, finalizeSound, generateVoiceover, ingestSoundFile, ingestVoiceover, type StepResult } from './run.ts';
 import { WordsError } from './words.ts';
 
 export interface CliResult { code: number; out: string }
@@ -120,6 +122,13 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: out.join(NL) };
     }
 
+    if (cmd === 'words') {
+      const unit = str(opt.get('unit'));
+      const path = str(opt.get('file'));
+      if (!unit || !path) return { code: 2, out: 'akuko: --unit and --file are required.' };
+      await attachWords({ host, now: clock }, unit, { filename: path, data: new Uint8Array(await readFile(path)) });
+      return { code: 0, out: 'Attached word timings to ' + unit + '. Run sync to rebuild the narration and captions.' };
+    }
     if (cmd === 'add-music' || cmd === 'add-sfx') {
       const path = str(opt.get('file'));
       const licence = str(opt.get('licence'));
@@ -186,7 +195,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: [`Recorded ${r.asset}${r.timings ? ' with word timings' : ' without word timings'}; it is waiting for the person's review.`, ...r.warnings].join(NL) };
     }
 
-    return { code: 2, out: 'akuko: command must be plan, status, step, ingest, collect, sync, add-music or add-sfx.' };
+    return { code: 2, out: 'akuko: command must be plan, status, step, ingest, words, collect, sync, add-music or add-sfx.' };
   } catch (err) {
     if (err instanceof SoundError || err instanceof WordsError) return { code: 1, out: err.message };
     return { code: 1, out: `akuko: ${err instanceof Error ? err.message : String(err)}` };
