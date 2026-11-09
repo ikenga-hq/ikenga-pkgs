@@ -34,7 +34,11 @@ import { PNG, createFakeHost, tinyProject } from './__fixtures__/fake-host.ts';
 import { createFakePaid, testConfig } from '../spend/__fixtures__/fake-paid.ts';
 import { createGeminiImageProvider } from './gemini-image/index.ts';
 import { createFalImageProvider } from './fal/index.ts';
-import { mockFal, mockGemini } from './gemini-image/__fixtures__/mock-net.ts';
+import { REF_URI, mockFal, mockGemini } from './gemini-image/__fixtures__/mock-net.ts';
+import { createFalVideoProvider } from './fal-video/index.ts';
+import { mockFalVideo } from './fal-video/__fixtures__/mock-net.ts';
+import { createElevenLabsProvider } from './tts/elevenlabs/index.ts';
+import { mockElevenLabs } from '../sound/__fixtures__/audio.ts';
 
 interface ProviderSpec {
   name: string;
@@ -54,6 +58,30 @@ const keyframeJob = (provider: string, id = 'job_kf_test'): Job => ({
   items: [
     { unit: 'sc1_sh1', prompt: 'A long dark hallway', output: 'keyframe', aspect_ratio: '16:9' },
     { unit: 'sc1_sh2', prompt: 'A hand on a latch', output: 'keyframe', refs: [{ id: 'char_n', role: 'character' }] },
+  ],
+});
+
+const clipJob = (provider: string): Job => ({
+  id: 'job_mo_test_r1',
+  stage: 'motion',
+  kind: 'video',
+  provider,
+  label: 'Clips for scene 1',
+  items: [
+    { unit: 'sc1_sh1', prompt: 'A long dark hallway, the camera slowly pushes in', output: 'clip', duration_s: 5, aspect_ratio: '16:9', refs: [{ id: 'kf1', uri: REF_URI, role: 'start-frame' }] },
+    { unit: 'sc1_sh2', prompt: 'A hand on a latch', output: 'clip', duration_s: 10, refs: [{ id: 'kf2', uri: REF_URI, role: 'start-frame' }] },
+  ],
+});
+
+const voiceJob = (provider: string): Job => ({
+  id: 'job_snd_test_r1',
+  stage: 'sound',
+  kind: 'audio',
+  provider,
+  label: 'Voice-over for scene 1',
+  items: [
+    { unit: 'sc1_sh1', prompt: 'And every night, about midnight.', output: 'vo', count: 1, duration_s: 6, refs: [{ id: 'voice_abc', role: 'voice' }] },
+    { unit: 'sc1_sh2', prompt: 'Oh, so gently!', output: 'vo', count: 1, duration_s: 4, refs: [{ id: 'voice_abc', role: 'voice' }] },
   ],
 });
 
@@ -85,6 +113,18 @@ const PROVIDERS: ProviderSpec[] = [
     config: loadProviderConfig(),
     make: (host) => ({ provider: createFalImageProvider(host, { fetch: mockFal().fetch, apiKey: 'test-key' }) }),
     job: () => keyframeJob('fal'),
+  },
+  {
+    name: 'fal-video (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createFalVideoProvider(host, { fetch: mockFalVideo().fetch, apiKey: 'test-key', now: () => '2026-11-09T10:00:00Z' }) }),
+    job: () => clipJob('fal-video'),
+  },
+  {
+    name: 'elevenlabs (network mocked, with timings)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createElevenLabsProvider(host, { fetch: mockElevenLabs().fetch, apiKey: 'test-key', now: () => '2026-11-09T10:00:00Z' }) }),
+    job: () => voiceJob('elevenlabs'),
   },
   {
     // Not a real provider: proves the suite's paid branch works before WP-06 adds real ones.

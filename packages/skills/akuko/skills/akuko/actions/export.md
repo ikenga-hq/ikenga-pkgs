@@ -1,6 +1,6 @@
 ---
 name: export
-description: "Export MP4 masters, cutdowns and optional timelines or decks."
+description: "Hand the approved film to DaVinci Resolve: media in shot order plus an FCPXML/EDL timeline."
 domain: content
 ux_mode: approve
 run:

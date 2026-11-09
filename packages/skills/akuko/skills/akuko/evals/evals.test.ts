@@ -116,7 +116,30 @@ describe('evals draft (prep for WP-09)', () => {
     }
   });
 
-  it('states the built behaviour of the keyframes, bible and motion evals', () => {
+  it('has a routing eval for every built stage action, and a stub eval only for assemble', () => {
+    const doc = JSON.parse(readFileSync(join(HERE, 'evals.json'), 'utf8')) as EvalsDocument;
+    const byName = (n: string) => doc.evals.find((e) => e.name === n);
+    for (const [name, action, needle] of [
+      ['stage-routing-motion', 'motion', /spend line/i],
+      ['stage-routing-sound', 'sound', /--voice/],
+      ['stage-routing-export', 'export', /approved material only/i],
+    ] as const) {
+      const e = byName(name);
+      assert.ok(e, `${name} exists`);
+      assert.equal(e!.action, action);
+      assert.ok(!/stub/i.test(e!.expected_output), `${action} is built, not a stub`);
+      assert.ok(e!.assertions.some((a) => needle.test(a)), `${name} asserts ${needle}`);
+    }
+    assert.ok(byName('stage-routing-motion')!.assertions.some((a) => /attempt/i.test(a)) && byName('stage-routing-motion')!.assertions.some((a) => /--fit/.test(a)));
+    assert.ok(byName('stage-routing-sound')!.assertions.some((a) => /never invents narration/i.test(a)));
+    assert.ok(byName('stage-routing-export')!.assertions.some((a) => /FCPXML/.test(a)) && byName('stage-routing-export')!.assertions.some((a) => /no unit or stage status/i.test(a)));
+    assert.ok(!byName('stub-action-motion-refusal'), 'the motion stub eval is gone');
+    const stubs = doc.evals.filter((e) => /^Stub ask/.test(e.expected_output));
+    assert.deepEqual(stubs.map((e) => e.action), ['assemble']);
+    assert.ok(/Stub \(WP-02\)/.test(readFileSync(join(ACTIONS_DIR, 'assemble.md'), 'utf8')), 'assemble is still a stub');
+  });
+
+  it('states the built behaviour of the keyframes and bible evals', () => {
     const doc = JSON.parse(readFileSync(join(HERE, 'evals.json'), 'utf8')) as EvalsDocument;
     const spend = doc.evals.find((e) => e.name === 'spend-gate-no-budget-refusal')!;
     assert.equal(spend.action, 'bible');
@@ -124,8 +147,6 @@ describe('evals draft (prep for WP-09)', () => {
     const gating = doc.evals.find((e) => e.name === 'gating-keyframes-before-bible-approved')!;
     assert.ok(gating.assertions.some((a) => /bible/i.test(a) && /waiting|locked/i.test(a)));
     assert.ok(!doc.evals.some((e) => e.action === 'keyframes' && /stub/i.test(e.expected_output)), 'keyframes is built, not a stub');
-    const motion = doc.evals.find((e) => e.action === 'motion')!;
-    assert.match(motion.expected_output, /^Stub ask/);
   });
 
   it('trigger evals: exactly 24, unique, 12/12, with film-vocabulary near-misses', () => {

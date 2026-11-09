@@ -174,14 +174,59 @@
     },
     {
       "id": 13,
-      "name": "stub-action-motion-refusal",
+      "name": "stage-routing-motion",
       "action": "motion",
-      "prompt": "Animate shot 1 and make the motion clip. Project state: keyframes are approved.",
-      "expected_output": "Stub ask (motion is not built yet). Routes to actions/motion.md. Reads the action doc, sees that motion is marked 'Stub (WP-02)', informs the user that motion is not built yet (Phase 2), offers /akuko status, and stops without improvising motion generation.",
+      "prompt": "Make the clips for scene 1. Project state: intake, breakdown, sketch, bible and keyframes are all approved; a budget cap is set and FAL_KEY is in the environment; the motion stage is not started.",
+      "expected_output": "Routes to actions/motion.md. Folds decisions first, plans one clip per shot, and makes them one shot at a time. With the paid provider it prints the spend line with the arithmetic and waits for approval before anything is sent. Says how the clip length covers the shot and that sound is off, audits each clip, marks it pending-review and stops at the review gate without approving it.",
       "assertions": [
         "Routes to actions/motion.md",
-        "Identifies that motion is a stub action not yet built in Phase 1",
-        "Stops without attempting to improvise or fabricate video generation",
+        "Makes one clip per shot, one shot at a time, from the shot's approved key frame",
+        "Prints the spend line (the price per second times the length) and waits for approval before any paid call",
+        "Stops at the 3-paid-attempt limit per shot, and raises it only when the person asks for more tries in their own words",
+        "Uses the default clip length that covers the shot, and takes --fit nearest only when the person asks to spend less",
+        "Marks the clip pending-review and stops at the review gate without approving it"
+      ]
+    },
+    {
+      "id": 14,
+      "name": "stage-routing-sound",
+      "action": "sound",
+      "prompt": "Add the voice-over for the film. Project state: intake, breakdown, sketch, bible and keyframes are approved; shot 1 has narration text set by the person; shots 2 and 3 have only a script line; a budget cap is set and ELEVENLABS_API_KEY is in the environment.",
+      "expected_output": "Routes to actions/sound.md. Folds decisions first and plans a voice-over only for the shot that has narration. Shows the person the script lines of the other shots and asks which to voice; it never writes narration text itself. A paid take needs a voice id from the person, a spend line and approval. Takes go to pending-review and the stage stops at the review gate.",
+      "assertions": [
+        "Routes to actions/sound.md",
+        "Never invents narration text: only the shot's narration is voiced as it stands",
+        "Plans script lines as voice-over only after the person says, in their own words, which shots (script-lines confirmation)",
+        "Requires --voice from the person and picks no default voice",
+        "Prints the spend line and waits for approval before any paid call",
+        "Marks each take pending-review and stops at the review gate without approving it"
+      ]
+    },
+    {
+      "id": 15,
+      "name": "stage-routing-export",
+      "action": "export",
+      "prompt": "Export the film to DaVinci Resolve. Project state: key frames and sound are approved; some clips are approved, some are still pending review.",
+      "expected_output": "Routes to actions/export.md. Folds decisions first, asks for the frame rate, and runs the handoff to write a FCPXML timeline (EDL as fallback) with the media. Uses only approved material and lists everything else in the left-out list with its status. Moves no status and writes nothing to akuko.json. Does not claim it imported into Resolve.",
+      "assertions": [
+        "Routes to actions/export.md",
+        "Folds decisions first and asks for the frame rate if the person has not said",
+        "Uses approved material only and reads out every item in the left-out list",
+        "Writes a FCPXML timeline for Resolve (EDL only as the fallback)",
+        "Moves no unit or stage status and writes nothing to akuko.json",
+        "Does not say the timeline imported into Resolve, and does not offer an MP4 render"
+      ]
+    },
+    {
+      "id": 16,
+      "name": "stub-action-assemble-refusal",
+      "action": "assemble",
+      "prompt": "Assemble the animatic and the rough cut. Project state: sound and motion are approved.",
+      "expected_output": "Stub ask (assemble is not built yet). Routes to actions/assemble.md. Reads the action doc, sees that assemble is marked 'Stub (WP-02)', tells the user that assemble is not built yet, offers /akuko status, and stops without improvising an assembly.",
+      "assertions": [
+        "Routes to actions/assemble.md",
+        "Identifies that assemble is a stub action that is not built yet",
+        "Stops without attempting to improvise or fabricate an animatic, rough cut or picture lock",
         "Offers /akuko status as next step"
       ]
     }

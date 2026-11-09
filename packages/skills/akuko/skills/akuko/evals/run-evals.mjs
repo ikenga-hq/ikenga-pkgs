@@ -10,6 +10,11 @@
 // It prints both pass rates and a verdict (PASS when each is at least the threshold,
 // 80% by default) and writes every result to a JSON file.
 //
+// A prompt whose model call itself failed (the command exited non-zero, or the model
+// only printed an auth / API / rate-limit error such as an expired sign-in) is an
+// ERROR, not a FAIL (a non-zero exit with a real trace, or one stopped at --max-turns, is scored). Errors are left out of both rates, and any error makes the
+// verdict INCONCLUSIVE (FAIL if a rate misses the pass mark even counting errors as passes).
+//
 // THIS SCRIPT CALLS A MODEL THROUGH THE COMMAND YOU GIVE IT. It never runs on its
 // own, no test runs it, and it uses whatever account your command uses. Use
 // --dry-run to see what would be sent without sending anything.
@@ -44,15 +49,16 @@
 //   --out <file>           results file (default ./akuko-evals-<timestamp>.json)
 //   --dry-run              print the plan and exit; sends nothing
 //
-// Exit code: 0 PASS, 1 FAIL, 2 usage error.
+// Exit code: 0 PASS, 1 FAIL, 2 usage error, 3 INCONCLUSIVE (some prompts errored).
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+const ACTIONS_DIR = join(HERE, '..', 'actions');
 
 export const DEFAULT_THRESHOLD = 0.8;
 export const SKILL_NAME = 'akuko';
@@ -91,6 +97,63 @@ export function toolCalls(output) {
 /** Is this a structured trace (stream-json events or a JSON document of messages), even one with no tool calls? */
 function isTrace(output) {
   return jsonObjects(output).some((o) => o && typeof o === 'object' && ('type' in o || 'messages' in o));
+}
+
+/**
+ * What a failed model call looks like in the model's own words. One list, kept narrow:
+ * every entry is a message a CLI or API prints when the call did not happen, not a
+ * phrase a model might use while doing the task.
+ */
+export const MODEL_ERROR_PATTERNS = [
+  /failed to authenticate/i,
+  /oauth (?:session|token)[^.\n]{0,40}expired/i,
+  /invalid api key/i,
+  /please run \/login/i,
+  /authentication_error/i,
+  /rate[_ ]limit(?:_error| exceeded| reached)/i,
+  /usage limit reached/i,
+  /credit balance is too low/i,
+  /overloaded_error/i,
+  /api error: ?(?:4\d\d|5\d\d)\b/i,
+];
+
+/** Text the assistant printed, in order (stream-json assistant messages). */
+function assistantText(output) {
+  const texts = [];
+  const walk = (v) => {
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (!v || typeof v !== 'object') return;
+    if (v.type === 'text' && typeof v.text === 'string') texts.push(v.text);
+    for (const k of Object.keys(v)) walk(v[k]);
+  };
+  for (const o of jsonObjects(output)) if (o && typeof o === 'object' && o.type === 'assistant') walk(o);
+  return texts.join('\n').trim();
+}
+
+/**
+ * Why this output is a failed model call rather than a model's answer, or null.
+ * Only when the model used no tool at all and its only words match MODEL_ERROR_PATTERNS
+ * (or a `result` event says is_error); a model that did work is never an error here.
+ */
+export function modelCallError(output) {
+  if (toolCalls(output).length > 0) return null;
+  // Only a short message that is the whole output counts: a real answer that happens to mention keys or rate limits does not.
+  const whole = isTrace(output) ? assistantText(output) : String(output).trim();
+  const text = whole.length < 300 ? whole : '';
+  if (MODEL_ERROR_PATTERNS.some((p) => p.test(text))) return `the model call failed: ${text.replace(/\s+/g, ' ').slice(0, 160)}`;
+  const flagged = jsonObjects(output).find((o) => o && typeof o === 'object' && o.type === 'result' && o.is_error === true && o.subtype !== 'error_max_turns');
+  if (flagged) return `the model call failed: ${String(flagged.result ?? flagged.subtype ?? 'error result').replace(/\s+/g, ' ').slice(0, 160)}`;
+  return null;
+}
+
+/**
+ * A trace from a command that exited non-zero but still holds what the model did: it used tools, or
+ * Claude Code stopped it at --max-turns (result subtype "error_max_turns", which makes `-p` exit non-zero).
+ * That is a real outcome and is scored; a model that wandered off and never opened the right file is a FAIL.
+ */
+export function isRealOutcome(output) {
+  if (!isTrace(output) || modelCallError(output)) return false;
+  return toolCalls(output).length > 0 || jsonObjects(output).some((o) => o && typeof o === 'object' && o.type === 'result' && o.subtype === 'error_max_turns');
 }
 
 const ACTION_PATH = /(?:^|[\\/])actions[\\/]([a-z][a-z-]*)\.md\b/i;
@@ -150,15 +213,33 @@ export function scoreTrigger(item, output) {
   };
 }
 
-export function scoreRouting(item, output) {
+/**
+ * The other actions an action file points at: any `<name>.md` reference (a markdown link, a
+ * backticked `./doctor.md`, or `../actions/doctor.md`) whose name is an action file that exists.
+ */
+export function linkedActions(action, actionsDir = ACTIONS_DIR) {
+  const file = join(actionsDir, `${action}.md`);
+  if (!existsSync(file)) return [];
+  const known = new Set(readdirSync(actionsDir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)));
+  const linked = new Set();
+  for (const m of readFileSync(file, 'utf8').matchAll(/(?:^|[\s(`/])(?:\.{1,2}\/)?(?:actions\/)?([a-z][a-z-]*)\.md\b/g)) {
+    if (known.has(m[1]) && m[1] !== action) linked.add(m[1]);
+  }
+  return [...linked];
+}
+
+export function scoreRouting(item, output, { actionsDir = ACTIONS_DIR } = {}) {
   const d = detectAction(output);
-  // Passes only when exactly one distinct akuko action file was opened and it is the expected one:
-  // a model that reads several actions to hedge is not routing.
-  const pass = d.actions.length === 1 && d.actions[0] === item.action;
+  // Passes when the FIRST akuko action file opened is the expected one and every other one opened is
+  // one the expected action itself points at (setup points at doctor, so reading both is following it).
+  // A model that opens an unrelated action next to the right one is hedging, not routing.
+  const allowed = linkedActions(item.action, actionsDir);
+  const strays = d.actions.slice(1).filter((a) => a !== item.action && !allowed.includes(a));
+  const pass = d.actions[0] === item.action && strays.length === 0;
   let reason;
   if (d.actions.length === 0) reason = 'opened no akuko action file';
-  else if (d.actions.length > 1) reason = `opened ${d.actions.length} different action files (${d.actions.join(', ')}); routing needs exactly one`;
-  else if (!pass) reason = `opened ${d.actions[0]}, expected ${item.action}`;
+  else if (d.actions[0] !== item.action) reason = `opened ${d.actions[0]} first, expected ${item.action}`;
+  else if (strays.length > 0) reason = `opened ${strays.join(', ')} besides ${item.action}, which ${item.action} does not link to`;
   return {
     kind: 'routing',
     id: item.id,
@@ -174,15 +255,28 @@ export function scoreRouting(item, output) {
   };
 }
 
-export const rate = (rows) => (rows.length === 0 ? null : rows.filter((r) => r.pass).length / rows.length);
+/** Pass rate over the rows that were actually scored: a row that errored never got a model answer and is left out. */
+export const rate = (rows) => {
+  const scored = rows.filter((r) => !r.error);
+  return scored.length === 0 ? null : scored.filter((r) => r.pass).length / scored.length;
+};
 
-/** PASS when every rate that was run is at least the threshold. */
+/**
+ * PASS when every rate that was run is at least the threshold; FAIL otherwise.
+ * With errored prompts (never got a model answer): FAIL if a set misses the threshold even when every
+ * errored prompt is counted as a pass, otherwise INCONCLUSIVE (the skill was not tested on them).
+ */
 export function verdict(triggerRows, routingRows, threshold = DEFAULT_THRESHOLD) {
   const t = rate(triggerRows);
   const r = rate(routingRows);
   const ran = [t, r].filter((x) => x !== null);
+  const errored = [...triggerRows, ...routingRows].some((x) => x.error);
   const pass = ran.length > 0 && ran.every((x) => x >= threshold);
-  return { trigger_rate: t, routing_rate: r, threshold, verdict: pass ? 'PASS' : 'FAIL' };
+  // Best case: every errored prompt would have passed. If a set misses the threshold even then, the verdict is FAIL.
+  const best = (rows) => (rows.length === 0 ? null : rows.filter((x) => x.pass || x.error).length / rows.length);
+  const bestRates = [best(triggerRows), best(routingRows)].filter((x) => x !== null);
+  const clearFail = bestRates.some((x) => x < threshold);
+  return { trigger_rate: t, routing_rate: r, threshold, verdict: errored && !clearFail ? 'INCONCLUSIVE' : pass && !errored ? 'PASS' : 'FAIL' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -200,7 +294,7 @@ export function loadEvals(dir = HERE) {
  * Run the evals through `runModel(prompt) => Promise<string>` and score them.
  * `runModel` is the only thing that touches a model; the tests give it canned outputs.
  */
-export async function runEvals({ triggers, stages, runModel, only, limit, concurrency = 2, threshold = DEFAULT_THRESHOLD, onProgress }) {
+export async function runEvals({ triggers, stages, runModel, only, limit, concurrency = 2, threshold = DEFAULT_THRESHOLD, onProgress, actionsDir = ACTIONS_DIR }) {
   const jobs = [];
   if (only !== 'routing') for (const t of limit ? triggers.slice(0, limit) : triggers) jobs.push({ kind: 'trigger', item: t, prompt: t.query });
   if (only !== 'trigger') for (const s of limit ? stages.slice(0, limit) : stages) jobs.push({ kind: 'routing', item: s, prompt: s.prompt });
@@ -215,7 +309,9 @@ export async function runEvals({ triggers, stages, runModel, only, limit, concur
       let row;
       try {
         const output = await runModel(job.prompt);
-        row = job.kind === 'trigger' ? scoreTrigger(job.item, output) : scoreRouting(job.item, output);
+        const failed = modelCallError(output);
+        if (failed) throw new Error(failed);
+        row = job.kind === 'trigger' ? scoreTrigger(job.item, output) : scoreRouting(job.item, output, { actionsDir });
       } catch (e) {
         const base = job.kind === 'trigger'
           ? { kind: 'trigger', query: job.item.query, expected: job.item.should_trigger }
@@ -231,13 +327,17 @@ export async function runEvals({ triggers, stages, runModel, only, limit, concur
 
   const trig = results.filter((r) => r.kind === 'trigger');
   const rout = results.filter((r) => r.kind === 'routing');
+  const errored = results.filter((r) => r.error);
+  const scored = (rows) => rows.filter((r) => !r.error);
   return {
     skill: SKILL_NAME,
     prompts_sent: jobs.length,
     ...verdict(trig, rout, threshold),
-    errors: results.filter((r) => r.error).length,
-    trigger: { passed: trig.filter((r) => r.pass).length, total: trig.length },
-    routing: { passed: rout.filter((r) => r.pass).length, total: rout.length },
+    errors: errored.length,
+    error_reasons: [...new Set(errored.map((r) => r.error))],
+    // `total` counts only the prompts that were scored; errored ones are listed under `errors`.
+    trigger: { passed: trig.filter((r) => r.pass).length, total: scored(trig).length },
+    routing: { passed: rout.filter((r) => r.pass).length, total: scored(rout).length },
     results,
   };
 }
@@ -263,7 +363,8 @@ export function commandRunner(template, { timeoutS = 240, cwd = process.cwd() } 
     child.on('close', (code) => {
       clearTimeout(timer);
       if (dir) rmSync(dir, { recursive: true, force: true });
-      if (code !== 0 && out.trim() === '') reject(new Error(`command exited ${code}: ${err.trim().slice(0, 300)}`));
+      // A non-zero exit is an error unless the output is a real trace of what the model did (tools used, or stopped at max turns).
+      if (code !== 0 && !isRealOutcome(out)) reject(new Error(`command exited ${code}: ${(modelCallError(out) ?? (err.trim() || 'no error output')).slice(0, 300)}`));
       else resolveRun(out);
     });
     if (!template.includes('{prompt_file}')) child.stdin.end(prompt);
@@ -329,16 +430,19 @@ export async function main(argv, { log = console.log, loadFrom = HERE } = {}) {
     ...(o.limit ? { limit: o.limit } : {}),
     concurrency: o.concurrency,
     threshold: o.threshold,
-    onProgress: (n, total, row) => log(`[${n}/${total}] ${row.pass ? 'pass' : 'FAIL'} ${row.kind} ${row.kind === 'trigger' ? row.query.slice(0, 60) : row.name}${row.error ? ` (error: ${row.error})` : ''}`),
+    onProgress: (n, total, row) => log(`[${n}/${total}] ${row.error ? 'ERROR' : row.pass ? 'pass' : 'FAIL'} ${row.kind} ${row.kind === 'trigger' ? row.query.slice(0, 60) : row.name}${row.error ? ` (error: ${row.error})` : ''}`),
   });
   writeFileSync(out, `${JSON.stringify({ ran_at: new Date().toISOString(), command: o.cmd, ...report }, null, 2)}\n`);
   log('');
   log(`Triggering:    ${report.trigger.passed}/${report.trigger.total} (${pct(report.trigger_rate)})`);
   log(`Stage routing: ${report.routing.passed}/${report.routing.total} (${pct(report.routing_rate)})`);
-  if (report.errors > 0) log(`Errors: ${report.errors} prompt(s) failed to run; they count as failures.`);
+  if (report.errors > 0) {
+    log(`Errors: ${report.errors} prompt(s) never got a model answer (${report.error_reasons.join('; ')}). They are left out of both rates.`);
+    log(report.verdict === 'FAIL' ? 'Still FAIL even if every errored prompt had passed.' : 'The skill was not tested on those prompts: fix the command or the sign-in and run again.');
+  }
   log(`Verdict (each at least ${pct(o.threshold)}): ${report.verdict}`);
   log(`Results: ${out}`);
-  return report.verdict === 'PASS' ? 0 : 1;
+  return report.verdict === 'PASS' ? 0 : report.verdict === 'INCONCLUSIVE' ? 3 : 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

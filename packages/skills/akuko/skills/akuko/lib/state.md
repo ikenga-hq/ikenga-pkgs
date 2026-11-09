@@ -49,8 +49,8 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 | 4 | keyframes | `keyframes` | WP-22 |
 | 5 | motion | `motion` | WP-10 · WP-11 |
 | 6 | sound | `sound` | WP-12 |
-| 7 | assemble | `assemble` | WP-13 · WP-15 |
-| 8 | export | `export` | WP-15 |
+| 7 | assemble | `assemble` | WP-13 (stub) |
+| 8 | export | `export` | WP-23 (Resolve handoff) |
 
 ### 0 intake
 *Action: `actions/intake.md`; code `../breakdown/intake.ts`. Free.*
@@ -69,7 +69,7 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - Writes `[[sc<N>_sh<M>]]` notes into `script/screenplay.fountain` (or `script/source.md` on the direct route).
 - Ids are allocated by code, never by the agent; numbers are never reused; a shot inserted later takes a letter (`sc3_sh2A`).
 - Idempotent: if `scenes[]` or `shots[]` is not empty, nothing is created and only missing tags are added. Lint errors (over 10 s, over 2 principals, no duration, no action, no scene) stop the write; a shot under 5 s or a non-canonical id is only a warning.
-- Hand-off: the checklist entries are units of stage `breakdown`, so the breakdown is `approved` only when every shot **and** every checklist entry is approved. The bible stage (WP-05, not built yet) then starts from the approved entries; the sketch board reads `shots[]`.
+- Hand-off: the checklist entries are units of stage `breakdown`, so the breakdown is `approved` only when every shot **and** every checklist entry is approved. The bible stage then starts from the approved entries; the sketch board reads `shots[]`.
 
 ### 2 sketch
 *Action: `actions/board.md`; code `../board/`. Free.*
@@ -106,13 +106,13 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - **Every image goes through `gate.run()`.** The default job is **one shot** (the next one ready), id `job_kf_<hash>_r<n>`, so each `approve-spend` binds to the amount shown for that one frame (`approve <amount> <CUR>`). The hash covers the **units, the provider and the model**: asking again with another model (even a cheaper one) is a new job and needs a fresh approval, and the gate refuses another provider under an approved id. `--scene <id>` or `--units a,b` makes one job for several frames and one approval for the total. Paid: the gate writes the `pending_spend` entry, a person approves, then it runs and `collect()` records the file. Manual: free; the prompt package goes out and the file comes back through `ingest()`. `stages.keyframes` is `waiting-spend` while an approval is awaited, `in-progress` while frames are being made, `in-review` once everything made waits for a person.
 - **Status moves** (the only ones this stage makes): `pending → draft` when a job is cleared to run; a frame a person sent back (`needs-rework`) becomes `draft` with its old file cleared (it stays stored; the "Revised: …" comment names it), the person's words go into the prompt, the new take fills the same asset, and a regeneration is a new job id (`…_r<n+1>`) with its own approval. `pending-review` is set by the gate or the manual provider on output. If the gate does not accept the run, the units are put back exactly as they were. **Nothing here writes `approved`.**
 - **One code-side repair** (as in §3). A key frame that is `approved` or `pending-review` must have a file. If one has none (an `undo` restored its status after a revision cleared the file), `finalizeKeyframes()` sets it back to `pending` with "Revised: restored without an image; needs generating", and the stage leaves `approved`. Allowed only because no image exists; readiness never reports `approved` without a file.
-- **Superseded references are flagged, never rewritten.** Each take carries `from:<bible asset id>@<fingerprint>` tags (the bible stage's format) for the images it was made from. `status` flags a key frame whose turnaround, plate or lookbook has since been sent back, un-approved or replaced. Code never changes the key frame; only a person sends it back. The at-scale continuity audit is WP-14 (Phase 2).
+- **Superseded references are flagged, never rewritten.** Each take carries `from:<bible asset id>@<fingerprint>` tags (the bible stage's format) for the images it was made from. `status` flags a key frame whose turnaround, plate or lookbook has since been sent back, un-approved or replaced. Code never changes the key frame; only a person sends it back. The at-scale continuity audit is built: see `actions/keyframes.md` §Audit and `../audit/` (below).
 - **Produces** a key-frame asset (`<shot>_keyframe`, `file`, `by_stage.keyframes.output`) owned by each shot. Motion (stage 5) reads the approved asset.
 - Idempotent: `plan` adds only missing assets; asking for a job twice before its file is back gives the same job id and one pending entry.
 - **Continuity audit (WP-14, advisory).** `audit/` (`auditProject(project) → AuditReport`, pure) checks every made key frame structurally (references used, references still current, characters in the prompt, at most 2 principals, one model per scene, the right lookbook) and takes the agent's own visual notes (`audit record`). It writes `board/audit.json` and `board/audit.md`, and the agent's `Audit: ... (audit <run>)` comments on the frames; re-running swaps only those. **It moves no status**: only a person sends a frame back, into the normal `needs-rework` flow. Motion may call the summary.
 
 ### 5 motion
-*Action: `actions/motion.md`; code `../motion/`. Paid, or free through the manual provider. WP-10 (clips); HTML scenes are WP-11's and are not wired in yet.*
+*Action: `actions/motion.md`; code `../motion/`. Paid, or free through the manual provider. WP-10 (clips). HTML scenes are WP-11's: the HyperFrames engine (`../engines/hyperframes/`) and `../blocks/` are built, but this action does not use them yet.*
 
 - **Opens** when every earlier stage, through `keyframes`, is approved. `plan` refuses otherwise and names the stage that is waiting.
 - **The review unit is one planned asset per shot**: `<shot>_clip`, kind `clip`, stage `motion`, owner = the shot, status `pending`, no file yet (the same shape as §4). The shot and its key frame are never touched; the provider fills the asset in place; folding approves `stages.motion` when a person has approved every clip.
@@ -139,7 +139,7 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - Known edges: ingesting a second audio file for a unit that already has one files a separate asset (the manual provider's rule; use `words` to add timings later); on host A, where `storeAsset` may register every stored file as an asset, the words, narration and caption files would show up as units (follow-up).
 
 ### 7 assemble
-*WP-13 / WP-15 fill this.*
+*Not built: `actions/assemble.md` is still a stub (WP-13). It tells the person so and stops.*
 
 ### 8 export
 *Action: `actions/export.md`; code `../handoff/` (WP-23). Free.*
