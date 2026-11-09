@@ -45,7 +45,7 @@ export const isClip = (a: Asset): boolean => a.stage === MOTION_STAGE && a.tags.
 export const clipAssets = (p: AkukoProject): Asset[] => p.assets.filter(isClip);
 
 const hasFile = (a: Asset | undefined): boolean => a?.file !== undefined;
-const approvedWithFile = (a: Asset | undefined): a is Asset => a !== undefined && a.status === 'approved' && hasFile(a);
+const approvedWithFile = (a: Asset | undefined): boolean => a !== undefined && a.status === 'approved' && hasFile(a);
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`;
 const money = (n: number): string => String(Number(n.toFixed(4)));
 const hash8 = (s: string): string => createHash('sha1').update(s).digest('hex').slice(0, 8);

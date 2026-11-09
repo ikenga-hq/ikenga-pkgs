@@ -111,7 +111,16 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 - Idempotent: `plan` adds only missing assets; asking for a job twice before its file is back gives the same job id and one pending entry.
 
 ### 5 motion
-*WP-10 / WP-11 fill this (Phase 2).*
+*Action: `actions/motion.md`; code `../motion/`. Paid, or free through the manual provider. WP-10 (clips); HTML scenes are WP-11's and are not wired in yet.*
+
+- **Opens** when every earlier stage, through `keyframes`, is approved. `plan` refuses otherwise and names the stage that is waiting.
+- **The review unit is one planned asset per shot**: `<shot>_clip`, kind `clip`, stage `motion`, owner = the shot, status `pending`, no file yet (the same shape as §4). The shot and its key frame are never touched; the provider fills the asset in place; folding approves `stages.motion` when a person has approved every clip.
+- **Start frame and prompt.** The start frame is the shot's approved key frame (`JobRef role: 'start-frame'`); a clip whose key frame is not approved with a file is `blocked`. The length is the shot's `duration_s` (a shot with none is refused), changed to the nearest length the model makes (ties go shorter) with a note to say so. The prompt is the shot's written action, camera and move; nothing is invented.
+- **Every clip goes through `gate.run()`.** Default job is one shot, id `job_mo_<hash>_r<n>`; the hash covers units, provider, model, each clip's seconds and the sound choice, so any of them changing is a new job with a fresh approval. The job label carries the per-second arithmetic the spend line shows. `--scene` / `--units` give one approval for several clips.
+- **Retry cap per shot** (in `motion/`, not the spend gate): paid attempts = ledger entries for the clip that are `done` or `failed` from a paid provider (manual takes excluded). Default 3; at the cap `step` refuses with the count and the money spent on that shot. `--max-attempts N` raises it, and an agent passes it only when the person asked in their own words.
+- **Sound is off by default.** Where a model can make sound it is a separate model id in config (`...#audio`) with its own price; `--audio` selects it.
+- **Stage state**: `waiting-spend` while an approval is awaited, `in-progress` while clips are being made, `in-review` once everything made waits for a person; `approved` only by folding. Status moves, send-back handling and the fileless repair are as in §4. **Nothing here writes `approved`.**
+- **Produces** a clip asset (`<shot>_clip`, `file`, `by_stage.motion.output`) owned by each shot.
 
 ### 6 sound
 *WP-12 fills this (Phase 2).*
