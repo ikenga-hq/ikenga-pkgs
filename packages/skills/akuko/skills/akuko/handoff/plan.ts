@@ -128,6 +128,9 @@ const ext = (uri: string): string => {
   return i > 0 ? base.slice(i).toLowerCase() : '';
 };
 
+/** Planned but never made (status pending, no file): nothing to say about it. */
+const started = (a: Asset): boolean => a.status !== 'pending' || a.file !== undefined;
+
 const usable = (a: Asset | undefined): a is Asset & { file: NonNullable<Asset['file']> } => a !== undefined && a.status === 'approved' && a.file !== undefined;
 
 function whyNot(a: Asset, exists: (uri: string) => boolean): string {
@@ -231,8 +234,8 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
       leftOut.push({ unit: shot.id, what: 'shot', why: 'missing: no approved clip or key frame, so a gap of the shot\'s length stands in' });
     }
     // The ones that could have been used but were not: say so, with their status.
-    if (clip && used !== 'clip') leftOut.push({ unit: clip.id, what: 'clip', why: whyNot(clip, exists) });
-    if (still && used === 'gap') leftOut.push({ unit: still.id, what: 'key frame', why: whyNot(still, exists) });
+    if (clip && used !== 'clip' && started(clip)) leftOut.push({ unit: clip.id, what: 'clip', why: whyNot(clip, exists) });
+    if (still && used === 'gap' && started(still)) leftOut.push({ unit: still.id, what: 'key frame', why: whyNot(still, exists) });
     shots.push({ n, shot: shot.id, frames: slot, recIn: t, uses: used });
     t += slot;
   }
@@ -249,7 +252,7 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
     const shot = p.shots.find((s) => s.id === a.owner);
     if (!shot) continue;
     if (!usable(a) || !exists(a.file.uri)) {
-      if (a.status !== 'pending' || a.file) leftOut.push({ unit: a.id, what: 'voice-over', why: whyNot(a, exists) });
+      if (started(a)) leftOut.push({ unit: a.id, what: 'voice-over', why: whyNot(a, exists) });
       continue;
     }
     const start = shotStart.get(shot.id);
@@ -279,7 +282,7 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
   for (const a of p.assets) {
     if (a.stage !== 'sound' || (a.kind !== 'music' && a.kind !== 'sfx')) continue;
     if (!usable(a) || !exists(a.file.uri)) {
-      leftOut.push({ unit: a.id, what: a.kind, why: whyNot(a, exists) });
+      if (started(a)) leftOut.push({ unit: a.id, what: a.kind, why: whyNot(a, exists) });
       continue;
     }
     const role = a.kind as 'music' | 'sfx';
