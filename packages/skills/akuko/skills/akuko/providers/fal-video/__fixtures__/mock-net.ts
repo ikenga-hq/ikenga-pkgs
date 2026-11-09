@@ -18,6 +18,10 @@ export interface FalVideoMockOptions {
   error?: (n: number) => string | undefined;
   /** Request number -> true when its result has no video. */
   noVideo?: (n: number) => boolean;
+  /** Request number -> status text for that request (overrides `status`). */
+  statusFor?: (n: number) => string | undefined;
+  /** Request number -> how reading its result fails: a 5xx, a 4xx or a network error. */
+  resultFail?: (n: number) => '5xx' | '4xx' | 'throw' | undefined;
 }
 
 export function mockFalVideo(opts: FalVideoMockOptions = {}): MockNet {
@@ -41,7 +45,13 @@ export function mockFalVideo(opts: FalVideoMockOptions = {}): MockNet {
     const req = Number(/requests\/req(\d+)/.exec(u)?.[1] ?? 0);
     if (u.endsWith('/status')) {
       const error = opts.error?.(req);
-      return json({ status: opts.status?.() ?? 'COMPLETED', ...(error ? { error } : {}) });
+      return json({ status: opts.statusFor?.(req) ?? opts.status?.() ?? 'COMPLETED', ...(error ? { error } : {}) });
+    }
+    if (u.startsWith('https://queue.fal.run/') && !u.endsWith('/status')) {
+      const fail = opts.resultFail?.(req);
+      if (fail === 'throw') throw new TypeError('network down');
+      if (fail === '5xx') return new Response('bad gateway', { status: 502 });
+      if (fail === '4xx') return new Response('gone', { status: 404 });
     }
     if (u.startsWith('https://queue.fal.run/') && opts.noVideo?.(req)) return json({ detail: 'nothing' });
     if (u.startsWith('https://queue.fal.run/')) return json({ video: { url: 'https://v3.fal.media/files/out.mp4', content_type: 'video/mp4' } });

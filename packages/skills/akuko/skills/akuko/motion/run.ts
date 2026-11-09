@@ -22,6 +22,8 @@ export interface StepDeps {
   host: WaveOneHost;
   gate: SpendGate;
   now?: () => string;
+  /** Called as soon as a job is submitted and before anything is collected, so a caller can save the handle: if collecting then fails, the reservation can still be recovered with `collect`. */
+  onSubmitted?: (job: Job, handle: JobHandle) => Promise<void>;
 }
 
 export interface StepOptions {
@@ -105,13 +107,20 @@ async function runJob(deps: StepDeps, job: Job, units: string[]): Promise<StepRe
     return { status: 'failed', job, error: r.error };
   }
 
+  await deps.onSubmitted?.(job, r.handle);
   if (!q.paid) return { status: 'handoff', job, handle: r.handle, text: r.handle.handoff?.text ?? '' };
   return collectClips(deps, job, r.handle, r.cost.amount);
 }
 
 /** Poll a submitted job; when it is finished the gate records the files and the stage state is refreshed. */
 export async function collectClips(deps: StepDeps, job: Job, handle: JobHandle, estimate = 0): Promise<StepResult> {
-  const c = await deps.gate.collect(handle);
+  let c: Awaited<ReturnType<SpendGate['collect']>>;
+  try {
+    c = await deps.gate.collect(handle);
+  } catch (err) {
+    // Polling or the download failed. The money is still reserved and nothing is lost: keep the job and try again.
+    return { status: 'running', job, handle, message: `could not finish collecting yet (${err instanceof Error ? err.message : String(err)}); the clip is not lost` };
+  }
   const s: JobStatus = c.status;
   if (s.state === 'queued' || s.state === 'running' || s.state === 'waiting-for-input') {
     return { status: 'running', job, handle, message: s.message ?? s.state };

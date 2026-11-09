@@ -36,7 +36,7 @@ import {
   refreshStageState,
   unitReadiness,
 } from './plan.ts';
-import { finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
+import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
 import { approve, approveSpend, decision, fold, keyframesApproved } from './__fixtures__/project.ts';
 
 const NOW = '2026-11-09T10:00:00Z';
@@ -538,5 +538,42 @@ describe('a batch that partly fails', () => {
     assert.notEqual(retry.job.id, first.job.id);
     assert.ok(retry.status === 'awaiting-approval' && Math.abs(retry.estimate - 0.35) < 1e-9);
     assert.equal(r.net!.calls.filter((c) => c.method === 'POST').length, posts, 'nothing was sent');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('collecting can fail without losing the job', () => {
+  it('the job is handed over as soon as it is submitted; a failing collect comes back as running, and collect later records the clip', async () => {
+    let broken = true;
+    const r = rig('fal-video', funded(), 'B', mockFalVideo({ resultFail: () => (broken ? '5xx' : undefined) }));
+    const saved: Array<{ id: string; ref: string }> = [];
+    const d = { ...deps(r), onSubmitted: async (job: { id: string }, handle: { ref: string }) => { saved.push({ id: job.id, ref: handle.ref }); } };
+    const first = await generateClips(d, { provider: 'fal-video', units: [CLIP1] });
+    assert.equal(first.status, 'awaiting-approval');
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'motion').project);
+
+    const step = await generateClips(d, { provider: 'fal-video', units: [CLIP1] });
+    assert.equal(step.status, 'running', JSON.stringify(step));
+    assert.equal(saved.length, 1, 'saved before collecting');
+    assert.equal(saved[0]!.id, first.job.id);
+    assert.ok(r.host.peek().ledger.every((e) => e.status === 'submitted'), 'the reservation is held, and the saved job can release it');
+    assert.equal(asset(r.host.peek(), CLIP1).status, 'draft');
+
+    broken = false;
+    if (step.status !== 'running') return;
+    const done = await collectClips(d, step.job, step.handle);
+    assert.equal(done.status, 'done', JSON.stringify(done));
+    assert.equal(asset(r.host.peek(), CLIP1).status, 'pending-review');
+    assert.ok(Math.abs((r.host.peek().budget?.spent ?? 0) - 0.7) < 1e-9);
+  });
+
+  it('a collect that throws is reported as running, never thrown', async () => {
+    const r = rig('fal-video', funded());
+    const first = await generateClips(deps(r), { provider: 'fal-video', units: [CLIP1] });
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'motion').project);
+    const gate = { quote: r.gate.quote, run: r.gate.run, collect: async () => { throw new Error('offline'); } };
+    const step = await generateClips({ ...deps(r), gate }, { provider: 'fal-video', units: [CLIP1] });
+    assert.equal(step.status, 'running');
+    assert.match(step.status === 'running' ? step.message : '', /could not finish collecting yet \(offline\)/);
   });
 });

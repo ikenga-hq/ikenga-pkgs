@@ -249,6 +249,61 @@ describe('fal video: result problems release the reservation', () => {
   });
 });
 
+describe('fal video: transient and final result problems', () => {
+  it('a 5xx or a network error reading the result is not final: the job stays running and a later collect records the clip', async () => {
+    for (const kind of ['5xx', 'throw'] as const) {
+      let broken = true;
+      const s = setup(mockFalVideo({ resultFail: () => (broken ? kind : undefined) }));
+      const j = { ...job(), items: [job().items[0]!] };
+      const r = await approveAndRun(s, j);
+      if (r.status !== 'submitted') throw new Error('not submitted');
+      const c1 = await s.gate.collect(r.handle);
+      assert.equal(c1.status.state, 'running', kind);
+      assert.ok(s.host.peek().ledger.every((e) => e.status === 'submitted'), 'the reservation is still held, not written off');
+      broken = false;
+      const c2 = await s.gate.collect(r.handle);
+      assert.equal(c2.status.state, 'done', kind);
+      assert.equal(c2.assets.length, 1);
+      assert.ok(s.host.peek().ledger.every((e) => e.status === 'done' && (e.actual ?? 0) > 0), 'billed once the clip is recorded');
+    }
+  });
+
+  it('a 4xx reading the result is final: failed, released, unbilled', async () => {
+    const s = setup(mockFalVideo({ resultFail: () => '4xx' }));
+    const j = { ...job(), items: [job().items[0]!] };
+    const r = await approveAndRun(s, j);
+    if (r.status !== 'submitted') throw new Error('not submitted');
+    const c = await s.gate.collect(r.handle);
+    assert.equal(c.status.state, 'failed');
+    assert.match(c.status.message ?? '', /HTTP 404/);
+    assert.ok(s.host.peek().ledger.every((e) => e.status === 'failed'));
+  });
+
+  it('an unexpected queue status is final for that unit: it is left out of fetch and settles at 0', async () => {
+    const s = setup(mockFalVideo({ statusFor: (n) => (n === 2 ? 'CANCELLED' : undefined) }));
+    const r = await approveAndRun(s, job());
+    if (r.status !== 'submitted') throw new Error('not submitted');
+    const st = await s.provider.poll(r.handle);
+    assert.equal(st.state, 'done');
+    assert.deepEqual(st.actual, { sc1_sh2: 0 });
+    const c = await s.gate.collect(r.handle);
+    assert.deepEqual(c.assets.map((a) => a.id), ['sc1_sh1-motion']);
+  });
+
+  it('when every clip of a batch fails the batch is failed and nothing is billed', async () => {
+    const s = setup(mockFalVideo({ error: () => 'content policy' }));
+    const r = await approveAndRun(s, job());
+    if (r.status !== 'submitted') throw new Error('not submitted');
+    const c = await s.gate.collect(r.handle);
+    assert.equal(c.status.state, 'failed');
+    assert.match(c.status.message ?? '', /sc1_sh1: content policy.*sc1_sh2: content policy/);
+    assert.equal(c.assets.length, 0);
+    const p = s.host.peek();
+    assert.ok(p.ledger.length === 2 && p.ledger.every((e) => e.status === 'failed' && (e.actual ?? 0) === 0));
+    assert.equal(p.budget?.spent, 0);
+  });
+});
+
 describe('fal video: limits and config', () => {
   it('fitSeconds covers the shot by default and can be told to take the nearest', () => {
     assert.deepEqual(fitSeconds(6, [5, 10]), { seconds: 10, changed: true, capped: false });

@@ -42,6 +42,8 @@ export const AUDIO_SUFFIX = '#audio';
 
 export class FalVideoError extends Error {
   override name = 'FalVideoError';
+  /** True when trying again later may work (a 5xx or a network error), so the clip must not be written off: fal may already have billed it. */
+  transient = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -184,9 +186,21 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
     const at = queueUrl(e.response_url);
     const hit = videoUrls.get(at);
     if (hit) return hit;
-    const res = await fetchOf(opts.fetch)(at, { headers: headers(false) });
+    const transient = (m: string): FalVideoError => Object.assign(new FalVideoError(m), { transient: true });
+    let res: Response;
+    try {
+      res = await fetchOf(opts.fetch)(at, { headers: headers(false) });
+    } catch (err) {
+      throw transient(`could not reach fal for the result (${err instanceof Error ? err.message : String(err)})`);
+    }
+    if (res.status >= 500) throw transient(`fal result HTTP ${res.status}`);
     if (!res.ok) throw new FalVideoError(`fal result HTTP ${res.status}`);
-    const r = (await res.json()) as { video?: { url?: string } };
+    let r: { video?: { url?: string } };
+    try {
+      r = (await res.json()) as { video?: { url?: string } };
+    } catch (err) {
+      throw transient(`fal's result could not be read (${err instanceof Error ? err.message : String(err)})`);
+    }
     if (!r.video?.url) throw new FalVideoError('fal returned no video');
     videoUrls.set(at, r.video.url);
     return r.video.url;
@@ -279,11 +293,16 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
                 await readVideoUrl(e);
                 done++;
               } catch (err) {
-                bad.add(e.unit);
-                errors.push(`${e.unit}: ${err instanceof Error ? err.message : String(err)}`);
+                // A 5xx or a network error may pass: fal has finished (and billed) the clip, so leave it running and
+                // let a later collect try again. Only a 4xx or a result with no video is final.
+                if (!(err instanceof FalVideoError && err.transient)) {
+                  bad.add(e.unit);
+                  errors.push(`${e.unit}: ${err instanceof Error ? err.message : String(err)}`);
+                }
               }
             }
           } else if (s.status !== 'IN_QUEUE' && s.status !== 'IN_PROGRESS') {
+            bad.add(e.unit);
             errors.push(`${e.unit}: unexpected status ${String(s.status)}`);
           }
         }

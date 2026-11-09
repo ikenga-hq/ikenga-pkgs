@@ -55,6 +55,10 @@ All commands: `node --experimental-strip-types ../motion/cli.ts <command> --proj
 7. **Stop at the review gate.** Everything made is `pending-review` and the stage is `in-review`. The person reviews each clip on the board. Don't call anything approved.
 8. **After the person's answers**: fold, `sync`, then `step` again for the next shot.
 
+## When a clip is still running: `collect`
+
+A paid job is saved as soon as it is submitted. If `step` ends with "still running" (the provider has not finished, or reading or downloading the result failed for now), the money is reserved and nothing is lost: run `collect --job <id>` (the id is in the message; it is safe to repeat) until it finishes, then tell the person the clips are ready for review. Do not run `step` again for it. If `collect` keeps failing with the same message, stop and tell the person what it says.
+
 ## After a failed run
 
 If a run fails (the provider refused it, the request failed, no clip came back), **tell the person what failed, in the command's words, and get their go-ahead before running `step` again.** Running it again retries the same job under the approval the person already gave, with no new spend line, so the person's go-ahead is the only check left. A batch (`--scene` / `--units`) can partly fail: the clips that were made are recorded and billed, and the command prints `NOT MADE: <clips>`. Those stay draft and were not billed. Tell the person which, and only if they agree run `step` for them: that is a new job with its own spend line and approval.

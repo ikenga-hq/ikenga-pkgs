@@ -75,7 +75,7 @@ function describeStatus(r: StepResult): CliResult {
     case 'failed':
       return { code: 1, out: `Failed: ${r.error}` };
     case 'running':
-      return { code: 0, out: `Job ${r.job.id} is still running (${r.message}). Run collect --job ${r.job.id} later.` };
+      return { code: 0, out: `Job ${r.job.id} is still running (${r.message}). Run collect --job ${r.job.id} again (it is safe to repeat).` };
     case 'done':
       return {
         code: 0,
@@ -125,7 +125,12 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
     const providers: Provider[] = [manual.provider, createFalVideoProvider(host, { now: clock, loadRef })];
     const gate = createSpendGate({ host, providers, level, now: clock });
-    const deps = { host, gate, now: clock };
+    // The job file is written the moment a job is submitted, before collecting, so `collect` can always pick it up.
+    const saveJob = async (job: Job, handle: JobHandle): Promise<void> => {
+      await mkdir(join(dir, 'motion', 'jobs'), { recursive: true });
+      await writeFileAtomic(jobFile(dir, job.id), `${JSON.stringify({ job, handle } satisfies SavedJob, null, 2)}${NL}`);
+    };
+    const deps = { host, gate, now: clock, onSubmitted: saveJob };
 
     if (cmd === 'step') {
       const provider = str(opt.get('provider'));
@@ -151,10 +156,6 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(max !== undefined ? { maxAttempts: Number(max) } : {}),
         ...(fit !== undefined ? { fit } : {}),
       });
-      if (r.status === 'handoff' || r.status === 'running') {
-        await mkdir(join(dir, 'motion', 'jobs'), { recursive: true });
-        await writeFileAtomic(jobFile(dir, r.job.id), `${JSON.stringify({ job: r.job, handle: r.handle } satisfies SavedJob, null, 2)}${NL}`);
-      }
       return describe(r);
     }
 
