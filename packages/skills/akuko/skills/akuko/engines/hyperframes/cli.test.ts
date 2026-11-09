@@ -195,10 +195,15 @@ describe('render', () => {
   it('parses the summary line', () => {
     assert.deepEqual(parseRenderSummary(RENDER_LOG), {
       frames: 180,
+      videoSeconds: null,
       renderedInSeconds: 82.9,
       pipeline: 'screenshot capture · hardware gpu · compile 3.6s · extract 0.0s · audio 0.0s · probe 0.6s · setup 26.5s · capture 47.1s · encode 0.7s',
     });
-    assert.deepEqual(parseRenderSummary('nothing'), { frames: null, renderedInSeconds: null, pipeline: null });
+    assert.deepEqual(parseRenderSummary('nothing'), { frames: null, videoSeconds: null, renderedInSeconds: null, pipeline: null });
+    const mp4 = parseRenderSummary('◇  out.mp4\n   412 KB · 6.0s video · rendered in 57.1s\n   screenshot capture · hardware gpu · setup 15.8s · capture 36.7s');
+    assert.equal(mp4.videoSeconds, 6);
+    assert.equal(mp4.frames, null);
+    assert.equal(mp4.renderedInSeconds, 57.1);
     assert.equal(parseDuration('48.2s'), 48.2);
     assert.equal(parseDuration('1h 2m 3s'), 3723);
   });
@@ -222,6 +227,10 @@ describe('render-time estimate (R-10)', () => {
     assert.match(estimateRender({ durationSeconds: 70, secondsPerFrame: 0.3, setupSeconds: 30 }).text, /^about 11 min \(2100 frames\)$/);
   });
 
+  it('defaults to the measured fit (rough)', () => {
+    assert.equal(estimateRender({ durationSeconds: 6 }).text, 'about 74 s (180 frames)');
+  });
+
   it('draft halves the frames', () => {
     assert.equal(estimateRender({ durationSeconds: 6, profile: 'draft' }).frames, 90);
     assert.throws(() => estimateRender({ durationSeconds: 0 }), RangeError);
@@ -230,5 +239,6 @@ describe('render-time estimate (R-10)', () => {
   it('calibrates seconds per frame from a finished render', () => {
     assert.ok(Math.abs((secondsPerFrameFrom({ frames: 180, renderedInSeconds: 84 }, 30) ?? 0) - 0.3) < 1e-9);
     assert.equal(secondsPerFrameFrom({ frames: null, renderedInSeconds: 84 }), null);
+    assert.ok(Math.abs((secondsPerFrameFrom({ frames: null, videoSeconds: 6, renderedInSeconds: 84 }, 30) ?? 0) - 0.3) < 1e-9);
   });
 });

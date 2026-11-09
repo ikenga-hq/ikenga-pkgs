@@ -106,7 +106,46 @@ export HYPERFRAMES_BROWSER_PATH="C:\Program Files\Google\Chrome\Application\chro
 node --experimental-strip-types engines/hyperframes/verify-blocks.ts --hf <hyperframes.mjs> --out <scratch> --snapshot
 ```
 
-RESULTS_PLACEHOLDER
+Each block was mounted alone in a 5 s slot (`hostHtml`), and then all eight together in the
+showcase. Counts are errors/warnings/infos:
+
+| block | `lint` | `check` | runtime | layout | contrast | craft warnings |
+|---|---|---|---|---|---|---|
+| stat | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty` |
+| reveal-list | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty` |
+| highlight-words | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty` |
+| ken-burns | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty` |
+| annotation | ok 0/0/0 | ok | ok | ok | ok | none |
+| chat-bubble | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty` |
+| avatar-badge | ok 0/0/0 | ok | ok | ok | ok | none |
+| caption-bar | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty`, `line_unread` (#cap-phrase-2) |
+| showcase (all eight) | ok 0/0/0 | ok | ok | ok | ok | `first_frame_empty`, `film_silent`, `dead_stretch`, `line_unread` |
+
+What the warnings mean here:
+
+- **`first_frame_empty`**: the block enters from nothing at 0 s. Blocks are inserts inside a
+  film, not stand-alone films whose first frame is a thumbnail, so this is by design.
+- **`line_unread` on CaptionBar**: HyperFrames wants 0.5 s + 0.3 s per word for each phrase,
+  and at least 2 s for a closing line. The three default phrases need about 6.5 s, and the
+  test slot is 5 s. Set `t1`–`t3` for the real copy and slot length.
+- **`film_silent` and `dead_stretch`**: these apply only to the 40 s showcase, which is a
+  test bench with no sound and with gaps between blocks.
+
+Each block's `audio_none` info is the same point as `film_silent`. The scratch snapshot
+contact sheets were checked by eye: every block draws its default copy in the vendored
+fonts.
+
+Render time for the same setup (6 s 1920×1080 G-01 composition, MP4 through
+`engines/hyperframes/cli.ts` `render()` with `HYPERFRAMES_BROWSER_PATH` set):
+
+| profile | output | wall clock | HyperFrames "rendered in" | breakdown |
+|---|---|---|---|---|
+| final (`--quality delivery`, 30 fps) | 180 frames | 72.5 s | 57.1 s | setup 15.8 s, capture 36.7 s, encode 0.8 s |
+| draft (`--quality draft --fps 15`) | 90 frames | 55.2 s | 41.6 s | setup 15.4 s, capture 22.7 s, encode 0.8 s |
+
+`estimateRender()` is fitted to these two runs: 0.2 s per frame plus 38 s. It is rough
+(R-10). The spike measured 2–3 minutes for the same length on the same machine under
+different load.
 
 ## Out of scope here
 

@@ -316,8 +316,10 @@ export interface RenderResult {
   output: string;
   /** Wall clock of the whole CLI call. */
   ms: number;
-  /** What HyperFrames reports on its summary line, when it prints one. */
+  /** What HyperFrames reports on its summary line, when it prints one: frames for a PNG sequence, */
   frames: number | null;
+  /** … the output's length in seconds for a video file. */
+  videoSeconds: number | null;
   renderedInSeconds: number | null;
   /** e.g. "screenshot capture · hardware gpu · …" */
   pipeline: string | null;
@@ -345,15 +347,20 @@ export function parseDuration(text: string): number | null {
   return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3]);
 }
 
-/** Pull frames, render time and pipeline from HyperFrames' summary lines. */
-export function parseRenderSummary(log: string): Pick<RenderResult, 'frames' | 'renderedInSeconds' | 'pipeline'> {
+/**
+ * Pull frames (PNG sequence) or video length (MP4 …), render time and pipeline from
+ * HyperFrames' summary lines, e.g. "1.3 MB · 6.0s video · rendered in 57.1s".
+ */
+export function parseRenderSummary(log: string): Pick<RenderResult, 'frames' | 'videoSeconds' | 'renderedInSeconds' | 'pipeline'> {
   const lines = log.split(/\r?\n/);
   const summary = lines.find((l) => /rendered in/.test(l));
   const frames = summary ? /(\d+)\s+frames/.exec(summary)?.[1] : undefined;
+  const video = summary ? /·\s*([^·]+?)\s+video\b/.exec(summary)?.[1] : undefined;
   const after = summary ? summary.slice(summary.indexOf('rendered in') + 'rendered in'.length) : '';
   const pipeline = lines.find((l) => /\bcapture\b.*·/.test(l) && !/rendered in/.test(l))?.trim() ?? null;
   return {
     frames: frames ? Number(frames) : null,
+    videoSeconds: video ? parseDuration(video) : null,
     renderedInSeconds: summary ? parseDuration(after) : null,
     pipeline,
   };
@@ -370,13 +377,15 @@ export async function render(dir: string, o: RenderOptions, opts: EngineOptions 
 // ------------------------------------------------------------------ render-time estimate (R-10)
 
 /**
- * Measured on one Windows dev laptop (Intel UHD 630, system Chrome, 6 workers, HyperFrames
- * 0.9.19), 6 s 1920x1080 compositions at 30 fps: see engines/hyperframes/G-01.md §Render time.
- * Rough by design: real time varies with the machine, the composition and what else runs.
+ * Wall clock of a whole `render` call, fitted to two MP4 renders of the 6 s 1920x1080 G-01
+ * composition through this wrapper on one Windows laptop (Intel UHD 630, system Chrome,
+ * 6 workers, HyperFrames 0.9.19): final 180 frames in 72.5 s, draft 90 frames in 55.2 s
+ * (G-01.md §Render time). Rough by design (R-10): the machine, the composition and whatever
+ * else is running all move it. Calibrate with secondsPerFrameFrom() on the machine in use.
  */
 export const MEASURED = {
-  secondsPerFrame: 0.3,
-  setupSeconds: 30,
+  secondsPerFrame: 0.2,
+  setupSeconds: 38,
 } as const;
 
 export interface EstimateInput {
@@ -404,8 +413,16 @@ export function estimateRender(i: EstimateInput): RenderEstimate {
   return { frames, seconds, text };
 }
 
-/** Seconds per frame from a finished render, to calibrate the estimate on this machine. */
-export function secondsPerFrameFrom(r: Pick<RenderResult, 'frames' | 'renderedInSeconds'>, setupSeconds: number = MEASURED.setupSeconds): number | null {
-  if (!r.frames || r.renderedInSeconds === null) return null;
-  return Math.max(0, r.renderedInSeconds - setupSeconds) / r.frames;
+/**
+ * Seconds per frame from a finished render, to calibrate the estimate on this machine.
+ * Uses the frame count HyperFrames printed, or video length × fps (default 30) for a video.
+ */
+export function secondsPerFrameFrom(
+  r: Pick<RenderResult, 'frames' | 'renderedInSeconds'> & { videoSeconds?: number | null },
+  setupSeconds: number = MEASURED.setupSeconds,
+  fps = 30,
+): number | null {
+  const frames = r.frames ?? (r.videoSeconds ? Math.round(r.videoSeconds * fps) : null);
+  if (!frames || r.renderedInSeconds === null) return null;
+  return Math.max(0, r.renderedInSeconds - setupSeconds) / frames;
 }
