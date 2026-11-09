@@ -11,7 +11,16 @@ export const MP4_BYTES = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 
 const json = (v: unknown, status = 200): Response =>
   new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
 
-export function mockFalVideo(opts: { status?: () => string; failSubmit?: (n: number) => Response | undefined } = {}): MockNet {
+export interface FalVideoMockOptions {
+  status?: () => string;
+  failSubmit?: (n: number) => Response | undefined;
+  /** Request number (1-based, in submit order) -> error text fal reports when it completes that request. */
+  error?: (n: number) => string | undefined;
+  /** Request number -> true when its result has no video. */
+  noVideo?: (n: number) => boolean;
+}
+
+export function mockFalVideo(opts: FalVideoMockOptions = {}): MockNet {
   const calls: MockNet['calls'] = [];
   const f: FetchLike = async (url, init) => {
     const u = String(url);
@@ -29,7 +38,12 @@ export function mockFalVideo(opts: { status?: () => string; failSubmit?: (n: num
         response_url: `https://queue.fal.run/${app}/requests/req${posts}`,
       });
     }
-    if (u.endsWith('/status')) return json({ status: opts.status?.() ?? 'COMPLETED' });
+    const req = Number(/requests\/req(\d+)/.exec(u)?.[1] ?? 0);
+    if (u.endsWith('/status')) {
+      const error = opts.error?.(req);
+      return json({ status: opts.status?.() ?? 'COMPLETED', ...(error ? { error } : {}) });
+    }
+    if (u.startsWith('https://queue.fal.run/') && opts.noVideo?.(req)) return json({ detail: 'nothing' });
     if (u.startsWith('https://queue.fal.run/')) return json({ video: { url: 'https://v3.fal.media/files/out.mp4', content_type: 'video/mp4' } });
     return new Response(MP4_BYTES, { status: 200, headers: { 'content-type': 'video/mp4' } });
   };

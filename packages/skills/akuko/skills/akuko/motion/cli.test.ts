@@ -58,12 +58,29 @@ describe('motion cli', () => {
     assert.match((await run(['step', '--project', dir, '--provider', 'manual'], T)).out, /sc1_sh2_clip/);
   });
 
-  it('a paid provider with no budget is refused with the setup pointer', async () => {
-    const { dir } = await folder();
+  it('a paid provider with no key is a setup error before the gate (nothing sent or counted); with a key but no budget it is refused with the setup pointer', async () => {
+    const { dir, host } = await folder();
     await run(['plan', '--project', dir], T);
-    const r = await run(['step', '--project', dir, '--provider', 'fal-video'], T);
-    assert.equal(r.code, 1);
-    assert.match(r.out, /Run `\/akuko setup`/);
+    const keep = process.env.FAL_KEY;
+    try {
+      delete process.env.FAL_KEY;
+      const noKey = await run(['step', '--project', dir, '--provider', 'fal-video'], T);
+      assert.equal(noKey.code, 1);
+      assert.match(noKey.out, /Setup needed: FAL_KEY is not set/);
+      assert.equal((await host.readState()).ledger.length, 0);
+      assert.equal((await host.readState()).pending_spend.length, 0);
+      process.env.FAL_KEY = 'dummy-not-a-secret';
+      const r = await run(['step', '--project', dir, '--provider', 'fal-video'], T);
+      assert.equal(r.code, 1);
+      assert.match(r.out, /Run `\/akuko setup`/);
+    } finally {
+      if (keep === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = keep;
+    }
+  });
+
+  it('--fit must be cover or nearest', async () => {
+    const { dir } = await folder();
+    assert.equal((await run(['step', '--project', dir, '--provider', 'manual', '--fit', 'longest'], T)).code, 2);
   });
 
   it('plan reports a shot at the retry limit; step refuses it; --max-attempts must be a whole number', async () => {
@@ -76,10 +93,16 @@ describe('motion cli', () => {
     await host.writeState(p);
     assert.match((await run(['plan', '--project', dir], T)).out, /sc1_sh1_clip is at the retry limit \(3 paid attempts, 1\.05 spent\)/);
     assert.match((await run(['status', '--project', dir], T)).out, /3 paid attempts, 1\.05 spent/);
-    const r = await run(['step', '--project', dir, '--provider', 'fal-video', '--units', 'sc1_sh1_clip'], T);
-    assert.equal(r.code, 1);
-    assert.match(r.out, /3 paid attempts.*--max-attempts 4/);
-    assert.equal((await run(['step', '--project', dir, '--provider', 'fal-video', '--max-attempts', 'abc'], T)).code, 2);
+    const keep = process.env.FAL_KEY;
+    process.env.FAL_KEY = 'dummy-not-a-secret';
+    try {
+      const r = await run(['step', '--project', dir, '--provider', 'fal-video', '--units', 'sc1_sh1_clip'], T);
+      assert.equal(r.code, 1);
+      assert.match(r.out, /3 paid attempts.*--max-attempts 4/);
+      assert.equal((await run(['step', '--project', dir, '--provider', 'fal-video', '--max-attempts', 'abc'], T)).code, 2);
+    } finally {
+      if (keep === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = keep;
+    }
   });
 
   it('needs --project and a known command', async () => {

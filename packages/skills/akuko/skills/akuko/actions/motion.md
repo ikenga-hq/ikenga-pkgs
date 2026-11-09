@@ -41,19 +41,23 @@ The unit is one planned asset per shot (`sc1_sh1_clip`, kind `clip`), owned by t
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../motion/cli.ts <command> --project <folder>` (B and C). On host A there is no code: follow the same steps with the manual provider and the rules in `../lib/spend.md` §Host A.
+All commands: `node --experimental-strip-types ../motion/cli.ts <command> --project <folder>` (B and C: the command line uses the local folder host). On host A, Node may run in claude.ai's workspace but the project lives in the board artifact's database (`../lib/hosts.md`): import `plan.ts` and `run.ts` and pass them the `ClaudeArtifactHost`, not this command line. Paid providers are still refused on host A, so use the manual provider and the rules in `../lib/spend.md` §Host A.
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If the stage is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: one planned clip per shot. Safe to repeat. It also lists any shot already at the retry limit.
 2. **`status`**: one line per clip with what it waits for (a shot whose key frame is not approved is `blocked`), its paid attempts and the money spent on it.
-3. **Choose the provider** (config and the person decide, not you): `manual` (free; hosts A, B, C) or `fal-video` (paid direct API; hosts B and C only, refused on A; key `FAL_KEY`). A paid provider needs a budget cap from `/akuko setup`; without one the command says so and stops.
+3. **Choose the provider** (config and the person decide, not you): `manual` (free; hosts A, B, C) or `fal-video` (paid direct API; hosts B and C only, refused on A; key `FAL_KEY`). A paid provider needs its key and a budget cap from `/akuko setup`. A missing key is reported as a setup problem before anything is estimated, sent or counted; a missing budget is refused with the setup pointer.
 4. **`step --provider <id>`** makes the next job, by default **one shot**:
    - **Paid:** it prints the spend line with the arithmetic (for example `5 s x 0.07 USD/s = 0.35`). **Show it to the person and wait.** Nothing has been sent. The person approves on the board (or replies in the exact words of the line, `approve <amount> <CURRENCY>`); fold, then run `step` again. It then runs, records the clip and marks it `pending-review`. A declined spend sends nothing. `--scene <id>` or `--units a,b` batches several clips into one job with one approval for the total, only if the person asks.
    - **Manual:** it prints the prompt package (the prompt, the start-frame file to attach, the length, the camera, the name to save as) and saves the job. Give it to the person. They bring the clip back by attaching it or dropping it in the folder: `ingest --job <id> --unit <clip id> --file <path> [--actual <cost they report>]`. No key or budget is needed.
-5. **Say what the command told you.** It reports when a clip's length was changed to one the model can make (the `fal-video` models make 5 or 10 s clips; a 6 s shot becomes 5 s, an 8 s shot 10 s) and that sound is off. Pass both on; do not hide a shorter clip.
+5. **Say what the command told you.** The `fal-video` models make only 5 or 10 s clips. By default the clip **covers the shot**: the shortest length that is at least as long (a 6 s shot gets a 10 s clip, a 5 s shot a 5 s clip), because a short clip cannot be stretched in the editor while a long one is trimmed there. The spend line shows what is billed beyond the shot ("10 s billed for a 6 s shot"). If the person wants to spend less, `--fit nearest` takes the closest length instead (a 6 s shot gets 5 s); tell them it can be shorter than the shot. A shot longer than the model's longest clip gets the longest, and the command says so. Also pass on that sound is off. Do not choose `--fit nearest` yourself.
 6. **Audit each clip** before telling the person it is ready: it starts from the key frame, characters and place do not change, the motion matches the written action and camera move, no morphing, no text. If one fails, say what is wrong and offer another try (paid: a new approval, and it counts against the limit below). Do not hide a bad clip.
 7. **Stop at the review gate.** Everything made is `pending-review` and the stage is `in-review`. The person reviews each clip on the board. Don't call anything approved.
 8. **After the person's answers**: fold, `sync`, then `step` again for the next shot.
+
+## After a failed run
+
+If a run fails (the provider refused it, the request failed, no clip came back), **tell the person what failed, in the command's words, and get their go-ahead before running `step` again.** Running it again retries the same job under the approval the person already gave, with no new spend line, so the person's go-ahead is the only check left. A batch (`--scene` / `--units`) can partly fail: the clips that were made are recorded and billed, and the command prints `NOT MADE: <clips>`. Those stay draft and were not billed. Tell the person which, and only if they agree run `step` for them: that is a new job with its own spend line and approval.
 
 ## Sound
 
@@ -61,7 +65,7 @@ Clips are made **silent** by default; sound has its own stage. If the person ask
 
 ## The retry limit
 
-Video is priced per second, so a retry loop is where money goes. Each shot may have **3 paid attempts** (finished or failed; the money a failed call cost counts; manual takes do not). The 4th is refused: the message gives the count and the money already spent on that shot. **Stop and tell the person** both numbers. Pass `--max-attempts <n>` (one more than the count, for one more try) **only if the person asked for more tries in their own words**. Never raise it on your own to get past a refusal, and never because a clip looks bad to you.
+Video is priced per second, so a retry loop is where money goes. Each shot may have **3 paid attempts**. An attempt is a call that **cost money**: a finished clip at its price, or a failed call that reports a cost. A call that never reached the provider (no key, a rejected request, a refused frame) is not an attempt and nothing is said to have been spent on it. Manual takes do not count. The 4th is refused: the message gives the count and the money already spent on that shot. **Stop and tell the person** both numbers. Pass `--max-attempts <n>` (one more than the count, for one more try) **only if the person asked for more tries in their own words**. Never raise it on your own to get past a refusal, and never because a clip looks bad to you.
 
 ## When a person sends a clip back
 
@@ -69,7 +73,8 @@ Folding turns it into `needs-rework` with their words. Run `step --units <clip i
 
 ## Limits to know
 
-- `fal-video` makes clips of fixed lengths (5 or 10 s), takes the key frame as its only start frame and follows the key frame's own aspect ratio. A shot longer than 10 s gets a 10 s clip; assemble can extend or trim.
+- `fal-video` makes clips of fixed lengths (5 or 10 s), takes the key frame as its only start frame and follows the key frame's own aspect ratio. A shot longer than 10 s gets a 10 s clip and needs another clip or a cutaway.
+- A key frame that is a local file goes to fal inline, as a base64 data URI. fal documents no limit for data URIs, but a very large PNG may be rejected; if a clip is refused for that reason, tell the person and make the key frame smaller rather than retrying.
 - A clip a provider refuses or fails stays `draft`; say so, and nothing is recorded as made.
 - A key frame that changes after a clip was made from it is not flagged yet; if the person sends a key frame back, ask whether its clip should be redone.
 - Changing the model, length or sound is a new job and needs a new approval.

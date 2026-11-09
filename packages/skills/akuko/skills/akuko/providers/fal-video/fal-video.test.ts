@@ -13,7 +13,7 @@ import { spentFromLedger } from '../../spend/ledger.ts';
 import { createFakeHost, tinyProject } from '../__fixtures__/fake-host.ts';
 import { REF_URI } from '../gemini-image/__fixtures__/mock-net.ts';
 import { MP4_BYTES, mockFalVideo } from './__fixtures__/mock-net.ts';
-import { AUDIO_SUFFIX, FAL_VIDEO_PROVIDER_ID, createFalVideoProvider, falVideoLimits, snapSeconds, splitModel } from './index.ts';
+import { AUDIO_SUFFIX, FAL_VIDEO_PROVIDER_ID, createFalVideoProvider, falVideoLimits, fitSeconds, snapSeconds, splitModel } from './index.ts';
 
 const NOW = '2026-11-09T10:00:00Z';
 const config = loadProviderConfig();
@@ -185,7 +185,8 @@ describe('fal video provider: requests', () => {
     assert.equal(r.status, 'submitted');
     if (r.status !== 'submitted') return;
     const st = await s.provider.poll(r.handle);
-    assert.equal(st.state, 'failed');
+    assert.equal(st.state, 'done', 'one clip was made and billed, so it is kept');
+    assert.deepEqual(st.actual, { sc1_sh2: 0 });
     assert.match(st.message ?? '', /sc1_sh2: fal HTTP 500/);
     const s2 = setup(mockFalVideo({ failSubmit: () => new Response('no', { status: 401 }) }));
     const r2 = await approveAndRun(s2, job());
@@ -215,7 +216,48 @@ describe('fal video provider: requests', () => {
   });
 });
 
+describe('fal video: result problems release the reservation', () => {
+  it('a COMPLETED request with no video fails the poll, so collect settles the ledger instead of leaving it submitted', async () => {
+    const s = setup(mockFalVideo({ noVideo: () => true }));
+    const j = { ...job(), items: [job().items[0]!] };
+    const r = await approveAndRun(s, j);
+    if (r.status !== 'submitted') throw new Error('not submitted');
+    const st = await s.provider.poll(r.handle);
+    assert.equal(st.state, 'failed');
+    assert.match(st.message ?? '', /no video/);
+    const c = await s.gate.collect(r.handle);
+    assert.equal(c.status.state, 'failed');
+    const p = s.host.peek();
+    assert.ok(p.ledger.length === 1 && p.ledger.every((e) => e.status === 'failed'), JSON.stringify(p.ledger));
+    assert.equal(p.budget?.spent, 0);
+    assert.equal(c.assets.length, 0);
+  });
+
+  it('when some clips are made and one is not, poll is done with that unit at 0 and fetch returns only the good clip', async () => {
+    const s = setup(mockFalVideo({ error: (n) => (n === 2 ? 'content policy' : undefined) }));
+    const r = await approveAndRun(s, job());
+    if (r.status !== 'submitted') throw new Error('not submitted');
+    const st = await s.provider.poll(r.handle);
+    assert.equal(st.state, 'done');
+    assert.deepEqual(st.actual, { sc1_sh2: 0 });
+    assert.match(st.message ?? '', /1 of 2 clips failed: sc1_sh2: content policy/);
+    const c = await s.gate.collect(r.handle);
+    assert.deepEqual(c.assets.map((a) => a.id), ['sc1_sh1-motion']);
+    const p = s.host.peek();
+    assert.equal(p.ledger.find((e) => e.unit === 'sc1_sh2')?.actual, 0);
+    assert.ok((p.ledger.find((e) => e.unit === 'sc1_sh1')?.actual ?? 0) > 0);
+  });
+});
+
 describe('fal video: limits and config', () => {
+  it('fitSeconds covers the shot by default and can be told to take the nearest', () => {
+    assert.deepEqual(fitSeconds(6, [5, 10]), { seconds: 10, changed: true, capped: false });
+    assert.deepEqual(fitSeconds(5, [5, 10]), { seconds: 5, changed: false, capped: false });
+    assert.deepEqual(fitSeconds(4, [5, 10]), { seconds: 5, changed: true, capped: false });
+    assert.deepEqual(fitSeconds(14, [5, 10]), { seconds: 10, changed: true, capped: true });
+    assert.deepEqual(fitSeconds(6, [5, 10], 'nearest'), { seconds: 5, changed: true, capped: false });
+  });
+
   it('snapSeconds picks the nearest allowed length, ties to the shorter', () => {
     assert.deepEqual(snapSeconds(5, [5, 10]), { seconds: 5, changed: false });
     assert.deepEqual(snapSeconds(6, [5, 10]), { seconds: 5, changed: true });

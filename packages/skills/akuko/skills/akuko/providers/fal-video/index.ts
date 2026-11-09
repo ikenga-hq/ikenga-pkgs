@@ -271,8 +271,10 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
           if (!res.ok) throw new FalVideoError(`fal status HTTP ${res.status} for ${e.unit}`);
           const s = (await res.json()) as { status?: string; error?: string };
           if (s.status === 'COMPLETED') {
-            if (s.error) errors.push(`${e.unit}: ${s.error}`);
-            else {
+            if (s.error) {
+              bad.add(e.unit);
+              errors.push(`${e.unit}: ${s.error}`);
+            } else {
               try {
                 await readVideoUrl(e);
                 done++;

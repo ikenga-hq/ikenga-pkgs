@@ -73,14 +73,14 @@ interface Rig {
   paid: boolean;
 }
 
-function rig(kind: 'manual' | 'fal-video', project: AkukoProject, level: 'A' | 'B' | 'C' = 'B'): Rig {
+function rig(kind: 'manual' | 'fal-video', project: AkukoProject, level: 'A' | 'B' | 'C' = 'B', mock?: MockNet): Rig {
   const host = createFakeHost(project);
   const guarded = guardedHost(host);
   const manual = createManualProvider(guarded, { now });
   const providers: Provider[] = [manual.provider];
   let net: MockNet | undefined;
   if (kind === 'fal-video') {
-    net = mockFalVideo();
+    net = mock ?? mockFalVideo();
     providers.push(createFalVideoProvider(guarded, { fetch: net.fetch, apiKey: 'test-key', loadRef: async () => ({ mime: 'image/png', data: PNG_BYTES }), now }));
   }
   const gate = createSpendGate({ host: guarded, providers, level, now });
@@ -188,10 +188,19 @@ describe('jobs: one shot, the start frame, the length the model can make', () =>
     assert.equal(b.job.kind, 'video');
     assert.equal(b.job.model, CFG.providers['fal-video']!.default_model);
     const item = b.job.items[0]!;
-    assert.equal(item.duration_s, 5, 'the 6 s shot is made as the nearest length the model makes');
+    assert.equal(item.duration_s, 10, 'the 6 s shot is covered by the shortest length that is at least as long');
     assert.deepEqual(item.refs, [{ id: 'sc1_sh1_keyframe', uri: 'mem://assets/sc1_sh1_keyframe.png', role: 'start-frame', note: 'the approved key frame: the first frame of the clip' }]);
-    assert.match(b.job.label, /sc1_sh1 5 s x 0\.07 USD\/s = 0\.35/);
-    assert.ok(b.notes.some((n) => /shot runs 6 s but fal-video makes 5 or 10 s clips, so this clip is 5 s/.test(n)), b.notes.join('|'));
+    assert.match(b.job.label, /sc1_sh1 10 s x 0\.07 USD\/s = 0\.7 \(10 s billed for a 6 s shot\)/);
+    assert.ok(b.notes.some((n) => /shot runs 6 s but fal-video makes 5 or 10 s clips, so this clip is 10 s \(4 s longer than the shot, billed.*--fit nearest/.test(n)), b.notes.join('|'));
+    const near = buildMotionJob(p, { provider: 'fal-video', fit: 'nearest' });
+    assert.equal(near.job.items[0]!.duration_s, 5);
+    assert.match(near.job.label, /sc1_sh1 5 s x 0\.07 USD\/s = 0\.35$/);
+    assert.ok(near.notes.some((n) => /1 s SHORTER than the shot/.test(n)), near.notes.join('|'));
+    assert.notEqual(near.job.id, b.job.id, 'a different length is a different job');
+    // a shot longer than anything the model makes gets the longest, and says so
+    const long = funded();
+    long.shots[0]!.duration_s = 14;
+    assert.ok(buildMotionJob(long, { provider: 'fal-video' }).notes.some((n) => /4 s SHORTER/.test(n) && /the longest it makes/.test(n)));
     assert.ok(b.notes.some((n) => /Sound is off/.test(n)));
   });
 
@@ -199,7 +208,7 @@ describe('jobs: one shot, the start frame, the length the model can make', () =>
     const p = funded();
     const two = buildMotionJob(p, { provider: 'fal-video', units: [CLIP1, 'sc1_sh4_clip'] });
     assert.deepEqual(two.units, [CLIP1, 'sc1_sh4_clip']);
-    assert.deepEqual(two.job.items.map((i) => i.duration_s), [5, 10]);
+    assert.deepEqual(two.job.items.map((i) => i.duration_s), [10, 10]);
     const scene = buildMotionJob(p, { provider: 'fal-video', scene: 'sc1' });
     assert.deepEqual(scene.units, ['sc1_sh1_clip', 'sc1_sh2_clip', 'sc1_sh3_clip', 'sc1_sh4_clip']);
   });
@@ -214,7 +223,7 @@ describe('jobs: one shot, the start frame, the length the model can make', () =>
     ]);
     assert.equal(ids.size, 4);
     const q = funded();
-    q.shots[0]!.duration_s = 10;
+    q.shots[0]!.duration_s = 3;
     assert.notEqual(buildMotionJob(q, { provider: 'fal-video' }).job.id, buildMotionJob(p, { provider: 'fal-video' }).job.id);
     assert.equal(buildMotionJob(p, { provider: 'fal-video' }).job.id, buildMotionJob(p, { provider: 'fal-video' }).job.id, 'deterministic');
   });
@@ -258,21 +267,21 @@ describe('the spend gate: one clip, shown per second, approved for that amount',
     const step = await generateClips(deps(r), { provider: 'fal-video' });
     assert.equal(step.status, 'awaiting-approval');
     if (step.status !== 'awaiting-approval') return;
-    assert.ok(Math.abs(step.estimate - 0.35) < 1e-9);
-    assert.match(step.confirmation, /sc1_sh1 5 s x 0\.07 USD\/s = 0\.35/);
-    assert.match(step.confirmation, /estimate 0\.35 USD/);
-    assert.match(step.confirmation, /Reply "approve 0\.35 USD"/);
+    assert.ok(Math.abs(step.estimate - 0.7) < 1e-9);
+    assert.match(step.confirmation, /sc1_sh1 10 s x 0\.07 USD\/s = 0\.7 \(10 s billed for a 6 s shot\)/);
+    assert.match(step.confirmation, /estimate 0\.7 USD/);
+    assert.match(step.confirmation, /Reply "approve 0\.7 USD"/);
     assert.equal(r.net!.calls.length, 0, 'nothing sent');
     assert.equal(r.host.peek().stages.motion.state, 'waiting-spend');
     assert.equal(asset(r.host.peek(), CLIP1).status, 'pending');
-    assert.ok(step.notes?.some((n) => /so this clip is 5 s/.test(n)));
+    assert.ok(step.notes?.some((n) => /so this clip is 10 s/.test(n)));
 
     r.host.set(approveSpend(r.host.peek(), step.job.id, 'motion').project);
     const done = await generateClips(deps(r), { provider: 'fal-video' });
     assert.equal(done.status, 'done', JSON.stringify(done));
     const posts = r.net!.calls.filter((c) => c.method === 'POST');
     assert.equal(posts.length, 1);
-    assert.equal((posts[0]!.body as Record<string, unknown>).duration, '5');
+    assert.equal((posts[0]!.body as Record<string, unknown>).duration, '10');
     const p = r.host.peek();
     const clip = asset(p, CLIP1);
     assert.equal(clip.status, 'pending-review');
@@ -282,7 +291,7 @@ describe('the spend gate: one clip, shown per second, approved for that amount',
     assert.equal(p.shots[0]!.status, 'approved', 'the shot is never touched');
     assert.equal(asset(p, 'sc1_sh1_keyframe').status, 'approved', 'nor is its key frame');
     assert.equal(p.ledger.length, 1);
-    assert.ok(Math.abs((p.budget?.spent ?? 0) - 0.35) < 1e-9);
+    assert.ok(Math.abs((p.budget?.spent ?? 0) - 0.7) < 1e-9);
     assert.deepEqual(checkIntegrity(p), []);
   });
 
@@ -291,14 +300,14 @@ describe('the spend gate: one clip, shown per second, approved for that amount',
     const first = await generateClips(deps(r), { provider: 'fal-video', units: [CLIP1] });
     assert.equal(first.status, 'awaiting-approval');
     r.host.set(approveSpend(r.host.peek(), first.job.id, 'motion').project);
-    // the shot gets longer: the id changes (length is in the hash) and the new job is held for its own approval
+    // the shot gets shorter, so the clip length (and price) changes: the id changes (length is in the hash) and the new job is held for its own approval
     const p = r.host.peek();
-    p.shots[0]!.duration_s = 10;
+    p.shots[0]!.duration_s = 3;
     r.host.set(p);
     const longer = await generateClips(deps(r), { provider: 'fal-video', units: [CLIP1] });
     assert.equal(longer.status, 'awaiting-approval');
     assert.notEqual(longer.job.id, first.job.id);
-    if (longer.status === 'awaiting-approval') assert.ok(Math.abs(longer.estimate - 0.7) < 1e-9);
+    if (longer.status === 'awaiting-approval') assert.ok(Math.abs(longer.estimate - 0.35) < 1e-9);
     assert.equal(r.net!.calls.length, 0);
   });
 
@@ -325,6 +334,9 @@ describe('retry cap: paid attempts per shot', () => {
       { id: 'c', ts: NOW, provider: 'fal-video', unit: CLIP1, estimate: 0.35, status: 'submitted', job: 'j3' },
       { id: 'd', ts: NOW, provider: 'manual', unit: CLIP1, actual: 5, status: 'done' },
       { id: 'e', ts: NOW, provider: 'fal-video', unit: 'sc1_sh2_clip', estimate: 0.35, actual: 0.35, status: 'done', job: 'j4' },
+      // nothing was sent or billed: a failed entry with no actual, and a batch clip that fell over (done at 0)
+      { id: 'f', ts: NOW, provider: 'fal-video', unit: CLIP1, estimate: 0.35, status: 'failed', job: 'j5' },
+      { id: 'g', ts: NOW, provider: 'fal-video', unit: CLIP1, estimate: 0.35, actual: 0, status: 'done', job: 'j6' },
     ];
     const t = paidAttempts(p, CLIP1);
     assert.equal(t.count, 2);
@@ -352,7 +364,7 @@ describe('retry cap: paid attempts per shot', () => {
     const posts = r.net!.calls.length;
     await assert.rejects(
       generateClips(deps(r), { provider: 'fal-video', units: [CLIP1] }),
-      (e: Error) => e instanceof MotionError && /3 paid attempts/.test(e.message) && /1\.05 USD has gone on it/.test(e.message) && /--max-attempts 4/.test(e.message) && /own words/.test(e.message),
+      (e: Error) => e instanceof MotionError && /3 paid attempts/.test(e.message) && /2\.1 USD has gone on it/.test(e.message) && /--max-attempts 4/.test(e.message) && /own words/.test(e.message),
     );
     // by default (no --units) the capped shot is skipped, and the next shot is the one made
     const next = await generateClips(deps(r), { provider: 'fal-video' });
@@ -376,6 +388,13 @@ describe('retry cap: paid attempts per shot', () => {
     p.ledger = [1, 2, 3].map((n) => ({ id: `f${n}`, ts: NOW, provider: 'fal-video', unit: CLIP1, estimate: 0.35, actual: 0.35, status: 'failed' as const, job: `jf${n}` }));
     r.host.set({ ...p, budget: { cap: 10, currency: 'USD', spent: 0 } });
     await assert.rejects(generateClips(deps(r), { provider: 'fal-video', units: [CLIP1] }), /3 paid attempts/);
+  });
+
+  it('attempts where nothing was sent (no key, a refused frame: failed with no actual) are not counted and cost nothing', () => {
+    const p = funded();
+    p.ledger = [1, 2, 3, 4].map((n) => ({ id: `n${n}`, ts: NOW, provider: 'fal-video', unit: CLIP1, estimate: 0.7, status: 'failed' as const, job: `jn${n}` }));
+    assert.deepEqual(paidAttempts(p, CLIP1), { count: 0, spent: 0 });
+    assert.doesNotThrow(() => buildMotionJob(p, { provider: 'fal-video', units: [CLIP1] }));
   });
 
   it('--max-attempts must be a sensible number', () => {
@@ -484,5 +503,40 @@ describe('doctor and config', () => {
     } finally {
       if (keep === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = keep;
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('a batch that partly fails', () => {
+  it('keeps the clips that were made and billed; the failed one stays draft and is remade by a new job with its own approval', async () => {
+    const r = rig('fal-video', funded(), 'B', mockFalVideo({ error: (n) => (n === 3 ? 'content policy' : undefined) }));
+    const first = await generateClips(deps(r), { provider: 'fal-video', scene: 'sc1' });
+    assert.equal(first.status, 'awaiting-approval');
+    r.host.set(approveSpend(r.host.peek(), first.job.id, 'motion').project);
+    const done = await generateClips(deps(r), { provider: 'fal-video', scene: 'sc1' });
+    assert.equal(done.status, 'done', JSON.stringify(done));
+    if (done.status !== 'done') return;
+    assert.deepEqual(done.missing, ['sc1_sh3_clip']);
+    assert.match(done.message ?? '', /content policy/);
+    assert.deepEqual([...done.assets].sort(), ['sc1_sh1_clip', 'sc1_sh2_clip', 'sc1_sh4_clip']);
+
+    const p = r.host.peek();
+    for (const id of ['sc1_sh1_clip', 'sc1_sh2_clip', 'sc1_sh4_clip']) assert.equal(asset(p, id).status, 'pending-review', id);
+    assert.equal(asset(p, 'sc1_sh3_clip').status, 'draft');
+    assert.equal(asset(p, 'sc1_sh3_clip').file, undefined);
+    assert.equal(p.ledger.length, 4);
+    assert.equal(p.ledger.find((e) => e.unit === 'sc1_sh3_clip')?.actual, 0, 'the failed clip is not billed');
+    assert.ok(p.ledger.every((e) => e.status === 'done'), 'nothing is left submitted');
+    assert.ok(Math.abs((p.budget?.spent ?? 0) - 1.75) < 1e-9, 'only the three made clips are paid for');
+    assert.ok(Math.abs(done.cost - 1.75) < 1e-9);
+    assert.deepEqual(paidAttempts(p, 'sc1_sh3_clip'), { count: 0, spent: 0 });
+
+    const posts = r.net!.calls.filter((c) => c.method === 'POST').length;
+    const retry = await generateClips(deps(r), { provider: 'fal-video', scene: 'sc1' });
+    assert.equal(retry.status, 'awaiting-approval', 'the remake needs its own approval');
+    assert.deepEqual(retry.job.items.map((i) => i.unit), ['sc1_sh3_clip']);
+    assert.notEqual(retry.job.id, first.job.id);
+    assert.ok(retry.status === 'awaiting-approval' && Math.abs(retry.estimate - 0.35) < 1e-9);
+    assert.equal(r.net!.calls.filter((c) => c.method === 'POST').length, posts, 'nothing was sent');
   });
 });
