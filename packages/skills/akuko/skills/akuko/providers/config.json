@@ -18,6 +18,30 @@
         }
       }
     },
+    "fal-video": {
+      "label": "fal video (Kling image-to-video on fal) — your fal key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "FAL_KEY",
+      "default_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+      "models": {
+        "fal-ai/kling-video/v2.5-turbo/pro/image-to-video": {
+          "price": { "amount": 0.07, "per": "second" },
+          "last_verified": "2026-11-09",
+          "source": "https://fal.ai/pricing lists this endpoint at $0.07 per second; https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/image-to-video says $0.35 for a 5 s video and $0.07 per additional second. Input/output schema: https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/image-to-video/api (image_url, duration enum 5 or 10, video.url output; no audio field, so it is silent). Read 2026-11-09."
+        },
+        "fal-ai/kling-video/v2.6/pro/image-to-video": {
+          "price": { "amount": 0.07, "per": "second" },
+          "last_verified": "2026-11-09",
+          "source": "https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video: 'Videos generated without audio cost $0.07 per second' (also on https://fal.ai/pricing). akuko always sends generate_audio false, so this is the audio-off price. Schema: https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video/api (start_image_url, duration enum 5 or 10, generate_audio default true, video.url output). Read 2026-11-09."
+        },
+        "fal-ai/kling-video/v2.6/pro/image-to-video#audio": {
+          "price": { "amount": 0.14, "per": "second" },
+          "last_verified": "2026-11-09",
+          "source": "Same endpoint as the entry without '#audio' (akuko strips the suffix and sends generate_audio true). https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video: 'Videos with native audio cost $0.14 per second' (voice control, $0.168, is not offered). Read 2026-11-09."
+        }
+      }
+    },
     "gemini-image": {
       "label": "Gemini image (Nano Banana) — your Gemini API key",
       "billing": "direct-api",
@@ -53,6 +77,25 @@
           "price": { "amount": 0.08, "per": "image" },
           "last_verified": "2026-11-07",
           "source": "https://fal.ai/pricing lists fal-ai/nano-banana-2 and fal-ai/nano-banana-2/edit (used when a unit has references) at $0.08 per image; the model pages carry no price. Input/limits: https://fal.ai/models/fal-ai/nano-banana-2/edit/api (14-reference total, resolution 0.5K-4K; akuko requests the 1K default), read 2026-11-07. Queue API: https://fal.ai/docs/model-apis/model-endpoints/queue. fal does not say whether 2K/4K cost more; akuko does not request them."
+        }
+      }
+    },
+    "elevenlabs": {
+      "label": "ElevenLabs text to speech (voice-over with word timings) — your ElevenLabs key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "ELEVENLABS_API_KEY",
+      "default_model": "eleven_flash_v2_5",
+      "models": {
+        "eleven_flash_v2_5": {
+          "price": { "amount": 0.00004, "per": "character" },
+          "last_verified": "2026-11-09",
+          "source": "https://elevenlabs.io/pricing/api, Text to Speech, row \"Flash / Turbo\": $0.04 per 1K characters, read 2026-11-09. Model id and the 40,000-character request limit: https://elevenlabs.io/docs/overview/models (read 2026-11-09). Endpoint and timing response (alignment.characters / character_start_times_seconds / character_end_times_seconds): https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps (read 2026-11-09). Auth header xi-api-key: https://elevenlabs.io/docs/api-reference/authentication."
+        },
+        "eleven_multilingual_v2": {
+          "price": { "amount": 0.00008, "per": "character" },
+          "last_verified": "2026-11-09",
+          "source": "https://elevenlabs.io/pricing/api, Text to Speech, row \"v2 Multilingual\": $0.08 per 1K characters, read 2026-11-09. Model id and the 10,000-character request limit: https://elevenlabs.io/docs/overview/models (read 2026-11-09). Same with-timestamps endpoint as above."
         }
       }
     },
