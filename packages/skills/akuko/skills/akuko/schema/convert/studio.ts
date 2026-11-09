@@ -206,7 +206,7 @@ function anchorKindForAsset(a: Asset): Anchor['kind'] {
     case 'plate': return 'location';
     case 'lookbook': return 'style';
     case 'panel': return 'sketch';
-    case 'clip': return 'video';
+    case 'clip': case 'lipsync': return 'video';
     case 'vo': case 'music': case 'sfx': return 'audio';
     default: return 'image';
   }

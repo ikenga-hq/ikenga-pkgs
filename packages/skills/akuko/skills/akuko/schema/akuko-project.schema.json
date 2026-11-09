@@ -74,7 +74,9 @@
         "sfx",
         "timeline",
         "export",
-        "other"
+        "other",
+        "lipsync",
+        "card"
       ]
     },
     "ProjectMeta": {
@@ -126,6 +128,20 @@
             "h"
           ],
           "additionalProperties": false
+        },
+        "fps": {
+          "type": "string",
+          "enum": [
+            "23.976",
+            "24",
+            "25",
+            "29.97",
+            "30",
+            "50",
+            "59.94",
+            "60"
+          ],
+          "description": "Timeline frame rate. Absent: chosen at export (--fps, default 24)."
         },
         "profile": {
           "type": "string",
@@ -473,6 +489,60 @@
           },
           "default": []
         },
+        "source": {
+          "$ref": "#/definitions/SheetSource",
+          "description": "The sheet row this shot was imported from (WP-25)."
+        },
+        "film": {
+          "$ref": "#/definitions/FilmSpan",
+          "description": "Where the shot sits on the master clock (audio.master), in seconds."
+        },
+        "part": {
+          "$ref": "#/definitions/Id",
+          "description": "Part of the film the shot belongs to, e.g. \"P7\"."
+        },
+        "lighting": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Lighting code from the sheet; the phrase it stands for is in the bible."
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "framing": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Framing from the sheet, free text."
+        },
+        "motion_note": {
+          "type": "string",
+          "description": "Motion note from the sheet, free text (e.g. \"Slow push-in\")."
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ShotLine"
+          },
+          "description": "Dialogue lines the shot covers (audio.lines ids)."
+        },
+        "treatment": {
+          "type": "string",
+          "enum": [
+            "still",
+            "still-move",
+            "video",
+            "lipsync"
+          ]
+        },
+        "move": {
+          "$ref": "#/definitions/StillMove",
+          "description": "Camera move on the still (treatment still-move)."
+        },
         "studio": {
           "$ref": "#/definitions/StudioShotExt"
         },
@@ -633,6 +703,10 @@
         "model": {
           "type": "string"
         },
+        "film": {
+          "$ref": "#/definitions/FilmSpan",
+          "description": "Where the asset sits on the master clock, in seconds. Required on a card (integrity)."
+        },
         "studio": {
           "$ref": "#/definitions/StudioAssetExt"
         }
@@ -657,6 +731,14 @@
         },
         "summary": {
           "type": "string"
+        },
+        "part": {
+          "$ref": "#/definitions/Id",
+          "description": "Part of the film the scene belongs to, e.g. \"P7\"."
+        },
+        "source": {
+          "$ref": "#/definitions/SheetSource",
+          "description": "The sheet scene this scene was imported from (WP-25)."
         }
       },
       "required": [
@@ -1558,6 +1640,503 @@
       ],
       "additionalProperties": false
     },
+    "FilmSpan": {
+      "type": "object",
+      "properties": {
+        "in_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "out_s": {
+          "$ref": "#/definitions/FilmSpan/properties/in_s"
+        }
+      },
+      "required": [
+        "in_s",
+        "out_s"
+      ],
+      "additionalProperties": false
+    },
+    "SheetSource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "sheet"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*$"
+        },
+        "row": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based spreadsheet row, for the person to find it again."
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ShotLine": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "spoken",
+            "thought"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "StillMove": {
+      "type": "object",
+      "properties": {
+        "from_scale": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 3
+        },
+        "to_scale": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 3
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "ease": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "from_scale",
+        "to_scale",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "MasterAudio": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "duration_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "sample_rate": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "start_tc": {
+          "type": "string",
+          "pattern": "^\\d{2}:[0-5]\\d:[0-5]\\d:\\d{2}$",
+          "description": "Timecode of the first sample, e.g. \"00:00:00:00\"."
+        },
+        "sha256": {
+          "$ref": "#/definitions/Sha256",
+          "description": "Digest of the file, to notice a changed master."
+        }
+      },
+      "required": [
+        "uri",
+        "duration_s",
+        "sample_rate",
+        "start_tc"
+      ],
+      "additionalProperties": false
+    },
+    "AudioLine": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "character": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who speaks or thinks it (a name, or a bible character id)."
+        },
+        "kind": {
+          "$ref": "#/definitions/ShotLine/properties/kind"
+        },
+        "film_in_s": {
+          "$ref": "#/definitions/FilmSpan/properties/in_s"
+        },
+        "film_out_s": {
+          "$ref": "#/definitions/FilmSpan/properties/in_s"
+        },
+        "clip_uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "description": "The words, as written in the source."
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "w": {
+                "type": "string",
+                "minLength": 1
+              },
+              "t_s": {
+                "$ref": "#/definitions/FilmSpan/properties/in_s"
+              }
+            },
+            "required": [
+              "w",
+              "t_s"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "film_in_s",
+        "film_out_s"
+      ],
+      "additionalProperties": false
+    },
+    "Rules": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "banned": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "term": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "$ref": "#/definitions/RuleScope"
+              },
+              "except": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "term"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "require": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "applies_to": {
+                "type": "string",
+                "enum": [
+                  "prompt",
+                  "negative"
+                ]
+              },
+              "scope": {
+                "$ref": "#/definitions/RuleScope"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "applies_to"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "uploads": {
+          "type": "object",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sha256": {
+                    "$ref": "#/definitions/Sha256"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "consent_ref": {
+                    "$ref": "#/definitions/Id",
+                    "description": "rules.consent[].id that covers this file."
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sha256",
+                  "label"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "never_from_photo": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          },
+          "default": [],
+          "description": "Bible entry ids that may only use generated references, never a photo."
+        },
+        "exempt": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "shots": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Id"
+                },
+                "minItems": 1
+              },
+              "skip": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "shots",
+              "skip"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "consent": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/Id"
+              },
+              "who": {
+                "type": "string",
+                "minLength": 1
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1
+              },
+              "date": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "who",
+              "what",
+              "date"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleScope": {
+      "type": "object",
+      "properties": {
+        "shots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Person": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "approver",
+            "signoff"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    "Gate": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/Id"
+        },
+        "title": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "shots": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Id"
+              }
+            },
+            "scenes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Id"
+              }
+            },
+            "parts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Id"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "needs": {
+          "type": "string",
+          "const": "signoff"
+        },
+        "signed": {
+          "$ref": "#/definitions/GateSignature",
+          "description": "Absent until signed."
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "needs"
+      ],
+      "additionalProperties": false
+    },
+    "GateSignature": {
+      "type": "object",
+      "properties": {
+        "by": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "people[].id of the signer."
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "approver",
+            "signoff"
+          ],
+          "description": "The signer's role; must be the gate's `needs` (integrity)."
+        },
+        "at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "via": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the sign-off was given, e.g. \"email\", \"in person\", \"shared page\"."
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by",
+        "role",
+        "at",
+        "via"
+      ],
+      "additionalProperties": false
+    },
     "AssetRef": {
       "type": "object",
       "properties": {
@@ -1844,6 +2423,15 @@
               ],
               "additionalProperties": false,
               "description": "Beat map of the music track (ms)."
+            },
+            "master": {
+              "$ref": "#/definitions/MasterAudio"
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AudioLine"
+              }
             }
           },
           "additionalProperties": false,
@@ -1881,6 +2469,24 @@
             "$ref": "#/definitions/Decision"
           },
           "default": []
+        },
+        "rules": {
+          "$ref": "#/definitions/Rules",
+          "description": "Hard project rules. Absent = none (read through rulesOf())."
+        },
+        "people": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Person"
+          },
+          "description": "Who approves (approver) and who signs gates (signoff)."
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Gate"
+          },
+          "description": "Milestones only a signoff person passes."
         },
         "studio": {
           "$ref": "#/definitions/StudioProjectExt"

@@ -29,6 +29,8 @@ export const STAGE_FOR_KIND: Record<AssetKind, StageId> = {
   timeline: 'assemble',
   export: 'export',
   other: 'intake',
+  lipsync: 'motion',
+  card: 'export',
 };
 
 /**
@@ -50,6 +52,7 @@ export function assetDir(a: Pick<AssetInput, 'kind' | 'owner'>): string {
     case 'keyframe':
       return 'board/panels';
     case 'clip':
+    case 'lipsync':
       return owner ? `motion/${owner}` : 'motion';
     case 'scene':
       return owner ? `motion/scenes/${owner}` : 'motion/scenes';
@@ -63,6 +66,8 @@ export function assetDir(a: Pick<AssetInput, 'kind' | 'owner'>): string {
       return 'cut';
     case 'export':
       return 'cut/exports';
+    case 'card':
+      return 'cut/cards';
     case 'reference':
     case 'other':
       return 'refs';
