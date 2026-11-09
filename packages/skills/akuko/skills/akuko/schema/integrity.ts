@@ -7,8 +7,8 @@
  * Returns a list of issues; an empty list means the project is consistent.
  */
 
-import type { AkukoProject } from './akuko-project.ts';
-import { listUnits } from './akuko-project.ts';
+import type { AkukoProject, RuleScope } from './akuko-project.ts';
+import { SHA256_PATTERN, listUnits } from './akuko-project.ts';
 
 export interface IntegrityIssue {
   path: string;
@@ -97,6 +97,8 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
     }
   });
 
+  checkRealProject(p, add, claim, sceneIds, bibleIds);
+
   if (p.budget) {
     const spent = p.ledger.reduce((sum, e) => (e.status === 'done' ? sum + Math.round((e.actual ?? 0) * 1e6) : sum), 0) / 1e6; // micro-units, same as spentFromLedger()
     if (Math.abs(spent - p.budget.spent) > MONEY_EPSILON) {
@@ -107,4 +109,107 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
   }
 
   return issues;
+}
+
+/** Tolerance for comparing film times (seconds) held as floats. */
+const FILM_EPSILON = 1e-9;
+
+/**
+ * Real-project references (WP-24): lines, film times, cards, rules, people
+ * and gates. Everything here is optional in the schema, so a project that
+ * uses none of it gets no issues.
+ */
+function checkRealProject(
+  p: AkukoProject,
+  add: (path: string, message: string) => void,
+  claim: (id: string, path: string) => void,
+  sceneIds: Set<string>,
+  bibleIds: Set<string>,
+): void {
+  const shotIds = new Set(p.shots.map((s) => s.id));
+
+  // Dialogue lines: unique ids; every shot line names one, with the same kind.
+  const lines = new Map<string, string>();
+  (p.audio.lines ?? []).forEach((l, i) => {
+    if (lines.has(l.id)) add(`audio.lines[${i}].id`, `line id "${l.id}" is used twice`);
+    else lines.set(l.id, l.kind);
+  });
+  p.shots.forEach((s, i) =>
+    (s.lines ?? []).forEach((l, k) => {
+      const kind = lines.get(l.id);
+      if (kind === undefined) add(`shots[${i}].lines[${k}].id`, `"${l.id}" is not in audio.lines`);
+      else if (kind !== l.kind) add(`shots[${i}].lines[${k}].kind`, `"${l.id}" is ${kind} in audio.lines, not ${l.kind}`);
+    }),
+  );
+
+  // Film times must not overlap within a scene (gaps are fine).
+  const byScene = new Map<string, { i: number; in_s: number; out_s: number }[]>();
+  p.shots.forEach((s, i) => {
+    if (s.film && s.scene !== undefined) byScene.set(s.scene, [...(byScene.get(s.scene) ?? []), { i, ...s.film }]);
+  });
+  for (const list of byScene.values()) {
+    const sorted = [...list].sort((a, b) => a.in_s - b.in_s || a.i - b.i);
+    for (let k = 1; k < sorted.length; k++) {
+      const prev = sorted[k - 1]!;
+      const cur = sorted[k]!;
+      if (cur.in_s < prev.out_s - FILM_EPSILON) {
+        add(`shots[${cur.i}].film`, `film ${cur.in_s}–${cur.out_s} s overlaps ${p.shots[prev.i]!.id} (${prev.in_s}–${prev.out_s} s) in scene ${p.shots[cur.i]!.scene}`);
+      }
+    }
+  }
+
+  // Cards are placed by film time, so they need one, and a file.
+  p.assets.forEach((a, i) => {
+    if (a.kind !== 'card') return;
+    if (!a.film) add(`assets[${i}].film`, `card "${a.id}" has no film time`);
+    if (!a.file) add(`assets[${i}].file`, `card "${a.id}" has no file`);
+  });
+
+  // Parts exist when a shot or scene carries them.
+  const parts = new Set<string>([...p.shots, ...p.scenes].flatMap((x) => (x.part === undefined ? [] : [x.part])));
+  const scopeIds = (path: string, scope: RuleScope | undefined) => {
+    scope?.shots?.forEach((id, k) => { if (!shotIds.has(id)) add(`${path}.shots[${k}]`, `unknown shot "${id}"`); });
+    scope?.scenes?.forEach((id, k) => { if (!sceneIds.has(id)) add(`${path}.scenes[${k}]`, `unknown scene "${id}"`); });
+  };
+
+  // Rules: scopes name real shots and scenes; hashes are well formed; consent refs resolve.
+  if (p.rules) {
+    const r = p.rules;
+    const consentIds = new Set<string>();
+    r.consent.forEach((c, i) => {
+      if (consentIds.has(c.id)) add(`rules.consent[${i}].id`, `consent id "${c.id}" is used twice`);
+      consentIds.add(c.id);
+    });
+    r.banned.forEach((b, i) => scopeIds(`rules.banned[${i}].scope`, b.scope));
+    r.require.forEach((q, i) => scopeIds(`rules.require[${i}].scope`, q.scope));
+    r.exempt.forEach((e, i) => scopeIds(`rules.exempt[${i}]`, { shots: e.shots }));
+    r.uploads.allow.forEach((u, i) => {
+      if (!SHA256_PATTERN.test(u.sha256)) add(`rules.uploads.allow[${i}].sha256`, 'sha256 must be 64 lowercase hex characters');
+      if (u.consent_ref !== undefined && !consentIds.has(u.consent_ref)) add(`rules.uploads.allow[${i}].consent_ref`, `unknown consent "${u.consent_ref}"`);
+    });
+    r.never_from_photo.forEach((id, i) => {
+      if (!bibleIds.has(id)) add(`rules.never_from_photo[${i}]`, `"${id}" is not a bible entry`);
+    });
+  }
+
+  // People: unique ids.
+  const people = new Map<string, string>();
+  (p.people ?? []).forEach((x, i) => {
+    if (people.has(x.id)) add(`people[${i}].id`, `person id "${x.id}" is used twice`);
+    else people.set(x.id, x.role);
+  });
+
+  // Gates: ids share the unit namespace (a decision may name one), scope ids exist,
+  // and a signature names a person whose role is the one the gate needs.
+  (p.gates ?? []).forEach((g, i) => {
+    claim(g.id, `gates[${i}]`);
+    scopeIds(`gates[${i}].scope`, g.scope);
+    g.scope.parts?.forEach((part, k) => { if (!parts.has(part)) add(`gates[${i}].scope.parts[${k}]`, `no shot or scene is in part "${part}"`); });
+    if (g.signed) {
+      const role = people.get(g.signed.by);
+      if (role === undefined) add(`gates[${i}].signed.by`, `unknown person "${g.signed.by}"`);
+      else if (role !== g.needs) add(`gates[${i}].signed.by`, `"${g.signed.by}" is ${role === 'approver' ? 'an approver' : role}; ${g.id} needs ${g.needs}`);
+      if (g.signed.role !== g.needs) add(`gates[${i}].signed.role`, `${g.id} needs ${g.needs}, not ${g.signed.role}`);
+    }
+  });
 }
