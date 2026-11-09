@@ -159,6 +159,22 @@ describe('gemini-image provider', () => {
     assert.ok(!JSON.stringify(r).includes('test-key'));
   });
 
+  it('pins the exact request body for every configured model (A-5: a mock once hid an HTTP 400 on image/png)', async () => {
+    for (const model of Object.keys(entry.models)) {
+      const s = setup();
+      const j: Job = { ...job({ model }), items: [{ unit: 'sc1_sh1', prompt: 'A long dark hallway', output: 'keyframe', aspect_ratio: '16:9' }] };
+      const r = await approveAndRun(s, j);
+      assert.equal(r.status, 'submitted');
+      assert.deepEqual(s.net.calls[0]!.body, {
+        model,
+        input: [{ type: 'text', text: 'A long dark hallway' }],
+        store: false,
+        response_format: { type: 'image', mime_type: 'image/jpeg', image_size: '1K', aspect_ratio: '16:9' },
+      }, model);
+      assert.equal(s.net.calls[0]!.headers['Api-Revision'], '2026-05-20');
+    }
+  });
+
   it('a later failure keeps the paid image and reports the missing unit', async () => {
     const net = mockGemini({ fail: (n) => (n === 2 ? new Response('{"error":{"message":"quota"}}', { status: 429 }) : undefined) });
     const s = setup(net);
@@ -168,6 +184,7 @@ describe('gemini-image provider', () => {
     const st = await s.provider.poll(r.handle);
     assert.equal(st.state, 'failed');
     assert.match(st.message ?? '', /sc1_sh2.*429.*quota/);
+    assert.match(st.message ?? '', /free tier, or billing is not active/);
     assert.deepEqual(Object.keys(st.actual ?? {}), ['sc1_sh1']);
   });
 

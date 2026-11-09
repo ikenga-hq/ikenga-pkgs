@@ -43,6 +43,16 @@ export const GEMINI_PROVIDER_ID = 'gemini-image';
 export const GEMINI_MAX_REFS = 14;
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const API_REVISION = '2026-05-20';
+/**
+ * Output format requested from the Interactions endpoint (`response_format.mime_type`).
+ * The live API rejected `image/png` for gemini-nano-banana-2.1 with HTTP 400 (only
+ * `image/jpeg` is accepted there, found in the 2026-11-09 paid check, A-5), and the
+ * image-generation docs show `image/jpeg` in their `response_format` examples without
+ * listing per-model formats: https://ai.google.dev/gemini-api/docs/image-generation
+ * (now served from https://aistudio.google.com/docs/image-generation). JPEG is
+ * therefore requested for every configured model; image-common.ts stores it as .jpg.
+ */
+export const GEMINI_OUTPUT_MIME = 'image/jpeg';
 
 export interface GeminiImageOptions {
   config?: AkukoProviderConfig;
@@ -119,7 +129,7 @@ export function createGeminiImageProvider(host: WaveOneHost, opts: GeminiImageOp
         store: false,
         response_format: {
           type: 'image',
-          mime_type: 'image/png',
+          mime_type: GEMINI_OUTPUT_MIME,
           image_size: '1K',
           ...(item.aspect_ratio ? { aspect_ratio: item.aspect_ratio } : {}),
         },
@@ -130,7 +140,10 @@ export function createGeminiImageProvider(host: WaveOneHost, opts: GeminiImageOp
     try { body = JSON.parse(text); } catch { body = undefined; }
     if (!res.ok) {
       const msg = (body as { error?: { message?: string } } | undefined)?.error?.message ?? text.slice(0, 200);
-      throw new GeminiImageError(`Gemini HTTP ${res.status}: ${msg}`);
+      const hint = res.status === 429
+        ? ' (this usually means the free tier, or billing is not active for this key\x27s project: image models need a paid Gemini API account, see https://ai.google.dev/gemini-api/docs/billing)'
+        : '';
+      throw new GeminiImageError(`Gemini HTTP ${res.status}: ${msg}${hint}`);
     }
     return parseInteraction(body);
   }
