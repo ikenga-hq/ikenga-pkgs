@@ -48,14 +48,16 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "break it down", "shot list", "breakdown" | [`actions/breakdown.md`](actions/breakdown.md) | WP-04 |
 | "characters", "locations", "look / style", "bible" | [`actions/bible.md`](actions/bible.md) | WP-05 |
 | "storyboard", "sketch board", "beat board", "board" | [`actions/board.md`](actions/board.md) | WP-21 |
-| "key frames", "final panels", "keyframes" | [`actions/keyframes.md`](actions/keyframes.md) | WP-22 |
+| "key frames", "final panels", "keyframes", "continuity check" | [`actions/keyframes.md`](actions/keyframes.md) | WP-22 |
 | "animate", "make the clips", "motion" | [`actions/motion.md`](actions/motion.md) | WP-10 · WP-11 |
 | "voice-over", "music", "sound effects", "sound" | [`actions/sound.md`](actions/sound.md) | WP-12 |
-| "animatic", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | WP-13 · WP-15 |
-| "render the film", "export the MP4", "export" | [`actions/export.md`](actions/export.md) | WP-15 · WP-17 |
+| "animatic", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | WP-13 (stub) |
+| "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
 | "I reviewed it", "apply my notes", "review" | [`actions/review.md`](actions/review.md) | WP-07a |
 | "show me …", "open the board", "view" | [`actions/view.md`](actions/view.md) | WP-07c |
 | "where are we", "what's next", "status" | [`actions/status.md`](actions/status.md) | — |
+
+Export hands the approved film to DaVinci Resolve as a timeline plus media. MP4 masters, cutdowns and a Canva deck are parked (plan Round 7): if asked for an MP4, say so and offer the handoff.
 
 If nothing matches, run `status` and offer the next action it suggests. If an action file still says **Stub (WP-02)**, tell the person it is not built yet and stop — do not improvise it.
 

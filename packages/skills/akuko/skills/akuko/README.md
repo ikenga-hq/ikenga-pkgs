@@ -6,7 +6,7 @@ An agent skill that takes a short story, treatment or film script to a finished 
 
 It runs in **Claude artifacts** (claude.ai), **Claude Code**, and the **Ikenga** desktop app, and detects which one at the start of every action. Two rules never bend: only a person approves anything, and nothing paid runs without an estimate, a budget cap and an explicit OK.
 
-> **Status: skeleton.** The router, host detection and project format are in place; most actions are stubs that say which work package fills them. Don't expect a film yet.
+> **Status:** every stage through export is built except **assemble** (the animatic, rough cut and picture lock), which is still a stub that says so. Export hands the approved film to DaVinci Resolve as a timeline plus media; MP4 masters, cutdowns and decks are not built. Paid stages (bible, key frames, motion, voice-over) are free through the manual provider and need a budget cap and your OK for any paid call.
 
 ## Layout
 
