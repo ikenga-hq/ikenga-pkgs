@@ -8,7 +8,8 @@
     y          number  vertical drift in px over the move (default -20)
     duration   number  s the move takes; match the host's data-duration (default 5)
   Motion: linear (`ease: "none"`): constant speed is the point of a Ken Burns move, so it uses
-  none of the vocabulary eases. The move is on a wrapper, never on the image itself.
+  none of the vocabulary eases. The move is on a wrapper, never on the image itself; the wrapper is
+  oversized on purpose (data-layout-allow-overflow) so the push never shows an edge.
   Host: <div id="ken-burns" data-composition-id="ken-burns" data-composition-src="compositions/ken-burns.html" ...>
 -->
 <template>
@@ -38,7 +39,7 @@
       {"id":"duration","type":"number","label":"Move takes (s)","default":5,"min":0.1}
     ]'
   >
-    <div id="kb-move" class="kb-move">
+    <div id="kb-move" class="kb-move" data-layout-allow-overflow>
       <div id="kb-plate" class="kb-plate"><div class="kb-sun"></div><div class="kb-ridge"></div></div>
     </div>
   </div>
