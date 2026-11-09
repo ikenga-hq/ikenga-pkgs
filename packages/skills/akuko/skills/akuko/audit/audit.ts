@@ -142,8 +142,11 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
   // 3. A character named in the shot is in the prompt (the prompt names the characters in `refs`).
   for (const c of p.bible.characters) {
     if (shot.refs.includes(c.id)) continue;
+    // A single-word name ("Mara", "Hood") cannot be told from ordinary prose by a text match, so it is capped at low;
+    // a multi-word name found in the action or blocking is medium.
+    const single = cleanName(c.name).split(' ').length === 1;
     if (mentions(shot.action, c.name) || shot.blocking.some((b) => mentions(b.who, c.name))) {
-      add('character-not-in-prompt', 'medium', `${c.name} is named in the shot's action or blocking but is not in its refs, so the prompt leaves them out`);
+      add('character-not-in-prompt', single ? 'low' : 'medium', `${c.name} is named in the shot's action or blocking but is not in its refs, so the prompt leaves them out`);
     } else if (mentions(shot.script_line, c.name)) {
       add('character-not-in-prompt', 'low', `${c.name} is named in the shot's script line but is not in its refs`);
     }
@@ -151,8 +154,9 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
 
   // 4. More than two principals in one frame (plan R-1).
   const principals = characterEntries(p, shot).filter(isPrincipal);
+  const label = (c: BibleEntry): string => (c.role === undefined ? `${c.name} (role not set, counted as principal)` : c.name);
   if (principals.length > MAX_PRINCIPALS) {
-    add('too-many-principals', 'high', `${principals.length} principals in one frame (${principals.map((c) => c.name).join(', ')}); more than ${MAX_PRINCIPALS} tends to blend faces`);
+    add('too-many-principals', 'high', `${principals.length} principals in one frame (${principals.map(label).join(', ')}); more than ${MAX_PRINCIPALS} tends to blend faces`);
   }
 
   // 6. The lookbook used matches the shot's style.
@@ -179,10 +183,15 @@ function mixedModelFindings(p: AkukoProject, made: Asset[]): Map<string, Finding
     for (const a of list) count.set(label(a), (count.get(label(a)) ?? 0) + 1);
     if (count.size < 2) continue;
     // Majority wins; a tie goes to the earliest frame's choice.
-    const top = [...count.entries()].reduce((best, e) => (e[1] > best[1] ? e : best));
+    const ranked = [...count.entries()];
+    const top = ranked.reduce((best, e) => (e[1] > best[1] ? e : best));
+    const tied = ranked.filter((e) => e[1] === top[1]);
     for (const a of list) {
-      if (label(a) === top[0]) continue;
-      out.set(a.id, { source: 'structural', check: 'mixed-model', severity: 'medium', text: `Made with ${label(a)} while most of scene ${scene || '(none)'} used ${top[0]}; mixing models is a drift risk` });
+      if (tied.length === 1 && label(a) === top[0]) continue;
+      const text = tied.length > 1
+        ? `Scene ${scene || '(none)'} is split between ${tied.map((e) => e[0]).join(' and ')}; this frame used ${label(a)}. Mixing models is a drift risk`
+        : `Made with ${label(a)} while most of scene ${scene || '(none)'} used ${top[0]}; mixing models is a drift risk`;
+      out.set(a.id, { source: 'structural', check: 'mixed-model', severity: 'medium', text });
     }
   }
   return out;

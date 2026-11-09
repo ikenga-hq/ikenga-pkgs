@@ -9,7 +9,13 @@
  *   record --unit <id> --finding "<text>" --severity low|medium|high
  *                            the agent's note from looking at one frame next to its references.
  *                            Stored in board/audit.json; run `run` afterwards to publish it.
+ *   record --clear --unit <id> [--finding "<text>"]
+ *                            retract the agent's own notes for that frame (only the one with that text, if given).
+ *                            Run `run` afterwards to drop its comment.
  *   summary                  print the last report's summary without changing anything
+ *
+ * `run` drops notes on earlier takes of regenerated frames from board/audit.json. It reports the count once
+ * (the report it writes lists them as stale); the next run no longer has them.
  *
  * Advisory only. Nothing here changes a status: only a person sends a frame back, on the board.
  * On host A import the functions from `audit.ts` and pass the project read from the artifact store.
@@ -76,6 +82,18 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: renderSummary(f.report).trimEnd() };
     }
 
+    if (cmd === 'record' && opt.has('clear')) {
+      const unit = str(opt.get('unit'));
+      const text = str(opt.get('finding'))?.trim();
+      if (!unit) return { code: 2, out: 'akuko: --unit <asset id> is required with --clear.' };
+      const f = await readAuditFile(dir);
+      const keep = f.notes.filter((n) => !(n.unit === unit && (text === undefined || n.text === text)));
+      const removed = f.notes.length - keep.length;
+      if (removed === 0) return { code: 1, out: `akuko: no recorded note on ${unit}${text ? ' with that text' : ''}.` };
+      await writeAuditFile(dir, { ...f, notes: keep });
+      return { code: 0, out: `Removed ${removed} of your note${removed === 1 ? '' : 's'} on ${unit}. Run \`run\` to drop its "Audit:" comment.` };
+    }
+
     if (cmd === 'record') {
       const unit = str(opt.get('unit'));
       const text = str(opt.get('finding'))?.trim();
@@ -100,7 +118,9 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const next = applyAuditComments(project, report, clock());
       if (JSON.stringify(next) !== JSON.stringify(project)) await host.writeState(next);
       const summary = renderSummary(report);
-      await writeAuditFile(dir, { version: 1, notes: file.notes, report }, summary);
+      // Notes on an earlier take are reported as stale just now; drop them so they are not carried forever.
+      const stale = new Set(report.stale_notes);
+      await writeAuditFile(dir, { version: 1, notes: file.notes.filter((n) => !stale.has(n)), report }, summary);
       const send = report.frames.flatMap((f) => (f.suggestion ? [`- ${f.suggestion}`] : []));
       return {
         code: 0,
@@ -108,6 +128,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
           line(report),
           report.summary.clean ? 'No high findings.' : 'There are high findings; show them to the person before motion.',
           ...(send.length ? ['Suggested for the person to consider (nothing was changed):', ...send] : []),
+          ...(report.stale_notes.length ? [`Dropped ${report.stale_notes.length} note${report.stale_notes.length === 1 ? '' : 's'} on earlier takes of regenerated frames (reported once, here).`] : []),
           'Report: board/audit.json and board/audit.md. Comments added to the frames start with "Audit:".',
         ].join('\n'),
       };

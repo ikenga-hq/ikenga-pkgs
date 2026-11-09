@@ -263,3 +263,76 @@ describe('audit: the command line', () => {
     assert.equal((await run(['nope', '--project', dir], clock)).code, 2);
   });
 });
+
+describe('audit: review follow-ups', () => {
+  it('caps a single-word character name at low, since a text match cannot tell it from prose', () => {
+    const p = clean();
+    p.bible.characters.push({ ...p.bible.characters[0]!, id: 'char_mara', name: 'Mara', refs: [] });
+    p.shots.find((s) => s.id === 'sc3_sh1')!.action = 'Mara waits by the door.';
+    const r = auditProject(p, { now: NOW });
+    assert.deepEqual(checks(r, 'sc3_sh1'), ['character-not-in-prompt:low']);
+  });
+
+  it('says so when a principal is counted because the role is not set', () => {
+    const p = clean();
+    for (const c of p.bible.characters) delete c.role;
+    p.shots.find((s) => s.id === 'sc2_sh1')!.refs.push('char_officers-3');
+    const f = frame(auditProject(p, { now: NOW }), 'sc2_sh1').structural.find((x) => x.check === 'too-many-principals')!;
+    assert.match(f.text, /The Narrator \(role not set, counted as principal\)/);
+  });
+
+  it('describes an even split instead of "most of the scene"', () => {
+    const p = clean();
+    asset(p, kf('sc2_sh3')).model = 'model-b';
+    asset(p, kf('sc2_sh4')).model = 'model-b';
+    const r = auditProject(p, { now: NOW });
+    for (const s of ['sc2_sh1', 'sc2_sh3']) assert.match(frame(r, s).structural.find((x) => x.check === 'mixed-model')!.text, /^Scene sc2 is split between gemini-image\/model-a and gemini-image\/model-b/);
+    assert.doesNotMatch(frame(r, 'sc2_sh3').structural[0]!.text, /most of scene/);
+  });
+
+  const clockAt = () => new Date(NOW);
+  async function folder(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'akuko-audit-'));
+    await createLocalHost({ projectDir: dir }).writeState(shortStoryKeyframesApproved());
+    return dir;
+  }
+  const rec = (dir: string, unit: string, text: string) => run(['record', '--project', dir, '--unit', unit, '--finding', text, '--severity', 'medium'], clockAt);
+
+  it('record --clear retracts the agent\'s notes for a unit, or only the one matching text', async () => {
+    const dir = await folder();
+    await rec(dir, kf('sc2_sh3'), 'hair too light');
+    await rec(dir, kf('sc2_sh3'), 'coat wrong');
+    await rec(dir, kf('sc3_sh1'), 'face differs');
+    await run(['run', '--project', dir], clockAt);
+    const one = await run(['record', '--clear', '--project', dir, '--unit', kf('sc2_sh3'), '--finding', 'coat wrong'], clockAt);
+    assert.equal(one.code, 0, one.out);
+    assert.match(one.out, /Removed 1 of your note on/);
+    assert.equal((await run(['record', '--clear', '--project', dir, '--unit', kf('sc2_sh3'), '--finding', 'coat wrong'], clockAt)).code, 1, 'nothing left to remove');
+    await run(['run', '--project', dir], clockAt);
+    const p = await createLocalHost({ projectDir: dir }).readState();
+    assert.equal(asset(p, kf('sc2_sh3')).comments.filter(isAuditComment).length, 1, 'the retracted note\'s comment is gone after run');
+    const all = await run(['record', '--clear', '--project', dir, '--unit', kf('sc2_sh3')], clockAt);
+    assert.match(all.out, /Removed 1 of your note on/);
+    await run(['run', '--project', dir], clockAt);
+    const q = await createLocalHost({ projectDir: dir }).readState();
+    assert.equal(asset(q, kf('sc2_sh3')).comments.filter(isAuditComment).length, 0);
+    assert.equal(asset(q, kf('sc3_sh1')).comments.filter(isAuditComment).length, 1, 'other frames keep their notes');
+    assert.equal((await run(['record', '--clear', '--project', dir], clockAt)).code, 2);
+  });
+
+  it('run drops notes on a regenerated take from board/audit.json, reporting the count once', async () => {
+    const dir = await folder();
+    await rec(dir, kf('sc2_sh3'), 'hair too light');
+    const host = createLocalHost({ projectDir: dir });
+    const p = await host.readState();
+    asset(p, kf('sc2_sh3')).file = { uri: 'mem://assets/sc2_sh3_keyframe-r2.png', mime: 'image/png', hash: 'h-take2' };
+    await host.writeState(p);
+    const first = await run(['run', '--project', dir], clockAt);
+    assert.match(first.out, /Dropped 1 note on earlier takes/);
+    const file = JSON.parse(readFileSync(join(dir, 'board', 'audit.json'), 'utf8')) as { notes: unknown[]; report: { stale_notes: unknown[] } };
+    assert.equal(file.notes.length, 0);
+    assert.equal(file.report.stale_notes.length, 1, 'this run\'s report still lists it');
+    const second = await run(['run', '--project', dir], clockAt);
+    assert.doesNotMatch(second.out, /Dropped/);
+  });
+});
