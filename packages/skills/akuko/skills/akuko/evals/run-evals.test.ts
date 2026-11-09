@@ -30,6 +30,7 @@ interface Mod {
   detectAction(o: string): { action: string | null; actions: string[]; method: string };
   scoreTrigger(i: TriggerItem, o: string): { pass: boolean; triggered: boolean };
   modelCallError(o: string): string | null;
+  isRealOutcome(o: string): boolean;
   linkedActions(action: string, dir?: string): string[];
   scoreRouting(i: StageItem, o: string, opts?: { actionsDir?: string }): { pass: boolean; routed_action: string | null; actions_read: string[]; reason?: string };
   rate(rows: Array<{ pass: boolean }>): number | null;
@@ -170,7 +171,10 @@ describe('scoring', () => {
     const v = m.verdict([ok, ok, ok, ok, err], [ok]);
     assert.equal(v.verdict, 'INCONCLUSIVE');
     assert.equal(v.trigger_rate, 1);
-    assert.equal(m.verdict([bad, err], [ok]).verdict, 'INCONCLUSIVE', 'even when the scored part would fail');
+    // A clear FAIL stays a FAIL: even counting the errored row as a pass, triggering is at 50%.
+    assert.equal(m.verdict([bad, err], [ok]).verdict, 'FAIL', 'a set that misses the line even if every error had passed');
+    assert.equal(m.verdict([ok, bad, err, err, err], [ok]).verdict, 'INCONCLUSIVE', 'the errors could still lift it to 80%: 4 of 5');
+    assert.equal(m.verdict([ok, ok, ok, ok, ok, bad, bad, err], [ok]).verdict, 'FAIL', '6 of 8 at best is 75%');
   });
 });
 
@@ -208,21 +212,77 @@ describe('a failed model call is an error, not a FAIL', () => {
     assert.ok(r.results.every((x) => x.error && x.pass === false));
   });
 
-  it('a non-zero exit with an ordinary trace is an error too, from a real subprocess', async () => {
+  const maxTurns = trace(
+    use('Skill', { skill: 'akuko' }),
+    use('Read', { file_path: `${SK}/actions/bible.md` }),
+    line({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 8 }),
+  );
+
+  it('a non-zero exit is still scored when the trace is a real outcome (tools used, or stopped at max turns)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akuko-evals-exit-'));
+    try {
+      const exits = (name: string, out: string) => {
+        const script = join(dir, name);
+        writeFileSync(script, `console.log(${JSON.stringify(out)}); process.exit(1);`);
+        return m.commandRunner(`node "${script}"`);
+      };
+      assert.equal(m.isRealOutcome(maxTurns), true);
+      assert.equal(m.isRealOutcome(loadsSkill), true);
+      assert.equal(m.isRealOutcome(expiredSignIn), false);
+      assert.equal(m.isRealOutcome(loadsNothing), false);
+      assert.equal(m.isRealOutcome('plain text'), false);
+      // max turns, exit 1, never opened the right action: scored as a FAIL, not dropped as an error
+      const { triggers, stages } = m.loadEvals();
+      const item = stages.find((x) => x.action === 'keyframes')!;
+      const r = await m.runEvals({ triggers: [], stages: [item], runModel: exits('max.mjs', maxTurns) });
+      assert.equal(r.errors, 0);
+      assert.deepEqual(r.routing, { passed: 0, total: 1 });
+      assert.equal(r.verdict, 'FAIL');
+      assert.match(String((r.results[0] as { reason?: string }).reason), /opened bible first, expected keyframes/);
+      // max turns after reaching the right action is a pass
+      const ok = trace(use('Read', { file_path: `${SK}/actions/keyframes.md` }), line({ type: 'result', subtype: 'error_max_turns', is_error: true }));
+      assert.equal((await m.runEvals({ triggers: [], stages: [item], runModel: exits('ok.mjs', ok) })).verdict, 'PASS');
+      // a trigger prompt whose run exited 1 after loading the skill is scored too
+      const t = triggers.find((x) => x.should_trigger)!;
+      assert.equal((await m.runEvals({ triggers: [t], stages: [], runModel: exits('t.mjs', loadsSkill) })).trigger.passed, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a non-zero exit with no trace, no tool use, or a non-max-turns error result is an error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'akuko-evals-exit-'));
     try {
       const script = join(dir, 'exits-1.mjs');
-      writeFileSync(script, `console.log(${JSON.stringify(loadsSkill)}); console.error('something broke'); process.exit(1);`);
+      writeFileSync(script, "console.log('boom, no json'); console.error('something broke'); process.exit(1);");
       const run = m.commandRunner(`node "${script}"`);
       await assert.rejects(run('any prompt'), /command exited 1: something broke/);
+      const quiet = join(dir, 'quiet.mjs');
+      writeFileSync(quiet, `console.log(${JSON.stringify(loadsNothing)}); process.exit(1);`);
+      await assert.rejects(m.commandRunner(`node "${quiet}"`)('p'), /command exited 1/);
       const { triggers, stages } = m.loadEvals();
       const r = await m.runEvals({ triggers, stages, limit: 2, runModel: run });
       assert.equal(r.errors, 4);
       assert.equal(r.verdict, 'INCONCLUSIVE');
       assert.equal(r.trigger_rate, null);
+      // an error result that is not max turns is an error even at exit 0
+      assert.match(m.modelCallError(trace(line({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'crashed' })))!, /crashed/);
+      assert.equal(m.modelCallError(maxTurns), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('an answer that mentions API keys or rate limits is not an error: only a short whole-output message is', () => {
+    const say = (text: string) => trace(line({ type: 'assistant', message: { content: [{ type: 'text', text }] } }));
+    // the negative trigger queries are about stories, images and voices; a model may well talk about keys and limits
+    const long = `Here is how to cope with rate limit exceeded errors from an image API: back off and retry. If you see an invalid API key message, check that the key is set in your environment, never in a file. ${'More detail follows. '.repeat(12)}`;
+    assert.ok(long.length > 300);
+    assert.equal(m.modelCallError(say(long)), null, 'a long answer in trace mode');
+    assert.equal(m.modelCallError(long), null, 'a long answer in plain text');
+    assert.equal(m.modelCallError(say('Midjourney has a rate limit exceeded policy; check your plan.'))?.startsWith('the model call failed'), true, 'a short whole-output message that matches is still an error');
+    const { triggers } = m.loadEvals();
+    for (const t of triggers.filter((x) => !x.should_trigger)) assert.equal(m.modelCallError(say(`Sure: ${t.query}`)), null, t.query);
   });
 
   it('the command line prints the reason, leaves the rates blank and exits 3', async () => {

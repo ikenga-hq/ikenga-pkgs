@@ -12,8 +12,8 @@
 //
 // A prompt whose model call itself failed (the command exited non-zero, or the model
 // only printed an auth / API / rate-limit error such as an expired sign-in) is an
-// ERROR, not a FAIL. Errors are left out of both rates, and any error makes the
-// verdict INCONCLUSIVE: the skill was not tested on that prompt.
+// ERROR, not a FAIL (a non-zero exit with a real trace, or one stopped at --max-turns, is scored). Errors are left out of both rates, and any error makes the
+// verdict INCONCLUSIVE (FAIL if a rate misses the pass mark even counting errors as passes).
 //
 // THIS SCRIPT CALLS A MODEL THROUGH THE COMMAND YOU GIVE IT. It never runs on its
 // own, no test runs it, and it uses whatever account your command uses. Use
@@ -137,11 +137,23 @@ function assistantText(output) {
  */
 export function modelCallError(output) {
   if (toolCalls(output).length > 0) return null;
-  const text = isTrace(output) ? assistantText(output) : String(output).trim().length <= 400 ? String(output).trim() : '';
+  // Only a short message that is the whole output counts: a real answer that happens to mention keys or rate limits does not.
+  const whole = isTrace(output) ? assistantText(output) : String(output).trim();
+  const text = whole.length < 300 ? whole : '';
   if (MODEL_ERROR_PATTERNS.some((p) => p.test(text))) return `the model call failed: ${text.replace(/\s+/g, ' ').slice(0, 160)}`;
-  const flagged = jsonObjects(output).find((o) => o && typeof o === 'object' && o.type === 'result' && o.is_error === true);
+  const flagged = jsonObjects(output).find((o) => o && typeof o === 'object' && o.type === 'result' && o.is_error === true && o.subtype !== 'error_max_turns');
   if (flagged) return `the model call failed: ${String(flagged.result ?? flagged.subtype ?? 'error result').replace(/\s+/g, ' ').slice(0, 160)}`;
   return null;
+}
+
+/**
+ * A trace from a command that exited non-zero but still holds what the model did: it used tools, or
+ * Claude Code stopped it at --max-turns (result subtype "error_max_turns", which makes `-p` exit non-zero).
+ * That is a real outcome and is scored; a model that wandered off and never opened the right file is a FAIL.
+ */
+export function isRealOutcome(output) {
+  if (!isTrace(output) || modelCallError(output)) return false;
+  return toolCalls(output).length > 0 || jsonObjects(output).some((o) => o && typeof o === 'object' && o.type === 'result' && o.subtype === 'error_max_turns');
 }
 
 const ACTION_PATH = /(?:^|[\\/])actions[\\/]([a-z][a-z-]*)\.md\b/i;
@@ -251,7 +263,8 @@ export const rate = (rows) => {
 
 /**
  * PASS when every rate that was run is at least the threshold; FAIL otherwise.
- * INCONCLUSIVE when any prompt errored: the skill was not tested on it.
+ * With errored prompts (never got a model answer): FAIL if a set misses the threshold even when every
+ * errored prompt is counted as a pass, otherwise INCONCLUSIVE (the skill was not tested on them).
  */
 export function verdict(triggerRows, routingRows, threshold = DEFAULT_THRESHOLD) {
   const t = rate(triggerRows);
@@ -259,7 +272,11 @@ export function verdict(triggerRows, routingRows, threshold = DEFAULT_THRESHOLD)
   const ran = [t, r].filter((x) => x !== null);
   const errored = [...triggerRows, ...routingRows].some((x) => x.error);
   const pass = ran.length > 0 && ran.every((x) => x >= threshold);
-  return { trigger_rate: t, routing_rate: r, threshold, verdict: errored ? 'INCONCLUSIVE' : pass ? 'PASS' : 'FAIL' };
+  // Best case: every errored prompt would have passed. If a set misses the threshold even then, the verdict is FAIL.
+  const best = (rows) => (rows.length === 0 ? null : rows.filter((x) => x.pass || x.error).length / rows.length);
+  const bestRates = [best(triggerRows), best(routingRows)].filter((x) => x !== null);
+  const clearFail = bestRates.some((x) => x < threshold);
+  return { trigger_rate: t, routing_rate: r, threshold, verdict: errored && !clearFail ? 'INCONCLUSIVE' : pass && !errored ? 'PASS' : 'FAIL' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -346,8 +363,8 @@ export function commandRunner(template, { timeoutS = 240, cwd = process.cwd() } 
     child.on('close', (code) => {
       clearTimeout(timer);
       if (dir) rmSync(dir, { recursive: true, force: true });
-      // A non-zero exit means the call itself failed, whatever it printed: that is an error, not an answer.
-      if (code !== 0) reject(new Error(`command exited ${code}: ${(modelCallError(out) ?? (err.trim() || 'no error output')).slice(0, 300)}`));
+      // A non-zero exit is an error unless the output is a real trace of what the model did (tools used, or stopped at max turns).
+      if (code !== 0 && !isRealOutcome(out)) reject(new Error(`command exited ${code}: ${(modelCallError(out) ?? (err.trim() || 'no error output')).slice(0, 300)}`));
       else resolveRun(out);
     });
     if (!template.includes('{prompt_file}')) child.stdin.end(prompt);
@@ -421,7 +438,7 @@ export async function main(argv, { log = console.log, loadFrom = HERE } = {}) {
   log(`Stage routing: ${report.routing.passed}/${report.routing.total} (${pct(report.routing_rate)})`);
   if (report.errors > 0) {
     log(`Errors: ${report.errors} prompt(s) never got a model answer (${report.error_reasons.join('; ')}). They are left out of both rates.`);
-    log('The skill was not tested on those prompts: fix the command or the sign-in and run again.');
+    log(report.verdict === 'FAIL' ? 'Still FAIL even if every errored prompt had passed.' : 'The skill was not tested on those prompts: fix the command or the sign-in and run again.');
   }
   log(`Verdict (each at least ${pct(o.threshold)}): ${report.verdict}`);
   log(`Results: ${out}`);
