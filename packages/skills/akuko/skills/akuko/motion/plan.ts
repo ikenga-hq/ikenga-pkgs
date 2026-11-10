@@ -11,7 +11,11 @@
  *   unitReadiness()    ready / blocked / in flight / in review / approved
  *   paidAttempts()     paid tries on one clip, from the ledger, with the money spent
  *   buildMotionJob()   one gate-ready Job (default: the next shot), refusing at the retry cap
- *   beginUnits() / abandonUnits() / repairFileless() / refreshStageState()
+ *   beginUnits() / abandonUnits() / repairFileless() / recordClipFilm()
+ *   the stage roll-up is `refreshMotionStage()` in `stage.ts`, shared with lip-sync (WP-32)
+ *
+ * Part scope (WP-32): `{ part: 'P7' }` on planning, status and jobs opens one part once its own key frames and
+ * bible entries are approved (`stage.ts#partOpenness`), and touches only that part's live shots.
  *
  * The retry cap lives here and not in `spend/` (frozen): a clip's price is per
  * second, so a retry loop is where money goes quickly. Nothing here calls a
@@ -30,10 +34,9 @@ import { removedAt } from '../decisions/fold.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { motionPrompt } from './prompts.ts';
 import { treatmentOf, wantsClip } from './treatment.ts';
+import { CLIP_TAG, MOTION_STAGE, partOpenness, partRefusal, partShotIds, partsOf, refreshMotionStage } from './stage.ts';
 
-export const MOTION_STAGE = 'motion' as const;
-/** Tag every planned clip asset carries. */
-export const CLIP_TAG = 'clip';
+export { CLIP_TAG, MOTION_STAGE, refreshMotionStage } from './stage.ts';
 /** Paid attempts allowed per shot unless the person asks for more. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -58,8 +61,20 @@ const hash8 = (s: string): string => createHash('sha1').update(s).digest('hex').
 // Planning
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Refuse unless the motion stage is open: every earlier stage, through the key frames, approved. */
-export function assertOpen(p: AkukoProject): void {
+/** A run scoped to one part of the film (`--part P7`). Absent: the whole project, as before. */
+export interface Scope { part?: string }
+
+/**
+ * Refuse unless the motion stage is open: every earlier stage, through the key frames, approved.
+ * With `{ part }`: refuse unless that part is open (`stage.ts#partOpenness`: the stages before the bible approved,
+ * and the part's own key frames and the bible entries they use approved), naming what is missing.
+ */
+export function assertOpen(p: AkukoProject, scope: Scope = {}): void {
+  if (scope.part !== undefined) {
+    const o = partOpenness(p, scope.part);
+    if (!o.open) throw new MotionError(partRefusal(o, partsOf(p)));
+    return;
+  }
   for (const { id } of STAGES) {
     if (id === MOTION_STAGE) break;
     if (p.stages[id].state !== 'approved') {
@@ -77,12 +92,13 @@ export interface PlanResult { project: AkukoProject; created: string[] }
  * behaviour). `still`, `still-move` and `lipsync` shots get none (`treatment.ts`); a shot removed from the
  * sheet gets none.
  */
-export function planMotion(project: AkukoProject, now: string): PlanResult {
-  assertOpen(project);
+export function planMotion(project: AkukoProject, now: string, scope: Scope = {}): PlanResult {
+  assertOpen(project, scope);
   const p = structuredClone(project);
   const created: string[] = [];
+  const only = inScope(p, scope);
   for (const shot of p.shots) {
-    if (removedAt(p, shot) !== undefined || !wantsClip(shot)) continue;
+    if (removedAt(p, shot) !== undefined || !wantsClip(shot) || !only(shot.id)) continue;
     const id = assetIdFor(shot.id);
     if (p.assets.some((a) => a.id === id)) continue;
     p.assets.push({
@@ -98,8 +114,14 @@ export function planMotion(project: AkukoProject, now: string): PlanResult {
     });
     created.push(id);
   }
-  if (created.length > 0 && p.stages.motion.state === 'not-started') p.stages.motion = { state: 'in-progress' };
-  return { project: p, created };
+  return { project: refreshMotionStage(p), created };
+}
+
+/** A filter on shot ids: every shot without a part scope, else the part's live shots. */
+export function inScope(p: AkukoProject, scope: Scope = {}): (shotId: string | undefined) => boolean {
+  if (scope.part === undefined) return () => true;
+  const ids = partShotIds(partOpenness(p, scope.part));
+  return (shotId) => shotId !== undefined && ids.has(shotId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -190,8 +212,9 @@ export interface StatusRow {
   idle?: string;
 }
 
-export function motionStatus(p: AkukoProject): StatusRow[] {
-  return liveClips(p).map((a) => {
+export function motionStatus(p: AkukoProject, scope: Scope = {}): StatusRow[] {
+  const only = inScope(p, scope);
+  return liveClips(p).filter((a) => only(a.owner)).map((a) => {
     const r = unitReadiness(p, a);
     const t = paidAttempts(p, a.id);
     const sh = shotOf(p, a);
@@ -234,6 +257,8 @@ export interface BuildOptions {
   units?: string[];
   /** Make every ready clip of this scene in one job. */
   scene?: string;
+  /** Only this part's shots, once the part is open (`--part P7`). */
+  part?: string;
   /** Ask for native sound where the model has it. Default off. */
   audio?: boolean;
   /** Paid attempts allowed per shot. Default 3; raise only when the person asked in their own words. */
@@ -281,11 +306,13 @@ function resolveModel(config: AkukoProviderConfig, o: BuildOptions): { model: st
  * shot at the retry cap is refused (or skipped, in a batch).
  */
 export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
-  assertOpen(p);
+  const scope: Scope = o.part !== undefined ? { part: o.part } : {};
+  assertOpen(p, scope);
   const config = o.config ?? loadProviderConfig();
   const max = o.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(max) || max < 1) throw new MotionError('--max-attempts must be a whole number of 1 or more.');
-  const all = activeClips(p);
+  const only = inScope(p, scope);
+  const all = activeClips(p).filter((a) => only(a.owner));
   const byId = new Map(liveClips(p).map((a) => [a.id, a]));
 
   let candidates: Asset[];
@@ -293,6 +320,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     candidates = o.units.map((id) => {
       const a = byId.get(id);
       if (!a) throw new MotionError(`"${id}" is not a planned clip; run plan first.`);
+      if (!only(a.owner)) throw new MotionError(`${id} is not in part ${o.part}; a run scoped to ${o.part} makes only that part's clips. Nothing was priced.`);
       const sh = shotOf(p, a);
       if (!wantsClip(sh)) throw new MotionError(`${sh.id}: the shot is \`${treatmentOf(sh) ?? 'none'}\`; treat it \`video\` first (only on the person's words), then plan. Nothing was priced.`);
       const r = unitReadiness(p, a);
@@ -303,7 +331,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     candidates = all.filter((a) => unitReadiness(p, a).state === 'ready' && (o.scene === undefined || shotOf(p, a).scene === o.scene));
   }
   if (candidates.length === 0) {
-    const stuck = motionStatus(p).filter((r) => r.state === 'blocked' && !r.idle).map((r) => `${r.asset} (waiting for the approved key frame ${r.waiting.join(', ')})`);
+    const stuck = motionStatus(p, scope).filter((r) => r.state === 'blocked' && !r.idle).map((r) => `${r.asset} (waiting for the approved key frame ${r.waiting.join(', ')})`);
     throw new MotionError(stuck.length ? `Nothing can be made yet: ${stuck.join('; ')}.` : 'Nothing is waiting to be made.');
   }
   if (new Set(candidates.map((a) => a.id)).size !== candidates.length) throw new MotionError('a unit was listed twice');
@@ -468,22 +496,19 @@ export function repairFileless(project: AkukoProject, ts: string): { project: Ak
   return { project: p, repaired };
 }
 
-/** Keep `stages.motion.state` honest after the units moved. Never touches `locked`, and never sets `approved`. */
-export function refreshStageState(project: AkukoProject): AkukoProject {
-  const rec = project.stages.motion;
-  if (rec.state === 'locked') return project;
-  const units = activeClips(project);
-  if (units.length === 0) return project;
-  if (rec.state === 'approved' && units.every(approvedWithFile)) return project;
-  const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');
-  let state: typeof rec.state;
-  if (todo.length > 0) {
-    const ids = new Set(todo.map((a) => a.id));
-    const waiting = project.pending_spend.some((j) => j.stage === MOTION_STAGE && j.status === 'awaiting-approval' && j.units.some((u) => ids.has(u)));
-    state = waiting ? 'waiting-spend' : 'in-progress';
-  } else {
-    state = 'in-review';
+/**
+ * Record where each clip sits in film time, as a job starts (WP-32): `film` = its shot's slot on the master clock
+ * when the clip was made, `in_s` = the shot's start (a clip starts on its key frame) and `out_s` = the end of the
+ * slot or of the clip, whichever comes first. The handoff reads this record. A shot with no `film` records nothing.
+ */
+export function recordClipFilm(project: AkukoProject, seconds: Record<string, number>): AkukoProject {
+  const p = structuredClone(project);
+  for (const [id, secs] of Object.entries(seconds)) {
+    const a = p.assets.find((x) => x.id === id);
+    const shot = a?.owner === undefined ? undefined : p.shots.find((s) => s.id === a.owner);
+    if (!a || !shot?.film) continue;
+    const out = Math.min(shot.film.out_s, shot.film.in_s + secs);
+    if (out > shot.film.in_s) a.film = { in_s: shot.film.in_s, out_s: Number(out.toFixed(6)) };
   }
-  if (state === rec.state) return project;
-  return { ...project, stages: { ...project.stages, motion: { state } } };
+  return p;
 }

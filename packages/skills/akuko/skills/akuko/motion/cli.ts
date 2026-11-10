@@ -3,10 +3,11 @@
  *
  *   node --experimental-strip-types motion/cli.ts <command> --project <dir> [options]
  *
- *   plan                      create a planned clip for every shot (idempotent); says which shots are at the retry cap
- *   status                    one line per clip: its status, what it waits for, paid attempts and money spent
+ *   plan    [--part P7]       create a planned clip for every shot (idempotent); says which shots are at the retry cap
+ *   status  [--part P7]       one line per clip: its status, what it waits for, paid attempts and money spent
+ *   parts                     one line per part: open for motion or not, and what it waits for (free, read-only)
  *   step    --provider <id>   the next clip (one shot) through the spend gate: manual | fal-video
- *           [--model <id>] [--units a,b] [--scene sc1] [--audio] [--fit cover|nearest] [--max-attempts N]
+ *           [--model <id>] [--units a,b] [--scene sc1] [--part P7] [--audio] [--fit cover|nearest] [--max-attempts N]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
  *             manual: prints the prompt package and stops; bring files back with `ingest`
  *             --audio       ask for the model's own sound (off by default; costs more; a new approval)
@@ -22,6 +23,11 @@
  *   moves   [--apply]         list the camera moves parsed from each still-move shot's motion note; --apply writes them
  *                             (only onto shots with no move yet). Free, no approval: the person reviews them in Resolve
  *   sync                      repair and refresh the stage state, after decisions were folded
+ *
+ *   --part P7  (plan, status, step) work on one part of the film only. It is allowed once that part's own key frames
+ *              and the bible entries they use are approved, before the rest of the film's are (WP-32). It is
+ *              worked out from the approvals each time; nothing is stored, and the stage itself stays locked
+ *              until the whole film opens. Paid jobs still go through the rules guard and the spend gate.
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
  * Everything goes through the local host adapter. On host A the same Node code runs in
@@ -41,8 +47,9 @@ import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
-import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion } from './plan.ts';
-import { ShotTreatmentSchema } from '../schema/akuko-project.ts';
+import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion, type Scope } from './plan.ts';
+import { motionRollup, partOpenness, partRefusal, partsOf } from './stage.ts';
+import { ShotTreatmentSchema, type AkukoProject } from '../schema/akuko-project.ts';
 import { removedAt } from '../decisions/fold.ts';
 import { applyMoves, planMoves } from './moves.ts';
 import { treatShots } from './treat.ts';
@@ -97,6 +104,24 @@ function describeStatus(r: StepResult): CliResult {
   }
 }
 
+/** How the motion stage reads project-wide, and that a part's progress is per unit while it is locked. */
+function stageLine(p: AkukoProject): string {
+  const st = p.stages.motion.state;
+  return st === 'locked'
+    ? 'The motion stage is locked project-wide: it opens when every key frame of the film is approved. A part whose own key frames and bible entries are approved can work ahead with --part; its progress shows on its units, not on the stage.'
+    : `The motion stage is ${st}.`;
+}
+
+/** One part: open for motion, or what it waits for; and how many of its units are planned and approved. */
+function partLine(p: AkukoProject, part: string): string {
+  const o = partOpenness(p, part);
+  const ids = new Set(o.shots.map((s) => s.id));
+  const units = motionRollup(p).active.filter((a) => a.owner !== undefined && ids.has(a.owner));
+  const approved = units.filter((a) => a.status === 'approved').length;
+  const tally = `${o.shots.length} live shot${o.shots.length === 1 ? '' : 's'}; ${units.length} motion unit${units.length === 1 ? '' : 's'} planned, ${approved} approved`;
+  return o.open ? `${part}: open for motion (${tally}).` : `${partRefusal(o, partsOf(p))} (${tally}.)`;
+}
+
 export async function run(argv: string[], now: () => Date = () => new Date()): Promise<CliResult> {
   const { cmd, opt } = flags(argv);
   const dir = str(opt.get('project'));
@@ -104,26 +129,39 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
   const host = createLocalHost({ projectDir: dir, now });
   const clock = () => now().toISOString();
 
+  const part = opt.get('part');
+  if (part === true) return { code: 2, out: 'akuko: --part needs a part id, e.g. --part P7.' };
+  const scope: Scope = part !== undefined ? { part } : {};
+
   try {
+    if (cmd === 'parts') {
+      const proj = await host.readState();
+      const parts = partsOf(proj);
+      if (parts.length === 0) return { code: 0, out: 'No shot carries a part, so there is nothing to open part by part; the whole film opens together.' };
+      return { code: 0, out: [stageLine(proj), ...parts.map((x) => partLine(proj, x))].join(NL) };
+    }
     if (cmd === 'status') {
       const proj = await host.readState();
-      const rows = motionStatus(proj);
+      const rows = motionStatus(proj, scope);
       const flags = candidateFlags(proj, (x) => removedAt(proj, x) === undefined);
-      if (rows.length === 0) return { code: 0, out: ['Nothing planned yet. Run plan.', ...flags].join(NL) };
+      const head = part !== undefined ? [stageLine(proj), partLine(proj, part)] : [];
+      if (rows.length === 0) return { code: 0, out: [...head, 'Nothing planned yet. Run plan.', ...flags].join(NL) };
       return {
         code: 0,
-        out: [...rows.map((r) => r.idle ? `${r.asset}: ${r.status} (${r.idle})` : `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for the approved key frame ${r.waiting.join(', ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...flags].join(NL),
+        out: [...head, ...rows.map((r) => r.idle ? `${r.asset}: ${r.status} (${r.idle})` : `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for the approved key frame ${r.waiting.join(', ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...flags].join(NL),
       };
     }
     if (cmd === 'plan') {
       const before = await host.readState();
-      const r = planMotion(before, clock());
-      if (r.created.length > 0) await host.writeState(r.project);
-      const capped = motionStatus(r.project).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved' && !x.idle);
-      const live = r.project.shots.filter((x) => removedAt(r.project, x) === undefined);
+      const r = planMotion(before, clock(), scope);
+      if (r.created.length > 0 || r.project.stages.motion.state !== before.stages.motion.state) await host.writeState(r.project);
+      const capped = motionStatus(r.project, scope).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved' && !x.idle);
+      const only = part !== undefined ? new Set(partOpenness(r.project, part).shots.map((x) => x.id)) : undefined;
+      const live = r.project.shots.filter((x) => removedAt(r.project, x) === undefined && (only === undefined || only.has(x.id)));
       const untiered = live.filter(isUntieredImport).map((x) => x.id);
       const none = !live.some(wantsClip);
       const out = [
+        ...(part !== undefined ? [partLine(r.project, part)] : []),
         r.created.length ? `Planned ${r.created.length} clip${r.created.length === 1 ? '' : 's'}: ${r.created.join(', ')}.` : none ? 'No shot is a video shot; nothing to plan. Only the person makes a shot video: treat --shot <id> --as video.' : 'Everything is already planned.',
         ...(untiered.length ? [`WARNING: ${untiered.length} imported shot${untiered.length === 1 ? ' has' : 's have'} no tier and ${untiered.length === 1 ? 'is' : 'are'} treated as still (never a paid clip): ${untiered.join(', ')}.`] : []),
         ...candidateFlags(r.project, (x) => removedAt(r.project, x) === undefined),
@@ -202,6 +240,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(model ? { model } : {}),
         ...(units ? { units } : {}),
         ...(scene ? { scene } : {}),
+        ...(part !== undefined ? { part } : {}),
         ...(opt.get('audio') === true ? { audio: true } : {}),
         ...(max !== undefined ? { maxAttempts: Number(max) } : {}),
         ...(fit !== undefined ? { fit } : {}),
@@ -230,7 +269,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join(NL) };
     }
 
-    return { code: 2, out: 'akuko: command must be plan, status, treat, moves, step, ingest, collect or sync.' };
+    return { code: 2, out: 'akuko: command must be plan, status, parts, treat, moves, step, ingest, collect or sync.' };
   } catch (err) {
     if (err instanceof MotionError) return { code: 1, out: err.message };
     return { code: 1, out: `akuko: ${err instanceof Error ? err.message : String(err)}` };

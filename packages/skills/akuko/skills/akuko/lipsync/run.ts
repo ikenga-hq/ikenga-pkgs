@@ -27,7 +27,8 @@ import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { abandonUnits, beginUnits } from '../motion/plan.ts';
 import { resolveAll, stillHashes, type AudioContext } from './cut.ts';
-import { buildLipsyncJob, refreshStageState, repairFileless, type Span } from './plan.ts';
+import { refreshMotionStage } from '../motion/stage.ts';
+import { buildLipsyncJob, repairFileless, type Span } from './plan.ts';
 
 export interface StepDeps {
   host: WaveOneHost;
@@ -45,6 +46,8 @@ export interface StepOptions {
   model?: string;
   /** The shot to make (default: the next ready one). */
   shot?: string;
+  /** Only this part's shots (`--part P7`), once the part is open. The audio context should carry the same part. */
+  part?: string;
   /** Paid attempts allowed per shot (default 3). Only when the person asked for more, in their own words. */
   maxAttempts?: number;
 }
@@ -77,7 +80,7 @@ function thrown(job: Job, err: unknown): StepResult {
 export async function finalizeLipsync(deps: Pick<StepDeps, 'host' | 'now'>): Promise<string[]> {
   const before = await deps.host.readState();
   const repaired = repairFileless(before, clock(deps));
-  const after = refreshStageState(repaired.project);
+  const after = refreshMotionStage(repaired.project);
   if (repaired.repaired.length > 0 || after !== repaired.project) await deps.host.writeState(after);
   return repaired.repaired;
 }
@@ -93,6 +96,7 @@ export async function generateLipsync(deps: StepDeps, o: StepOptions): Promise<S
     stills,
     ...(o.model !== undefined ? { model: o.model } : {}),
     ...(o.shot !== undefined ? { shot: o.shot } : {}),
+    ...(o.part !== undefined ? { part: o.part } : {}),
     ...(o.maxAttempts !== undefined ? { maxAttempts: o.maxAttempts } : {}),
   });
   const res = await runJob(deps, built.job, [built.unit], built.audio.film);
@@ -102,7 +106,8 @@ export async function generateLipsync(deps: StepDeps, o: StepOptions): Promise<S
 /**
  * The unit, as it starts: `beginUnits` (pending → draft, a sent-back take cleared), and `film` set to
  * where the audio being sent sits on the master clock (a master slice), or cleared (a clip: not known).
- * That is where the video belongs in the edit.
+ * That is where the video belongs in the edit: the handoff places the lip-sync at this span (WP-32), and never
+ * recomputes it from today's lines, which may have changed since.
  */
 function begin(p: AkukoProject, unit: string, film: Span | undefined, ts: string): AkukoProject {
   const q = beginUnits(p, [unit], ts);
@@ -133,8 +138,8 @@ async function runJob(deps: StepDeps, job: Job, units: string[], film?: Span): P
   // Clear to go. A sent-back lip-sync gets its old take cleared so the new one fills it in place;
   // if the gate does not accept the run (or throws), the unit is put back exactly as it was.
   const before = await host.readState();
-  await host.writeState(refreshStageState(begin(before, units[0]!, film, clock(deps))));
-  const putBack = async (): Promise<void> => host.writeState(refreshStageState(abandonUnits(await host.readState(), before, units)));
+  await host.writeState(refreshMotionStage(begin(before, units[0]!, film, clock(deps))));
+  const putBack = async (): Promise<void> => host.writeState(refreshMotionStage(abandonUnits(await host.readState(), before, units)));
 
   let r: Awaited<ReturnType<SpendGate['run']>>;
   try {

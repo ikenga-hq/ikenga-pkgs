@@ -75,6 +75,12 @@ export interface VideoEvent {
   card?: string;
   /** A camera move on a still (master-clock plans). */
   move?: StillMove;
+  /**
+   * A still that is one piece of its shot's slot (the key frame held before or after a lip-sync, WP-32): the piece
+   * starts `at` frames into the slot, which is `of` frames long. The move runs across the whole slot, so this piece
+   * carries the part of it between `at` and `at + frames` (fcpxml.ts#movePiece). Absent: the still fills its slot.
+   */
+  moveSpan?: { at: number; of: number };
 }
 
 /** The audio roles the per-shot layout lays; a master-clock plan has one more, `master`. */
@@ -131,6 +137,8 @@ export interface MoveRow {
   recIn: number;
   frames: number;
   move: StillMove;
+  /** The lip-sync the still is held around (WP-32): its record in and length, in frames. The move runs on across it. */
+  around?: { recIn: number; frames: number };
 }
 
 export interface ExportPlan {

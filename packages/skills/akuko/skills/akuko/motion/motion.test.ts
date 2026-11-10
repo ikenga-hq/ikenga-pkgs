@@ -33,7 +33,7 @@ import {
   motionStatus,
   paidAttempts,
   planMotion,
-  refreshStageState,
+  refreshMotionStage,
   unitReadiness,
 } from './plan.ts';
 import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
@@ -477,13 +477,13 @@ describe('rework and review: only a person approves', () => {
     assert.equal(asset(r.host.peek(), CLIP1).status, 'pending-review');
   });
 
-  it('refreshStageState never sets approved and never touches locked', () => {
+  it('refreshMotionStage never sets approved and never touches locked', () => {
     const p = planned();
     p.stages.motion = { state: 'locked' };
-    assert.equal(refreshStageState(p).stages.motion.state, 'locked');
+    assert.equal(refreshMotionStage(p).stages.motion.state, 'locked');
     const q = planned();
     for (const a of clipAssets(q)) { a.status = 'pending-review'; a.file = { uri: 'x.mp4', mime: 'video/mp4' }; }
-    assert.equal(refreshStageState(q).stages.motion.state, 'in-review');
+    assert.equal(refreshMotionStage(q).stages.motion.state, 'in-review');
   });
 });
 

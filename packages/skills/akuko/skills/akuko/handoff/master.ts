@@ -17,6 +17,12 @@
  * slot is cut at the slot's end; a clip shorter is followed by a GAP (akuko never stretches or freezes a frame),
  * named in the notes. A still is held for the slot; if its shot has a `move`, the move runs across the slot.
  *
+ * A lip-sync (WP-32) sits at its own span's film time (`lipsyncSpan`: recorded on the asset, else today's lines),
+ * inside the shot's slot, in whole frames. The approved key frame holds the slot before and after it, and the
+ * shot's move is NOT restarted per piece: it runs across the whole slot, and each still piece carries its share
+ * (`VideoEvent.moveSpan`, written as keyframes by `fcpxml.ts`). With no approved key frame those pieces are gaps,
+ * listed as left out.
+ *
  * Sound in the files: only the master is laid. Voice-over, music and effects that exist are listed as
  * "covered by the master". Picture files never contribute sound (a clip made with a sound track is muted).
  */
@@ -25,6 +31,7 @@ import type { AkukoProject, Asset, Shot } from '../schema/akuko-project.ts';
 import { shotUnitId } from '../schema/akuko-project.ts';
 import { isKeyframe } from '../keyframes/plan.ts';
 import { isClip } from '../motion/plan.ts';
+import { wantedSpan } from '../lipsync/plan.ts';
 import { isVo } from '../sound/plan.ts';
 import { ASPECT_SIZE, ext, pad, safe, started, usable, whyNot } from './plan-shared.ts';
 import type { AudioEvent, CardRow, ExportPlan, LeftOut, MasterFile, MediaFile, MoveRow, PlanInput, ShotRow, VideoEvent } from './plan.ts';
@@ -55,6 +62,24 @@ const num = (n: number): string => String(Number(n.toFixed(4)));
 /** One line that says what a move is: used for the marker, the EDL comment and the README. */
 export function moveLabel(shot: string, mv: NonNullable<Shot['move']>): string {
   return `MOVE ${shot}: scale ${num(mv.from_scale)} to ${num(mv.to_scale)}, drift x ${num(mv.x)} px, y ${num(mv.y)} px (1920x1080 frame), ease ${mv.ease ?? 'none'}`;
+}
+
+/**
+ * Where a lip-sync clip sits on the master clock (WP-32). The lip-sync step records it on the asset as it starts
+ * the job: `film` = the span of the audio it sent (a master slice). That record is what counts: the lines may have
+ * moved since. An older lip-sync (made before the record existed), or one whose audio was a line's own clip (its
+ * lead-in is not known), has none: then the span is worked out from today's lines (`lipsync/plan.ts#wantedSpan`),
+ * else it fills the shot from its start, and a warning says so either way.
+ */
+export function lipsyncSpan(p: AkukoProject, shot: Shot, lip: Asset, warnings: string[]): { in_s: number; out_s: number } | undefined {
+  if (lip.film) return lip.film;
+  const today = wantedSpan(p, shot);
+  if (today) {
+    warnings.push(`${lip.id}: no film span is recorded on it (made before akuko recorded one, or its audio was the line's own clip), so it was placed by today's lines at ${num(today.in_s)} to ${num(today.out_s)} s. Check its lips against the master in Resolve.`);
+    return today;
+  }
+  warnings.push(`${lip.id}: no film span is recorded on it and the shot has no spoken line on the master to place it by, so it starts at the shot's start. Check its lips against the master in Resolve.`);
+  return undefined;
 }
 
 const STILL_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.bmp']);
@@ -181,11 +206,47 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
     let uses: ShotRow['uses'] = 'gap';
     if (usable(lip) && exists(lip.file.uri)) {
       const m = await addMedia({ role: 'clip', asset: lip.id, shot: shot.id, uri: lip.file.uri, dest: `media/${num3}_${safe(shot.id)}_lipsync${ext(lip.file.uri)}`, ...(lip.file.mime ? { mime: lip.file.mime } : {}) });
-      placeMotion(shot.id, m, inF, slot, { shot: shot.id, from: 'lipsync', note: 'lip-sync clip' });
+      // WP-32: the lip-sync sits at its span's film time (recorded on the asset when it was made); the key frame
+      // holds the rest of the slot, before and after, with the shot's move running on across the whole slot.
+      const span = lipsyncSpan(p, shot, lip, warnings);
+      let lipIn = inF;
+      let lipOut = outF;
+      if (span) {
+        lipIn = Math.min(Math.max(frameAt(span.in_s), inF), outF);
+        lipOut = Math.min(Math.max(frameAt(span.out_s), lipIn), outF);
+        if (lipOut - lipIn < 1) {
+          warnings.push(`${lip.id}: its span (${num(span.in_s)} to ${num(span.out_s)} s) falls outside the shot's film time (${num(shot.film.in_s)} to ${num(shot.film.out_s)} s), so it was placed at the shot's start. Check it in Resolve.`);
+          lipIn = inF;
+          lipOut = outF;
+        }
+      }
+      const holds = lipIn > inF || lipOut < outF;
+      const hold = holds && usable(still) && exists(still.file.uri)
+        ? await addMedia({ role: 'still', asset: still.id, shot: shot.id, uri: still.file.uri, dest: `media/${num3}_${safe(shot.id)}_still${ext(still.file.uri)}`, ...(still.file.mime ? { mime: still.file.mime } : {}) })
+        : undefined;
+      const gaps: string[] = [];
+      const piece = (from: number, to: number, side: 'before' | 'after'): void => {
+        if (to <= from) return;
+        if (hold) {
+          mk({ shot: shot.id, kind: 'still', media: hold, recIn: from, frames: to - from, srcIn: 0, from: 'keyframe', note: `still (key frame), held ${side} the lip-sync`, ...(shot.move ? { move: shot.move, moveSpan: { at: from - inF, of: slot } } : {}) });
+        } else {
+          mk({ shot: shot.id, kind: 'gap', recIn: from, frames: to - from, srcIn: 0, note: `no approved key frame to hold ${side} the lip-sync` });
+          gaps.push(`${side} it (${to - from} frame${to - from === 1 ? '' : 's'})`);
+        }
+      };
+      piece(inF, lipIn, 'before');
+      placeMotion(shot.id, m, lipIn, lipOut - lipIn, { shot: shot.id, from: 'lipsync', note: 'lip-sync clip' });
+      piece(lipOut, outF, 'after');
+      if (hold && shot.move) moves.push({ shot: shot.id, recIn: inF, frames: slot, move: shot.move, around: { recIn: lipIn, frames: lipOut - lipIn } });
+      if (gaps.length) leftOut.push({ unit: still?.id ?? shotUnitId(shot.id, 'keyframe'), what: 'key frame', why: `${still ? whyNot(still, exists) : 'there is no key frame'}, so the slot around the lip-sync is a gap ${gaps.join(' and ')}` });
       uses = 'lipsync';
     } else if (usable(clip) && exists(clip.file.uri)) {
       const m = await addMedia({ role: 'clip', asset: clip.id, shot: shot.id, uri: clip.file.uri, dest: `media/${num3}_${safe(shot.id)}${ext(clip.file.uri)}`, ...(clip.file.mime ? { mime: clip.file.mime } : {}) });
       placeMotion(shot.id, m, inF, slot, { shot: shot.id, from: 'clip', note: 'clip' });
+      // A clip starts on its shot's first frame. Its recorded film time (WP-32) says where the shot was when it was made.
+      if (clip.film && Math.abs(frameAt(clip.film.in_s) - inF) >= 1) {
+        warnings.push(`${clip.id}: made when the shot started at ${num(clip.film.in_s)} s; the shot now starts at ${num(shot.film.in_s)} s. It was placed at the shot's start; check that it still fits.`);
+      }
       uses = 'clip';
     } else if (usable(still) && exists(still.file.uri)) {
       const m = await addMedia({ role: 'still', asset: still.id, shot: shot.id, uri: still.file.uri, dest: `media/${num3}_${safe(shot.id)}_still${ext(still.file.uri)}`, ...(still.file.mime ? { mime: still.file.mime } : {}) });

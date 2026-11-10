@@ -7,7 +7,9 @@
  *   → quote it at the spend gate (paid: a `pending_spend` entry the person approves)
  *   → only when it is free or already approved: begin the units, `gate.run()`
  *   → paid: `gate.collect()` records the files; manual: hand the prompt package to the person
- *   → refresh the stage state
+ *   → refresh the stage state (`stage.ts#refreshMotionStage`, the one roll-up shared with lip-sync)
+ *
+ * `part` (WP-32) scopes the job to one part of the film, once that part is open (plan.ts#assertOpen).
  *
  * It never calls a provider's `submit()` itself (only `gate.run()` does), never
  * writes `approved`, and writes the project only through the host.
@@ -16,7 +18,8 @@
 import type { Job, JobHandle, JobStatus, WaveOneHost } from '../providers/contract.ts';
 import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
-import { abandonUnits, beginUnits, buildMotionJob, refreshStageState, repairFileless } from './plan.ts';
+import { abandonUnits, beginUnits, buildMotionJob, recordClipFilm, repairFileless } from './plan.ts';
+import { refreshMotionStage } from './stage.ts';
 
 export interface StepDeps {
   host: WaveOneHost;
@@ -31,6 +34,8 @@ export interface StepOptions {
   model?: string;
   units?: string[];
   scene?: string;
+  /** Only this part's shots (`--part P7`), once the part is open. */
+  part?: string;
   /** Ask for native sound where the model has it. Default off. */
   audio?: boolean;
   /** Paid attempts allowed per shot (default 3). Only when the person asked for more, in their own words. */
@@ -57,7 +62,7 @@ const clock = (d: Pick<StepDeps, 'now'>): string => (d.now ?? (() => new Date().
 export async function finalizeMotion(deps: Pick<StepDeps, 'host' | 'now'>): Promise<string[]> {
   const before = await deps.host.readState();
   const repaired = repairFileless(before, clock(deps));
-  const after = refreshStageState(repaired.project);
+  const after = refreshMotionStage(repaired.project);
   if (repaired.repaired.length > 0 || after !== repaired.project) await deps.host.writeState(after);
   return repaired.repaired;
 }
@@ -71,6 +76,7 @@ export async function generateClips(deps: StepDeps, o: StepOptions): Promise<Ste
     ...(o.model !== undefined ? { model: o.model } : {}),
     ...(o.units !== undefined ? { units: o.units } : {}),
     ...(o.scene !== undefined ? { scene: o.scene } : {}),
+    ...(o.part !== undefined ? { part: o.part } : {}),
     ...(o.audio !== undefined ? { audio: o.audio } : {}),
     ...(o.maxAttempts !== undefined ? { maxAttempts: o.maxAttempts } : {}),
     ...(o.fit !== undefined ? { fit: o.fit } : {}),
@@ -93,15 +99,16 @@ async function runJob(deps: StepDeps, job: Job, units: string[]): Promise<StepRe
     return { status: 'awaiting-approval', job, estimate: q.cost.amount, confirmation: q.confirmation ?? '' };
   }
 
-  // Clear to go. A sent-back clip gets its old take cleared so the new one fills it in place;
-  // if the gate does not accept the run, the units are put back exactly as they were.
+  // Clear to go. A sent-back clip gets its old take cleared so the new one fills it in place, and each clip records
+  // where it sits in film time (WP-32); if the gate does not accept the run, the units are put back exactly as they were.
   const before = await host.readState();
-  const begun = refreshStageState(beginUnits(before, units, clock(deps)));
+  const seconds = Object.fromEntries(job.items.filter((i) => i.duration_s !== undefined).map((i) => [i.unit, i.duration_s as number]));
+  const begun = refreshMotionStage(recordClipFilm(beginUnits(before, units, clock(deps)), seconds));
   await host.writeState(begun);
 
   const r = await gate.run(job);
   if (r.status !== 'submitted') {
-    await host.writeState(refreshStageState(abandonUnits(await host.readState(), before, units)));
+    await host.writeState(refreshMotionStage(abandonUnits(await host.readState(), before, units)));
     if (r.status === 'awaiting-approval') return { status: 'awaiting-approval', job, estimate: r.cost.amount, confirmation: r.confirmation };
     if (r.status === 'refused') return { status: 'refused', job, code: r.refusal.code, message: r.refusal.message };
     return { status: 'failed', job, error: r.error };

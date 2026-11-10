@@ -41,6 +41,8 @@ import type { Job, JobItem } from '../providers/contract.ts';
 import { falVideoLimits, fitSeconds, FAL_VIDEO_PROVIDER_ID } from '../providers/fal-video/index.ts';
 import { FAL_LIPSYNC_PROVIDER_ID, billedSeconds, chooseLipsyncModel, falLipsyncLimits } from '../providers/lipsync/fal/index.ts';
 import type { AkukoProject, Asset, AudioLine, Shot, ShotTreatment } from '../schema/akuko-project.ts';
+import { DEFAULT_TREATMENT, treatmentOf } from '../motion/treatment.ts';
+import { PAD_AFTER_S, PAD_BEFORE_S, lineSpan, secs } from '../lipsync/plan.ts';
 import { ledgerSummary } from '../spend/ledger.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -48,25 +50,12 @@ import { ledgerSummary } from '../spend/ledger.ts';
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * What a shot with no `treatment` means, by tier. A local copy of the table
- * WP-27 defines in `motion/treatment.ts`; `estimate.test.ts` pins it.
- * TODO(WP-27): import `treatmentOf` from `../motion/treatment.ts` once it lands and delete this copy.
- * No tier and no treatment is today's behaviour: every such shot gets a clip.
+ * What a shot with no `treatment` means, by tier: WP-27's table and `treatmentOf`, imported (WP-32), so the
+ * estimate and the motion stage can never disagree. `estimate.test.ts` still pins the table. No tier and no
+ * treatment is today's behaviour (a clip) for a hand-made project; an imported sheet shot with no tier is `still`.
  */
-export const DEFAULT_TREATMENT_BY_TIER: Readonly<Record<'A' | 'B' | 'C', ShotTreatment>> = { A: 'still-move', B: 'still-move', C: 'still' };
-
-/** The shot's treatment, explicit or from its tier; undefined = today's behaviour (a clip). */
-export function treatmentOf(shot: Shot): ShotTreatment | undefined {
-  if (shot.treatment !== undefined) return shot.treatment;
-  return shot.tier !== undefined ? DEFAULT_TREATMENT_BY_TIER[shot.tier] : undefined;
-}
-
-/**
- * Seconds added to a line's length for the audio actually sent: the pad a cut slice carries.
- * 0.15 s before and 0.25 s after, the same as the line clips a real project ships.
- * TODO(WP-28b): read the pad from `lipsync/cut.ts` when it lands.
- */
-export const LINE_PAD_S = 0.4;
+export const DEFAULT_TREATMENT_BY_TIER: Readonly<Record<'A' | 'B' | 'C', ShotTreatment>> = DEFAULT_TREATMENT;
+export { treatmentOf };
 
 export const DEFAULT_TRIES: [number, number, number] = [1, 1.5, 3];
 export const TTS_PROVIDER = 'elevenlabs';
@@ -368,31 +357,38 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
     }
     chosen.sort((a, b) => a.line.film_in_s - b.line.film_in_s);
 
+    // One lip-sync per shot, as the lip-sync step makes them: its chosen lines become ONE span, cut by the step's own
+    // rule (`lipsync/plan.ts#lineSpan`: the pads, clamped to the shot and the master). A line no shot carries is
+    // priced on its own, by the same rule.
+    const groups = new Map<string, { unit: string; shot: Shot | undefined; lines: AudioLine[]; part: string }>();
+    for (const x of chosen) {
+      const key = x.shot ? `${x.shot.id}_lipsync` : x.line.id;
+      const g = groups.get(key) ?? groups.set(key, { unit: key, shot: x.shot, lines: [], part: x.part }).get(key)!;
+      g.lines.push(x.line);
+    }
+    const master = project.audio?.master;
     const byModel = new Map<string, JobItem[]>();
     const meta = new Map<string, string>();
-    const doneShots = new Set<string>();
-    for (const x of chosen) {
-      const id = x.line.id;
-      const lsId = x.shot ? `${x.shot.id}_lipsync` : id;
-      if (x.shot && made(assetById.get(lsId))) { if (!doneShots.has(lsId)) { doneShots.add(lsId); doneCount.lipsync++; } continue; }
-      if (x.shot && paidAttempts(project, lsId).count >= cap) { warnings.push(`${lsId} has used its ${cap} paid attempts; its line ${id} is not priced.`); continue; }
-      const audioS = x.line.film_out_s - x.line.film_in_s + LINE_PAD_S;
+    for (const g of groups.values()) {
+      const ids = g.lines.map((l) => l.id).join(', ');
+      if (g.shot && made(assetById.get(g.unit))) { doneCount.lipsync++; continue; }
+      if (g.shot && paidAttempts(project, g.unit).count >= cap) { warnings.push(`${g.unit} has used its ${cap} paid attempts; its line${g.lines.length === 1 ? '' : 's'} ${ids} ${g.lines.length === 1 ? 'is' : 'are'} not priced.`); continue; }
+      const span = lineSpan(g.lines, g.shot?.film, master);
+      if (!span) { warnings.push(`${g.unit} (line${g.lines.length === 1 ? '' : 's'} ${ids}): the lines fall outside the shot's film time, so there is nothing to cut; not priced.`); continue; }
+      const audioS = secs(span.out_s - span.in_s);
       const model = chooseLipsyncModel(config, 'image', audioS);
-      if (model === undefined) { warnings.push(`line ${id} (${money(audioS)} s): no lip-sync model admits that length, so it is not priced.`); continue; }
+      if (model === undefined) { warnings.push(`${g.unit} (${money(audioS)} s): no lip-sync model admits that length, so it is not priced.`); continue; }
       const billed = billedSeconds(audioS, falLipsyncLimits(model) ?? {});
-      (byModel.get(model) ?? byModel.set(model, []).get(model)!).push({ unit: id, prompt: '', output: 'lipsync', count: 1, duration_s: billed });
-      meta.set(id, x.part);
+      (byModel.get(model) ?? byModel.set(model, []).get(model)!).push({ unit: g.unit, prompt: '', output: 'lipsync', count: 1, duration_s: billed });
+      meta.set(g.unit, g.part);
     }
     for (const [model, items] of byModel) {
       const l = priceLine(config, FAL_LIPSYNC_PROVIDER_ID, model);
       if (l) prices.push(`lip-sync: ${l}`);
       const costs = priceJob(config, FAL_LIPSYNC_PROVIDER_ID, model, 'lipsync', items, warnings);
-      for (const it of items) {
-        const shotId = chosen.find((c) => c.line.id === it.unit)?.shot?.id;
-        priced.push({ unit: shotId ? `${shotId}_lipsync#${it.unit}` : it.unit, part: meta.get(it.unit)!, stage: 'lipsync', cost: costs[it.unit] ?? 0, capped: true });
-      }
+      for (const it of items) priced.push({ unit: it.unit, part: meta.get(it.unit)!, stage: 'lipsync', cost: costs[it.unit] ?? 0, capped: true });
     }
-    notes.push(`Lip-sync is priced per spoken line (image mode) plus ${LINE_PAD_S} s of pad per line. WP-28b may cut a shot with several lines as one span, so a shot with several lines can cost a little more or less than shown.`);
+    notes.push(`Lip-sync is priced per shot (image mode), on one span covering its spoken lines: ${PAD_BEFORE_S} s before the first and ${PAD_AFTER_S} s after the last, kept inside the shot${master ? ' and the master' : ''}, the same rule the lip-sync step cuts by (lipsync/plan.ts). A line no shot carries is priced on its own.`);
   }
 
   // ── sound: text-to-speech ───────────────────────────────────────────

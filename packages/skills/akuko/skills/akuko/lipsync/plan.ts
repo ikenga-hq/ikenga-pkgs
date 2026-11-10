@@ -20,7 +20,10 @@
  *   wantedSpan()                       the master slice a shot's lines need
  *   unitReadiness()                    ready / blocked / in flight / in review / approved
  *   buildLipsyncJob()                  one gate-ready Job for one shot, refusing at the retry cap
- *   repairFileless() / refreshStageState()
+ *   repairFileless()                   the stage roll-up is motion's `refreshMotionStage()` (motion/stage.ts, WP-32)
+ *
+ * Part scope (WP-32): `{ part: 'P7' }` plans, cuts, prices and makes only that part's live shots, once the part is
+ * open (motion's `assertOpen`).
  *
  * Nothing here reads files, calls a provider, writes `approved`, or writes the
  * project. Audio is looked up by `cut.ts` (`resolveAudio`) and passed in.
@@ -35,15 +38,13 @@ import type { Job, JobItem, JobRef } from '../providers/contract.ts';
 import { FAL_LIPSYNC_PROVIDER_ID, LENGTH_TOLERANCE_S, billedSeconds, chooseLipsyncModel, falLipsyncLimits, secondsNote } from '../providers/lipsync/fal/index.ts';
 import { requestedChanges } from '../bible/plan.ts';
 import { jobRan } from '../keyframes/plan.ts';
-import { assertOpen as assertMotionOpen, paidAttempts } from '../motion/plan.ts';
+import { assertOpen as assertMotionOpen, inScope, paidAttempts, type Scope } from '../motion/plan.ts';
+import { CUT_TAG, LIPSYNC_TAG, refreshMotionStage, spokenLines } from '../motion/stage.ts';
 import { removedAt } from '../decisions/fold.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 
+export { CUT_TAG, LIPSYNC_TAG, refreshMotionStage, spokenLines, type Scope };
 export const LIPSYNC_STAGE = 'motion' as const;
-/** Tag every planned lip-sync asset carries. */
-export const LIPSYNC_TAG = 'lipsync';
-/** Tag on the audio cut for a shot's lip-sync (an `akuko-cut` asset, `cut.ts`). */
-export const CUT_TAG = 'lipsync-audio';
 /** Paid attempts allowed per shot unless the person asks for more. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
 /** Pad around the spoken line(s) when cutting from the master: a little lead-in and tail, so no word is clipped. */
@@ -72,16 +73,6 @@ const hash8 = (s: string): string => createHash('sha1').update(s).digest('hex').
 // Which shots
 // ─────────────────────────────────────────────────────────────────────────
 
-/** The shot's spoken lines, in film order, as `audio.lines` entries. Thought lines are left out (they need nothing). */
-export function spokenLines(p: AkukoProject, shot: Shot): AudioLine[] {
-  const byId = new Map((p.audio?.lines ?? []).map((l) => [l.id, l]));
-  return (shot.lines ?? [])
-    .filter((l) => l.kind === 'spoken')
-    .map((l) => byId.get(l.id))
-    .filter((l): l is AudioLine => l !== undefined && l.kind === 'spoken')
-    .sort((a, b) => a.film_in_s - b.film_in_s);
-}
-
 export interface Target { shot: Shot; lines: AudioLine[] }
 export interface Passed { shot: string; why: string }
 
@@ -90,11 +81,13 @@ export interface Passed { shot: string; why: string }
  * spoken line, not removed from the sheet, with at least one spoken line.
  * `passed` names shots that asked for lip-sync but have nothing to sync.
  */
-export function lipsyncTargets(p: AkukoProject): { targets: Target[]; passed: Passed[] } {
+export function lipsyncTargets(p: AkukoProject, scope: Scope = {}): { targets: Target[]; passed: Passed[] } {
   const targets: Target[] = [];
   const passed: Passed[] = [];
+  const only = inScope(p, scope);
   for (const shot of p.shots) {
     if (shot.treatment !== 'lipsync' && shot.treatment !== 'video') continue;
+    if (!only(shot.id)) continue;
     if (removedAt(p, shot) !== undefined) continue;
     const lines = spokenLines(p, shot);
     if (lines.length > 0) { targets.push({ shot, lines }); continue; }
@@ -109,11 +102,11 @@ export function lipsyncTargets(p: AkukoProject): { targets: Target[]; passed: Pa
 export interface PlanResult { project: AkukoProject; created: string[]; passed: Passed[] }
 
 /** Create the planned lip-sync asset for every target shot that has none. Safe to run again. */
-export function planLipsync(project: AkukoProject, now: string): PlanResult {
-  assertOpen(project);
+export function planLipsync(project: AkukoProject, now: string, scope: Scope = {}): PlanResult {
+  assertOpen(project, scope);
   const p = structuredClone(project);
   const created: string[] = [];
-  const { targets, passed } = lipsyncTargets(p);
+  const { targets, passed } = lipsyncTargets(p, scope);
   for (const { shot } of targets) {
     const id = assetIdFor(shot.id);
     if (p.assets.some((a) => a.id === id)) continue;
@@ -130,8 +123,7 @@ export function planLipsync(project: AkukoProject, now: string): PlanResult {
     });
     created.push(id);
   }
-  if (created.length > 0 && p.stages.motion.state === 'not-started') p.stages.motion = { state: 'in-progress' };
-  return { project: p, created, passed };
+  return { project: refreshMotionStage(p), created, passed };
 }
 
 /**
@@ -139,8 +131,8 @@ export function planLipsync(project: AkukoProject, now: string): PlanResult {
  * target (`lipsyncTargets`). Only these are cut, priced, made or listed as
  * work. Removed rows are left out.
  */
-export function currentUnits(p: AkukoProject): Asset[] {
-  const wanted = new Set(lipsyncTargets(p).targets.map((t) => t.shot.id));
+export function currentUnits(p: AkukoProject, scope: Scope = {}): Asset[] {
+  const wanted = new Set(lipsyncTargets(p, scope).targets.map((t) => t.shot.id));
   return lipsyncAssets(p).filter((a) => removedAt(p, a) === undefined && a.owner !== undefined && wanted.has(a.owner));
 }
 
@@ -152,10 +144,11 @@ export interface Orphan { asset: string; shot: string; why: string }
  * (a made one keeps its file and its review), but nothing is cut, priced or
  * made for them. Removed rows are reported by the sheet, not here.
  */
-export function orphanedUnits(p: AkukoProject): Orphan[] {
+export function orphanedUnits(p: AkukoProject, scope: Scope = {}): Orphan[] {
   const wanted = new Set(lipsyncTargets(p).targets.map((t) => t.shot.id));
+  const only = inScope(p, scope);
   return lipsyncAssets(p)
-    .filter((a) => removedAt(p, a) === undefined && !(a.owner !== undefined && wanted.has(a.owner)))
+    .filter((a) => removedAt(p, a) === undefined && only(a.owner) && !(a.owner !== undefined && wanted.has(a.owner)))
     .map((a) => {
       const shot = p.shots.find((s) => s.id === a.owner);
       const why = !shot ? 'its shot is gone'
@@ -167,10 +160,13 @@ export function orphanedUnits(p: AkukoProject): Orphan[] {
 
 export const orphanLine = (o: Orphan): string => `${o.asset}: no longer asked for (${o.why}); kept. Nothing is cut, priced or made for it.`;
 
-/** The motion stage must be open (every earlier stage, through the key frames, approved): lip-sync is part of it. */
-export function assertOpen(p: AkukoProject): void {
+/**
+ * The motion stage must be open (every earlier stage, through the key frames, approved): lip-sync is part of it.
+ * With `{ part }`, that part must be open (its own key frames and bible entries approved; motion's rule).
+ */
+export function assertOpen(p: AkukoProject, scope: Scope = {}): void {
   try {
-    assertMotionOpen(p);
+    assertMotionOpen(p, scope);
   } catch (err) {
     throw new LipsyncError(err instanceof Error ? err.message : String(err));
   }
@@ -189,23 +185,37 @@ export const shotOf = (p: AkukoProject, a: Asset): Shot => {
 export interface Span { in_s: number; out_s: number }
 
 /**
- * The part of the master to cut for a shot: from the first spoken line's
- * start minus `PAD_BEFORE_S` to the last one's end plus `PAD_AFTER_S`,
- * clamped to the shot's own film time (what is outside it is not on screen in
- * this shot) and to the master. Undefined when there is nothing to cut.
+ * The span rule, on its own (WP-32: shared with the whole-film estimate, `setup/estimate.ts`): from the first
+ * line's start minus `PAD_BEFORE_S` to the last one's end plus `PAD_AFTER_S`, clamped to the shot's film time when
+ * it has one (what is outside it is not on screen in this shot), to 0, and, with a master, to the master's length
+ * and rounded to whole master frames. Undefined when there are no lines or the span is empty.
+ */
+export function lineSpan(lines: ReadonlyArray<Pick<AudioLine, 'film_in_s' | 'film_out_s'>>, shotFilm?: Span, master?: { duration_s: number; sample_rate: number }): Span | undefined {
+  if (lines.length === 0) return undefined;
+  let a = Math.min(...lines.map((l) => l.film_in_s)) - PAD_BEFORE_S;
+  let b = Math.max(...lines.map((l) => l.film_out_s)) + PAD_AFTER_S;
+  if (shotFilm) { a = Math.max(a, shotFilm.in_s); b = Math.min(b, shotFilm.out_s); }
+  a = Math.max(0, a);
+  let span: Span;
+  if (master) {
+    b = Math.min(master.duration_s, b);
+    // Whole frames of the master, so the tag says exactly what the file holds.
+    const rate = master.sample_rate;
+    span = { in_s: secs(Math.round(a * rate) / rate), out_s: secs(Math.round(b * rate) / rate) };
+  } else {
+    span = { in_s: secs(a), out_s: secs(b) };
+  }
+  return span.out_s > span.in_s ? span : undefined;
+}
+
+/**
+ * The part of the master to cut for a shot: `lineSpan` over its spoken lines, clamped to the shot and the
+ * master. Undefined when there is nothing to cut (no master, or no spoken line).
  */
 export function wantedSpan(p: AkukoProject, shot: Shot, lines = spokenLines(p, shot)): Span | undefined {
   const master = p.audio?.master;
-  if (!master || lines.length === 0) return undefined;
-  let a = Math.min(...lines.map((l) => l.film_in_s)) - PAD_BEFORE_S;
-  let b = Math.max(...lines.map((l) => l.film_out_s)) + PAD_AFTER_S;
-  if (shot.film) { a = Math.max(a, shot.film.in_s); b = Math.min(b, shot.film.out_s); }
-  a = Math.max(0, a);
-  b = Math.min(master.duration_s, b);
-  // Whole frames of the master, so the tag says exactly what the file holds.
-  const rate = master.sample_rate;
-  const span = { in_s: secs(Math.round(a * rate) / rate), out_s: secs(Math.round(b * rate) / rate) };
-  return span.out_s > span.in_s ? span : undefined;
+  if (!master) return undefined;
+  return lineSpan(lines, shot.film, master);
 }
 
 /**
@@ -276,8 +286,8 @@ export interface StatusRow {
 }
 
 /** One row per lip-sync still asked for (`currentUnits`); orphans are listed by `orphanedUnits`. */
-export function lipsyncStatus(p: AkukoProject, audio: Map<string, AudioLookup>): StatusRow[] {
-  return currentUnits(p).map((a) => {
+export function lipsyncStatus(p: AkukoProject, audio: Map<string, AudioLookup>, scope: Scope = {}): StatusRow[] {
+  return currentUnits(p, scope).map((a) => {
     const r = unitReadiness(p, a, audio.get(a.id));
     const t = paidAttempts(p, a.id);
     const shot = p.shots.find((s) => s.id === a.owner);
@@ -319,6 +329,8 @@ export interface BuildOptions {
   model?: string;
   /** The shot to make. Default: the next ready one. One shot per job, always. */
   shot?: string;
+  /** Only this part's shots (`--part P7`), once the part is open. */
+  part?: string;
   /** Paid attempts allowed per shot. Default 3; raise only when the person asked in their own words. */
   maxAttempts?: number;
   /** Audio per lip-sync unit id, from `cut.ts` `resolveAudio()`. */
@@ -376,11 +388,12 @@ export function lipsyncPrompt(shot: Shot, lines: AudioLine[], asked = ''): strin
  * refused (named) or skipped (default pick).
  */
 export function buildLipsyncJob(p: AkukoProject, o: BuildOptions): BuiltJob {
-  assertOpen(p);
+  const scope: Scope = o.part !== undefined ? { part: o.part } : {};
+  assertOpen(p, scope);
   const config = o.config ?? loadProviderConfig();
   const max = o.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(max) || max < 1) throw new LipsyncError('--max-attempts must be a whole number of 1 or more.');
-  const units = currentUnits(p);
+  const units = currentUnits(p, scope);
 
   let a: Asset | undefined;
   const skipped: string[] = [];
@@ -388,6 +401,7 @@ export function buildLipsyncJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     a = units.find((x) => x.owner === o.shot);
     const orphan = orphanedUnits(p).find((x) => x.shot === o.shot);
     if (!a && orphan) throw new LipsyncError(orphanLine(orphan));
+    if (!a && o.part !== undefined && currentUnits(p).some((x) => x.owner === o.shot)) throw new LipsyncError(`shot ${o.shot} is not in part ${o.part}; a run scoped to ${o.part} makes only that part's lip-syncs. Nothing was priced.`);
     if (!a) throw new LipsyncError(`shot ${o.shot} has no planned lip-sync; run plan first (a shot gets one when its treatment is lipsync, or video with a spoken line).`);
     const r = unitReadiness(p, a, o.audio.get(a.id));
     if (r.state !== 'ready') throw new LipsyncError(`${a.id} cannot be made now (${r.state}${r.waiting.length ? `; waiting for ${r.waiting.join(' and ')}` : ''}).`);
@@ -400,7 +414,7 @@ export function buildLipsyncJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       break;
     }
     if (!a) {
-      const stuck = lipsyncStatus(p, o.audio).filter((r) => r.state === 'blocked').map((r) => `${r.asset} (waiting for ${r.waiting.join(' and ')})`);
+      const stuck = lipsyncStatus(p, o.audio, scope).filter((r) => r.state === 'blocked').map((r) => `${r.asset} (waiting for ${r.waiting.join(' and ')})`);
       throw new LipsyncError([...skipped, stuck.length ? `Nothing can be made yet: ${stuck.join('; ')}.` : skipped.length ? '' : 'Nothing is waiting to be made.'].filter(Boolean).join(' '));
     }
   }
@@ -433,7 +447,7 @@ export function buildLipsyncJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   };
   const notes: string[] = [];
   if (audio.film && shot.film && Math.abs(audio.film.in_s - shot.film.in_s) > 1e-6) {
-    notes.push(`${a.id}: the line audio starts ${money(audio.film.in_s - shot.film.in_s)} s into the shot. The lip-sync video starts with the audio, so in the edit it belongs at ${money(audio.film.in_s)} s on the master, not at the shot's start (${money(shot.film.in_s)} s).`);
+    notes.push(`${a.id}: the line audio starts ${money(audio.film.in_s - shot.film.in_s)} s into the shot, so the lip-sync video belongs at ${money(audio.film.in_s)} s on the master, not at the shot's start (${money(shot.film.in_s)} s). akuko records that span on the lip-sync, and the Resolve handoff places it there, holding the key frame before and after it.`);
   }
   const job: Job = {
     id: lipsyncJobId(p, { unit: a.id, provider: o.provider, ...(model !== undefined ? { model } : {}), seconds, audio: `${audio.uri}@${audio.sha256}`, still: `${kf.file!.uri}@${stillSha}` }),
@@ -484,28 +498,4 @@ export function repairFileless(project: AkukoProject, ts: string): { project: Ak
     }
   }
   return { project: p, repaired };
-}
-
-/**
- * Keep `stages.motion.state` honest after lip-sync units moved, counting every
- * unit at the stage that this step or the clip step plans (clips, lip-syncs,
- * line cuts), removed rows left out. Never touches `locked`, never sets `approved`.
- */
-export function refreshStageState(project: AkukoProject): AkukoProject {
-  const rec = project.stages.motion;
-  if (rec.state === 'locked') return project;
-  const units = project.assets.filter((a) => a.stage === LIPSYNC_STAGE && (a.kind === 'clip' || isLipsync(a) || isCut(a)) && removedAt(project, a) === undefined);
-  if (units.length === 0) return project;
-  if (rec.state === 'approved' && units.every(approvedWithFile)) return project;
-  const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');
-  let state: typeof rec.state;
-  if (todo.length > 0) {
-    const ids = new Set(todo.map((a) => a.id));
-    const waiting = project.pending_spend.some((j) => j.stage === LIPSYNC_STAGE && j.status === 'awaiting-approval' && j.units.some((u) => ids.has(u)));
-    state = waiting ? 'waiting-spend' : 'in-progress';
-  } else {
-    state = 'in-review';
-  }
-  if (state === rec.state) return project;
-  return { ...project, stages: { ...project.stages, motion: { state } } };
 }

@@ -78,29 +78,69 @@ export function easeInterps(ease: StillMove['ease']): [string, string] {
 
 const n4 = (n: number): string => String(Number(n.toFixed(4)));
 
+/** How far through a move it is at fraction `t` (0..1) of its time, by its ease: GSAP's sine eases, as KenBurns and the README name them. */
+export function moveProgress(ease: StillMove['ease'], t: number): number {
+  const u = Math.min(1, Math.max(0, t));
+  switch (ease) {
+    case 'ease-in': return 1 - Math.cos((u * Math.PI) / 2);
+    case 'ease-out': return Math.sin((u * Math.PI) / 2);
+    case 'ease-in-out': return -(Math.cos(Math.PI * u) - 1) / 2;
+    default: return u;
+  }
+}
+
+/** A move's scale and drift (pixels of a 1920x1080 frame) at fraction `t` of its time. */
+export function moveAt(mv: StillMove, t: number): { scale: number; x: number; y: number } {
+  const k = moveProgress(mv.ease, t);
+  return { scale: mv.from_scale + (mv.to_scale - mv.from_scale) * k, x: mv.x * k, y: mv.y * k };
+}
+
+/**
+ * The keyframes for one piece of a still's slot (WP-32: the key frame held before or after a lip-sync). The move
+ * runs across the WHOLE slot of `of` frames and is never restarted: a piece from frame `at` to `at + frames` starts
+ * where the move is at `at / of` and ends where it is at `(at + frames) / of`, so the two pieces either side of a
+ * lip-sync join up with the move as it would have been under it. Values at a piece's ends are exact for every
+ * ease. Between them a piece interpolates on its own: the move's ease is kept on the ends that are the move's own
+ * start or end, and the cut ends are linear, so an eased move is followed closely but not exactly inside a piece.
+ * A whole-slot still (`at` 0, `frames` = `of`) gives the move's own two keyframes.
+ */
+export function movePiece(mv: StillMove, at: number, frames: number, of: number): { start: ReturnType<typeof moveAt>; end: ReturnType<typeof moveAt>; interps: [string, string] } {
+  const [i0, i1] = easeInterps(mv.ease);
+  const a = of > 0 ? at / of : 0;
+  const b = of > 0 ? (at + frames) / of : 1;
+  return { start: moveAt(mv, a), end: moveAt(mv, b), interps: [at === 0 ? i0 : 'linear', at + frames >= of ? i1 : 'linear'] };
+}
+
 /**
  * `adjust-transform` keyframes for a still's move. Apple's FCPXML reference: `position` is in percent of the
  * project's HEIGHT, +y up; `scale` is a factor. The schema's `x`/`y` are pixels of a 1920x1080 frame, +y down, so
- * x% = x / 1080 x 100 and y% = -y / 1080 x 100. The animation runs across the whole slot.
+ * x% = x / 1080 x 100 and y% = -y / 1080 x 100. The animation runs across the whole slot; a still that is one
+ * piece of the slot (`span`) carries its share of it (`movePiece`).
  */
-function transformXml(push: (indent: number, s: string) => void, ind: number, mv: StillMove, frames: number, fps: Fps, t: (n: number) => string): void {
-  const [i0, i1] = easeInterps(mv.ease);
+function transformXml(push: (indent: number, s: string) => void, ind: number, mv: StillMove, frames: number, fps: Fps, t: (n: number) => string, span?: { at: number; of: number }): void {
+  const { start, end, interps: [i0, i1] } = movePiece(mv, span?.at ?? 0, frames, span?.of ?? frames);
   const px = (v: number): number => (v / 1080) * 100;
-  const pos = `${n4(px(mv.x))} ${n4(-px(mv.y))}`;
+  const pos = (m: { x: number; y: number }): string => (m.x === 0 && m.y === 0 ? '0 0' : `${n4(px(m.x))} ${n4(-px(m.y))}`);
   push(ind, '<adjust-transform>');
   push(ind + 1, '<param name="position">');
   push(ind + 2, '<keyframeAnimation>');
-  push(ind + 3, `<keyframe time="0s" value="0 0" interp="${i0}"/>`);
-  push(ind + 3, `<keyframe time="${t(frames)}" value="${pos}" interp="${i1}"/>`);
+  push(ind + 3, `<keyframe time="0s" value="${pos(start)}" interp="${i0}"/>`);
+  push(ind + 3, `<keyframe time="${t(frames)}" value="${pos(end)}" interp="${i1}"/>`);
   push(ind + 2, '</keyframeAnimation>');
   push(ind + 1, '</param>');
   push(ind + 1, '<param name="scale">');
   push(ind + 2, '<keyframeAnimation>');
-  push(ind + 3, `<keyframe time="0s" value="${n4(mv.from_scale)} ${n4(mv.from_scale)}" interp="${i0}"/>`);
-  push(ind + 3, `<keyframe time="${t(frames)}" value="${n4(mv.to_scale)} ${n4(mv.to_scale)}" interp="${i1}"/>`);
+  push(ind + 3, `<keyframe time="0s" value="${n4(start.scale)} ${n4(start.scale)}" interp="${i0}"/>`);
+  push(ind + 3, `<keyframe time="${t(frames)}" value="${n4(end.scale)} ${n4(end.scale)}" interp="${i1}"/>`);
   push(ind + 2, '</keyframeAnimation>');
   push(ind + 1, '</param>');
   push(ind, '</adjust-transform>');
+}
+
+/** Words for a still that is one piece of its slot: which frames of the whole move it carries. Empty for a whole-slot still. */
+export function pieceLabel(span: { at: number; of: number } | undefined, frames: number): string {
+  if (!span || (span.at === 0 && frames >= span.of)) return '';
+  return `; this piece is frames ${span.at} to ${span.at + frames} of the shot's ${span.of}, held around its lip-sync; the move runs on across the lip-sync`;
 }
 
 export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
@@ -165,14 +205,14 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
     if (kids.length === 0 && !mute && !mv) push(6, `${open}/>`);
     else {
       push(6, `${open}>`);
-      if (mv) transformXml(push, 7, mv, v.frames, plan.fps, t);
+      if (mv) transformXml(push, 7, mv, v.frames, plan.fps, t, v.moveSpan);
       if (mute) push(7, '<adjust-volume amount="-96dB"/>');
       for (const a of kids) {
         // An anchored item's offset is in its parent's own time, which starts at the parent's `start` (0s here).
         push(7, `<asset-clip ref="${a.media.id}" lane="-${a.track}" offset="${t(a.recIn - v.recIn)}" name="${esc(stem(a.media.dest))}" start="0s" duration="${t(a.frames)}"/>`);
       }
       // A marker per move: the same numbers in words, for a Resolve that does not read the keyframes (README).
-      if (mv) push(7, `<marker start="0s" duration="${t(1)}" value="${esc(moveLabel(v.shot, mv))}"/>`);
+      if (mv) push(7, `<marker start="0s" duration="${t(1)}" value="${esc(moveLabel(v.shot, mv) + pieceLabel(v.moveSpan, v.frames))}"/>`);
       push(6, close);
     }
   }

@@ -3,12 +3,12 @@
  *
  *   node --experimental-strip-types lipsync/cli.ts <command> --project <dir> [options]
  *
- *   plan     [--allow-root <dir>]… [--from master]   plan a lip-sync for every shot that needs one (idempotent), then cut the
+ *   plan     [--allow-root <dir>]… [--from master] [--part P7]   plan a lip-sync for every shot that needs one (idempotent), then cut the
  *                                    line audio each needs (free, local): the line's own clip when it can be
  *                                    used as it is, else a 16-bit slice of the master
- *   status   [--allow-root <dir>]…   one line per lip-sync: its status, what it waits for, paid attempts, money
+ *   status   [--allow-root <dir>]… [--part P7]   one line per lip-sync: its status, what it waits for, paid attempts, money
  *   step     --provider <id>         the next lip-sync (one shot) through the rules guard and the spend gate:
- *            [--shot <id>] [--model <id>] [--max-attempts N] [--allow-root <dir>]… [--from master]
+ *            [--shot <id>] [--part P7] [--model <id>] [--max-attempts N] [--allow-root <dir>]… [--from master]
  *              provider: manual | fal-lipsync
  *              paid: prints the spend line (with the files that would be uploaded) and stops until a person
  *                    approves it, then runs and records the video
@@ -27,6 +27,10 @@
  * instead of using its own clip, for that run: the person's choice when a clip may hold more than may leave
  * their machine.
  *
+ * `--part P7` (plan, status, step) works on one part of the film only, once that part's own key frames and the
+ * bible entries they use are approved (WP-32; motion's rule, `motion/cli.ts parts` lists every part). It is worked
+ * out from the approvals each time and never stored; the motion stage itself stays locked until the whole film opens.
+ *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
  */
 
@@ -42,7 +46,8 @@ import { FAL_LIPSYNC_PROVIDER_ID, createFalLipsyncProvider } from '../providers/
 import { createManualProvider } from '../providers/manual/index.ts';
 import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
-import { AkukoProjectSchema } from '../schema/akuko-project.ts';
+import { AkukoProjectSchema, type AkukoProject } from '../schema/akuko-project.ts';
+import { partOpenness, partRefusal, partsOf } from '../motion/stage.ts';
 import { cutAudio, masterHash, resolveAll } from './cut.ts';
 import { DEFAULT_MAX_ATTEMPTS, LipsyncError, lipsyncStatus, orphanLine, orphanedUnits, planLipsync } from './plan.ts';
 import { collectLipsync, finalizeLipsync, generateLipsync, ingestLipsync, type StepResult } from './run.ts';
@@ -97,6 +102,14 @@ function describeStatus(r: StepResult): CliResult {
   }
 }
 
+/** A part-scoped run's first line: the part is open, and the stage itself still reads as it does project-wide. */
+function partHead(p: AkukoProject, part: string): string {
+  const o = partOpenness(p, part);
+  if (!o.open) return partRefusal(o, partsOf(p));
+  const st = p.stages.motion.state;
+  return `${part}: open for motion (its key frames and the bible entries they use are approved).${st === 'locked' ? ' The motion stage itself stays locked until the whole film opens; this part\'s progress is on its units.' : ''}`;
+}
+
 export async function run(argv: string[], now: () => Date = () => new Date(), io: CliIo = {}): Promise<CliResult> {
   const { cmd, opt, roots, bareRoot } = flags(argv);
   const dir = str(opt.get('project'));
@@ -108,7 +121,10 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
     if (!existsSync(resolve(r))) return { code: 2, out: `akuko: --allow-root ${r} does not exist.` };
   }
   const allowRoots = roots.map((r) => resolve(r));
-  const audioCtx = { projectDir: dir, allowRoots, ...(from === 'master' ? { from: 'master' as const } : {}) };
+  const part = opt.get('part');
+  if (part === true) return { code: 2, out: 'akuko: --part needs a part id, e.g. --part P7.' };
+  const scope = part !== undefined ? { part } : {};
+  const audioCtx = { projectDir: dir, allowRoots, ...(from === 'master' ? { from: 'master' as const } : {}), ...scope };
   const host = createLocalHost({ projectDir: dir, now });
   const clock = () => now().toISOString();
   const env = io.env ?? process.env;
@@ -116,21 +132,23 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
   try {
     if (cmd === 'status') {
       const p = await host.readState();
-      const rows = lipsyncStatus(p, await resolveAll(p, audioCtx));
-      const orphans = orphanedUnits(p).map(orphanLine);
-      if (rows.length === 0 && orphans.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
+      const rows = lipsyncStatus(p, await resolveAll(p, audioCtx), scope);
+      const orphans = orphanedUnits(p, scope).map(orphanLine);
+      const head = part !== undefined ? [partHead(p, part)] : [];
+      if (rows.length === 0 && orphans.length === 0) return { code: 0, out: [...head, 'Nothing planned yet. Run plan.'].join(NL) };
       return {
         code: 0,
-        out: [...rows.map((r) => `${r.asset} (line${r.lines.length === 1 ? '' : 's'} ${r.lines.join(', ')}): ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(' and ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...orphans].join(NL),
+        out: [...head, ...rows.map((r) => `${r.asset} (line${r.lines.length === 1 ? '' : 's'} ${r.lines.join(', ')}): ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(' and ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...orphans].join(NL),
       };
     }
     if (cmd === 'plan') {
       const before = await host.readState();
-      const planned = planLipsync(before, clock());
+      const planned = planLipsync(before, clock(), scope);
       const cut = await cutAudio(planned.project, { ...audioCtx, now: clock(), ...(io.chunkBytes !== undefined ? { chunkBytes: io.chunkBytes } : {}) });
-      if (planned.created.length > 0 || cut.cut.length > 0) await host.writeState(AkukoProjectSchema.parse(cut.project));
-      const capped = lipsyncStatus(cut.project, await resolveAll(cut.project, audioCtx)).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved');
+      if (planned.created.length > 0 || cut.cut.length > 0 || cut.project.stages.motion.state !== before.stages.motion.state) await host.writeState(AkukoProjectSchema.parse(cut.project));
+      const capped = lipsyncStatus(cut.project, await resolveAll(cut.project, audioCtx), scope).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved');
       const out = [
+        ...(part !== undefined ? [partHead(cut.project, part)] : []),
         planned.created.length ? `Planned ${planned.created.length} lip-sync${planned.created.length === 1 ? '' : 's'}: ${planned.created.join(', ')}.` : 'Every lip-sync is already planned.',
         ...planned.passed.map((x) => `${x.shot}: no lip-sync, because ${x.why}.`),
         ...(cut.cut.length ? [`Cut the line audio for ${cut.cut.join(', ')} (16-bit WAV in lipsync/cuts/). Each is waiting for the person to listen to it on the board.`] : []),
@@ -192,6 +210,7 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
         provider,
         ...(model ? { model } : {}),
         ...(shot ? { shot } : {}),
+        ...(part !== undefined ? { part } : {}),
         ...(max !== undefined ? { maxAttempts: Number(max) } : {}),
       });
       return describe(r);
