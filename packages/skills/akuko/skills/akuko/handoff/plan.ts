@@ -17,16 +17,21 @@
  * `audio.narration.audio` track from the start; approved music and SFX where their placement
  * tag says (`placement:film|scene:<id>|shot:<id>`), otherwise listed as "not placed" (their
  * files are still copied).
+ *
+ * A project whose `audio.master` is set is planned differently, by `master.ts` (WP-23b): shots and
+ * cards sit at their film times and the locked WAV runs uncut under them.
  */
 
-import type { AkukoProject, Asset, Shot } from '../schema/akuko-project.ts';
+import type { AkukoProject, Asset, Shot, StillMove } from '../schema/akuko-project.ts';
+import { buildMasterPlan } from './master.ts';
+import { ASPECT_SIZE, ext, pad, safe, started, usable, whyNot } from './plan-shared.ts';
 import { isKeyframe } from '../keyframes/plan.ts';
 import { isClip } from '../motion/plan.ts';
 import { isVo } from '../sound/plan.ts';
 import type { Probe } from './probe.ts';
-import { HandoffError, framesAvailable, framesFor, type Fps } from './timecode.ts';
+import { HandoffError, START_FRAMES, framesAvailable, framesFor, type Fps } from './timecode.ts';
 
-export type MediaRole = 'clip' | 'still' | 'vo' | 'narration' | 'music' | 'sfx' | 'captions';
+export type MediaRole = 'clip' | 'still' | 'vo' | 'narration' | 'music' | 'sfx' | 'captions' | 'master';
 
 export interface MediaFile {
   /** Stable id inside the timeline files: `m1`, `m2` ... */
@@ -46,6 +51,10 @@ export interface MediaFile {
   sampleRate?: number;
   /** A video file that carries a sound track. */
   hasAudio?: boolean;
+  /** Absolute path the file is read from, when it is not a plain path inside the project (the master audio). */
+  src?: string;
+  /** `file://` URL the timeline points at when the file is referenced in place, not copied (`--link-media`). */
+  href?: string;
 }
 
 export interface VideoEvent {
@@ -60,11 +69,20 @@ export interface VideoEvent {
   /** Source in-point in frames (always 0: media starts at its first frame). */
   srcIn: number;
   note?: string;
+  /** Master-clock plans only: where the picture came from. */
+  from?: 'lipsync' | 'clip' | 'keyframe' | 'card';
+  /** A card's asset id (master-clock plans). */
+  card?: string;
+  /** A camera move on a still (master-clock plans). */
+  move?: StillMove;
 }
+
+/** The audio roles the per-shot layout lays; a master-clock plan has one more, `master`. */
+export type LaidRole = 'vo' | 'narration' | 'music' | 'sfx';
 
 export interface AudioEvent {
   n: number;
-  role: 'vo' | 'narration' | 'music' | 'sfx';
+  role: LaidRole | 'master';
   media: MediaFile;
   /** The shot the sound belongs to or sits under, if any. */
   shot?: string;
@@ -88,7 +106,31 @@ export interface ShotRow {
   frames: number;
   recIn: number;
   /** What is on the video track. */
-  uses: 'clip' | 'still' | 'gap' | 'no-duration';
+  uses: 'clip' | 'still' | 'gap' | 'no-duration' | 'lipsync' | 'removed';
+}
+
+/** What a master-clock plan records about the locked audio. */
+export interface MasterInfo {
+  /** `audio.master.start_tc`: the first frame of the timeline. */
+  startTc: string;
+  durationS: number;
+  /** The master is referenced in place, not copied. */
+  linked: boolean;
+  media: MediaFile;
+}
+
+export interface CardRow {
+  asset: string;
+  sheetId?: string;
+  recIn: number;
+  frames: number;
+}
+
+export interface MoveRow {
+  shot: string;
+  recIn: number;
+  frames: number;
+  move: StillMove;
 }
 
 export interface ExportPlan {
@@ -108,6 +150,31 @@ export interface ExportPlan {
   warnings: string[];
   /** True when media lengths could not be checked (no files to read, host A). */
   unchecked: boolean;
+  /** First frame of the timeline (absent: 01:00:00:00, `START_FRAMES`). */
+  startFrames?: number;
+  /** Set when the project has `audio.master`: shots and cards are at film time, the master is uncut on A1. */
+  master?: MasterInfo;
+  /** Master-clock plans: approved cards placed. */
+  cards?: CardRow[];
+  /** Master-clock plans: camera moves on stills. */
+  moves?: MoveRow[];
+  /** Master-clock plans: sound units that exist but are not laid because the master covers them. */
+  covered?: LeftOut[];
+}
+
+/** Where the timeline's first frame sits. */
+export const startOf = (plan: Pick<ExportPlan, 'fps' | 'startFrames'>): number => plan.startFrames ?? START_FRAMES(plan.fps);
+
+/** What a master file looks like on disk (host B and C); a timeline-only run has none of it. */
+export interface MasterFile {
+  exists: boolean;
+  src?: string;
+  /** Length read from the file's own header, when it could be. */
+  durationS?: number;
+  sampleRate?: number;
+  channels?: number;
+  /** `file://` URL for a file referenced in place. */
+  href?: string;
 }
 
 export interface PlanInput {
@@ -120,28 +187,10 @@ export interface PlanInput {
   list?(dir: string): string[];
   /** Host A and similar: no files to read, the timeline is built from the project alone. */
   timelineOnly?: boolean;
-}
-
-const ASPECT_SIZE: Record<string, [number, number]> = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] };
-
-const pad = (n: number, w: number): string => String(n).padStart(w, '0');
-const safe = (s: string): string => s.replace(/[^A-Za-z0-9_-]/g, '_');
-const ext = (uri: string): string => {
-  const base = uri.split('/').pop() ?? '';
-  const i = base.lastIndexOf('.');
-  return i > 0 ? base.slice(i).toLowerCase() : '';
-};
-
-/** Planned but never made (status pending, no file): nothing to say about it. */
-const started = (a: Asset): boolean => a.status !== 'pending' || a.file !== undefined;
-
-const usable = (a: Asset | undefined): a is Asset & { file: NonNullable<Asset['file']> } => a !== undefined && a.status === 'approved' && a.file !== undefined;
-
-function whyNot(a: Asset, exists: (uri: string) => boolean): string {
-  if (a.status !== 'approved') return `status is ${a.status}, not approved`;
-  if (!a.file) return 'approved but has no file';
-  if (!exists(a.file.uri)) return `approved, but its file is missing (${a.file.uri})`;
-  return 'not usable';
+  /** Where `audio.master.uri` is on disk (it may go up out of the project folder). */
+  resolveMaster?(uri: string): Promise<MasterFile>;
+  /** `--link-media`: the master is referenced in place, not copied. */
+  linkMaster?: boolean;
 }
 
 /** `placement:film|scene:<id>|shot:<id>` from a music/SFX asset; undefined when it has none. */
@@ -156,6 +205,7 @@ export function placementOf(a: Asset): { film: true } | { scene: string } | { sh
 }
 
 export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
+  if (input.project.audio.master) return buildMasterPlan(input);
   const { project: p, fps } = input;
   const exists = (uri: string): boolean => input.timelineOnly === true || input.exists(uri);
   if (p.shots.length === 0) throw new HandoffError('This project has no shots yet, so there is nothing to put on a timeline.');
@@ -260,7 +310,7 @@ export async function buildPlan(input: PlanInput): Promise<ExportPlan> {
   // ── audio ─────────────────────────────────────────────────────────────
   const audio: AudioEvent[] = [];
   const notPlaced: MediaFile[] = [];
-  const found: Array<Omit<AudioEvent, 'n' | 'track'>> = [];
+  const found: Array<Omit<AudioEvent, 'n' | 'track' | 'role'> & { role: LaidRole }> = [];
 
   const takes = vos.filter((a) => a.owner !== undefined);
   let anyTake = false;

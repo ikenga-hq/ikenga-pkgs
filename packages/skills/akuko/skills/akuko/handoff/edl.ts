@@ -11,11 +11,15 @@
  * `* FROM CLIP NAME:` and every event carries the shot id.
  *
  * Source timecode runs from 00:00:00:00 (generated media has no embedded timecode). Record
- * timecode starts at 01:00:00:00. Non-drop frame.
+ * timecode starts at 01:00:00:00 (a master-clock project: at `audio.master.start_tc`). Non-drop frame.
+ * A master-clock export has `MASTER` for the locked audio and `C001`... for cards. An EDL cannot carry a camera
+ * move, so each move is a `* MOVE` comment and is listed in the README.
  */
 
 import type { AudioEvent, ExportPlan, VideoEvent } from './plan.ts';
-import { START_FRAMES, timecode } from './timecode.ts';
+import { timecode } from './timecode.ts';
+import { startOf } from './plan.ts';
+import { moveLabel } from './master.ts';
 
 /**
  * One reel name per file, never shared across kinds, at most 8 characters (the CMX 3600 reel field):
@@ -23,7 +27,12 @@ import { START_FRAMES, timecode } from './timecode.ts';
  */
 export function reelName(plan: ExportPlan, ev: VideoEvent | AudioEvent): string {
   const shotNo = (shot: string | undefined): string => String(plan.shots.find((s) => s.shot === shot)?.n ?? 0).padStart(3, '0');
-  if ('kind' in ev) return ev.kind === 'gap' ? 'BL' : `V${shotNo(ev.shot)}`;
+  if ('kind' in ev) {
+    if (ev.kind === 'gap') return 'BL';
+    if (ev.card !== undefined) return `C${String(plan.video.filter((v) => v.card !== undefined).indexOf(ev) + 1).padStart(3, '0')}`;
+    return `V${shotNo(ev.shot)}`;
+  }
+  if (ev.role === 'master') return 'MASTER';
   if (ev.role === 'vo') return `A${shotNo(ev.shot)}`;
   const same = plan.audio.filter((a) => a.role === ev.role);
   const nn = String(same.indexOf(ev) + 1).padStart(2, '0');
@@ -38,7 +47,7 @@ function eventLine(n: number, reel: string, track: string, srcIn: string, srcOut
 
 export function renderVideoEdl(plan: ExportPlan): string {
   const { fps } = plan;
-  const start = START_FRAMES(fps);
+  const start = startOf(plan);
   const out = [`TITLE: ${plan.title} (video)`, 'FCM: NON-DROP FRAME', ''];
   for (const v of plan.video) {
     const rec = [timecode(start + v.recIn, fps), timecode(start + v.recIn + v.frames, fps)] as const;
@@ -48,7 +57,8 @@ export function renderVideoEdl(plan: ExportPlan): string {
     } else {
       out.push(eventLine(v.n, reelName(plan, v), 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));
       out.push(`* FROM CLIP NAME: ${fileName(v.media!.dest)}`);
-      out.push(`* SHOT ${v.shot}${v.kind === 'still' ? ' (still: a key frame held for the shot)' : ''}`);
+      out.push(v.card !== undefined ? `* CARD ${v.card}` : `* SHOT ${v.shot}${v.kind === 'still' ? ' (still: a key frame held for the shot)' : ''}`);
+      if (v.move) out.push(`* ${moveLabel(v.shot, v.move)}`);
     }
     out.push('');
   }
@@ -66,7 +76,7 @@ export function audioTracks(plan: ExportPlan): AudioEvent[][] {
 
 export function renderAudioEdl(plan: ExportPlan, events: AudioEvent[], label: string): string {
   const { fps } = plan;
-  const start = START_FRAMES(fps);
+  const start = startOf(plan);
   const out = [`TITLE: ${plan.title} (${label})`, 'FCM: NON-DROP FRAME', ''];
   events.forEach((a, i) => {
     const track = (a.media.channels ?? 2) === 1 ? 'A' : 'AA';
