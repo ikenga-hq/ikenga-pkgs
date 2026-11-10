@@ -10,6 +10,14 @@ export const STAGE_IDS = ['intake', 'breakdown', 'sketch', 'bible', 'keyframes',
 
 export const bibleEntries = (p) => [...p.bible.characters, ...p.bible.locations, ...p.bible.styles];
 
+/** A unit is out of review when its row left the shot list: its own `source.removed_at`, else its owner's (as decisions/fold.ts removedAt). */
+export function removedAt(p, u) {
+  const own = u.source?.removed_at;
+  if (own !== undefined) return own;
+  if (u.owner === undefined) return undefined;
+  return unitsById(p).get(u.owner)?.source?.removed_at;
+}
+
 export function unitsById(p) {
   const m = new Map();
   for (const u of [...p.shots, ...bibleEntries(p), ...p.assets]) m.set(u.id, u);
@@ -42,12 +50,13 @@ export function expectedMoney(p) {
 /** The counts a "your move" summary must show. */
 export function expectedYourMove(p) {
   const assetIds = new Set(p.assets.map((a) => a.id));
+  const live = (u) => removedAt(p, u) === undefined;
   return {
-    'waiting-shots': p.shots.filter((s) => s.status === 'pending-review').length,
+    'waiting-shots': p.shots.filter((s) => live(s) && s.status === 'pending-review').length,
     'waiting-spend': p.pending_spend.filter((j) => j.status === 'awaiting-approval').length,
     'waiting-other':
-      p.assets.filter((a) => a.status === 'pending-review').length +
-      bibleEntries(p).filter((e) => e.status === 'pending-review' && !e.refs.some((r) => assetIds.has(r))).length,
+      p.assets.filter((a) => live(a) && a.status === 'pending-review').length +
+      bibleEntries(p).filter((e) => live(e) && e.status === 'pending-review' && !e.refs.some((r) => assetIds.has(r))).length,
   };
 }
 

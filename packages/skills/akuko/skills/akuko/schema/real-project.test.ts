@@ -109,9 +109,9 @@ function sheetProject(): Record<string, any> {
       },
       { id: 'S02b-010_lipsync', kind: 'lipsync', stage: 'motion', status: 'pending', owner: 'S02b-010' },
       {
-        id: 'card_S00-020', kind: 'card', stage: 'export', status: 'pending-review', name: 'Credits',
+        id: 'card_S04-020', kind: 'card', stage: 'export', status: 'pending-review', name: 'Credits',
         file: { uri: '../Titles/credits.png', mime: 'image/png' }, film: { in_s: 29, out_s: 30.5 },
-        source: { kind: 'sheet', id: 'S00-020', row: 2 },
+        source: { kind: 'sheet', id: 'S04-020', row: 2 },
       },
     ],
     audio: {
@@ -271,7 +271,7 @@ describe('real-project integrity: each rule has a failing case', () => {
     }, ['shots[1].film', 'shots[4].film']],
     ['a duration that is not the film span', (p) => { p.shots[1]!.duration_s = 6; }, ['shots[1].duration_s']],
     ['a lighting code that is no style entry', (p) => { p.shots[0]!.lighting = 'L9'; }, ['shots[0].lighting']],
-    ['a card with a shot-shaped id', (p) => { p.assets[3]!.id = 'S00-020'; }, ['assets[3].id']],
+    ['a card with a shot-shaped id', (p) => { p.assets[3]!.id = 'S04-020'; }, ['assets[3].id']],
     ['a start frame that does not exist at the project rate', (p) => { p.audio.master!.start_tc = '00:00:00:24'; }, ['audio.master.start_tc']],
     ['times past the end of the master', (p) => {
       p.shots[3]!.film = { in_s: 14, out_s: 31 };
@@ -312,10 +312,10 @@ describe('real-project integrity: each rule has a failing case', () => {
   it('a touching pair from mm:ss.ss sheet times (in == previous out exactly) is fine', () => {
     const mmss = (t: string): number => { const [m, s] = t.split(':'); return Number(m) * 60 + Number(s); };
     const p = parse(sheetProject());
-    p.audio.master!.duration_s = 1972.134917;
-    p.shots[0]!.film = { in_s: mmss('18:31.98'), out_s: mmss('18:37.41') };
-    p.shots[1]!.film = { in_s: mmss('18:37.41'), out_s: mmss('18:44.06') };
-    p.shots[1]!.duration_s = mmss('18:44.06') - mmss('18:37.41');
+    p.audio.master!.duration_s = 1523.4062;
+    p.shots[0]!.film = { in_s: mmss('12:14.30'), out_s: mmss('12:19.75') };
+    p.shots[1]!.film = { in_s: mmss('12:19.75'), out_s: mmss('12:26.10') };
+    p.shots[1]!.duration_s = mmss('12:26.10') - mmss('12:19.75');
     assert.deepEqual(checkIntegrity(p), []);
   });
 
@@ -359,7 +359,7 @@ describe('old projects parse unchanged', () => {
 });
 
 describe('unit ids built from shot ids', () => {
-  const sheetIds = ['S11-010', 'S16b-010', 'S00-010', 'S11-015A'];
+  const sheetIds = ['S02-030', 'S07b-010', 'S03-020', 'S02-035A'];
   const canonicalIds = ['sc1_sh1', 'sc3_sh2A'];
 
   it('sheet ids and canonical ids are disjoint forms', () => {
@@ -370,7 +370,7 @@ describe('unit ids built from shot ids', () => {
       assert.ok(IdSchema.safeParse(id).success, id);
     }
     for (const id of canonicalIds) assert.ok(!isSheetShotId(id), id);
-    for (const id of ['S11_010', 'S11-010-keyframes', 'S11-010-2', 'sc1-sh1', 's11-010', 'S11', 'job_kf_1']) assert.ok(!isSheetShotId(id), id);
+    for (const id of ['S02_030', 'S02-030-keyframes', 'S02-030-2', 'sc1-sh1', 's02-030', 'S02', 'job_kf_1']) assert.ok(!isSheetShotId(id), id);
   });
 
   it('every stage helper round-trips a sheet id (and a canonical id)', () => {

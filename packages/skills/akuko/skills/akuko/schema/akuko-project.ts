@@ -76,7 +76,7 @@ export const AKUKO_SCHEMA_VERSION = 1 as const;
  * assets, jobs, scenes). Safe to use in a file name: `board/panels/<id>-<stage>.png`.
  * Shots written by the breakdown stage use the `sc<N>_sh<M>` form (see
  * `CANONICAL_SHOT_ID`); imported shots keep their source id (a shot-list
- * sheet's ids have the `SHEET_SHOT_ID` form, e.g. `S11-010`).
+ * sheet's ids have the `SHEET_SHOT_ID` form, e.g. `S02-030`).
  */
 export const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const IdSchema = z.string().regex(ID_PATTERN, 'id must be letters, digits, ".", "_" or "-", starting with a letter or digit');
@@ -87,7 +87,7 @@ export const isCanonicalShotId = (id: string): boolean => CANONICAL_SHOT_ID.test
 
 /**
  * Shot ids kept from an imported shot-list sheet (WP-24, R9-6):
- * `S<scene>[letter]-<shot>[letter]`, e.g. `S11-010`, `S16b-010`, `S00-010`.
+ * `S<scene>[letter]-<shot>[letter]`, e.g. `S02-030`, `S07b-010`, `S03-020`.
  * Exactly one `-` and no `_`, so a sheet id can never be mistaken for:
  *   - a canonical id (`sc1_sh1` always has a `_`);
  *   - a unit id built from a shot id (`<shot>_keyframe`, `<shot>_clip`,
@@ -95,7 +95,7 @@ export const isCanonicalShotId = (id: string): boolean => CANONICAL_SHOT_ID.test
  *   - a provider output id (`<unit>-<stage>`, `-2`, `-v2`), which has a second `-`;
  *   - a job id (`job_…`).
  * `isSheetShotId` tests the pattern only; it does not mean "this is a shot".
- * A sheet's ready-made rows can have the same form (`S00-020`), so a card
+ * A sheet's ready-made rows can have the same form (`S04-020`), so a card
  * keeps its sheet id in `source.id` and is stored as `card_<sheet id>`.
  */
 export const SHEET_SHOT_ID = /^S\d+[a-z]?-\d+[A-Za-z]?$/;
@@ -913,23 +913,54 @@ export type UnitRef =
   | { kind: 'character' | 'location' | 'style'; unit: BibleEntry }
   | { kind: 'asset'; unit: Asset };
 
+export interface UnitListOptions {
+  /**
+   * Keep units whose row left the imported shot list (`source.removed_at`, set
+   * by a re-import), or whose owner's did. Default `true`: the full list the
+   * decision folder works over (it must still see removed units to release a
+   * stage). Pass `false` for "live" units: what readiness checks, boards and
+   * audits count.
+   */
+  includeRemoved?: boolean;
+}
+
+const removedStamp = (u: object): string | undefined => (u as { source?: { removed_at?: string } }).source?.removed_at;
+
+/**
+ * When a unit is out of the live set because its row left the shot list: its
+ * own `source.removed_at`, else its owner's (a `<shot>_keyframe` of a removed
+ * shot, an image of a removed bible entry). Same rule as `decisions/fold.ts`
+ * `removedAt`, kept here so schema-level code needn't import the folder.
+ */
+export function removedAt(p: AkukoProject, u: object): string | undefined {
+  const own = removedStamp(u);
+  if (own !== undefined) return own;
+  const owner = (u as { owner?: string }).owner;
+  if (owner === undefined) return undefined;
+  const o = [...p.shots, ...p.bible.characters, ...p.bible.locations, ...p.bible.styles, ...p.assets].find((x) => x.id === owner);
+  return o === undefined ? undefined : removedStamp(o);
+}
+
 /**
  * Every unit in the project, in document order: shots, then bible entries,
  * then assets. This is the `units[]` collection the review surface and the
  * actions work over; units live in their own collections, not in a copy.
+ * Removed units are included unless `{ includeRemoved: false }`.
  */
-export function listUnits(p: AkukoProject): UnitRef[] {
-  return [
+export function listUnits(p: AkukoProject, opts: UnitListOptions = {}): UnitRef[] {
+  const all: UnitRef[] = [
     ...p.shots.map((unit) => ({ kind: 'shot' as const, unit })),
     ...p.bible.characters.map((unit) => ({ kind: 'character' as const, unit })),
     ...p.bible.locations.map((unit) => ({ kind: 'location' as const, unit })),
     ...p.bible.styles.map((unit) => ({ kind: 'style' as const, unit })),
     ...p.assets.map((unit) => ({ kind: 'asset' as const, unit })),
   ];
+  return opts.includeRemoved === false ? all.filter((r) => removedAt(p, r.unit) === undefined) : all;
 }
 
-export function findUnit(p: AkukoProject, id: string): UnitRef | undefined {
-  return listUnits(p).find((u) => u.unit.id === id);
+/** Find a unit by id. Finds removed units too (provenance and ledger lookups need them) unless `{ includeRemoved: false }`. */
+export function findUnit(p: AkukoProject, id: string, opts: UnitListOptions = {}): UnitRef | undefined {
+  return listUnits(p, opts).find((u) => u.unit.id === id);
 }
 
 /** Schemas exported as named JSON Schema definitions. */

@@ -224,4 +224,43 @@ describe('refs and the master hash', () => {
   });
 });
 
+describe('re-import and approved bible entries (WP-24c)', () => {
+  const withToken = async (name: string, expands: string): Promise<ImportInput> => {
+    const wb = workbook();
+    const tokens = wb.find((sh) => sh.name === 'Tokens')!;
+    tokens.rows = tokens.rows.map((r) => (r[0] === name ? [r[0]!, expands, r[2]!] : r));
+    const dir = await mkdtemp(join(tmpdir(), 'akuko-bib-'));
+    const file = join(dir, 'sheet.xlsx');
+    await writeFile(file, makeXlsx(wb));
+    return { ...(await loadSheet(file, resolveMapping(undefined))), cardFile: (id) => `cards/${id}.png` };
+  };
+  const approveEntry = (p: AkukoProject, id: string): void => {
+    const e = p.bible.characters.find((x) => x.id === id)!;
+    e.status = 'approved';
+    e.by_stage!.breakdown!.status = 'approved';
+  };
+
+  it('puts an approved entry back in review, with an agent comment, when its description changes', async () => {
+    const first = importSheet(fresh(), await inputFrom(), { now: T0 });
+    const p = structuredClone(first.project);
+    p.stages.intake = { state: 'approved' };
+    p.stages.breakdown = { state: 'approved' };
+    const ada = p.bible.characters.find((c) => c.name === 'ADA-NOW')!;
+    const bo = p.bible.characters.find((c) => c.name === 'BO')!;
+    approveEntry(p, ada.id);
+    approveEntry(p, bo.id);
+    const r = importSheet(p, await withToken('ADA-NOW', 'a woman in her seventies, white braid, green coat'), { now: T1 });
+    const by = new Map(r.project.bible.characters.map((c) => [c.id, c]));
+    assert.equal(by.get(ada.id)!.status, 'pending-review');
+    assert.equal(by.get(ada.id)!.by_stage!.breakdown!.status, 'pending-review');
+    const note = by.get(ada.id)!.comments.at(-1)!;
+    assert.equal(note.author, 'agent');
+    assert.match(note.text, /Re-imported: description changed/);
+    assert.equal(by.get(bo.id)!.status, 'approved', 'an untouched entry stays approved');
+    assert.equal(r.project.stages.breakdown.state, 'in-review');
+    assert.ok(r.summary.changed.some((c) => c.id === ada.id && c.approved));
+    assert.equal(r.project.bible.characters.filter((c) => c.status === 'approved').length, 1, 'code never approves anything');
+  });
+});
+
 void mkdir;

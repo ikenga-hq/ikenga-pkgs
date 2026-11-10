@@ -22,7 +22,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { STAGES, type AkukoProject, type Asset, type Shot } from '../schema/akuko-project.ts';
+import { STAGES, removedAt, type AkukoProject, type Asset, type Shot } from '../schema/akuko-project.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { jobTag } from '../providers/outputs.ts';
@@ -65,7 +65,8 @@ export function assertOpen(p: AkukoProject): void {
     }
     if (id === 'keyframes') break;
   }
-  const open = p.shots.filter((s) => s.status !== 'approved');
+  // A shot removed from the shot list takes no review, so it never holds sound back.
+  const open = p.shots.filter((s) => s.status !== 'approved' && removedAt(p, s) === undefined);
   if (open.length > 0) throw new SoundError(`These shots are not approved yet: ${open.map((s) => s.id).join(', ')}.`);
 }
 

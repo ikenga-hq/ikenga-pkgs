@@ -21,7 +21,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { AkukoProject, Asset, BibleEntry, Shot } from '../schema/akuko-project.ts';
+import { removedAt, type AkukoProject, type Asset, type BibleEntry, type Shot } from '../schema/akuko-project.ts';
 import { bibleAssets, roleOf } from '../bible/plan.ts';
 import { keyframeAssets, neededRefs, supersededRefs } from '../keyframes/plan.ts';
 
@@ -202,7 +202,8 @@ const runIdFor = (visual: VisualNote[]): string => `audit_${createHash('sha1').u
 /** Audit every key frame that has an image. Pure: reads the project, returns the report, writes nothing. */
 export function auditProject(project: AkukoProject, opts: AuditOptions = {}): AuditReport {
   const keyframes = keyframeAssets(project);
-  const made = keyframes.filter(hasFile);
+  // A key frame whose shot left the shot list is kept for the record, not audited.
+  const made = keyframes.filter((a) => hasFile(a) && removedAt(project, a) === undefined);
   const notes = opts.visual ?? [];
   const mixed = mixedModelFindings(project, made);
   const stale: VisualNote[] = [];
