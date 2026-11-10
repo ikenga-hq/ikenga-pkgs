@@ -3,12 +3,12 @@
  *
  *   node --experimental-strip-types lipsync/cli.ts <command> --project <dir> [options]
  *
- *   plan     [--allow-root <dir>]…   plan a lip-sync for every shot that needs one (idempotent), then cut the
+ *   plan     [--allow-root <dir>]… [--from master]   plan a lip-sync for every shot that needs one (idempotent), then cut the
  *                                    line audio each needs (free, local): the line's own clip when it can be
  *                                    used as it is, else a 16-bit slice of the master
  *   status   [--allow-root <dir>]…   one line per lip-sync: its status, what it waits for, paid attempts, money
  *   step     --provider <id>         the next lip-sync (one shot) through the rules guard and the spend gate:
- *            [--shot <id>] [--model <id>] [--max-attempts N] [--allow-root <dir>]…
+ *            [--shot <id>] [--model <id>] [--max-attempts N] [--allow-root <dir>]… [--from master]
  *              provider: manual | fal-lipsync
  *              paid: prints the spend line (with the files that would be uploaded) and stops until a person
  *                    approves it, then runs and records the video
@@ -23,7 +23,9 @@
  *
  * `--allow-root <dir>` (repeatable) lets this ONE run read files in a folder outside the project, such as
  * a folder of line clips. Pass it only when the person named that folder; it is never remembered, and
- * nothing in akuko.json or a job can add one.
+ * nothing in akuko.json or a job can add one. `--from master` (plan, status, step) cuts the line from the master
+ * instead of using its own clip, for that run: the person's choice when a clip may hold more than may leave
+ * their machine.
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
  */
@@ -42,7 +44,7 @@ import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { AkukoProjectSchema } from '../schema/akuko-project.ts';
 import { cutAudio, masterHash, resolveAll } from './cut.ts';
-import { DEFAULT_MAX_ATTEMPTS, LipsyncError, lipsyncStatus, planLipsync } from './plan.ts';
+import { DEFAULT_MAX_ATTEMPTS, LipsyncError, lipsyncStatus, orphanLine, orphanedUnits, planLipsync } from './plan.ts';
 import { collectLipsync, finalizeLipsync, generateLipsync, ingestLipsync, type StepResult } from './run.ts';
 
 export interface CliResult { code: number; out: string }
@@ -50,19 +52,20 @@ export interface CliResult { code: number; out: string }
 /** For tests: a mocked network and environment. The command line itself uses the real ones. */
 export interface CliIo { fetch?: FetchLike; env?: Record<string, string | undefined>; chunkBytes?: number }
 
-function flags(argv: string[]): { cmd: string; opt: Map<string, string | true>; roots: string[] } {
+function flags(argv: string[]): { cmd: string; opt: Map<string, string | true>; roots: string[]; bareRoot: boolean } {
   const [cmd = '', ...rest] = argv;
   const opt = new Map<string, string | true>();
   const roots: string[] = [];
+  let bareRoot = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (!a.startsWith('--')) continue;
     const next = rest[i + 1];
     const value: string | true = next !== undefined && !next.startsWith('--') ? (i++, next) : true;
-    if (a === '--allow-root') { if (typeof value === 'string') roots.push(value); continue; }
+    if (a === '--allow-root') { if (typeof value === 'string') roots.push(value); else bareRoot = true; continue; }
     opt.set(a.slice(2), value);
   }
-  return { cmd, opt, roots };
+  return { cmd, opt, roots, bareRoot };
 }
 const str = (v: string | true | undefined): string | undefined => (typeof v === 'string' ? v : undefined);
 
@@ -95,14 +98,17 @@ function describeStatus(r: StepResult): CliResult {
 }
 
 export async function run(argv: string[], now: () => Date = () => new Date(), io: CliIo = {}): Promise<CliResult> {
-  const { cmd, opt, roots } = flags(argv);
+  const { cmd, opt, roots, bareRoot } = flags(argv);
   const dir = str(opt.get('project'));
   if (!dir) return { code: 2, out: 'akuko: --project <folder> is required.' };
+  if (bareRoot) return { code: 2, out: 'akuko: --allow-root needs a folder (one the person named), e.g. --allow-root "../Audio/Clips".' };
+  const from = opt.get('from');
+  if (from !== undefined && from !== 'master') return { code: 2, out: 'akuko: --from takes master (cut the line from the master instead of using its own clip).' };
   for (const r of roots) {
     if (!existsSync(resolve(r))) return { code: 2, out: `akuko: --allow-root ${r} does not exist.` };
   }
   const allowRoots = roots.map((r) => resolve(r));
-  const audioCtx = { projectDir: dir, allowRoots };
+  const audioCtx = { projectDir: dir, allowRoots, ...(from === 'master' ? { from: 'master' as const } : {}) };
   const host = createLocalHost({ projectDir: dir, now });
   const clock = () => now().toISOString();
   const env = io.env ?? process.env;
@@ -111,10 +117,11 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
     if (cmd === 'status') {
       const p = await host.readState();
       const rows = lipsyncStatus(p, await resolveAll(p, audioCtx));
-      if (rows.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
+      const orphans = orphanedUnits(p).map(orphanLine);
+      if (rows.length === 0 && orphans.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
       return {
         code: 0,
-        out: rows.map((r) => `${r.asset} (line${r.lines.length === 1 ? '' : 's'} ${r.lines.join(', ')}): ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(' and ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`).join(NL),
+        out: [...rows.map((r) => `${r.asset} (line${r.lines.length === 1 ? '' : 's'} ${r.lines.join(', ')}): ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(' and ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...orphans].join(NL),
       };
     }
     if (cmd === 'plan') {

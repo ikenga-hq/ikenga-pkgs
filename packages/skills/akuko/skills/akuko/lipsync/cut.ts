@@ -49,7 +49,9 @@ import {
   LIPSYNC_STAGE,
   assetIdFor,
   cutIdFor,
-  lipsyncAssets,
+  currentUnits,
+  orphanLine,
+  orphanedUnits,
   secs,
   shotOf,
   spokenLines,
@@ -67,7 +69,12 @@ export interface AudioContext {
   projectDir: string;
   /** Folders outside the project the person named for this run (`--allow-root`). Never stored. */
   allowRoots?: string[];
+  /** `master`: the person chose the master cut over a line's own clip, for this run (`--from master`). */
+  from?: 'master';
 }
+
+/** Added to what the spend line says about audio read from outside the project folder (a line clip there, or one read through --allow-root). */
+export const OUTSIDE_WARNING = 'a file outside the project; check it holds only speech that may leave your machine (line clips can be cut from an unbleeped reference)';
 
 const norm = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
 const inside = (root: string, p: string): boolean => {
@@ -83,7 +90,7 @@ export function pathOf(uri: string, projectDir: string): string | undefined {
 }
 
 /** The real path of `uri` when it is a readable file inside the project folder or an allowed root; else why not. */
-async function readable(uri: string, ctx: AudioContext): Promise<{ path: string } | { why: string }> {
+async function readable(uri: string, ctx: AudioContext): Promise<{ path: string; outside: boolean } | { why: string }> {
   const p = pathOf(uri, ctx.projectDir);
   if (!p) return { why: `${uri} is not a local file` };
   let real: string;
@@ -95,7 +102,9 @@ async function readable(uri: string, ctx: AudioContext): Promise<{ path: string 
   if (!roots.some((r) => inside(r, real))) {
     return { why: `${uri} is outside the project folder; it can be read only if the person names its folder with --allow-root for this run` };
   }
-  return { path: real };
+  // Inside the project folder itself, or only through an allowed root (a project folder that doesn't resolve counts as outside).
+  const project = await realpath(resolve(ctx.projectDir)).catch(() => undefined);
+  return { path: real, outside: project === undefined || !inside(project, real) };
 }
 
 const lineIds = (lines: AudioLine[]): string => lines.map((l) => l.id).join(',');
@@ -133,13 +142,13 @@ export async function resolveAudio(p: AkukoProject, shot: Shot, ctx: AudioContex
   const src = audioSource(p, shot);
   if (src.lines.length === 0) return { ok: false, why: src.why ?? 'no spoken line' };
   const notes: string[] = [];
-  if (src.clip) {
+  if (src.clip && ctx.from !== 'master') {
     const r = await readable(src.clip.clip_uri!, ctx);
     if ('path' in r) {
       try {
         const { layout, seconds } = await secondsOf(r.path);
         if (isPcm16(layout)) {
-          return { ok: true, audio: { id: src.clip.id, uri: src.clip.clip_uri!, seconds, sha256: await sha256File(r.path), says: `line ${src.clip.id}'s own clip` } };
+          return { ok: true, audio: { id: src.clip.id, uri: src.clip.clip_uri!, seconds, sha256: await sha256File(r.path), says: `line ${src.clip.id}'s own clip${r.outside ? `, ${OUTSIDE_WARNING}` : ''}` } };
         }
         notes.push(`its clip is ${layout.bits}-bit ${layout.encoding === 'float' ? 'float' : 'PCM'}, so it needs a 16-bit copy`);
       } catch (err) {
@@ -169,11 +178,10 @@ export async function resolveAudio(p: AkukoProject, shot: Shot, ctx: AudioContex
   return { ok: false, why: [...notes, why].join('; ') };
 }
 
-/** Audio lookups for every planned lip-sync unit (removed rows left out). */
+/** Audio lookups for every lip-sync still asked for (`currentUnits`: removed rows and orphans left out). */
 export async function resolveAll(p: AkukoProject, ctx: AudioContext): Promise<Map<string, AudioLookup>> {
   const out = new Map<string, AudioLookup>();
-  for (const a of lipsyncAssets(p)) {
-    if (removedAt(p, a) !== undefined) continue;
+  for (const a of currentUnits(p)) {
     const shot = p.shots.find((s) => s.id === a.owner);
     out.set(a.id, shot ? await resolveAudio(p, shot, ctx) : { ok: false, why: 'its shot is gone' });
   }
@@ -191,13 +199,13 @@ type Wanted =
  */
 async function wantedCut(p: AkukoProject, shot: Shot, ctx: AudioContext): Promise<Wanted> {
   const src = audioSource(p, shot);
-  if (src.clip) {
+  if (src.clip && ctx.from !== 'master') {
     const r = await readable(src.clip.clip_uri!, ctx);
     if ('path' in r) {
       try {
         const { layout, seconds } = await secondsOf(r.path);
         if (!isPcm16(layout)) {
-          return { source: { kind: 'clip', uri: src.clip.clip_uri!, path: r.path, sha256: await sha256File(r.path) }, span: { in_s: 0, out_s: secs(seconds) }, says: `line ${src.clip.id}'s own clip ${src.clip.clip_uri}, converted to 16-bit` };
+          return { source: { kind: 'clip', uri: src.clip.clip_uri!, path: r.path, sha256: await sha256File(r.path) }, span: { in_s: 0, out_s: secs(seconds) }, says: `line ${src.clip.id}'s own clip ${src.clip.clip_uri}, converted to 16-bit${r.outside ? `; the clip is ${OUTSIDE_WARNING}` : ''}` };
         }
       } catch { /* not a WAV akuko can read: fall back to the master */ }
     }
@@ -236,8 +244,9 @@ export async function cutAudio(project: AkukoProject, ctx: AudioContext & { now:
   const cut: string[] = [];
   type Job = { shot: Shot; lines: AudioLine[]; source: { kind: 'master' | 'clip'; uri: string; path: string; sha256?: string }; span: Span; range?: FrameRange; says: string };
   const jobs: Job[] = [];
-  for (const a of lipsyncAssets(p)) {
-    if (removedAt(p, a) !== undefined) continue;
+  // A lip-sync no longer asked for is kept, and nothing is cut for it.
+  notes.push(...orphanedUnits(p).map(orphanLine));
+  for (const a of currentUnits(p)) {
     const shot = shotOf(p, a);
     const now = await resolveAudio(p, shot, ctx);
     const todo = a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework';
@@ -344,4 +353,21 @@ export async function masterHash(p: AkukoProject, projectDir: string): Promise<{
   const path = pathOf(m.uri, projectDir);
   if (!path || !existsSync(path)) throw new Error(`the master ${m.uri} is not there`);
   return { uri: m.uri, sha256: await sha256File(path) };
+}
+
+/**
+ * sha256 of each current lip-sync's key frame as the file is now, by key-frame
+ * asset id, for the job id: a still swapped on disk (even with an old
+ * recorded hash) is a new job. A file that can't be read is left out (the job
+ * then uses the recorded hash, or is refused without one).
+ */
+export async function stillHashes(p: AkukoProject, ctx: Pick<AudioContext, 'projectDir'>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const a of currentUnits(p)) {
+    const kf = p.assets.find((x) => x.id === `${a.owner}_keyframe`);
+    const path = kf?.file ? pathOf(kf.file.uri, ctx.projectDir) : undefined;
+    if (!kf || !path || !existsSync(path)) continue;
+    try { out.set(kf.id, await sha256File(path)); } catch { /* unreadable: the recorded hash stands in */ }
+  }
+  return out;
 }

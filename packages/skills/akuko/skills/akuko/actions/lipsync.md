@@ -43,7 +43,8 @@ Clip mode (lip-syncing an approved video clip) is not used yet: fal would need t
 ## Where the stage is tracked
 
 - `<shot>_lipsync` (kind `lipsync`, stage `motion`, owner = the shot): the video, reviewed on the board like a clip.
-- `<shot>_linecut` (kind `vo`, stage `motion`, provider `akuko-cut`): the cut line audio, in `lipsync/cuts/`. It is recorded `pending-review` so the person can listen to it on the board; the stage is approved only when these are too. It is not what lets the lip-sync run.
+- `<shot>_linecut` (kind `vo`, stage `motion`, provider `akuko-cut`): the cut line audio, in `lipsync/cuts/`. It is recorded `pending-review`. **The board has no audio player**: the person listens by opening the file itself, `lipsync/cuts/<shot>_linecut.wav` (give them the path), then approves or sends it back on the board. **Every line cut must be approved before the motion stage can be.** Its approval is not what lets the lip-sync run.
+- A lip-sync whose shot **no longer asks for one** (the person changed its treatment, or its spoken line went away) is kept, never deleted. `plan` and `status` list it as "no longer asked for (treatment …); kept", and nothing is cut, priced or made for it. It still sits at the motion stage, so if it was never made, tell the person it holds the stage open: they decide what to do with it.
 
 ## Steps
 
@@ -52,13 +53,14 @@ All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --pro
 0. **Fold decisions first** (`../decisions/cli.ts fold`). If the stage is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: plans a lip-sync for every shot that needs one and cuts the line audio each needs (free, local; the master is read once, never loaded whole). Safe to repeat. Pass on everything it prints:
    - which shots were passed over and why (a thought line, no spoken line);
-   - which line audio was cut and which clips are used as they are;
+   - which line audio was cut and which clips are used as they are. Give the person the path of each new cut (`lipsync/cuts/…`) to listen to: the board can't play it;
+   - which lip-syncs are no longer asked for (kept, nothing done for them);
    - **the master hash.** If `audio.master.sha256` is not recorded, it prints the hash it computed. Tell the person; recording it is their command: `record-master-hash` (it never overwrites a different recorded hash without `--replace`). If the project has rules, slices of the master can be uploaded only when that hash is in `rules.uploads.allow` with `slices: true`; the person adds that entry, not you;
    - a master that no longer matches its recorded hash is refused: nothing is cut. Tell the person the film times may no longer match the file.
 2. **`status`**: one line per lip-sync with its lines, what it waits for (the approved key frame, the line audio), its paid attempts and money spent.
 3. **Choose the provider** (config and the person decide, not you): `manual` (free; hosts A, B, C) or `fal-lipsync` (paid direct API; hosts B and C only; key `FAL_KEY`; needs a budget cap from `/akuko setup`). A missing key is reported before anything is estimated, sent or counted.
 4. **`step --provider <id> [--shot <id>]`** makes the next lip-sync (one shot):
-   - **Paid:** it prints the spend line: the arithmetic (`2 s x 0.08 USD/s = 0.16`) **and the files it would upload to fal** (the still and the audio, with where the audio came from). **Uploading the person's audio and picture is their call: show them the whole line and wait.** Nothing has been sent. They approve on the board (or reply in the line's exact words, `approve <amount> <CURRENCY>`); fold, then run `step` again. It then runs, records the video and marks it `pending-review`.
+   - **Paid:** it prints the spend line: the arithmetic (`2 s x 0.08 USD/s = 0.16`) **and the files it would upload to fal** (the still and the audio, with where the audio came from). **Uploading the person's audio and picture is their call: show them the whole line and wait.** When the audio is a file outside the project, the line says so: "a file outside the project; check it holds only speech that may leave your machine (line clips can be cut from an unbleeped reference)". **Read that sentence to the person, word for word**, and let them choose: approve, or ask for the master cut instead (`step --from master`, after `plan --from master` has cut it). Nothing has been sent. They approve on the board (or reply in the line's exact words, `approve <amount> <CURRENCY>`); fold, then run `step` again. It then runs, records the video and marks it `pending-review`.
    - **Manual:** it prints the prompt package (the still and the audio to take to their tool). They bring the video back: `ingest --job <id> --unit <shot>_lipsync --file <path> [--actual <cost they report>]`.
    - Leave `--model` out: akuko picks the model that fits the measured line. Name one only if the person asked; a model that can't take the line is refused.
 5. **Say where the video belongs.** The lip-sync video starts with its audio, which usually starts a little after the shot does; `step` prints "belongs at <n> s on the master". The Resolve handoff places a lip-sync at the shot's start today, so tell the person to slide it to that time (or wait for the handoff to do it).
@@ -67,7 +69,9 @@ All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --pro
 
 ## Files outside the project folder
 
-A line clip often lives outside the project folder (a media folder next to it). akuko reads such a file **only** when the person names its folder for that run: `--allow-root <folder>` (repeatable) on `plan`, `status` or `step`. **Pass it only with a folder the person named in their own words; never pick one yourself.** It is not remembered: the next run without it does not read that folder (the master slice is used instead, and `plan` says why). The spend line names the clip it would upload.
+A line clip often lives outside the project folder (a media folder next to it). akuko reads such a file **only** when the person names its folder for that run: `--allow-root <folder>` (repeatable) on `plan`, `status` or `step`. **Pass it only with a folder the person named in their own words; never pick one yourself.** It is not remembered: the next run without it does not read that folder (the master slice is used instead, and `plan` says why). A bare `--allow-root` with no folder is refused.
+
+The spend line names the clip it would upload and adds: "a file outside the project; check it holds only speech that may leave your machine (line clips can be cut from an unbleeped reference)". **Read it to the person.** Line clips are often cut from a reference track that was never meant to leave the edit (an unbleeped mix, a guide track), so only the person can say whether that clip may be uploaded. If they would rather not, `--from master` (on `plan`, `status` and `step`, for that run) uses a slice of the master instead of the clip; `plan --from master` cuts it first.
 
 ## When it is still running: `collect`
 

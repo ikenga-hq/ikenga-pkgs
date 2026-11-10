@@ -26,7 +26,7 @@ import type { Job, JobHandle, JobStatus, WaveOneHost } from '../providers/contra
 import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { abandonUnits, beginUnits } from '../motion/plan.ts';
-import { resolveAll, type AudioContext } from './cut.ts';
+import { resolveAll, stillHashes, type AudioContext } from './cut.ts';
 import { buildLipsyncJob, refreshStageState, repairFileless, type Span } from './plan.ts';
 
 export interface StepDeps {
@@ -86,9 +86,11 @@ export async function generateLipsync(deps: StepDeps, o: StepOptions): Promise<S
   await finalizeLipsync(deps); // repairs first: an undo may have left a lip-sync without its file
   const project = await deps.host.readState();
   const audio = await resolveAll(project, deps.audio);
+  const stills = await stillHashes(project, deps.audio);
   const built = buildLipsyncJob(project, {
     provider: o.provider,
     audio,
+    stills,
     ...(o.model !== undefined ? { model: o.model } : {}),
     ...(o.shot !== undefined ? { shot: o.shot } : {}),
     ...(o.maxAttempts !== undefined ? { maxAttempts: o.maxAttempts } : {}),

@@ -20,10 +20,10 @@ import { guardGate, RULES_BREACH } from '../rules/guard.ts';
 import { sha256Bytes } from '../rules/refs.ts';
 import { approveSpend } from '../bible/__fixtures__/project.ts';
 import { run } from './cli.ts';
-import { resolveAll } from './cut.ts';
-import { LipsyncError, assetIdFor, buildLipsyncJob, lipsyncTargets, planLipsync } from './plan.ts';
+import { OUTSIDE_WARNING, resolveAll, stillHashes } from './cut.ts';
+import { LipsyncError, PAD_AFTER_S, PAD_BEFORE_S, assetIdFor, buildLipsyncJob, expectedAudioSeconds, lipsyncTargets, planLipsync } from './plan.ts';
 import { PROVIDER_REFUSED, generateLipsync } from './run.ts';
-import { T0, lipsyncFolder, readProject, writeProject } from './__fixtures__/project.ts';
+import { T0, lipsyncFolder, readProject, wav16, writeProject } from './__fixtures__/project.ts';
 
 globalThis.fetch = (() => { throw new Error('a real network call was attempted'); }) as typeof fetch;
 
@@ -304,6 +304,98 @@ describe('the master hash', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+describe('approvals bind to the files', () => {
+  it('a changed audio or still file is a new job, and the old approval does not run it', async () => {
+    const { dir } = await planned();
+    const net = mockFalLipsync();
+    const io = { fetch: net.fetch, env: ENV };
+    const step = () => run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020'], T, io);
+    const pending = async () => (await readProject(dir)).pending_spend.map((j) => `${j.id}:${j.status}`);
+
+    assert.match((await step()).out, /Spend check/);
+    const first = await approvePending(dir);
+
+    // The person's clip is replaced on disk after the approval: new bytes, same name and length.
+    await writeFile(join(dir, 'clips', 'L02.wav'), wav16(2.45, 99));
+    const afterAudio = await step();
+    assert.equal(afterAudio.code, 0, afterAudio.out);
+    assert.match(afterAudio.out, /Spend check[\s\S]*Nothing has been sent/);
+    const ids = await pending();
+    assert.equal(ids.length, 2);
+    assert.ok(ids.includes(`${first}:approved`), 'the old approval stays, unused');
+    const second = ids.find((x) => x.endsWith(':awaiting-approval'))!.split(':')[0]!;
+    assert.notEqual(second, first);
+
+    // The key frame is swapped on disk (its recorded hash is now stale): again a new job.
+    await approvePending(dir);
+    await writeFile(join(dir, 'board', 'panels', 'S02-020_keyframe.png'), new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    const afterStill = await step();
+    assert.match(afterStill.out, /Spend check[\s\S]*Nothing has been sent/);
+    assert.equal((await pending()).filter((x) => x.endsWith(':awaiting-approval')).length, 1);
+    assert.equal((await pending()).length, 3);
+    assert.equal(net.calls.filter((c) => c.method === 'POST').length, 0, 'nothing ran under an approval given for other files');
+  });
+
+  it('a key frame with no recorded hash is tied to its bytes, never to its name alone', async () => {
+    const { dir, project } = await planned();
+    const audio = await resolveAll(project, { projectDir: dir });
+    const withHash = buildLipsyncJob(project, { provider: 'fal-lipsync', shot: 'S02-010', audio }).job.id;
+    const p = structuredClone(project);
+    delete p.assets.find((a) => a.id === 'S02-010_keyframe')!.file!.hash;
+    assert.throws(() => buildLipsyncJob(p, { provider: 'fal-lipsync', shot: 'S02-010', audio }), /no recorded hash/);
+    const stills = await stillHashes(p, { projectDir: dir });
+    assert.equal(buildLipsyncJob(p, { provider: 'fal-lipsync', shot: 'S02-010', audio, stills }).job.id, withHash, 'the bytes hash to what was recorded');
+  });
+});
+
+describe('lip-syncs no longer asked for', () => {
+  it('are kept and reported; nothing is cut, priced or made for them', async () => {
+    const { dir } = await planned();
+    const p = await readProject(dir);
+    p.shots.find((s) => s.id === 'S03-010')!.treatment = 'still';
+    p.audio!.lines!.find((l) => l.id === 'L05')!.film_in_s = 20.6; // a re-cut would be due, if it were still asked for
+    await writeProject(dir, p);
+
+    const again = await run(['plan', '--project', dir], T);
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /S03-010_lipsync: no longer asked for \(treatment still\); kept\./);
+    assert.doesNotMatch(again.out, /Cut the line audio for .*S03-010/);
+    const after = await readProject(dir);
+    assert.ok(after.assets.some((a) => a.id === 'S03-010_lipsync'), 'never deleted');
+    assert.ok(after.assets.find((a) => a.id === 'S03-010_linecut')!.tags.some((t) => t.includes('@20.3-')), 'its old cut is left as it was');
+
+    const status = (await run(['status', '--project', dir], T)).out;
+    assert.match(status, /S03-010_lipsync: no longer asked for/);
+    assert.doesNotMatch(status, /S03-010_lipsync \(lines/);
+
+    const asked = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S03-010'], T, { fetch: mockFalLipsync().fetch, env: ENV });
+    assert.equal(asked.code, 1);
+    assert.match(asked.out, /no longer asked for \(treatment still\)/);
+    assert.deepEqual((await readProject(dir)).pending_spend, [], 'no spend asked for');
+
+    // With every other lip-sync gone too, step asks for nothing.
+    const q = await readProject(dir);
+    q.shots.find((s) => s.id === 'S02-010')!.treatment = 'still';
+    q.shots.find((s) => s.id === 'S02-020')!.treatment = 'still-move';
+    await writeProject(dir, q);
+    const none = await run(['step', '--project', dir, '--provider', 'fal-lipsync'], T, { fetch: mockFalLipsync().fetch, env: ENV });
+    assert.equal(none.code, 1);
+    assert.match(none.out, /Nothing is waiting to be made/);
+    assert.deepEqual((await readProject(dir)).pending_spend, []);
+  });
+});
+
+describe('shared pad and span (for estimates)', () => {
+  it('expectedAudioSeconds is the master span: the lines, the pads, inside the shot', async () => {
+    const { project } = await lipsyncFolder();
+    const shot = (id: string) => project.shots.find((s) => s.id === id)!;
+    assert.deepEqual([PAD_BEFORE_S, PAD_AFTER_S], [0.2, 0.3]);
+    assert.equal(expectedAudioSeconds(project, shot('S02-010')), 2);   // 1.0-2.5 → 0.8-2.8
+    assert.equal(expectedAudioSeconds(project, shot('S03-010')), 6);   // 20.5-26.0 → 20.3-26.3
+    assert.equal(expectedAudioSeconds(project, shot('S02-030')), undefined); // thought only
+  });
+});
+
 describe('files outside the project', () => {
   it('a clip outside the project is read only through --allow-root, never remembered; without it the master is cut', async () => {
     const { dir, base, planOut } = await planned({ clipOutside: true });
@@ -316,10 +408,31 @@ describe('files outside the project', () => {
     const root = join(base, 'media');
     const withRoot = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020', '--allow-root', root], T, io);
     assert.equal(withRoot.code, 0, withRoot.out);
-    assert.match(withRoot.out, /the audio \.\.\/media\/clips\/L02\.wav \(line L02's own clip\)/);
+    assert.ok(withRoot.out.includes(`the audio ../media/clips/L02.wav (line L02's own clip, ${OUTSIDE_WARNING})`), withRoot.out);
+    assert.match(OUTSIDE_WARNING, /check it holds only speech that may leave your machine \(line clips can be cut from an unbleeped reference\)/);
+    // The person can choose the master cut over the clip.
+    const fromMaster = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020', '--allow-root', root, '--from', 'master'], T, io);
+    assert.match(fromMaster.out, /S02-020_linecut\.wav \(cut from the master/);
+    assert.doesNotMatch(fromMaster.out, /unbleeped/);
     assert.ok(!(await readFile(join(dir, 'akuko.json'), 'utf8')).includes(JSON.stringify(root).slice(1, -1)), 'the allowed folder is not stored');
     // The next run without the flag is back to the master cut.
     assert.match((await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020'], T, io)).out, /S02-020_linecut\.wav \(cut from the master/);
     assert.equal((await run(['status', '--project', dir, '--allow-root', join(base, 'nope')], T)).code, 2);
+    const bare = await run(['status', '--project', dir, '--allow-root'], T);
+    assert.equal(bare.code, 2);
+    assert.match(bare.out, /--allow-root needs a folder/);
+    assert.equal((await run(['status', '--project', dir, '--from', 'clip'], T)).code, 2);
+  });
+
+  it('a clip inside the project carries no warning; --from master cuts the master instead', async () => {
+    const { dir } = await planned();
+    const io = { fetch: mockFalLipsync().fetch, env: ENV };
+    const clip = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020'], T, io);
+    assert.match(clip.out, /the audio clips\/L02\.wav \(line L02's own clip\)/);
+    assert.doesNotMatch(clip.out, /outside the project/);
+    const plan = await run(['plan', '--project', dir, '--from', 'master'], T);
+    assert.match(plan.out, /Cut the line audio for S02-020_linecut/);
+    const master = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-020', '--from', 'master'], T, io);
+    assert.match(master.out, /the audio lipsync\/cuts\/S02-020_linecut\.wav \(cut from the master audio\/master\.wav, 4\.8-7\.3 s\)/);
   });
 });

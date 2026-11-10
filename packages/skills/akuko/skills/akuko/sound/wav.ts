@@ -238,11 +238,11 @@ export interface SliceResult {
 /**
  * Cut `ranges` out of the WAV at `path` as 16-bit PCM WAVs, streaming the
  * file once in chunks of `chunkBytes` (default 1 MiB) and keeping only the
- * bytes of the ranges. The whole file is hashed on the way, so the caller
+ * bytes of the ranges (`onRead` sees each chunk's size). The whole file is hashed on the way, so the caller
  * knows exactly which file the slices came from. A file whose size changes
  * while it is read is refused.
  */
-export async function sliceWavTo16(path: string, ranges: FrameRange[], opts: { chunkBytes?: number } = {}): Promise<SliceResult> {
+export async function sliceWavTo16(path: string, ranges: FrameRange[], opts: { chunkBytes?: number; onRead?: (bytes: number) => void } = {}): Promise<SliceResult> {
   const layout = await readWavLayout(path);
   const clamp = (f: number): number => Math.max(0, Math.min(layout.frames, f));
   const want = ranges.map((r) => {
@@ -259,6 +259,7 @@ export async function sliceWavTo16(path: string, ranges: FrameRange[], opts: { c
     createReadStream(path, { highWaterMark: opts.chunkBytes ?? 1 << 20 })
       .on('data', (c: Buffer | string) => {
         const chunk = typeof c === 'string' ? Buffer.from(c) : c;
+        opts.onRead?.(chunk.length);
         h.update(chunk);
         const end = pos + chunk.length;
         for (const w of want) {

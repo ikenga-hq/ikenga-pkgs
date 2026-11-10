@@ -59,6 +59,22 @@ describe('the WAV slicer (sound/wav.ts)', () => {
     assert.deepEqual(c!.range, { startFrame: Math.round(2.9 * RATE), endFrame: RATE * 3 });
   });
 
+  it('reads in bounded chunks, never the whole file at once', async () => {
+    const bytes = wav24(RATE * 100); // 2.4 MB: more than two default chunks
+    const path = await tmpFile('big.wav', bytes);
+    for (const chunkBytes of [undefined, 4096]) {
+      const reads: number[] = [];
+      const r = await sliceWavTo16(path, [framesOf(40, 42.5, RATE)], { ...(chunkBytes ? { chunkBytes } : {}), onRead: (n) => reads.push(n) });
+      const cap = chunkBytes ?? 1 << 20;
+      assert.ok(Math.max(...reads) <= cap, `no read over ${cap} bytes (largest ${Math.max(...reads)})`);
+      assert.ok(Math.max(...reads) < bytes.length / 2, 'no read holds the file');
+      assert.ok(reads.length >= Math.ceil(bytes.length / cap), `${reads.length} reads`);
+      assert.equal(reads.reduce((a, b) => a + b, 0), bytes.length, 'every byte read once (for the hash)');
+      assert.equal(r.sha256, sha256Bytes(bytes));
+      assert.equal(parseWav(r.slices[0]!.wav).frames, 2.5 * RATE);
+    }
+  });
+
   it('keeps channels (24-bit extensible stereo) and copies a 16-bit source byte for byte', async () => {
     const st = await sliceWavTo16(await tmpFile('s.wav', wav24(100, { channels: 2, extensible: true })), [{ startFrame: 10, endFrame: 20 }]);
     assert.equal(st.layout.tag, 0xfffe);
