@@ -32,6 +32,9 @@ export type LintRule =
   | 'action-missing'
   | 'scene-missing'
   | 'id-not-canonical'
+  | 'split-note'
+  | 'film-order'
+  | 'sheet-id-not-in-script'
   | 'tag-missing'
   | 'tag-unknown-shot';
 
@@ -59,6 +62,12 @@ export function principalsOf(p: AkukoProject, shot: Shot): string[] {
   return out;
 }
 
+/** A shot imported from a sheet (WP-25): the sheet sets its length and id, not the film profile's limits. */
+export const isImported = (s: Shot): boolean => s.source?.kind === 'sheet';
+
+const SPLIT_NOTE = /\bSPLIT\b/;
+const FILM_EPSILON = 1e-9;
+
 export function lintShots(p: AkukoProject, opts: LintOptions = {}): LintIssue[] {
   const max = opts.maxSeconds ?? MAX_SHOT_SECONDS;
   const min = opts.minSeconds ?? MIN_SHOT_SECONDS;
@@ -67,7 +76,14 @@ export function lintShots(p: AkukoProject, opts: LintOptions = {}): LintIssue[] 
   const add = (severity: LintIssue['severity'], rule: LintRule, shot: string, message: string) =>
     issues.push({ severity, rule, shot, message });
 
+  let prev: Shot | undefined;
   for (const s of p.shots) {
+    if (isImported(s)) {
+      lintImportedShot(p, s, prev, maxP, add);
+      if (s.source?.removed_at === undefined) prev = s;
+      continue;
+    }
+    prev = s;
     if (!isCanonicalShotId(s.id)) {
       add('warning', 'id-not-canonical', s.id, `${s.id}: shot ids from breakdown look like sc<N>_sh<M> (for example sc3_sh2).`);
     }
@@ -107,6 +123,54 @@ export function lintTags(p: AkukoProject, scriptText: string, opts: { prose?: bo
   for (const t of tags) {
     if (!known.has(t.shotId)) {
       issues.push({ severity: 'error', rule: 'tag-unknown-shot', shot: t.shotId, message: `Line ${t.line + 1} is tagged [[${t.shotId}]] but the project has no such shot.` });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Imported shots (WP-25). The sheet decides a shot's length and id, so there is no 10 s cap, no
+ * 5 s floor and no canonical-id check; a SPLIT note is a reminder, not an error. Film times that
+ * overlap inside a scene are reported by the integrity check, so only a shot that starts before
+ * the previous shot of a different scene ends is reported here.
+ */
+function lintImportedShot(
+  p: AkukoProject,
+  s: Shot,
+  prev: Shot | undefined,
+  maxP: number,
+  add: (severity: LintIssue['severity'], rule: LintRule, shot: string, message: string) => void,
+): void {
+  if (s.source?.removed_at !== undefined) return;
+  if (s.duration_s === undefined) add('error', 'duration-missing', s.id, `${s.id} has no duration.`);
+  if (s.scene === undefined) add('error', 'scene-missing', s.id, `${s.id} is not attached to a scene.`);
+  if (!s.action || s.action.trim() === '') add('warning', 'action-missing', s.id, `${s.id} has no text in the sheet.`);
+  if (s.notes !== undefined && SPLIT_NOTE.test(s.notes)) {
+    add('warning', 'split-note', s.id, `${s.id} is marked SPLIT in the sheet's notes: it may be one shot the sheet cut in two, or a long shot to split.`);
+  }
+  const names = principalsOf(p, s);
+  if (names.length > maxP) {
+    add('warning', 'too-many-principals', s.id, `${s.id} has ${names.length} principal characters (${names.join(', ')}); faces drift beyond ${maxP} in one generated frame.`);
+  }
+  if (prev?.film && s.film && prev.scene !== s.scene && s.film.in_s < prev.film.out_s - FILM_EPSILON) {
+    add('warning', 'film-order', s.id, `${s.id} starts at ${s.film.in_s} s, before ${prev.id} ends (${prev.film.out_s} s).`);
+  }
+}
+
+const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Does each imported shot's sheet id appear in the film script (a document that names its shots,
+ * for example with the id in backticks)? A missing id is a warning, so the person can see which
+ * shots the script does not mention. Shots that did not come from a sheet are not checked.
+ */
+export function lintSheetIdsInScript(p: AkukoProject, scriptText: string): LintIssue[] {
+  const issues: LintIssue[] = [];
+  for (const s of p.shots) {
+    if (!isImported(s) || s.source?.removed_at !== undefined) continue;
+    const id = s.source!.id;
+    if (!new RegExp(`(?<![A-Za-z0-9_-])${escapeRe(id)}(?![A-Za-z0-9_-])(?!\\.[A-Za-z0-9])`).test(scriptText)) {
+      issues.push({ severity: 'warning', rule: 'sheet-id-not-in-script', shot: s.id, message: `${s.id} is not mentioned in the film script.` });
     }
   }
   return issues;
