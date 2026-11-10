@@ -22,7 +22,12 @@ export interface Finding {
     | 'stale-model'
     | 'example-in-use'
     | 'example-present'
-    | 'unknown-provider';
+    | 'unknown-provider'
+    // project rules (WP-26, rules-checks.ts)
+    | 'rules-invalid'
+    | 'rules-required-empty'
+    | 'rules-allowed-missing'
+    | 'rules-setup';
   message: string;
   /** What the person can do about it. Doctor never does it for them. */
   fix?: string;

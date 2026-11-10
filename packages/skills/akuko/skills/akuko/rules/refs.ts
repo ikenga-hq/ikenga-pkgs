@@ -43,7 +43,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { closeSync, createReadStream, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { JobRef } from '../providers/contract.ts';
@@ -136,6 +136,25 @@ export async function sha256File(path: string, cache?: HashCache): Promise<strin
   await new Promise<void>((ok, fail) => {
     createReadStream(path).on('data', (c) => h.update(c)).on('end', () => ok()).on('error', fail);
   });
+  const hex = h.digest('hex');
+  cache?.set(key, hex);
+  return hex;
+}
+
+/** The same, synchronously and in 1 MiB chunks (for doctor, which is synchronous). */
+export function sha256FileSync(path: string, cache?: HashCache): string {
+  const st = statSync(path);
+  const key = `${path}|${st.size}|${st.mtimeMs}`;
+  const hit = cache?.get(key);
+  if (hit) return hit;
+  const h = createHash('sha256');
+  const buf = Buffer.alloc(1 << 20);
+  const fd = openSync(path, 'r');
+  try {
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) h.update(buf.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
   const hex = h.digest('hex');
   cache?.set(key, hex);
   return hex;
