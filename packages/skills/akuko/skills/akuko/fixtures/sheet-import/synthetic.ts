@@ -54,7 +54,7 @@ export const SHOT_ROWS: Row[] = [
   { id: 'S01-030', scene: 'S01', secs: 9.5, tier: 'B', framing: 'MS', prompt: '[ADA] hands [BO] a crust', motion: 'Slow pull-back', chars: 'ADA, BO', loc: 'KITCHEN', in: '00:20.50', out: '00:30.00', part: 'P1', light: 'L-LAMP', lines: 'Q3 Bo (spoken); Q4 Ada (thought)' },
   { id: 'P2-CARD', scene: 'CARD', prompt: '(Part card)', status: 'n/a', in: '00:30.00', out: '00:34.00', part: 'P2' },
   { id: 'S02-010', scene: 'S02', secs: 6, tier: 'B', framing: 'WS', prompt: '[ADA] at a window, a reference still', chars: 'ADA', loc: 'KITCHEN', in: '00:34.00', out: '00:40.00', part: 'P2', light: 'REF', ref: 'REF-window' },
-  { id: 'CREDITS-010', scene: 'CREDITS', prompt: '(Rolling credits)', status: 'n/a', in: '00:40.00', out: '00:48.00', part: 'Credits' },
+  { id: 'CREDITS-010', scene: 'CREDITS', prompt: '(End credits)', status: 'n/a', in: '00:40.00', out: '00:48.00', part: 'Credits' },
 ];
 
 export const MASTER_SECONDS = 48;

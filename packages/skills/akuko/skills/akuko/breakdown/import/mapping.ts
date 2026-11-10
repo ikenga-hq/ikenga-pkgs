@@ -5,7 +5,7 @@
  * starts with the name also matches), never by position, so a sheet that moves
  * or adds a column still imports. A mapping JSON passed with `--mapping`
  * overrides any of these keys; what it leaves out keeps the default, which is
- * the layout of the first real project (E01).
+ * the layout of a typical production sheet.
  *
  * A value may be one header or a list of alternatives.
  */

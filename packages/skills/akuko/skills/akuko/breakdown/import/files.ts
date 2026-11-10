@@ -37,7 +37,7 @@ export async function loadSheet(file: string, mapping: ImportMapping, extra: { t
     };
   }
   const sheets = readXlsx(await readFile(file));
-  const shots = sheetTable(sheets, mapping.sheets.shots) ?? (sheets.length === 1 ? tableOf(sheets[0]!.name, sheets[0]!.rows) : undefined);
+  const shots = sheetTable(sheets, mapping.sheets.shots) ?? (sheets.length === 1 ? tableOf(sheets[0]!.name, sheets[0]!.rows, sheets[0]!.kinds) : undefined);
   if (!shots) throw new ReadError(`the workbook has no sheet named "${mapping.sheets.shots}" (it has: ${sheets.map((s) => s.name).join(', ')}); name the shot sheet in a mapping file (sheets.shots)`);
   const tokens = sheetTable(sheets, mapping.sheets.tokens);
   const lighting = sheetTable(sheets, mapping.sheets.lighting);
@@ -59,8 +59,8 @@ const inOrder = (want: string[], have: string[]): boolean => {
 /**
  * Find a ready-made row's file. In order: the mapping's `cards.files` (a name in the cards folder,
  * or a path); a file whose name holds the id's words and numbers in order, leading zeros aside
- * (`P7-CARD` finds `Film_P07_Part-Card.png`, and never `P10`); then, when exactly one file matches,
- * one whose name holds the id's word part (`CREDITS-010` finds `Film_Rolling-Credits.mp4`). Anything else
+ * (`P3-CARD` finds `Show_P03_Card.png`, and never `P10`); then, when exactly one file matches,
+ * one whose name holds the id's word part (`CREDITS-010` finds `Show_Credits_roll.mp4`). Anything else
  * is not found, and the row is left out.
  */
 export function cardResolver(projectDir: string, cardsDir: string | undefined, files: Record<string, string>): (id: string) => string | undefined {

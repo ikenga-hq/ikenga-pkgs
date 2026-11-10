@@ -66,13 +66,13 @@ describe('reading', () => {
   });
 
   it('parses film times', () => {
-    assert.equal(parseFilmTime('18:31.98'), 1111.98);
+    assert.equal(parseFilmTime('12:34.56'), 754.56);
     assert.equal(parseFilmTime('00:04.50'), 4.5);
     assert.equal(parseFilmTime('1:02:03.5'), 3723.5);
     assert.equal(parseFilmTime('12.5'), 12.5);
     assert.equal(parseFilmTime('0:75.00'), undefined);
     assert.equal(parseFilmTime('soon'), undefined);
-    assert.equal(formatFilmTime(1111.98), '18:31.98');
+    assert.equal(formatFilmTime(754.56), '12:34.56');
   });
 
   it('refuses a file that is not a workbook', () => {
@@ -119,7 +119,7 @@ describe('the import', () => {
     const r = importSheet(fresh(), await inputFrom(), { now: T0 });
     const by = new Map(r.project.shots.map((s) => [s.id, s]));
     assert.deepEqual(by.get('S01-010')!.refs, ['ADA', 'BO', 'KITCHEN', 'L-LAMP', 'house-style']);
-    assert.deepEqual(by.get('S01-020')!.refs, ['KITCHEN', 'L-LAMP', 'house-style']);
+    assert.deepEqual(by.get('S01-020')!.refs, ['KITCHEN']); // written as-is: neither the lighting phrase nor the style is in its prompt
   });
 
   it('writes scenes with parts, and shots with part, lighting, tier, framing, motion, film time and source', async () => {
@@ -367,8 +367,10 @@ describe('re-import', () => {
     assert.match(s30.prompt!, /a warm crust/);
     assert.deepEqual(s30.film, { in_s: 20.5, out_s: 29 });
     assert.equal(s30.duration_s, 8.5);
-    assert.equal(s30.status, 'approved');
-    assert.equal(s30.comments.length, 1);
+    assert.equal(s30.status, 'pending-review'); // approved before; its prompt changed, so it is back in review
+    assert.equal(s30.comments.length, 2);
+    assert.match(s30.comments[1]!.text, /^Re-imported: .*prompt.*back in review/);
+    assert.equal(s30.by_stage!.breakdown!.status, 'pending-review');
     assert.equal(s30.treatment, 'still-move');
     assert.equal(s30.updated_at, T1().toISOString());
     // untouched: the shot nobody changed keeps its stamp
@@ -377,7 +379,7 @@ describe('re-import', () => {
     const gone = by.get('S01-020')!;
     assert.equal(gone.source!.removed_at, T1().toISOString());
     assert.equal(gone.film, undefined);
-    assert.equal(gone.status, 'pending-review');
+    assert.equal(gone.status, 'pending'); // a removed row is never reviewed or planned
     // other assets and the card's approval stand
     assert.equal(r.project.assets.find((a) => a.id === 'S01-030_keyframe')!.status, 'approved');
     assert.equal(r.project.assets.find((a) => a.id === 'card_P2-CARD')!.status, 'approved');
@@ -474,12 +476,12 @@ describe('finding the ready-made files', () => {
   it('matches by sheet id, by the id\'s word part when unique, and by an explicit mapping', async () => {
     const dir = await tmp();
     await asFile(dir, 'Cards/P2-CARD_title.png', 'x');
-    await asFile(dir, 'Cards/Film_Rolling-Credits_24fps.mp4', 'x');
+    await asFile(dir, 'Cards/Show_Credits_roll.mp4', 'x');
     await asFile(dir, 'Cards/opening.png', 'x');
     const proj = join(dir, 'akuko');
     const find = cardResolver(proj, join(dir, 'Cards'), { 'S00-020': 'opening.png' });
     assert.equal(find('P2-CARD'), '../Cards/P2-CARD_title.png');
-    assert.equal(find('CREDITS-010'), '../Cards/Film_Rolling-Credits_24fps.mp4');
+    assert.equal(find('CREDITS-010'), '../Cards/Show_Credits_roll.mp4');
     assert.equal(find('S00-020'), '../Cards/opening.png');
     assert.equal(find('P9-CARD'), undefined);
   });

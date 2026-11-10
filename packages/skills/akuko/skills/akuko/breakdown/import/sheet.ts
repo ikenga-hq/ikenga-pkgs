@@ -21,6 +21,8 @@
 
 import {
   AkukoProjectSchema,
+  STAGES,
+  type StageId,
   FpsSchema,
   SHEET_ID_PATTERN,
   type AkukoProject,
@@ -153,6 +155,23 @@ interface ShotRow {
   refMoment: string;
 }
 
+/**
+ * A film time from a cell. Text is `mm:ss.ss`. In a workbook a **number** cell is not read as seconds:
+ * Excel stores a time as a fraction of a day, so a cell formatted as a date or time is scaled to seconds
+ * (x 86400), and any other number cell is refused with a message (format the column as text, or use a CSV).
+ */
+function filmTime(r: TableRow, i: number): { v?: number; why?: string } {
+  const raw = cell(r, i);
+  const kind = r.kinds?.[i] ?? '';
+  if (kind === 'd') {
+    const x = Number(raw);
+    return Number.isFinite(x) && x >= 0 ? { v: round6(x * 86400) } : { why: `"${raw}" is not a usable time` };
+  }
+  if (kind === 'n') return { why: `"${raw}" is a number cell: Excel keeps times as fractions of a day, so it is not read as seconds. Format the column as text (mm:ss.ss) or as a time` };
+  const v = parseFilmTime(raw);
+  return v === undefined ? { why: `"${raw}" is not mm:ss.ss` } : { v };
+}
+
 const splitList = (s: string): string[] => s.split(/[,;]/).map((x) => x.trim()).filter((x) => x !== '' && x !== '—' && x !== '-');
 
 // ── the importer ─────────────────────────────────────────────────────────
@@ -233,9 +252,11 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     if (!SHEET_ID_PATTERN.test(id)) { skipped.push(`row ${r.row} (${id}): the id must be letters, digits, "." or "-" (no "_")`); continue; }
     if (seenIds.has(id)) { skipped.push(`row ${r.row} (${id}): the id is already used by an earlier row`); continue; }
     seenIds.add(id);
-    const a = parseFilmTime(cell(r, col.filmIn));
-    const b = parseFilmTime(cell(r, col.filmOut));
-    if (a === undefined || b === undefined) { skipped.push(`row ${r.row} (${id}): the film times "${cell(r, col.filmIn)}" and "${cell(r, col.filmOut)}" are not mm:ss.ss`); continue; }
+    const ta = filmTime(r, col.filmIn);
+    const tb = filmTime(r, col.filmOut);
+    if (ta.v === undefined || tb.v === undefined) { skipped.push(`row ${r.row} (${id}): film ${ta.v === undefined ? 'in' : 'out'} ${(ta.v === undefined ? ta : tb).why}`); continue; }
+    const a = ta.v;
+    const b = tb.v;
     if (!(b > a)) { skipped.push(`row ${r.row} (${id}): film out ${formatFilmTime(b)} is not after film in ${formatFilmTime(a)}`); continue; }
     if (col.status >= 0 && norm(cell(r, col.status)) === norm(m.readyStatus)) {
       cardRows.push({ row: r.row, id, filmIn: a, filmOut: b, label: cell(r, col.cue) });
@@ -333,9 +354,12 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
       if (tk) refs.push(tk.id);
       else warn(`${r.id}: location "${loc}" is not in the Tokens table`);
     }
+    // a prompt written as-is holds neither the lighting phrase nor the house style, so its refs name neither;
+    // a reference shot holds no house style
+    const asIs = r.prompt.startsWith('(');
     const lightingId = light && light.phrase !== '' ? light.id : undefined;
-    if (lightingId !== undefined) refs.push(lightingId);
-    if (!isRef && styleBlock !== undefined && styleBlock !== '') refs.push(HOUSE);
+    if (lightingId !== undefined && !asIs) refs.push(lightingId);
+    if (!isRef && !asIs && styleBlock !== undefined && styleBlock !== '') refs.push(HOUSE);
 
     if (r.tier !== '' && !/^[ABC]$/.test(r.tier)) warn(`${r.id}: tier "${r.tier}" is not A, B or C; left out`);
     const part = r.part !== '' ? partId(r.part) : undefined;
@@ -470,12 +494,21 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   const removed: Change[] = [];
   let unchanged = 0;
 
+  type AnyUnit = { stage: StageId; status: string; by_stage?: Record<string, { status: string }>; comments?: { ts: string; stage: StageId; author: string; text: string }[] };
+  const demotedStages = new Set<StageId>();
+  /** Set a unit's status, and the stage record that mirrors it (as decision folding does). */
+  const setStatus = (u: object, status: string): void => {
+    const a = u as AnyUnit;
+    a.status = status;
+    const rec = a.by_stage?.[a.stage];
+    if (rec) rec.status = status;
+  };
   type Unit = { id: string; status?: string | undefined; updated_at?: string | undefined; source?: SheetSource | undefined };
   /**
    * Update `list` from `want`: matched by sheet id, in place; new ones are appended;
    * only `owned` keys are refreshed. Returns the matched ids.
    */
-  function merge<T extends Unit>(list: T[], want: T[], kind: ChangeKind, owned: (keyof T)[], opts2: { keepFile?: boolean; touchContent?: boolean; noStamp?: boolean } = {}): void {
+  function merge<T extends Unit>(list: T[], want: T[], kind: ChangeKind, owned: (keyof T)[], opts2: { keepFile?: boolean; touchContent?: boolean; noStamp?: boolean; watch?: string[] } = {}): void {
     const bySource = new Map<string, number>();
     list.forEach((x, i) => { if (x.source?.kind === 'sheet') bySource.set(x.source.id, i); });
     const matched = new Set<number>();
@@ -511,16 +544,30 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
         nb.breakdown = { ...nb.breakdown, ...(wb?.content !== undefined ? { content: wb.content } : {}) };
         if (wb?.content === undefined) delete nb.breakdown.content;
       }
+      // a row that came back is live again
+      const wasRemoved = cur.source?.removed_at !== undefined;
+      if (wasRemoved && cur.status === 'pending') setStatus(next, 'pending-review');
+      // an approved unit whose substance changed goes back to review, with a note (code never writes "approved")
+      const hit = cur.status === 'approved' ? fields.filter((f) => opts2.watch?.includes(f)) : [];
+      if (hit.length > 0) {
+        setStatus(next, 'pending-review');
+        const u = next as unknown as AnyUnit;
+        u.comments = [...(u.comments ?? []), { ts: nowIso, stage: u.stage, author: 'agent', text: `Re-imported: ${hit.join(', ')} changed in the sheet, so this is back in review (it was approved).` }];
+        demotedStages.add(u.stage);
+      }
       if (fields.length === 0) { unchanged++; continue; }
       if (!opts2.noStamp) next.updated_at = nowIso;
       list[at] = next;
-      changed.push({ kind, id: w.id, fields, ...(cur.status === 'approved' && { approved: true }) });
+      changed.push({ kind, id: w.id, fields, ...(hit.length > 0 && { approved: true }) });
     }
     // rows that left the sheet
     list.forEach((x, i) => {
       if (matched.has(i) || x.source?.kind !== 'sheet' || !want.every((w) => w.source!.id !== x.source!.id)) return;
       if (x.source.removed_at !== undefined) return;
-      list[i] = { ...x, source: { ...x.source, removed_at: nowIso }, ...(opts2.noStamp ? {} : { updated_at: nowIso }) };
+      const gone = { ...x, source: { ...x.source, removed_at: nowIso }, ...(opts2.noStamp ? {} : { updated_at: nowIso }) };
+      // a removed row is never planned or reviewed: unless a person approved it, it drops back to "pending"
+      if (x.status !== undefined && x.status !== 'approved') setStatus(gone, 'pending');
+      list[i] = gone;
       removed.push({ kind, id: x.id });
     });
   }
@@ -532,7 +579,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     const cur = out.shots.find((x) => x.source?.id === w.id);
     if (cur && w.shot_type === 'unset') w.shot_type = cur.shot_type;
   }
-  merge(out.shots, wantShots, 'shot', shotOwned, { touchContent: true });
+  merge(out.shots, wantShots, 'shot', shotOwned, { touchContent: true, watch: ['prompt', 'negative', 'film', 'refs'] });
   // a shot that left the sheet no longer sits on the clock: its film time would clash with what replaced it
   for (const s of out.shots) if (s.source?.removed_at !== undefined && s.film !== undefined) delete s.film;
   // sheet order for the shots still in the sheet, then the removed ones
@@ -543,7 +590,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   merge(out.bible.characters, wantChars, 'character', ['name', 'description', 'notes'], { touchContent: true });
   merge(out.bible.locations, wantLocs, 'location', ['name', 'description', 'notes'], { touchContent: true });
   merge(out.bible.styles, wantStyles, 'style', ['name', 'description', 'notes'], { touchContent: true });
-  merge(out.assets, wantCards, 'card', ['name', 'film', 'file'], { keepFile: true });
+  merge(out.assets, wantCards, 'card', ['name', 'film', 'file'], { keepFile: true, watch: ['film', 'file'] });
 
   // lines
   if (hasLines) {
@@ -561,8 +608,14 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   }
 
   // master clock, fps
-  if (input.master && !same(out.audio.master, input.master)) {
-    out.audio.master = input.master;
+  if (input.master) {
+    let master = input.master;
+    const old = out.audio.master;
+    if (master.sha256 === undefined && old?.sha256 !== undefined) {
+      if (old.uri === master.uri && old.duration_s === master.duration_s && old.sample_rate === master.sample_rate) master = { ...master, sha256: old.sha256 };
+      else warn('the master changed (its path, length or rate differ), so its earlier sha256 was cleared; run with --hash to record the new one');
+    }
+    if (!same(out.audio.master, master)) out.audio.master = master;
   }
   const fps = input.fps !== undefined ? FpsSchema.parse(input.fps) : out.project.fps ?? '24';
   if (out.project.fps !== fps) out.project.fps = fps;
@@ -578,10 +631,14 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     });
     Object.assign(out, done);
   }
-  if (firstImport && out.stages.breakdown.state !== 'locked') {
+  // the breakdown is in review once it has content and intake lets it open (also on a later import)
+  if (out.stages.breakdown.state === 'not-started' || out.stages.breakdown.state === 'in-progress') {
     out.stages.breakdown = { state: 'in-review' };
     out.current_stage = 'breakdown';
   }
+  // an approved stage whose unit went back to review is open again
+  for (const st of demotedStages) if (out.stages[st].state === 'approved') out.stages[st] = { state: 'in-review' };
+  if (demotedStages.size > 0) out.current_stage = STAGES.find(({ id }) => out.stages[id].state !== 'approved')?.id ?? out.current_stage;
 
   const anyChange = added.length + changed.length + removed.length > 0 || !same(out.audio, project.audio) || !same(out.project, project.project) || !same(out.script, project.script);
   if (anyChange) out.project.updated_at = nowIso;
@@ -628,7 +685,7 @@ export function formatSummary(r: ImportResult, opts: { dryRun?: boolean; maxWarn
     const list = (title: string, xs: Change[]) => {
       if (xs.length === 0) return;
       out.push(`  ${title}:`);
-      for (const x of xs.slice(0, 40)) out.push(`    ${x.kind} ${x.id}${x.fields ? ` (${x.fields.join(', ')})` : ''}${x.approved ? ' [approved: its approval stands; re-check it]' : ''}`);
+      for (const x of xs.slice(0, 40)) out.push(`    ${x.kind} ${x.id}${x.fields ? ` (${x.fields.join(', ')})` : ''}${x.approved ? ' [was approved: sent back to review]' : ''}`);
       if (xs.length > 40) out.push(`    ... and ${xs.length - 40} more`);
     };
     list('added', s.added);
