@@ -149,6 +149,7 @@ const PROFILE = fileURLToPath(new URL('../profiles/film/profile.json', import.me
 const EXPECTED = [
   'setup', 'doctor', 'intake', 'breakdown', 'bible', 'board', 'keyframes',
   'motion', 'sound', 'assemble', 'export', 'review', 'view', 'status',
+  'lipsync', // WP-28b
 ].sort();
 
 const stubs = readdirSync(ACTIONS_DIR).filter((f) => f.endsWith('.md')).sort();

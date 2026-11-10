@@ -113,8 +113,7 @@ describe('cutting the line audio (lipsync/cut.ts)', () => {
     const s = int16(bytes);
     assert.equal(s.length, 2 * RATE);
     for (let i = 0; i < s.length; i++) assert.equal(s[i], sample24(0.8 * RATE + i) >> 8);
-    // The lip-sync to be made carries where its audio sits on the master.
-    assert.deepEqual(r.project.assets.find((a) => a.id === assetIdFor('S02-010'))!.film, span);
+    assert.equal(r.project.assets.find((a) => a.id === assetIdFor('S02-010'))!.film, undefined, 'set when a job starts, from the audio it sends');
 
     const two = r.project.assets.find((a) => a.id === cutIdFor('S03-010'))!;
     assert.deepEqual(parseSliceTag(two.tags.find((t) => t.startsWith('slice-of:'))!), { sha256: r.masterSha256, in_s: 20.3, out_s: 26.3 }); // one span over L05 and L06

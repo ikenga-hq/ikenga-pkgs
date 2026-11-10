@@ -21,12 +21,13 @@
  * never writes `approved`, and writes the project only through the host.
  */
 
+import type { AkukoProject } from '../schema/akuko-project.ts';
 import type { Job, JobHandle, JobStatus, WaveOneHost } from '../providers/contract.ts';
 import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { abandonUnits, beginUnits } from '../motion/plan.ts';
 import { resolveAll, type AudioContext } from './cut.ts';
-import { buildLipsyncJob, refreshStageState, repairFileless } from './plan.ts';
+import { buildLipsyncJob, refreshStageState, repairFileless, type Span } from './plan.ts';
 
 export interface StepDeps {
   host: WaveOneHost;
@@ -92,11 +93,23 @@ export async function generateLipsync(deps: StepDeps, o: StepOptions): Promise<S
     ...(o.shot !== undefined ? { shot: o.shot } : {}),
     ...(o.maxAttempts !== undefined ? { maxAttempts: o.maxAttempts } : {}),
   });
-  const res = await runJob(deps, built.job, [built.unit]);
+  const res = await runJob(deps, built.job, [built.unit], built.audio.film);
   return built.notes.length ? { ...res, notes: built.notes } : res;
 }
 
-async function runJob(deps: StepDeps, job: Job, units: string[]): Promise<StepResult> {
+/**
+ * The unit, as it starts: `beginUnits` (pending → draft, a sent-back take cleared), and `film` set to
+ * where the audio being sent sits on the master clock (a master slice), or cleared (a clip: not known).
+ * That is where the video belongs in the edit.
+ */
+function begin(p: AkukoProject, unit: string, film: Span | undefined, ts: string): AkukoProject {
+  const q = beginUnits(p, [unit], ts);
+  const a = q.assets.find((x) => x.id === unit);
+  if (a) { if (film) a.film = film; else delete a.film; }
+  return q;
+}
+
+async function runJob(deps: StepDeps, job: Job, units: string[], film?: Span): Promise<StepResult> {
   const { host, gate } = deps;
 
   // Price it and, for a paid job, make the pending entry the person approves. Nothing is submitted.
@@ -118,7 +131,7 @@ async function runJob(deps: StepDeps, job: Job, units: string[]): Promise<StepRe
   // Clear to go. A sent-back lip-sync gets its old take cleared so the new one fills it in place;
   // if the gate does not accept the run (or throws), the unit is put back exactly as it was.
   const before = await host.readState();
-  await host.writeState(refreshStageState(beginUnits(before, units, clock(deps))));
+  await host.writeState(refreshStageState(begin(before, units[0]!, film, clock(deps))));
   const putBack = async (): Promise<void> => host.writeState(refreshStageState(abandonUnits(await host.readState(), before, units)));
 
   let r: Awaited<ReturnType<SpendGate['run']>>;

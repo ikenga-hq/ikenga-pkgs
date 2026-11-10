@@ -334,11 +334,6 @@ async function record(p: AkukoProject, shot: Shot, lines: AudioLine[], kind: 'ma
     updated_at: ctx.now,
   };
   if (old) p.assets[i] = asset; else p.assets.push(asset);
-  // The lip-sync unit still to be made carries where its audio sits on the master clock (a master slice), for the edit.
-  const ls = p.assets.find((a) => a.id === assetIdFor(shot.id));
-  if (ls && !ls.file) {
-    if (kind === 'master') ls.film = span; else delete ls.film;
-  }
   return id;
 }
 

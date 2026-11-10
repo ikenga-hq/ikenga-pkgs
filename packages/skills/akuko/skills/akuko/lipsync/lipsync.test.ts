@@ -112,7 +112,7 @@ describe('the job', () => {
       { id: 'S02-010_keyframe', uri: 'board/panels/S02-010_keyframe.png', role: 'start-frame', note: 'the approved key frame: the face to animate' },
       { id: 'S02-010_linecut', uri: 'lipsync/cuts/S02-010_linecut.wav', role: 'audio', note: 'seconds=2' },
     ]);
-    assert.match(b.job.label, /Uploads to fal: the still board\/panels\/S02-010_keyframe\.png and the audio lipsync\/cuts\/S02-010_linecut\.wav \(cut from the master audio\/master\.wav, 0\.8-2\.8 s\)/);
+    assert.match(b.job.label, /uploads to fal, if you approve, the still board\/panels\/S02-010_keyframe\.png and the audio lipsync\/cuts\/S02-010_linecut\.wav \(cut from the master audio\/master\.wav, 0\.8-2\.8 s\)/);
     assert.match(b.job.label, /2 s x 0\.08 USD\/s = 0\.16/);
     assert.ok(b.notes.some((n) => /starts 0\.8 s into the shot/.test(n)));
 
@@ -218,7 +218,7 @@ describe('the rules guard and the spend gate', () => {
 
     const first = await run(['step', '--project', dir, '--provider', 'fal-lipsync', '--shot', 'S02-010'], T, io);
     assert.equal(first.code, 0, first.out);
-    assert.match(first.out, /Spend check — Lip-sync S02-010 \(line L01\).*Uploads to fal: the still board\/panels\/S02-010_keyframe\.png and the audio lipsync\/cuts\/S02-010_linecut\.wav/);
+    assert.match(first.out, /Spend check — Lip-sync S02-010 \(line L01\): uploads to fal, if you approve, the still board\/panels\/S02-010_keyframe\.png and the audio lipsync\/cuts\/S02-010_linecut\.wav/);
     assert.match(first.out, /estimate 0\.16 USD/);
     assert.match(first.out, /Nothing has been sent/);
     assert.equal(net.calls.length, 0);
@@ -245,6 +245,7 @@ describe('the rules guard and the spend gate', () => {
     assert.equal(ls.status, 'pending-review');
     assert.equal(ls.provider, 'fal-lipsync');
     assert.equal(ls.model, 'veed/fabric-1.0#480p');
+    assert.deepEqual(ls.film, { in_s: 0.8, out_s: 2.8 }, 'where the video belongs on the master: the span of the audio it was made from');
     assert.ok(ls.tags.includes(`job:${jobId}`));
     assert.ok(ls.file && existsSync(join(dir, ...ls.file.uri.split('/'))));
     assert.deepEqual(new Uint8Array(await readFile(join(dir, ...ls.file.uri.split('/')))), MP4_BYTES);

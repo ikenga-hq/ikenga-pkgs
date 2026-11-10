@@ -392,14 +392,17 @@ export function buildLipsyncJob(p: AkukoProject, o: BuildOptions): BuiltJob {
 
 /** The job label the spend line shows: the arithmetic, and plainly which files go to the provider. */
 function labelFor(config: AkukoProviderConfig, provider: string, model: string | undefined, shot: Shot, lines: AudioLine[], seconds: number, kf: Asset, audio: Audio): string {
-  const head = `Lip-sync ${shot.id} (line${lines.length === 1 ? '' : 's'} ${lines.map((l) => l.id).join(', ')}): a ${money(seconds)} s line on the approved key frame`;
-  if (provider === MANUAL_PROVIDER_ID) return `${head}. Nothing is uploaded by akuko: you take the still ${kf.file!.uri} and the audio ${audio.uri} (${audio.says}) to the tool you use.`;
+  const head = `Lip-sync ${shot.id} (line${lines.length === 1 ? '' : 's'} ${lines.map((l) => l.id).join(', ')})`;
+  if (provider === MANUAL_PROVIDER_ID) {
+    return `${head}: a ${money(seconds)} s line on the approved key frame. Nothing is uploaded by akuko: you take the still ${kf.file!.uri} and the audio ${audio.uri} (${audio.says}) to the tool you use`;
+  }
   const price = priceFor(config, provider, model);
   const l = model ? falLipsyncLimits(model) : undefined;
   const billed = billedSeconds(seconds, l ?? {});
-  const extra = billed > seconds + 1e-9 ? ` (billed as ${money(billed)} s)` : '';
-  return `${head}, ${money(billed)} s x ${money(price.amount)} ${price.currency}/s = ${money(billed * price.amount)}${extra}. ` +
-    `Uploads to ${provider === FAL_LIPSYNC_PROVIDER_ID ? 'fal' : provider}: the still ${kf.file!.uri} and the audio ${audio.uri} (${audio.says}). Uploading them is your call`;
+  const extra = billed > seconds + 1e-9 ? ` (a ${money(seconds)} s line billed as ${money(billed)} s)` : '';
+  // The gate's spend line is `Spend check — <label>: <provider> (<model>), 1 unit, estimate …`.
+  return `${head}: uploads to ${provider === FAL_LIPSYNC_PROVIDER_ID ? 'fal' : provider}, if you approve, the still ${kf.file!.uri} and the audio ${audio.uri} (${audio.says}); ` +
+    `${money(billed)} s x ${money(price.amount)} ${price.currency}/s = ${money(billed * price.amount)}${extra}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
