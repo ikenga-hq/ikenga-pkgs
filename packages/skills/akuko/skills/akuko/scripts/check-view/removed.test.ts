@@ -20,7 +20,13 @@ const dir = mkdtempSync(join(tmpdir(), 'akuko-cv-removed-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 const MARK = "(a.status === 'pending-review' ? '<button type=\"button\" data-akuko-action=\"approve\"";
-const noAssetControls = readFileSync(join(SKILL, 'views', '__fixtures__', 'tiny-board.html'), 'utf8').replace(MARK, "(false ? '<button type=\"button\" data-akuko-action=\"approve\"");
+const TINY = readFileSync(join(SKILL, 'views', '__fixtures__', 'tiny-board.html'), 'utf8');
+// Like default-board@0.3, leave a removed asset out of "your move"; and take the asset Approve button out.
+const COUNT = "V.assets.filter(function (a) { return a.status === 'pending-review'; }).length";
+const noAssetControls = TINY
+  .replace(MARK, "(false ? '<button type=\"button\" data-akuko-action=\"approve\"")
+  .replace(COUNT, "V.assets.filter(function (a) { return a.status === 'pending-review' && !(a.source && a.source.removed_at); }).length")
+  .replace('"id":"test-board"', '"id":"removed-rows-board"');
 const view = join(dir, 'no-asset-controls.html');
 writeFileSync(view, noAssetControls);
 
@@ -47,8 +53,9 @@ function check(file: string): Promise<{ ok: boolean; codes: string[] }> {
 }
 
 describe('check-view and removed units', () => {
-  it('the test view really has no asset Approve control', () => {
-    assert.notEqual(noAssetControls, readFileSync(join(SKILL, 'views', '__fixtures__', 'tiny-board.html'), 'utf8'));
+  it('the test view differs from the minimal board in the three places it should', () => {
+    assert.ok(TINY.includes(MARK) && TINY.includes(COUNT) && TINY.includes('"id":"test-board"'));
+    assert.ok(!noAssetControls.includes(MARK) && !noAssetControls.includes(COUNT) && !noAssetControls.includes('"id":"test-board"'));
   });
 
   it('a removed pending asset needs no Approve control; a live one still does', { timeout: 900_000 }, async () => {
