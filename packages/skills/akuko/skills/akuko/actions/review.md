@@ -80,6 +80,25 @@ For each unit now `needs-rework`, one at a time (SKILL.md review rule 3):
 
 Never edit or delete the trail (`Status: …`) or `Not applied: …` comments folding wrote.
 
+## 4. Sign-off gates
+
+A project may have **gates** (`gates[]`, e.g. `G-LOOK`, `G-PILOT`) and **people** (`people[]`, role `approver` or `signoff`). Day-to-day approvals stay as above. A gate is passed only when a person with the `signoff` role signs it (`../lib/state.md` §Sign-off gates). Gates never lock a stage: tell the person where a gate stands, and let them decide when to move on.
+
+**Where a gate stands.** `node --experimental-strip-types decisions/cli.ts gates --project <project>` (host A: `--project-file <saved akuko/project>`) prints each gate's units in scope, how many are approved, and whether and how it was signed. The board's **Gates** panel shows the same.
+
+**Showing the signer what they sign.** When the person asks for it, make the gate's read-only sign-off page: `node --experimental-strip-types views/publish.ts --project <project> --signoff <gate id>` (writes `<project>/views/signoff-<gate>.html`; `--out <file>` to put it elsewhere; `--images link` for a gate whose pictures are too big to embed). It has no buttons and makes no network calls; the signer only looks at it. The person sends it as a file, or, if they ask, publish it as a private link (an Artifact publish of that file; on host A through `publishView()`). Say which pictures were linked rather than embedded (the command prints it).
+
+**Recording a sign-off. The agent never signs, and never infers a sign-off.**
+
+- Run `signoff` **only** when the person says, in their own words, that a named gate was signed by a named person, and how: for example "record G-LOOK signed by <name> via email". Ask for whatever is missing (which gate, who, how). "They liked it", "looks good to them", "go ahead", "sign it off" or an approval on the board are **not** sign-offs: answer with the words to use instead.
+- Never pass your own name or an agent name as the signer, and never sign because a gate is ready.
+- **People are the person's to name.** Add someone to `people[]` (any role, and above all `signoff`), or change a role, only on the person's explicit instruction naming them and the role. Never add yourself or an agent, and never add a signer so that a sign-off can be recorded.
+- Then run, with the person's words for `--via` and any note:
+  `node --experimental-strip-types decisions/cli.ts signoff --project <project> --gate <id> --by <person id> --via "<how>" [--note "<their words>"] [--at <when it was given, ISO>]`
+  Host A: `signoff-file --project-file <akuko/project saved as a file> --out signed.json …`, then ArtifactData `set` `akuko/project` to `signed.json` with `if_version`.
+- It refuses, and writes nothing, for an unknown gate, an unknown person, a person without the `signoff` role, or a gate already signed. Tell the person why. Re-sign only if they ask to replace the earlier sign-off: add `--replace` (the old record is kept in the new note).
+- Tell the person what was recorded, plus any warning it printed (for example "signed with 5 of 13 not approved yet"), and say plainly: **on this host the sign-off is attested, not proven**. akuko recorded it on the person's word; nothing checked who the signer is.
+
 ## Rules it inherits
 
 - Detect the host first; read and write the project only through the host adapter (`../hosts/`), or `decisions/cli.ts`, which uses it.

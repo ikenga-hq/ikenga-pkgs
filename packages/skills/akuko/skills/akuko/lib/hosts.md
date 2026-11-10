@@ -127,6 +127,18 @@ What each host can actually do for the artifact database and files, recorded 202
 - **Studio MCP:** the Studio pkg `com.ikenga.studio` declares an MCP server named `studio` (verified-from-source: `ikenga-pkgs/packages/apps/studio/manifest.json`). How its tools are named in the engine's tool list is **unverified** (C2); `isStudioServer()` accepts `studio`, `*-studio`, `*.studio`.
 - `IKENGA_PROJECT_ROOT` / `IKENGA_PROJECT_ID` are set for pkg MCP servers and sidecars (verified-from-source: `ikenga/shell/src-tauri/src/commands/pkg_mcp.rs`, `pkg/lifecycle.rs`), not shown to reach the engine's chat session, so detection does not use them.
 
+### Sign-off gates, per host (WP-29)
+
+A gate sign-off (`gates[].signed`, `../lib/state.md` §Sign-off gates) is recorded by a command, on the person's explicit words naming the gate and the signer (`../actions/review.md` §4). The agent never signs. What each host can and can't prove:
+
+| | A — claude.ai | B — local | C — Ikenga |
+|---|---|---|---|
+| Record it | `decisions/cli.ts signoff-file --project-file <saved akuko/project> --out <file> …`, then ArtifactData `set` `akuko/project` with `if_version` | `decisions/cli.ts signoff --project <dir> …` (writes through the local host: validated, atomic, compare-and-swap) | as B |
+| Who signed | the person's word; claude.ai knows the *viewer* of a board, not the signer, so nothing ties the record to the signer | the person's word only: **attested, not proven** | as B (the shell's `art.host.user` names the pane's user, not the signer) |
+| Sign-off page | publish the page's HTML through `publishView()` (read-only: no capabilities needed) → a private link | `views/publish.ts --project <dir> --signoff <gate>` → `<project>/views/signoff-<gate>.html`, sent as a file; or published as a private link with the Artifact tool when the desktop app has it and the person asks | as B |
+
+The sign-off page has no script and makes no network call, so it shows the same in a mail client's preview, a browser, an artifact or an Ikenga pane. Pictures are embedded up to 3 MiB each and 12 MB in all (so the page fits a 16 MB artifact); the rest are linked by a path relative to the page and only show when the page sits in the project's `views/` folder.
+
 ---
 
 ## Manual host check

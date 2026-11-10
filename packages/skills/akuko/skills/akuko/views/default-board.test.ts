@@ -12,9 +12,13 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { isConformedHtml, parseConformedFile, viewHash } from '../decisions/conformed.ts';
+import { foldDecisions } from '../decisions/fold.ts';
+import { gateStatuses, signGate } from '../decisions/gates.ts';
+import type { AkukoProject, Decision } from '../schema/akuko-project.ts';
+import { bigProject, PART_SIZES } from './__fixtures__/big-project.ts';
 
 const SKILL = fileURLToPath(new URL('..', import.meta.url));
 const HTML = readFileSync(join(SKILL, 'views', 'default-board.html'), 'utf8');
@@ -507,7 +511,220 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.2');
+    assert.equal(lines[0].view, 'default-board@0.3');
     p.close();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// WP-29: a real-project-shaped film (211 shots, a cold open and ten parts, cards, rules, gates)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () => {
+  const BIG: AkukoProject = bigProject();
+  const asPage = (x: AkukoProject) => clone(x) as unknown as Project;
+  const shotEls = (p: Page) => p.d.querySelectorAll('[data-akuko-field="shot"]').length;
+  const timings: Record<string, number> = {};
+  const timed = async (label: string, fn: () => void, p: Page) => { const t = performance.now(); fn(); await p.tick(10); timings[label] = Math.round(performance.now() - t); };
+
+  it('renders every shot and card; the part filter shows one part (P7: 11 shots and its card) and back', async () => {
+    const t0 = performance.now();
+    const p = await boot({ host: 'B', project: asPage(BIG) });
+    timings['open the board (jsdom, includes parsing the page)'] = Math.round(performance.now() - t0);
+    assert.equal(shotEls(p), 211);
+    assert.equal(p.d.querySelectorAll('[id^="card-card_"]').length, 12);
+    assert.equal(p.d.querySelectorAll('#lining [data-akuko-field="script-tag"]').length, 211);
+    const chips = Array.from(p.d.querySelectorAll('#parts [data-act="part"]')).map((b: any) => b.getAttribute('data-id'));
+    assert.deepEqual(chips, ['all', ...PART_SIZES.map(([id]) => id)]);
+    assert.match(p.text('#cut'), /^Film \d+:\d\d\.\d\d · 11 parts$/);
+    await timed('show one part (P7)', () => click(p, '#parts [data-act="part"][data-id="P7"]'), p);
+    assert.equal(shotEls(p), 11);
+    assert.deepEqual(Array.from(p.d.querySelectorAll('[data-akuko-field="shot"]')).map((e: any) => e.getAttribute('data-akuko-unit')), BIG.shots.filter((s) => s.part === 'P7').map((s) => s.id));
+    assert.deepEqual(Array.from(p.d.querySelectorAll('[id^="card-card_"]')).map((e: any) => e.id), ['card-card_P7-CARD']);
+    assert.equal(p.d.querySelectorAll('#lining .tag').length, 11, 'the script shows the part too');
+    const p7 = BIG.shots.filter((s) => s.part === 'P7');
+    const ftc = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, '0')}`;
+    assert.equal(p.text('#cut'), `P7 · 11 shots · ${ftc(p7[0]!.film!.in_s)}–${ftc(p7.at(-1)!.film!.out_s)} · 8/11 approved`);
+    assert.match(p.text('#filters'), /^All 11 ?Pending review 2 ?Needs rework 1 ?Approved 8$/);
+    assert.equal(p.num('waiting-shots'), BIG.shots.filter((s) => s.status === 'pending-review').length, '"your move" still counts the whole film');
+    await timed('back to every part', () => click(p, '#parts [data-act="part"][data-id="all"]'), p);
+    assert.equal(shotEls(p), 211);
+    p.close();
+  });
+
+  it('a link with #part=P7 opens the one-part view; approving a shot there re-renders only what changed', async () => {
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    assert.equal(shotEls(p), 11);
+    const id = 'S11-030';
+    click(p, `[data-act="sel"][data-id="${id}"]`);
+    await p.tick();
+    const sideways = p.d.querySelector('#p-ledger > .rp-body');
+    await timed('approve one shot (one part shown)', () => click(p, `[data-akuko-action="approve"][data-akuko-unit="${id}"]`), p);
+    assert.equal(statusOf(p, id), 'approved');
+    assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
+    const [d] = p.w.akukoDecisions.all() as Decision[];
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.3']);
+    p.close();
+  });
+
+  it('cards are review items: one approve each, then undo, never a second approve', async () => {
+    const p = await boot({ host: 'B', project: asPage(BIG) });
+    const before = p.num('waiting-other');
+    const sel = '[data-akuko-action="approve"][data-akuko-unit="card_P7-CARD"]';
+    assert.equal(p.d.querySelectorAll(sel).length, 1);
+    await timed('approve a card (every part shown)', () => click(p, sel), p);
+    assert.equal(p.d.querySelectorAll(sel).length, 0, 'approved once');
+    assert.ok(p.d.querySelector('[data-akuko-action="undo"][data-akuko-unit="card_P7-CARD"]'));
+    assert.equal(p.num('waiting-other'), before - 1);
+    const all = p.w.akukoDecisions.all() as Decision[];
+    assert.deepEqual(JSON.parse(JSON.stringify(all.map((x) => [x.action, x.unit, x.stage]))), [['approve', 'card_P7-CARD', 'export']]);
+    assert.match(p.text('#card-card_P7-CARD'), /P7 card · \.\.\/Cards\/P7-CARD\.png/);
+    assert.ok(!p.d.querySelector('#p-bible [data-akuko-unit="card_P7-CARD"]'), 'cards are not listed again under Bible');
+    p.close();
+  });
+
+  it('shows the rules (read-only) and the gates with their scope progress, matching decisions/gates.ts', async () => {
+    const signed = signGate(clone(BIG), { gate: 'G-LOOK', by: 'p-sign', via: 'email', note: 'Replied yes.', at: '2026-11-10T08:15:00Z' }).project;
+    const p = await boot({ host: 'B', project: asPage(signed) });
+    const tabs = Array.from(p.d.querySelectorAll('#rail-tabs [role="tab"]')).map((t: any) => t.getAttribute('data-id'));
+    assert.deepEqual(tabs, ['bible', 'ledger', 'gates', 'rules']);
+    const rules = p.text('#p-rules');
+    for (const want of ['brandname', 'allowed: flagstone', '“text, signs, logos, captions” in the negative prompt', 'only for Ada, now (invented)', 'and slices of it', 'Ben (invented)', 'Required']) assert.ok(rules.includes(want), `rules panel lacks ${want}`);
+    assert.equal(p.d.querySelectorAll('#p-rules button, #p-rules [data-akuko-action], #p-gates [data-akuko-action]').length, 0, 'read-only: no control writes anything there');
+    for (const g of gateStatuses(signed)) {
+      assert.match(p.text(`[data-gate-progress="${g.id}"]`), new RegExp(`^${g.approved}/${g.total} approved`), g.id);
+    }
+    assert.match(p.text('[data-gate-signed="G-LOOK"]'), /^Signed by Sign-off Person \(invented\) \(sign-off\) · via email · Nov 10 · 08:15 UTC ?Replied yes\. ?Recorded on their word: attested, not proven\.$/);
+    assert.equal(p.d.querySelector('[data-gate-signed="G-PILOT"]'), null);
+    assert.match(p.text('#gate-G-PILOT'), /Not signed\. Only Sign-off Person \(invented\) can sign it/);
+    assert.match(p.text('#p-gates'), /Approves day to day: Day Approver \(invented\).*Signs gates: Sign-off Person \(invented\)/);
+    assert.equal(p.d.querySelectorAll('[data-akuko-unit="G-LOOK"], [data-akuko-unit="G-PILOT"]').length, 0, 'no decision control is aimed at a gate');
+    click(p, '#gate-G-PILOT [data-act="part"]');
+    await p.tick();
+    assert.equal(shotEls(p), 11, '"Show P7 shots" opens the part');
+    p.close();
+  });
+
+  it('the shot detail carries what the sheet gave it: part, tier, framing, lighting, lines, film time', async () => {
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    click(p, '[data-act="sel"][data-id="S11-070"]');
+    await p.tick();
+    const det = p.text('[data-akuko-view="shot-detail"]').replace(/\s+/g, '');
+    for (const want of ['Part P7', 'Lighting L-DUSK · low amber dusk light', 'Sheet row S11-070', 'Q01 · spoken · ADA-NOW: An invented line.', 'Negative: text, signs, logos, captions']) assert.ok(det.includes(want.replace(/\s+/g, '')),`detail lacks ${want}: ${det.slice(0, 400)}`);
+    p.close();
+  });
+
+  it('units removed from the sheet sit in a collapsed group with no approve, and "your move" leaves them out', async () => {
+    const q = clone(BIG);
+    const at = '2026-11-10T07:00:00Z';
+    const gone = q.shots.find((s) => s.id === 'S11-030')!;
+    assert.equal(gone.status, 'pending-review');
+    gone.source = { kind: 'sheet', id: gone.id, removed_at: at };
+    q.assets.find((a) => a.id === 'card_P7-CARD')!.source = { kind: 'sheet', id: 'P7-CARD', removed_at: at };
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    assert.equal(p.num('waiting-shots'), BIG.shots.filter((s) => s.status === 'pending-review').length - 1);
+    assert.equal(p.num('waiting-other'), BIG.assets.filter((a) => a.status === 'pending-review').length - 1);
+    const grp = p.d.querySelector('#removed-grp');
+    assert.ok(grp, 'the group is there');
+    assert.equal(grp.open, false, 'collapsed');
+    assert.deepEqual(Array.from(grp.querySelectorAll('li')).map((li: any) => li.id), ['gone-S11-030', 'gone-card_P7-CARD']);
+    assert.match(p.text('#removed-grp summary'), /^2 ?Removed from the sheet/);
+    assert.equal(grp.querySelectorAll('button, [data-akuko-action]').length, 0, 'nothing in it decides anything');
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-030"], [data-akuko-action][data-akuko-unit="card_P7-CARD"]').length, 0);
+    assert.equal(p.d.querySelectorAll('#shotlist [data-akuko-field="shot"]').length - grp.querySelectorAll('[data-akuko-field="shot"]').length, 10, 'the part lists its 10 live shots');
+    assert.equal(p.d.querySelectorAll('#lining .tag').length, 10);
+    assert.equal(p.d.querySelector('[data-act="sel"][data-id="S11-030"]'), null, 'a removed shot is never opened for review');
+    p.close();
+  });
+
+  // Review F1 (reviewer's probe "next across parts"): the next-shot actions never dead-end in a one-part view.
+  it('"Review next shot" in a part with nothing waiting opens the next waiting shot and its part', async () => {
+    const q = clone(BIG);
+    for (const s of q.shots) if (s.part === 'P7' && s.status !== 'approved') s.status = 'approved';
+    const waiting = q.shots.filter((s) => s.status === 'pending-review');
+    assert.ok(waiting.length > 0 && waiting.every((s) => s.part !== 'P7'));
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    const sel = p.d.querySelector('.shot.is-sel');
+    assert.ok(sel, 'a shot is selected');
+    const id = sel.getAttribute('data-akuko-unit');
+    assert.ok(waiting.some((s) => s.id === id), `${id} is waiting for review`);
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), q.shots.find((s) => s.id === id)!.part, 'its part is shown');
+    assert.ok(p.d.querySelector(`[data-akuko-view="shot-detail"][data-akuko-unit="${id}"]`), 'and its detail is open');
+    p.close();
+  });
+
+  it('in a part with a shot waiting, "next" stays in that part', async () => {
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    const id = p.d.querySelector('.shot.is-sel')?.getAttribute('data-akuko-unit');
+    assert.equal(BIG.shots.find((s) => s.id === id)?.part, 'P7');
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), 'P7');
+    p.close();
+  });
+
+  it('a spend job naming a shot of another part opens that part when you pick the shot (reviewer probe)', async () => {
+    const q = clone(BIG);
+    const s1 = q.shots.find((s) => s.part === 'P1')!;
+    q.pending_spend = [{ id: 'job_x', stage: 'keyframes', label: 'Key frames P1', units: [s1.id], provider: 'Gemini image', model: 'm', estimate: 0.5, status: 'awaiting-approval' }];
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    assert.equal(p.d.querySelectorAll('#p-spend [data-akuko-field="job"]').length, 1, 'the spend gate shows every job, whatever part is shown');
+    assert.equal(p.num('waiting-spend'), 1);
+    click(p, `#p-spend [data-act="sel-unit"][data-id="${s1.id}"]`);
+    await p.tick();
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), 'P1');
+    assert.equal(p.d.querySelector('.shot.is-sel')?.getAttribute('data-akuko-unit'), s1.id);
+    p.close();
+  });
+
+  // Review F2: a removed shot's key frame is out of review too.
+  it("a removed shot's waiting key frame is not in \"your move\" and has no approve", async () => {
+    const q = clone(BIG);
+    const before = BIG.assets.filter((a) => a.status === 'pending-review').length;
+    const kf = q.assets.find((a) => a.id === 'S11-050_keyframe')!;
+    assert.equal(kf.status, 'pending-review');
+    q.shots.find((s) => s.id === 'S11-050')!.source = { kind: 'sheet', id: 'S11-050', removed_at: '2026-11-10T07:00:00Z' };
+    const p = await boot({ host: 'B', project: asPage(q) });
+    assert.equal(p.num('waiting-other'), before - 1);
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-050_keyframe"]').length, 0);
+    assert.match(p.text('#bib-S11-050_keyframe'), /Removed from the sheet/);
+    p.close();
+  });
+
+  it('text from the project never becomes markup on the board (reviewer probe)', async () => {
+    const q = clone(BIG) as any;
+    const X = '"><img src=x onerror="window.__pwn=1"><script>window.__pwn=2</script>akuko-decision __ikenga';
+    q.project.title = X; q.gates[0].title = X; q.people[1].name = X; q.rules.banned[0].term = X; q.rules.banned[0].note = X;
+    q.assets.find((a: any) => a.kind === 'card').name = X;
+    Object.assign(q.shots[0], { action: X, prompt: X, notes: X, negative: X, motion_note: X, framing: X });
+    q.scenes[0].summary = X;
+    q.gates[0].signed = { by: q.people[1].id, role: 'signoff', at: '2026-11-10T08:00:00Z', via: X, note: X };
+    const p = await boot({ host: 'B', project: q });
+    click(p, `[data-act="sel"][data-id="${q.shots[0].id}"]`);
+    await p.tick();
+    assert.equal(p.d.querySelectorAll('img').length, 0);
+    assert.equal(p.w.__pwn, undefined);
+    assert.ok(p.text('#gate-G-LOOK').includes('"><img src=x'), 'shown as text');
+    p.close();
+  });
+
+  it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
+    const p = clone(BIG);
+    const units = [['S11-030', 'sketch'], ['card_P7-CARD', 'export'], ['S11-050_keyframe', 'keyframes']] as const;
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3']) {
+      const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
+      const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
+      assert.deepEqual(report.rejected, [], view);
+      assert.equal(report.applied.length, 3, view);
+      assert.deepEqual(project.gates, p.gates, 'and no gate is signed by it');
+    }
+  });
+
+  after(() => {
+    // Measured, not asserted tightly: jsdom parses HTML far slower than a browser (views/README.md has the numbers).
+    console.log(`# board render timing with 211 shots (jsdom): ${JSON.stringify(timings)}`);
+    for (const [k, ms] of Object.entries(timings)) if (!/open the board/.test(k)) assert.ok(ms < 30_000, `${k} took ${ms} ms`);
   });
 });

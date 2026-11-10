@@ -20,6 +20,21 @@
  *       Host B. Validates decision lines a person copied from a local view
  *       ("Copy decisions for akuko") and appends the new ones to decisions.jsonl.
  *
+ *   signoff --project <dir> --gate <id> --by <person id> --via "<how>" [--note …] [--at <ISO>] [--replace]
+ *       Hosts B and C (WP-29). Records gates[].signed {by, role: "signoff", at, via, note}
+ *       on the signer's word, after checking the person has the gate's role and the gate
+ *       isn't signed yet (--replace re-signs, keeping the old record in the note). Run it
+ *       ONLY on the person's explicit words naming the gate and the signer
+ *       (actions/review.md §Sign-off). Attested, not proven. Exit 1 on a refusal.
+ *
+ *   signoff-file --project-file <akuko.json> --out <file> --gate … --by … --via … [same options]
+ *       Host A: the same, on the `akuko/project` doc saved as a file; writes the
+ *       signed project to --out for the agent to `set` back with `if_version`.
+ *
+ *   gates --project <dir> [--gate <id>]   |   gates --project-file <akuko.json> [--gate <id>]
+ *       Every gate's status (decisions/gates.ts): units in scope, how many are approved,
+ *       whether and how it is signed. Read-only.
+ *
  * Conformed views: always the skill's shipped views/conformed.json, plus each --conformed file
  * (default <projectDir>/views/conformed.json). Missing files count as empty, listed in `warnings`.
  */
@@ -33,6 +48,7 @@ import { createLocalHost } from '../hosts/local.ts';
 import { parseArtifactRows } from './artifact-db.ts';
 import { loadConformedFile, parseConformedFile, type ConformedView } from './conformed.ts';
 import { foldDecisions } from './fold.ts';
+import { GateError, gateStatus, gateStatuses, signGate, type GateStatus } from './gates.ts';
 import { readIkengaStore } from './ikenga.ts';
 import { appendDecisions, parseJsonl, readJsonlStore } from './jsonl.ts';
 
@@ -52,7 +68,14 @@ function args(argv: string[]) {
   }
   return { pos, opt };
 }
-const takesValue = (a: string) => a !== '--dry-run';
+const FLAGS = new Set(['--dry-run', '--replace', '--units']);
+const takesValue = (a: string) => !FLAGS.has(a);
+
+/** A gate's status for printing: the unit list is summarised unless --units is given. */
+function printable(s: GateStatus, withUnits: boolean) {
+  const { units, ...rest } = s;
+  return withUnits ? s : { ...rest, units: units.length };
+}
 
 /**
  * The conformed views folding accepts approvals from: ALWAYS the skill's
@@ -113,7 +136,51 @@ export async function main(argv: string[]): Promise<number> {
     console.log(JSON.stringify({ appended: written.map((d) => d.id), invalid: read.invalid }, null, 2));
     return read.invalid.length > 0 ? 1 : 0;
   }
-  console.error('usage: cli.ts fold <projectDir> | fold-file --project … --rows … --out … | append <projectDir> <file|->');
+  if (cmd === 'signoff' || cmd === 'signoff-file') {
+    const one = (k: string) => opt[k]?.[0];
+    const [gate, by, via] = [one('gate'), one('by'), one('via')];
+    const file = cmd === 'signoff-file';
+    const dir = one('project');
+    const pf = one('project-file');
+    const out = one('out');
+    if (!gate || !by || via === undefined || (file ? !pf || !out : !dir)) {
+      throw new Error(file
+        ? 'usage: signoff-file --project-file <akuko.json> --out <file> --gate <id> --by <person id> --via "<how>" [--note …] [--at <ISO>] [--replace]'
+        : 'usage: signoff --project <dir> --gate <id> --by <person id> --via "<how>" [--note …] [--at <ISO>] [--replace]');
+    }
+    const host = file ? undefined : createLocalHost({ projectDir: dir! });
+    const project = host ? await host.readState() : AkukoProjectSchema.parse(JSON.parse(readInput(pf!)));
+    const note = one('note');
+    const at = one('at');
+    try {
+      const r = signGate(project, { gate, by, via, ...(note !== undefined ? { note } : {}), ...(at !== undefined ? { at } : {}), replace: !!opt.replace });
+      if (host) await host.writeState(r.project);
+      else writeFileSync(out!, `${JSON.stringify(r.project, null, 2)}\n`);
+      console.log(JSON.stringify({ ok: true, gate, signed: r.record, ...(r.replaced ? { replaced: r.replaced } : {}), status: printable(r.status, false), warnings: r.warnings, attested: "recorded on the signer's word; not proven", ...(file ? { out } : {}) }, null, 2));
+      return 0;
+    } catch (e) {
+      if (!(e instanceof GateError)) throw e;
+      console.log(JSON.stringify({ ok: false, gate, code: e.code, message: e.message }, null, 2));
+      return 1;
+    }
+  }
+  if (cmd === 'gates') {
+    const dir = opt.project?.[0];
+    const pf = opt['project-file']?.[0];
+    if (!dir && !pf) throw new Error('usage: gates --project <dir> | --project-file <akuko.json> [--gate <id>] [--units]');
+    const project = dir ? await createLocalHost({ projectDir: dir }).readState() : AkukoProjectSchema.parse(JSON.parse(readInput(pf!)));
+    const id = opt.gate?.[0];
+    try {
+      const list = id ? [gateStatus(project, id)] : gateStatuses(project);
+      console.log(JSON.stringify({ gates: list.map((s) => printable(s, !!opt.units)) }, null, 2));
+      return 0;
+    } catch (e) {
+      if (!(e instanceof GateError)) throw e;
+      console.log(JSON.stringify({ ok: false, code: e.code, message: e.message }, null, 2));
+      return 1;
+    }
+  }
+  console.error('usage: cli.ts fold <projectDir> | fold-file --project … --rows … --out … | append <projectDir> <file|-> | signoff --project <dir> --gate … --by … --via … | signoff-file … | gates --project <dir>');
   return 2;
 }
 
