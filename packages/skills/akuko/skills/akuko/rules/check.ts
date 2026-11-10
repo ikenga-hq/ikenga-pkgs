@@ -92,6 +92,8 @@ interface Context {
   entry?: BibleEntry;
   /** Bible ids the item concerns: the shot's refs and lighting, or the bible entry it is for. */
   bibleIds: string[];
+  /** Who or where the item shows: the shot's characters and locations, or the bible entry it is for. */
+  subjects: string[];
 }
 
 const bibleIdsOf = (p: AkukoProject): Set<string> =>
@@ -101,7 +103,8 @@ function shotContext(p: AkukoProject, shot: Shot): Context {
   const ids = bibleIdsOf(p);
   const scene = p.scenes.find((s) => s.id === shot.scene);
   const bibleIds = [...new Set([...shot.refs, ...(shot.lighting ? [shot.lighting] : [])])].filter((id) => ids.has(id));
-  return { shot, ...(scene ? { scene } : {}), bibleIds };
+  const subjectIds = new Set([...p.bible.characters, ...p.bible.locations].map((e) => e.id));
+  return { shot, ...(scene ? { scene } : {}), bibleIds, subjects: bibleIds.filter((id) => subjectIds.has(id)) };
 }
 
 /** The shot or bible entry a unit belongs to (a shot, a bible entry, or an asset owned by one, up to two owners up). */
@@ -111,10 +114,10 @@ export function contextOf(p: AkukoProject, unit: string): Context {
     const u = findUnit(p, id);
     if (!u) break;
     if (u.kind === 'shot') return shotContext(p, u.unit);
-    if (u.kind !== 'asset') return { entry: u.unit, bibleIds: [u.unit.id] };
+    if (u.kind !== 'asset') return { entry: u.unit, bibleIds: [u.unit.id], subjects: [u.unit.id] };
     id = u.unit.owner;
   }
-  return { bibleIds: [] };
+  return { bibleIds: [], subjects: [] };
 }
 
 function inScope(scope: RuleScope | undefined, c: Context): boolean {
@@ -207,15 +210,15 @@ const ids = (c: Context): Pick<Breach, 'shot' | 'entry'> => ({ ...(c.shot ? { sh
 
 /**
  * The bible ids an external ref is a reference FOR: the entry that owns the
- * asset, else the bible entry the ref names, else everything the item
- * concerns (strict: a picture attached to a shot counts as a reference for
- * every entry in that shot).
+ * asset, else the bible entry the ref names, else every subject of the item
+ * (strict: a picture attached to a shot counts as a reference for every
+ * character and location in that shot; a bible job's subject is its entry).
  */
 function targetsOf(p: AkukoProject, ref: Pick<JobRef, 'id'>, asset: Asset | undefined, c: Context): string[] {
   const all = bibleIdsOf(p);
   if (asset?.owner !== undefined && all.has(asset.owner)) return [asset.owner];
   if (all.has(ref.id)) return [ref.id];
-  return c.bibleIds;
+  return c.subjects;
 }
 
 async function refBreaches(
@@ -417,7 +420,7 @@ export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions
 
   for (const entry of [...p.bible.characters, ...p.bible.locations, ...p.bible.styles]) {
     counts.entries++;
-    const c: Context = { entry, bibleIds: [entry.id] };
+    const c: Context = { entry, bibleIds: [entry.id], subjects: [entry.id] };
     breaches.push(...bannedIn(rules, c, [{ field: 'name', text: entry.name }, { field: 'description', text: entry.description }, ...entry.notes.map((n) => ({ field: 'note', text: n }))], new Set()));
     const listed = new Set(entry.refs);
     for (const a of p.assets) if (a.kind === 'reference' && a.owner === entry.id) listed.add(a.id);

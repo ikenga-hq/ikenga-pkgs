@@ -31,6 +31,7 @@ import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createGeminiImageProvider } from '../providers/gemini-image/index.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { createSpendGate } from '../spend/gate.ts';
+import { guardGate } from '../rules/guard.ts';
 import { BibleError, bibleStatus, planBible } from './plan.ts';
 import { collectBible, finalizeBible, generateBible, ingestBible, type StepResult } from './run.ts';
 
@@ -99,7 +100,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     const manual = createManualProvider(host, { now: clock });
     const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
     const providers: Provider[] = [manual.provider, createGeminiImageProvider(host, { now: clock, loadRef }), createFalImageProvider(host, { now: clock, loadRef })];
-    const gate = createSpendGate({ host, providers, level, now: clock });
+    // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     const deps = { host, gate, now: clock };
 
     if (cmd === 'step') {
