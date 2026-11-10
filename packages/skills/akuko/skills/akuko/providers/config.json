@@ -120,7 +120,7 @@
             "per": "second"
           },
           "last_verified": "2026-11-10",
-          "source": "IMAGE + AUDIO (fallback). https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10: \"480p - $0.08 per second, 720p - $0.15 per second\" (the page does not say whether seconds are of audio or output; they match). Request: image_url, audio_url, resolution (\"720p\" or \"480p\", required); the page states no audio length limit; output video.url. akuko strips the \"#480p\" suffix and sends it as resolution."
+          "source": "IMAGE + AUDIO (fallback). https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10: \"480p - $0.08 per second, 720p - $0.15 per second\" (fal's page does not say whether those are audio or output seconds, so akuko prices max(audio, 1 s) of the line). Request: image_url, audio_url, resolution (\"720p\" or \"480p\", required); the page states no audio length limit; output video.url. akuko strips the \"#480p\" suffix and sends it as resolution. It is the default for a line under 5 s (h3-max needs 5 s or more)."
         },
         "veed/fabric-1.0#720p": {
           "price": {
@@ -128,7 +128,7 @@
             "per": "second"
           },
           "last_verified": "2026-11-10",
-          "source": "IMAGE + AUDIO (fallback, higher resolution). Same endpoint and page as the 480p entry (https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10): 720p $0.15 per second. akuko strips the \"#720p\" suffix and sends it as resolution."
+          "source": "IMAGE + AUDIO (fallback, higher resolution). Same endpoint and page as the 480p entry (https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10): 720p $0.15 per second. akuko strips the \"#720p\" suffix and sends it as resolution. Same billing-basis gap as the 480p entry: fal does not say whether those are audio or output seconds; akuko prices max(audio, 1 s)."
         },
         "fal-ai/kling-video/lipsync/audio-to-video": {
           "price": {
