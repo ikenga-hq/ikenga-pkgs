@@ -45,7 +45,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "set up akuko", "configure", "set a budget", "add my keys" | [`actions/setup.md`](actions/setup.md) | WP-08 |
 | "check my setup", "what's missing", "doctor" | [`actions/doctor.md`](actions/doctor.md) | WP-08 |
 | "make a film from this story / script", "start a project", "intake" | [`actions/intake.md`](actions/intake.md) | WP-04 |
-| "break it down", "shot list", "breakdown" | [`actions/breakdown.md`](actions/breakdown.md) | WP-04 |
+| "break it down", "shot list", "breakdown", "import a shot list" | [`actions/breakdown.md`](actions/breakdown.md) | WP-04 |
 | "characters", "locations", "look / style", "bible" | [`actions/bible.md`](actions/bible.md) | WP-05 |
 | "storyboard", "sketch board", "beat board", "board" | [`actions/board.md`](actions/board.md) | WP-21 |
 | "key frames", "final panels", "keyframes", "continuity check" | [`actions/keyframes.md`](actions/keyframes.md) | WP-22 |
