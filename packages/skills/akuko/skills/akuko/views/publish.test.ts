@@ -44,7 +44,7 @@ describe('views/publish.ts', () => {
     const embedded = JSON.parse(raw);
     assert.equal(embedded.project.title, 'A <b>bold</b> </script> film');
     assert.equal(embedded._sample, undefined, 'no longer a sample');
-    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.2', html), 'same hash as the recorded board');
+    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.3', html), 'same hash as the recorded board');
     assert.equal(viewHash(html), viewHash(readFileSync(DEFAULT_BOARD, 'utf8')));
   });
 
@@ -60,11 +60,11 @@ describe('views/publish.ts', () => {
     assert.equal((await run(['--project', join(dir, 'nope')])).code, 1);
   });
 
-  it('decisions written by an older board (@0.1) still fold against the shipped list', () => {
+  it('decisions written by older boards (@0.1, @0.2) still fold against the shipped list', () => {
     const project = AkukoProjectSchema.parse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
     const shot = project.shots.find((s) => s.status === 'pending-review')!;
     const mk = (view: string, id: string) => ({ id, action: 'approve', unit: shot.id, stage: 'sketch', by: 'you', at: '2026-11-09T10:00:00Z', view }) as Decision;
-    assert.ok(conformedViewIds(CONFORMED).has('default-board@0.1') && conformedViewIds(CONFORMED).has('default-board@0.2'));
+    assert.ok(['0.1', '0.2', '0.3'].every((v) => conformedViewIds(CONFORMED).has('default-board@' + v)));
     for (const [view, id] of [['default-board@0.1', '11111111-1111-4111-8111-111111111111'], ['default-board@0.2', '22222222-2222-4222-8222-222222222222']] as const) {
       const { report } = foldDecisions(structuredClone(project), [mk(view, id)], { conformed: CONFORMED });
       assert.equal(report.rejected.length, 0, `${view} rejected: ${JSON.stringify(report.rejected)}`);

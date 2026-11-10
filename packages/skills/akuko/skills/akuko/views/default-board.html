@@ -1,5 +1,5 @@
 <!--
-akuko default board · default-board@0.1 · built from the locked design D-01 (option B, "Script desk")
+akuko default board · default-board@0.3 · built from the locked design D-01 (option B, "Script desk")
   What it is: the one finished review surface akuko ships. Script paper on the left, the shot list beside it with every shot lined to the
     line it came from, the spend gate pinned top-right, Bible and Ledger beneath it. It is a view in the sense of views/contract.md:
     it shows akuko.json and writes decisions through the inlined decision writer, nothing else.
@@ -7,7 +7,10 @@ akuko default board · default-board@0.1 · built from the locked design D-01 (o
     akuko/project and the decisions collection from the artifact database; as a local file it reads akuko.json beside it (or a file
     you pick); in Ikenga it reads the same file through the viewer. It only ever reads these: it never writes the project and never
     needs republishing to show new state. A decision the project has not folded in yet is shown as a preview, derived again on every render.
-  Provenance: this exact file's sha256 is on views/conformed.json. Change it, bump "version", run scripts/check-view.mjs --record again.
+  Real projects (WP-29, @0.3): a part filter and a one-part view (#part=P7) for a 211-shot shot list, film times on the master clock,
+    cards as review items (approved once), a read-only Rules panel and a Gates panel (scope progress, who signed and how). The board
+    never signs a gate: a sign-off is recorded by decisions/cli.ts signoff, on the signer's word.
+  Provenance: this exact file's sha256 is on views/conformed.json. Change it, bump "version", run scripts/check-view.mjs --ship again.
   Tokens: @ikenga/tokens theme A "Dusk Wood" values, defined under --ak-* names on purpose: a host that injects its own --bg-base / --fg
     (the Ikenga viewer does) must not be able to mix its palette into this page.
 -->
@@ -441,6 +444,34 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .sample-msg { display: block; flex: 1 1 100%; margin-top: 6px; font: 600 13px/1.4 var(--ak-font-sans); color: var(--ak-fg); }
 @media (min-width: 761px) { .foot { flex-wrap: nowrap; white-space: nowrap; } .foot-id { display: none; } }
 .foot-warn { color: var(--ak-fg); font-weight: 600; }
+/* real projects (WP-29): parts, cards, gates, rules */
+.f-lbl { align-self: center; margin-right: 2px; font: 600 12px/1 var(--ak-font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ak-fg-muted); }
+.filters:not([hidden]) + .filters { margin-top: 6px; }
+.filters[hidden] { display: none; }
+.ph-card { display: grid; place-content: center; width: 112px; aspect-ratio: 16 / 9; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-xs); font: 700 12px/1 var(--ak-font-sans); letter-spacing: .1em; color: var(--ak-fg-muted); }
+.card-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 14px; align-items: center; padding: 10px 20px; }
+.card-row .bib-act { margin-top: 6px; }
+.flag { display: inline-block; padding: 2px 6px; border: 1px solid var(--ak-border); border-radius: var(--ak-radius-xs); font: 600 12px/1.2 var(--ak-font-sans); color: var(--ak-fg); }
+.flag-off { border-style: dashed; color: var(--ak-fg-muted); }
+.gt { padding: 14px 0; border-bottom: 1px solid var(--ak-border-soft); }
+.gt-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 10px; }
+.gt-id { font: 600 15px/1.3 var(--ak-font-mono); }
+.gt-t { margin-top: 2px; font: 500 16px/1.35 var(--ak-font-display); }
+.gt-scope, .gt-count { margin-top: 6px; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.gt-count b { color: var(--ak-fg); }
+.gt .bar { margin-top: 8px; }
+.seg-ok { background: var(--ak-success); }
+.seg-wait { background: repeating-linear-gradient(135deg, var(--ak-achievement) 0 3px, transparent 3px 6px); }
+.seg-back { background: var(--ak-danger); }
+.gt-sign { margin-top: 10px; padding: 10px 12px; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-md); font-size: 14px; }
+.gt-sign b { font-weight: 700; }
+.gt-notes { margin-top: 8px; display: grid; gap: 4px; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg); }
+.gt-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ppl { display: grid; gap: 4px; margin-bottom: 6px; font-size: 14px; }
+.rules-dl { display: grid; gap: 4px 0; }
+.rules-dl dt { margin-top: 12px; font: 600 12px/1.3 var(--ak-font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ak-fg-muted); }
+.rules-dl dd ul { display: grid; gap: 4px; }
+.rules-dl dd li { font-size: 14px; }
 
 /* ── footer ── */
 .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 20px; background: var(--ak-bg-surface); border-top: 1px solid var(--ak-border); font: 500 12px/1.4 var(--ak-font-sans); color: var(--ak-fg-muted); }
@@ -500,7 +531,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   .gate .mrows { gap: 3px 12px; margin-top: 8px; }
   .rail-bar { display: block; position: sticky; top: 0; z-index: 3; background: var(--ak-bg-surface); }
   .rail[data-stuck] .rail-pin { display: grid; }
-  body[data-rail="bible"] #p-ledger, body[data-rail="ledger"] #p-bible { display: none; }
+  body:not([data-rail="bible"]) #p-bible, body:not([data-rail="ledger"]) #p-ledger, body:not([data-rail="gates"]) #p-gates, body:not([data-rail="rules"]) #p-rules { display: none; }
 }
 /* ── layout: medium (script | tabbed right column) ── */
 @media (min-width: 761px) and (max-width: 1279px) {
@@ -512,9 +543,9 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   .rail-tabs { display: none; }
   .rail .rail-panel { display: none; }
   .rail { display: none; }
-  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail { display: flex; }
-  body[data-view="spend"] .pane-shots, body[data-view="bible"] .pane-shots, body[data-view="ledger"] .pane-shots { display: none; }
-  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger { display: flex; flex: 1; overflow: auto; border-bottom: 0; }
+  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail, body[data-view="gates"] .rail, body[data-view="rules"] .rail { display: flex; }
+  body[data-view="spend"] .pane-shots, body[data-view="bible"] .pane-shots, body[data-view="ledger"] .pane-shots, body[data-view="gates"] .pane-shots, body[data-view="rules"] .pane-shots { display: none; }
+  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger, body[data-view="gates"] #p-gates, body[data-view="rules"] #p-rules { display: flex; flex: 1; overflow: auto; border-bottom: 0; }
   .host { order: 5; flex: 1 1 100%; max-width: none; }
   .top-row { flex-wrap: wrap; row-gap: 10px; }
   .paper { padding-left: 24px; }
@@ -530,7 +561,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 }
 @media (min-width: 761px) and (max-width: 1060px) {
   .shot-row { grid-template-columns: 96px minmax(0, 1fr); }
-  .thumb { width: 96px; }
+  .thumb, .ph-card { width: 96px; }
+  .card-row { grid-template-columns: 96px minmax(0, 1fr); }
   .shot-row .chip { grid-column: 2; justify-self: start; }
 }
 /* ── layout: phone (switchable panes, page scroll) ── */
@@ -549,10 +581,10 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   .desk-nav { position: sticky; top: 0; z-index: 10; padding: 8px; }
   .pane, .rail { display: none; }
   body[data-view="script"] .pane-script, body[data-view="shots"] .pane-shots { display: flex; }
-  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail { display: flex; }
+  body[data-view="spend"] .rail, body[data-view="bible"] .rail, body[data-view="ledger"] .rail, body[data-view="gates"] .rail, body[data-view="rules"] .rail { display: flex; }
   .rail-tabs { display: none; }
   .rail .rail-panel { display: none; }
-  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger { display: flex; border-bottom: 0; }
+  body[data-view="spend"] #p-spend, body[data-view="bible"] #p-bible, body[data-view="ledger"] #p-ledger, body[data-view="gates"] #p-gates, body[data-view="rules"] #p-rules { display: flex; border-bottom: 0; }
   .pane-script, .pane-shots { border-right: 0; }
   .pane-head { padding: 14px 16px 12px; }
   .scroller { overflow: visible; }
@@ -564,7 +596,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   .ln { scroll-margin: 90px; }
   .banner { top: var(--ak-nav-h); padding: 10px 16px; }
   .shot-row { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 10px 16px; scroll-margin-top: calc(var(--ak-nav-h) + 64px); }
-  .thumb { width: 92px; }
+  .thumb, .ph-card { width: 92px; }
+  .card-row { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 10px 16px; }
   .shot-row .chip { grid-column: 2; justify-self: start; }
   .detail { padding: 4px 16px 24px; }
   .specs { grid-template-columns: 1fr; }
@@ -628,12 +661,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     <div class="pane-head">
       <h2 class="ph-h" id="h-shots">Shots</h2>
       <p class="ph-sub mono" id="cut"></p>
+      <div class="filters" id="parts" role="group" aria-label="Show one part of the film" hidden></div>
       <div class="filters" id="filters" role="group" aria-label="Filter shots by review status"></div>
     </div>
     <div class="scroller" id="shot-scroll"><div id="shotlist"></div></div>
   </section>
 
-  <aside class="rail" id="rail" aria-label="Spend, bible and ledger">
+  <aside class="rail" id="rail" aria-label="Spend, bible, ledger, gates and rules">
     <section class="rail-panel gate" id="p-spend" data-akuko-view="spend-gate" aria-labelledby="h-spend"></section>
     <div class="rail-ref" id="rail-ref">
       <div class="rail-bar">
@@ -642,6 +676,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       </div>
       <section class="rail-panel" id="p-bible" data-akuko-view="bible" role="tabpanel" aria-labelledby="tab-bible"></section>
       <section class="rail-panel" id="p-ledger" data-akuko-view="ledger" role="tabpanel" aria-labelledby="tab-ledger"></section>
+      <section class="rail-panel" id="p-gates" role="tabpanel" aria-labelledby="tab-gates"></section>
+      <section class="rail-panel" id="p-rules" role="tabpanel" aria-labelledby="tab-rules"></section>
     </div>
   </aside>
 </main>
@@ -652,8 +688,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 <textarea class="copy-fallback" id="copy-fallback" readonly rows="4" aria-label="Your decisions, to copy by hand" hidden></textarea>
 <input class="vh" id="file-in" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
 
-<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.1.0","variant":"default","fallback":{"mode":"mock"}}</script>
-<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.2","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
+<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.3.0","variant":"default","fallback":{"mode":"mock"}}</script>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.3","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
 <script type="application/json" id="akuko-project">{"format":"akuko","schema_version":1,"project":{"slug":"the-beating","title":"The Beating","logline":"A man insists he is sane while describing how he killed an old man for his pale, clouded eye — until the dead man's heart gives him away.","source":"Adapted from \"The Tell-Tale Heart\" by Edgar Allan Poe (1843, public domain)","runtime_s":70,"aspect_ratio":"16:9","profile":"film","created_at":"2026-11-05T00:00:00Z","notes":"Prices are illustrative fixture values, not quotes."},"host":{"level":"A","label":"Claude artifact","capabilities":{}},"stages":{"intake":{"state":"approved"},"breakdown":{"state":"approved"},"sketch":{"state":"in-review"},"bible":{"state":"in-progress"},"keyframes":{"state":"waiting-spend"},"motion":{"state":"locked"},"sound":{"state":"locked"},"assemble":{"state":"locked"},"export":{"state":"locked"}},"current_stage":"sketch","script":{"beats":[]},"scenes":[{"id":"sc1","heading":"INT. OLD MAN'S HOUSE — HALLWAY — NIGHT","summary":"Midnight. The narrator creeps to the old man's door, as he has every night for a week."},{"id":"sc2","heading":"INT. OLD MAN'S BEDROOM — NIGHT","summary":"The lantern's single ray falls on the eye. The old man wakes. The narrator strikes."},{"id":"sc3","heading":"INT. OLD MAN'S BEDROOM — LATER","summary":"He hides the body beneath the floorboards."},{"id":"sc4","heading":"INT. OLD MAN'S BEDROOM — DAWN","summary":"Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud."}],"shots":[{"id":"sc1_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"ws","camera":"Static, low angle","camera_move":"unset","action":"A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.","duration_s":6,"prompt":"Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro","refs":["char_narrator","loc_hallway","style_lookbook"],"script_line":"Every night, about midnight, I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"N","shape":"rect","x":0.72,"y":0.55,"w":0.06,"h":0.3}]},{"id":"sc1_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"insert","camera":"Macro, locked off","camera_move":"unset","action":"His hand turns the latch, a fraction at a time.","duration_s":4,"prompt":"Extreme close-up of a hand slowly turning an iron door latch, lantern light from below","refs":["char_narrator","style_lookbook"],"script_line":"I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"hand","shape":"rect","x":0.35,"y":0.35,"w":0.3,"h":0.3}]},{"id":"sc1_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"pov","camera":"Handheld, slow push","camera_move":"push-in","action":"Through the crack of the door: darkness, and the shape of the old man asleep.","duration_s":6,"prompt":"POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.","blocking":[{"who":"OM","shape":"ellipse","x":0.5,"y":0.62,"w":0.22,"h":0.12}]},{"id":"sc2_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The narrator opens the lantern a crack. A single thin ray cuts across the room.","duration_s":7,"prompt":"Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.","blocking":[{"who":"N","shape":"rect","x":0.18,"y":0.35,"w":0.12,"h":0.5},{"who":"OM","shape":"ellipse","x":0.72,"y":0.6,"w":0.2,"h":0.12}]},{"id":"sc2_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"The eye, pale blue with a film over it, wide open in the ray of light.","duration_s":4,"prompt":"Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam","refs":["char_oldman","style_lookbook"],"script_line":"It was open — wide, wide open — and I grew furious as I gazed upon it.","blocking":[{"who":"OM eye","shape":"ellipse","x":0.5,"y":0.5,"w":0.34,"h":0.2}]},{"id":"sc2_sh3","stage":"sketch","status":"needs-rework","comments":[{"ts":"2026-11-06T21:12:00Z","stage":"sketch","author":"You","text":"He should bolt up — this framing reads calm. Try a lower, tighter angle."}],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The old man sits up in bed: 'Who's there?'","duration_s":5,"prompt":"Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I heard him sit up in the bed, crying out — \"Who's there?\"","blocking":[{"who":"OM","shape":"rect","x":0.42,"y":0.3,"w":0.16,"h":0.42}]},{"id":"sc2_sh4","stage":"sketch","status":"pending-review","comments":[],"scene":"sc2","shot_type":"ws","camera":"Static, high angle","camera_move":"unset","action":"The lantern drops. The bed is dragged over him. Only shadows move.","duration_s":6,"prompt":"High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow","refs":["char_narrator","char_oldman","loc_bedroom","style_lookbook"],"script_line":"In an instant I dragged him to the floor, and pulled the heavy bed over him.","blocking":[{"who":"N","shape":"rect","x":0.3,"y":0.42,"w":0.1,"h":0.36},{"who":"bed","shape":"rect","x":0.5,"y":0.55,"w":0.32,"h":0.2}]},{"id":"sc3_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc3","shot_type":"overhead","camera":"Overhead, static","camera_move":"unset","action":"From above: he lifts three planks from the floor.","duration_s":7,"prompt":"Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I took up three planks from the flooring of the chamber, and deposited all between the scantlings.","blocking":[{"who":"N","shape":"ellipse","x":0.4,"y":0.45,"w":0.18,"h":0.18},{"who":"planks","shape":"rect","x":0.58,"y":0.3,"w":0.08,"h":0.42}]},{"id":"sc4_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ws","camera":"Static","camera_move":"unset","action":"Dawn light. Three officers stand in the doorway, hats in hand.","duration_s":6,"prompt":"Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway","refs":["char_officers","loc_bedroom","style_lookbook"],"script_line":"There entered three men, who introduced themselves, with perfect suavity, as officers of the police.","blocking":[{"who":"O1","shape":"rect","x":0.4,"y":0.3,"w":0.07,"h":0.45},{"who":"O2","shape":"rect","x":0.5,"y":0.3,"w":0.07,"h":0.45},{"who":"O3","shape":"rect","x":0.6,"y":0.3,"w":0.07,"h":0.45}]},{"id":"sc4_sh2","stage":"sketch","status":"pending-review","comments":[],"scene":"sc4","shot_type":"ms","camera":"Slow dolly in","camera_move":"push-in","action":"He places his chair directly over the hidden boards and smiles at the officers.","duration_s":8,"prompt":"Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"I placed my own seat upon the very spot beneath which reposed the corpse of the victim.","blocking":[{"who":"N","shape":"rect","x":0.44,"y":0.32,"w":0.12,"h":0.46},{"who":"O1","shape":"rect","x":0.12,"y":0.3,"w":0.06,"h":0.4}]},{"id":"sc4_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"Sweat on his temple. Under the silence, a low, dull, quick sound.","duration_s":5,"prompt":"Extreme close-up of a sweating temple and a twitching eye, cold dawn light","refs":["char_narrator","style_lookbook"],"script_line":"It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.","blocking":[{"who":"N face","shape":"ellipse","x":0.55,"y":0.45,"w":0.4,"h":0.5}]},{"id":"sc4_sh4","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ms","camera":"Handheld, whip to boards","camera_move":"whip-pan","action":"He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'","duration_s":6,"prompt":"Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"","blocking":[{"who":"N","shape":"rect","x":0.4,"y":0.5,"w":0.16,"h":0.32},{"who":"O2","shape":"rect","x":0.75,"y":0.28,"w":0.06,"h":0.42}]}],"bible":{"characters":[{"id":"char_narrator","stage":"bible","status":"approved","comments":[],"name":"The Narrator","role":"Principal","description":"Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle.","notes":[],"refs":["char_narrator_portrait","char_narrator_turnaround"]},{"id":"char_oldman","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man","role":"Principal","description":"Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'.","notes":[],"refs":["char_oldman_portrait","char_oldman_turnaround"]},{"id":"char_officers","stage":"bible","status":"pending","comments":[],"name":"Officers (×3)","role":"Supporting","description":"1840s police, dark greatcoats, polite and unhurried.","notes":[],"refs":[]}],"locations":[{"id":"loc_hallway","stage":"bible","status":"approved","comments":[],"name":"Hallway","description":"Narrow, bare boards, a single door at the end.","notes":[],"refs":["loc_hallway_plate"]},{"id":"loc_bedroom","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man's Bedroom","description":"Four-poster bed, shuttered window, wide pine floorboards.","notes":[],"refs":["loc_bedroom_plate"]}],"styles":[{"id":"style_lookbook","stage":"bible","status":"approved","comments":[],"name":"Lookbook","notes":["Lantern chiaroscuro: one warm source, everything else falls to black","Dawn scenes go cold and grey — the only daylight in the film","Fine film grain, no lens flares","Composition leaves dead space around the eye"],"refs":[]}]},"assets":[{"id":"char_narrator_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_narrator","tags":[]},{"id":"char_narrator_turnaround","stage":"bible","status":"approved","comments":[],"kind":"turnaround","owner":"char_narrator","tags":[]},{"id":"char_oldman_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_oldman","tags":[]},{"id":"char_oldman_turnaround","stage":"bible","status":"pending-review","comments":[],"kind":"turnaround","owner":"char_oldman","tags":[]},{"id":"loc_hallway_plate","stage":"bible","status":"approved","comments":[],"kind":"plate","owner":"loc_hallway","tags":[]},{"id":"loc_bedroom_plate","stage":"bible","status":"pending-review","comments":[],"kind":"plate","owner":"loc_bedroom","tags":[]}],"audio":{},"budget":{"cap":15,"currency":"USD","spent":0.84},"pending_spend":[{"id":"job_kf_sc1","stage":"keyframes","label":"Generate key frames for scene 1","units":["sc1_sh1","sc1_sh2","sc1_sh3"],"provider":"Gemini image","model":"gemini-3.1-flash-image-preview","estimate":0.36,"status":"awaiting-approval"}],"ledger":[{"ts":"2026-11-06T19:40:00Z","provider":"Gemini image","unit":"char_narrator_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T19:44:00Z","provider":"Gemini image","unit":"char_narrator_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:05:00Z","provider":"Gemini image","unit":"char_oldman_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T20:09:00Z","provider":"Gemini image","unit":"char_oldman_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:30:00Z","provider":"Gemini image","unit":"loc_hallway_plate","actual":0.06,"status":"done"},{"ts":"2026-11-06T20:33:00Z","provider":"Gemini image","unit":"loc_bedroom_plate","actual":0.06,"status":"done"}],"decisions":[],"_sample":true}</script>
 <script>
 /* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */
@@ -757,6 +793,10 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const pad2 = n => String(n).padStart(2, '0');
   const tc = s => pad2(Math.floor(s / 60)) + ':' + pad2(s % 60);
   const clock = s => Math.floor(s / 60) + ':' + pad2(s % 60);
+  /* film time on the master clock, m:ss.ss (imported shot lists are timed to the hundredth) */
+  const ftc = s => Math.floor(s / 60) + ':' + (s % 60).toFixed(2).padStart(5, '0');
+  const dur = n => String(Number(Number(n).toFixed(2)));
+  const stamp = s => (filmClock ? ftc(s) : tc(s));
   const gateNum = n => String(Number(Number(n).toFixed(4)));
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const when = ts => { const d = new Date(ts); if (isNaN(d)) return ''; return MON[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' · ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ' UTC'; };
@@ -777,7 +817,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const disp = s => (s === 'pending' ? 'not-started' : s);
     const assetById = {};
     p.assets.forEach(a => { assetById[a.id] = a; });
-    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '' });
+    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '', name: a.name || '', film: a.film || null, uri: (a.file && a.file.uri) || '', removed: !!(a.source && a.source.removed_at) });
+    const scenePart = {};
+    p.scenes.forEach(s => { scenePart[s.id] = s.part || null; });
+    const lineById = {};
+    ((p.audio && p.audio.lines) || []).forEach(l => { lineById[l.id] = l; });
     const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes || [], comments: e.comments || [],
       assets: (e.refs || []).filter(r => assetById[r]).map(r => asset(assetById[r])) });
     const styles = (p.bible.styles || []).map(entry);
@@ -786,10 +830,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       project: Object.assign({}, p.project),
       host: p.host,
       stages: LABELS.map((l, n) => ({ id: l[0], n: n, label: l[1], state: p.stages[l[0]].state, current: p.current_stage === l[0] })),
-      scenes: p.scenes.map(s => ({ id: s.id, slug: s.heading || s.id, summary: s.summary || '' })),
-      shots: p.shots.map(s => ({ id: s.id, stage: s.stage, scene: s.scene, type: TYPE[s.shot_type] || s.shot_type || '', camera: s.camera || '', duration_s: s.duration_s || 0, status: disp(s.status), _status: s.status,
+      scenes: p.scenes.map(s => ({ id: s.id, slug: s.heading || s.id, summary: s.summary || '', part: s.part || null, sheet: !!(s.source && s.source.kind === 'sheet') })),
+      shots: p.shots.map(s => ({ id: s.id, stage: s.stage, scene: s.scene, type: TYPE[s.shot_type] || (s.shot_type && s.shot_type !== 'unset' ? s.shot_type : '') || s.framing || '', camera: s.camera || '', duration_s: s.duration_s || 0, status: disp(s.status), _status: s.status,
         action: s.action || '', script_line: s.script_line || '', prompt: s.prompt || '', refs: s.refs || [], blocking: s.blocking || [],
-        move: MV[s.camera_move] || (!s.camera_move || s.camera_move === 'unset' || s.camera_move === 'static' ? null : s.camera_move), comments: s.comments || [] })),
+        move: MV[s.camera_move] || (!s.camera_move || s.camera_move === 'unset' || s.camera_move === 'static' ? null : s.camera_move), comments: s.comments || [],
+        part: s.part || (s.scene && scenePart[s.scene]) || null, film: s.film || null, tier: s.tier || '', framing: s.framing || '', motion_note: s.motion_note || '', lighting: s.lighting || '', negative: s.negative || '',
+        notes: s.notes || '', removed: !!(s.source && s.source.removed_at), source: s.source || null,
+        lines: (s.lines || []).map(l => Object.assign({ id: l.id, kind: l.kind }, lineById[l.id] ? { text: lineById[l.id].text || '', character: lineById[l.id].character || '' } : {})) })),
       bible: { characters: (p.bible.characters || []).map(entry), locations: (p.bible.locations || []).map(entry), styles: styles },
       assets: p.assets.map(asset),
       budget: p.budget || null,
@@ -797,12 +844,25 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       ledger: (p.ledger || []).map(l => Object.assign({}, l, { unit: assetById[l.unit] && assetById[l.unit].owner ? assetById[l.unit].owner + ' · ' + assetById[l.unit].kind : l.unit, actual: l.actual || 0 })),
       ledger_raw: p.ledger || [],
       decisions: p.decisions || [],
+      people: p.people || [],
+      gates: p.gates || [],
+      rules: p.rules || null,
+      master: (p.audio && p.audio.master) || null,
       _note: p.project.notes
     };
   }
 
   let P = null, D = null, lastSig = '';
-  let shotsById, sceneN, stageById, currentStage, bibleById, assetsById, cutTotal, looseAssets, moneyFmt;
+  let shotsById, sceneN, stageById, currentStage, bibleById, assetsById, cutTotal, looseAssets, moneyFmt, filmClock = false, PARTS = [], CARDS = [];
+  /* A card belongs to the part of the first shot that starts at or after it (a part card sits just before its part), else to the
+     last shot's part (end credits). The same rule as decisions/gates.ts#cardPart. */
+  function cardPart(c) {
+    if (!c.film) return null;
+    const timed = D.shots.filter(s => !s.removed && s.film && s.part).slice().sort((a, b) => a.film.in_s - b.film.in_s);
+    const next = timed.find(s => s.film.in_s >= c.film.in_s - 1e-6);
+    const s = next || timed[timed.length - 1];
+    return s ? s.part : null;
+  }
   const SRC = { kind: 'snapshot', at: null, ok: null };
   /* The file as shipped carries a sample project (marked "_sample") so it opens offline. Until real data arrives it is
      labelled as a sample and its decision controls do nothing: a click must never approve a unit of someone's real project. */
@@ -821,8 +881,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     assetsById = {}; D.assets.forEach(a => { assetsById[a.id] = a; });
     const referenced = {};
     Object.keys(bibleById).forEach(k => bibleById[k].item.assets.forEach(a => { referenced[a.id] = true; }));
-    looseAssets = D.assets.filter(a => !referenced[a.id]);
-    let t = 0; D.shots.forEach(s => { s._in = t; t += s.duration_s; s._out = t; }); cutTotal = t;
+    looseAssets = D.assets.filter(a => !referenced[a.id] && a.kind !== 'card');
+    /* film times: on the master clock when the shot has one (an imported shot list), else shot after shot */
+    let t = 0; D.shots.forEach(s => { if (s.film) { s._in = s.film.in_s; s._out = s.film.out_s; } else { s._in = t; s._out = t + s.duration_s; } t = Math.max(t, s._out); });
+    cutTotal = D.master ? D.master.duration_s : t;
+    filmClock = D.shots.some(s => s.film) || !!D.master;
+    /* parts in film order (P1…P10), from the shots and their scenes */
+    PARTS = []; D.shots.forEach(s => { if (s.part && PARTS.indexOf(s.part) === -1) PARTS.push(s.part); });
+    D.scenes.forEach(sc => { if (sc.part && PARTS.indexOf(sc.part) === -1) PARTS.push(sc.part); });
+    CARDS = D.assets.filter(a => a.kind === 'card').sort((a, b) => ((a.film ? a.film.in_s : 0) - (b.film ? b.film.in_s : 0)));
+    CARDS.forEach(c => { c._part = cardPart(c); });
     moneyFmt = null;
     try { moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: (D.budget && D.budget.currency) || 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }); } catch (e) { moneyFmt = null; }
   }
@@ -850,6 +918,15 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const MOON = '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 10.1A5.6 5.6 0 0 1 5.9 2.8a5.6 5.6 0 1 0 7.3 7.3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
   const glyph = st => '<span class="g g-' + ((ST[st] || { g: 'none' }).g) + '" aria-hidden="true"></span>';
   const chip = st => '<span class="chip" data-st="' + esc(st) + '">' + glyph(st) + esc((ST[st] || { label: st }).label) + '</span>';
+  /* A 211-shot film re-renders on every click, so a container is only re-parsed when what it shows changed (and always when the
+     page leaves or enters sample mode, whose controls are switched off after rendering). */
+  function setHtml(el, html) {
+    const key = (isSample() ? 's:' : 'r:') + html;
+    if (el._akHtml === key) return false;
+    el.innerHTML = html;
+    el._akHtml = key;
+    return true;
+  }
 
   /* ── storage for the person's view settings (always guarded) ── */
   const KEY = 'akuko-board:' + P.project.slug + ':ui';
@@ -862,19 +939,29 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   store.probe();
 
   /* ── view state (decisions are NOT kept here: see derive()) ── */
-  const VIEWS = ['script', 'shots', 'spend', 'bible', 'ledger'];
+  const VIEWS = ['script', 'shots', 'spend', 'bible', 'ledger', 'gates', 'rules'];
+  const RAILS = ['bible', 'ledger', 'gates', 'rules'];
   const FILTERS = ['all', 'pending-review', 'needs-rework', 'approved'];
   const hostMode = () => { const m = document.documentElement.getAttribute('data-mode'); return m === 'light' || m === 'dark' ? m : null; };
-  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null };
+  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null };
   const saved = store.read();
   if (saved && saved.v === 2) {
     if (saved.sel && shotsById[saved.sel]) S.sel = saved.sel;
-    if (saved.rail === 'bible' || saved.rail === 'ledger') S.rail = saved.rail;
+    if (RAILS.indexOf(saved.rail) !== -1) S.rail = saved.rail;
     if (FILTERS.indexOf(saved.filter) !== -1) S.filter = saved.filter;
+    if (typeof saved.part === 'string' && PARTS.indexOf(saved.part) !== -1) S.part = saved.part;
     if (saved.mode === 'light' || saved.mode === 'dark') { S.mode = saved.mode; S.modeChosen = true; }
     if (VIEWS.indexOf(saved.view) !== -1) S.view = saved.view;
   }
-  function save() { store.write({ v: 2, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, mode: S.modeChosen ? S.mode : null }); }
+  /* a link can open one part: default-board.html#part=P7 */
+  { const m = /(?:^#|&)part=([^&]+)/.exec(location.hash || ''); const want = m ? decodeURIComponent(m[1]) : null; if (want && PARTS.indexOf(want) !== -1) S.part = want; }
+  function save() { store.write({ v: 2, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, part: S.part, mode: S.modeChosen ? S.mode : null }); }
+  /* parts: what the one-part view shows. "all" shows the whole film. */
+  const inPart = s => S.part === 'all' || s.part === S.part;
+  const partShots = () => D.shots.filter(inPart);
+  const partScenes = () => D.scenes.filter(sc => S.part === 'all' || sc.part === S.part || D.shots.some(s => s.scene === sc.id && s.part === S.part));
+  const partCards = () => CARDS.filter(c => S.part === 'all' || c._part === S.part);
+  const hasRail = id => (id === 'gates' ? D.gates.length > 0 || D.people.length > 0 : id === 'rules' ? !!D.rules : true);
   /* Decisions this page holds that the project does not have yet. Ones already folded into the project (their ids are in its
      decisions) are left out of the copy, so a second copy never resends them. Nothing here deletes a decision. */
   function unfoldedDecisions() { const have = {}; (D ? D.decisions : []).forEach(d => { have[d.id] = true; }); return W.all().filter(d => !have[d.id]); }
@@ -1058,7 +1145,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     if (s.move) g += moveMarks(s.move, big);
     if (big) {
       g += '<text class="pk" x="7" y="11">' + esc(s.type) + '</text>';
-      g += '<text class="pd" x="' + (W - 7) + '" y="' + (H - 6) + '" text-anchor="end">' + tc(s._in) + '–' + tc(s._out) + '</text>';
+      g += '<text class="pd" x="' + (W - 7) + '" y="' + (H - 6) + '" text-anchor="end">' + stamp(s._in) + '–' + stamp(s._out) + '</text>';
     }
     return g + '</svg>';
   }
@@ -1068,11 +1155,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const PR = D.project;
     const narr = bibleById.char_narrator ? bibleById.char_narrator.item.name.toUpperCase() : 'NARRATOR';
     let h = '<header class="page-head"><p class="pg-title">' + esc(String(PR.title || '').toUpperCase()) + '</p>' + (PR.source ? '<p class="pg-src">' + esc(PR.source) + '</p>' : '') + '</header>';
-    D.scenes.forEach(sc => {
-      const shots = D.shots.filter(s => s.scene === sc.id);
+    const sheet = D.shots.some(s => s.source && s.source.kind === 'sheet');
+    partScenes().forEach(sc => {
+      const shots = D.shots.filter(s => s.scene === sc.id && inPart(s));
       const paras = [];
       shots.forEach(s => {
-        const line = s.script_line || '';
+        /* an imported shot list may carry no script line: show its dialogue lines, else what happens */
+        const line = s.script_line || s.lines.filter(l => l.text).map(l => (l.character ? l.character + ': ' : '') + l.text + (l.kind === 'thought' ? ' (thought)' : '')).join(' ') || s.action || s.id;
         const host = paras.find(p => {
           const at = p.text.indexOf(line);
           if (!line || at === -1) return false;
@@ -1090,21 +1179,27 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         inner += esc(p.text.slice(pos));
         return '<p class="dlg"><span class="ln" id="ln-' + p.id + '" data-shot="' + p.id + '" data-hover="' + p.id + '">' + inner + '</span></p>';
       }).join('');
-      h += '<section class="scene" aria-label="Scene ' + sceneN[sc.id] + '">' +
-        '<h3 class="slug"><span class="sn">' + sceneN[sc.id] + '</span><span>' + esc(sc.slug) + '</span><span class="sn" aria-hidden="true">' + sceneN[sc.id] + '</span></h3>' +
-        '<p class="action">' + esc(sc.summary) + '</p>' +
-        '<p class="cue">' + esc(narr) + ' (V.O.)</p>' + body + '</section>';
+      h += '<section class="scene" aria-label="Scene ' + esc(sceneLabel(sc)) + '">' +
+        '<h3 class="slug"><span class="sn">' + esc(sceneLabel(sc)) + '</span><span>' + esc(sc.slug === sc.id && sc.part ? sc.part : sc.slug) + '</span><span class="sn" aria-hidden="true">' + esc(sceneLabel(sc)) + '</span></h3>' +
+        (sc.summary ? '<p class="action">' + esc(sc.summary) + '</p>' : '') +
+        (sheet ? '' : '<p class="cue">' + esc(narr) + ' (V.O.)</p>') + body + '</section>';
     });
     $('#page').innerHTML = h;
-    $('#lining').innerHTML = D.shots.map(s => {
+    $('#lining').innerHTML = partShots().map(s => {
       const m = s.id.match(/^(.*_)(.+)$/);
       const lbl = '<span class="tg-l">' + (m ? '<span class="tg-sc">' + esc(m[1]) + '</span>' + esc(m[2]) : esc(s.id)) + '</span>';
       return '<div class="tram" data-id="' + s.id + '" aria-hidden="true"></div>' +
         '<button class="tag" type="button" data-act="sel-tag" data-akuko-field="script-tag" data-akuko-unit="' + s.id + '" data-id="' + s.id + '" data-k="tag:' + s.id + '" data-hover="' + s.id + '"><span class="tg-g"></span>' + lbl + '</button>';
     }).join('');
-    $('#script-sub').textContent = D.shots.length + ' shot tags across ' + D.scenes.length + ' scenes · click a line or tag to open its shot';
+    const ns = partShots().length, nsc = partScenes().length;
+    $('#script-sub').textContent = (S.part === 'all' ? '' : S.part + ' · ') + ns + ' shot tags across ' + nsc + ' ' + plural(nsc, 'scene') + ' · click a line or tag to open its shot';
+    builtPart = S.part;
   }
+  /* a sheet scene keeps its own id (S11); a breakdown scene is numbered */
+  const sceneLabel = sc => (sc.sheet ? sc.id : String(sceneN[sc.id]));
+  let builtPart = null;
   function paintScript() {
+    if (builtPart !== S.part) buildScript();
     $$('#page .ln').forEach(el => { el.classList.toggle('is-sel', el.dataset.shot === S.sel); });
     $$('#lining .tram').forEach(el => { el.dataset.st = shotStatus(el.dataset.id); el.classList.toggle('is-sel', el.dataset.id === S.sel); });
     $$('#lining .tag').forEach(el => {
@@ -1112,7 +1207,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       el.classList.toggle('is-sel', sel);
       el.setAttribute('aria-pressed', String(sel));
       el.setAttribute('aria-label', 'Shot ' + id + ', ' + (ST[st] || { label: st }).label);
-      $('.tg-g', el).outerHTML = '<span class="tg-g">' + glyph(st) + '</span>';
+      if (el.getAttribute('data-gst') !== st) { $('.tg-g', el).outerHTML = '<span class="tg-g">' + glyph(st) + '</span>'; el.setAttribute('data-gst', st); }
     });
   }
   function layoutLining() {
@@ -1173,7 +1268,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const c = counts(), pend = c['pending-review'] || 0, rew = c['needs-rework'] || 0;
     const sp = awaitingSpend(), wo = waitingOther();
     const nf = (f, n) => '<span data-akuko-field="' + f + '">' + n + '</span>';
-    const oth = looseAssets.some(a => assetStatus(a) === 'pending-review') ? 'review item' : 'bible item';
+    const oth = looseAssets.concat(CARDS).some(a => assetStatus(a) === 'pending-review') ? 'review item' : 'bible item';
     const cats = [];
     if (pend) cats.push({ k: 'shots', main: '<strong>' + nf('waiting-shots', pend) + ' ' + plural(pend, 'shot') + '</strong> waiting for you', sub: nf('waiting-shots', pend) + ' ' + plural(pend, 'shot') + ' to review', btn: 'Review next shot' });
     if (sp.length) cats.push({ k: 'spend', main: '<strong>' + nf('waiting-spend', sp.length) + ' spend ' + plural(sp.length, 'decision') + '</strong> waiting for you', sub: nf('waiting-spend', sp.length) + ' spend ' + plural(sp.length, 'decision') + ' (' + esc(money(sp.reduce((a, j) => a + j.estimate, 0))) + ')', btn: 'Open spend gate' });
@@ -1182,11 +1277,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     if (rew) parts.push(rew + ' ' + plural(rew, 'shot') + ' back with akuko');
     if (!cats.length) parts.push('akuko picks up your approvals on its next action');
     const btn = cats.length ? '<button class="btn btn-primary btn-sm" type="button" data-act="next" data-k="next">' + cats[0].btn + '</button>' : '';
-    $('#next').innerHTML = '<div class="next-txt"><p class="next-main">' + (cats.length ? cats[0].main : 'Nothing waiting on you') + '</p><p class="next-sub">' + parts.join(' · ') + '</p></div>' + btn;
+    setHtml($('#next'), '<div class="next-txt"><p class="next-main">' + (cats.length ? cats[0].main : 'Nothing waiting on you') + '</p><p class="next-sub">' + parts.join(' · ') + '</p></div>' + btn);
   }
   function renderStages() {
     const c = counts(), wo = waitingOther();
-    $('#stages').innerHTML = D.stages.map(st => {
+    setHtml($('#stages'), D.stages.map(st => {
       let s = STAGE_TXT[st.state] || st.state, g = '';
       if (st.state === 'approved') g = glyph('approved');
       else if (st.state === 'in-review') g = '<span class="g g-now" aria-hidden="true"></span>';
@@ -1212,46 +1307,81 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       return '<li class="stage" data-state="' + esc(st.state) + '" data-akuko-field="stage" data-akuko-stage="' + st.id + '" data-akuko-status="' + esc(st.state) + '"' + (st.current ? ' aria-current="step"' : '') + '>' +
         (st.current ? '<span class="vh" data-akuko-field="current-stage" data-akuko-stage="' + st.id + '">current stage</span>' : '') +
         (target ? '<button class="stage-in" type="button" data-act="stage" data-id="' + target + '" data-k="stage:' + st.id + '">' + inner + '</button>' : '<div class="stage-in stage-idle" title="' + esc(why) + '">' + inner + (st.state === 'not-started' ? '' : '<span class="vh">' + esc(why) + '</span>') + '</div>') + '</li>';
-    }).join('');
+    }).join(''));
   }
   function effView() { return (!isMobile() && S.view === 'script') ? 'shots' : S.view; }
   function renderNav() {
+    if (!hasRail(S.rail)) S.rail = 'bible';
+    if ((S.view === 'gates' || S.view === 'rules') && !hasRail(S.view)) S.view = 'shots';
     const c = counts(), ev = effView();
-    const items = [['script', 'Script', 0], ['shots', 'Shots', c['pending-review'] || 0], ['spend', 'Spend', awaitingSpend().length], ['bible', 'Bible', waitingOther()], ['ledger', 'Ledger', 0]];
-    $('#desknav').innerHTML = items.map(it => '<button class="dn" type="button" data-act="view" data-id="' + it[0] + '" data-v="' + it[0] + '" data-k="view:' + it[0] + '" aria-pressed="' + (ev === it[0]) + '">' + it[1] +
-      (it[2] ? '<span class="badge">' + it[2] + '<span class="vh"> waiting</span></span>' : '') + '</button>').join('');
+    const items = [['script', 'Script', 0], ['shots', 'Shots', c['pending-review'] || 0], ['spend', 'Spend', awaitingSpend().length], ['bible', 'Bible', waitingOther()], ['ledger', 'Ledger', 0], ['gates', 'Gates', 0], ['rules', 'Rules', 0]].filter(it => hasRail(it[0]));
+    setHtml($('#desknav'), items.map(it => '<button class="dn" type="button" data-act="view" data-id="' + it[0] + '" data-v="' + it[0] + '" data-k="view:' + it[0] + '" aria-pressed="' + (ev === it[0]) + '">' + it[1] +
+      (it[2] ? '<span class="badge">' + it[2] + '<span class="vh"> waiting</span></span>' : '') + '</button>').join(''));
     document.body.dataset.view = ev;
     document.body.dataset.rail = S.rail;
     const ba = waitingOther();
-    $('#rail-tabs').innerHTML = [['bible', 'Bible', ba ? '<span class="badge">' + ba + '<span class="vh"> waiting</span></span>' : ''], ['ledger', 'Ledger', '<span class="mono rtab-n">' + D.ledger.length + '</span>']]
-      .map(t => '<button class="rtab" type="button" role="tab" id="tab-' + t[0] + '" aria-controls="p-' + t[0] + '" aria-selected="' + (S.rail === t[0]) + '" tabindex="' + (S.rail === t[0] ? '0' : '-1') + '" data-act="rail" data-id="' + t[0] + '" data-k="rail:' + t[0] + '">' + t[1] + t[2] + '</button>').join('');
+    setHtml($('#rail-tabs'), [['bible', 'Bible', ba ? '<span class="badge">' + ba + '<span class="vh"> waiting</span></span>' : ''], ['ledger', 'Ledger', '<span class="mono rtab-n">' + D.ledger.length + '</span>'],
+      ['gates', 'Gates', '<span class="mono rtab-n">' + D.gates.length + '</span>'], ['rules', 'Rules', '']].filter(t => hasRail(t[0]))
+      .map(t => '<button class="rtab" type="button" role="tab" id="tab-' + t[0] + '" aria-controls="p-' + t[0] + '" aria-selected="' + (S.rail === t[0]) + '" tabindex="' + (S.rail === t[0] ? '0' : '-1') + '" data-act="rail" data-id="' + t[0] + '" data-k="rail:' + t[0] + '">' + t[1] + t[2] + '</button>').join(''));
   }
 
   /* ── shots ────────────────────────────────────────────── */
   function renderShots() {
-    const c = counts();
-    $('#cut').textContent = 'Cut ' + clock(cutTotal) + (D.project.runtime_s ? ' of ' + clock(D.project.runtime_s) + ' target' : '');
-    const F = [['all', 'All', D.shots.length], ['pending-review', 'Pending review', c['pending-review'] || 0], ['needs-rework', 'Needs rework', c['needs-rework'] || 0], ['approved', 'Approved', c.approved || 0]];
-    $('#filters').innerHTML = F.map(f => '<button class="fchip" type="button" data-act="filter" data-id="' + f[0] + '" data-k="filter:' + f[0] + '" aria-pressed="' + (S.filter === f[0]) + '">' + (f[0] === 'all' ? '' : glyph(f[0])) + f[1] + ' <span class="mono">' + f[2] + '</span></button>').join('');
-    let h = '';
-    D.scenes.forEach(sc => {
-      const all = D.shots.filter(s => s.scene === sc.id);
+    const shots = partShots();
+    const c = { 'approved': 0, 'pending-review': 0, 'needs-rework': 0 };
+    shots.forEach(s => { const st = shotStatus(s.id); c[st] = (c[st] || 0) + 1; });
+    if (S.part === 'all' || !shots.length) {
+      $('#cut').textContent = (filmClock ? 'Film ' + ftc(cutTotal) : 'Cut ' + clock(cutTotal)) + (D.project.runtime_s ? ' of ' + clock(D.project.runtime_s) + ' target' : '') + (PARTS.length ? ' · ' + PARTS.length + ' ' + plural(PARTS.length, 'part') : '');
+    } else {
+      const a = Math.min.apply(null, shots.map(s => s._in)), b = Math.max.apply(null, shots.map(s => s._out));
+      $('#cut').textContent = S.part + ' · ' + shots.length + ' ' + plural(shots.length, 'shot') + ' · ' + stamp(a) + '–' + stamp(b) + ' · ' + (c.approved || 0) + '/' + shots.length + ' approved';
+    }
+    const pe = $('#parts');
+    pe.hidden = PARTS.length < 2;
+    setHtml(pe, PARTS.length < 2 ? '' : '<span class="f-lbl" aria-hidden="true">Part</span>' + [['all', 'All parts', D.shots.length]].concat(PARTS.map(pt => [pt, pt, D.shots.filter(s => s.part === pt).length]))
+      .map(f => '<button class="fchip" type="button" data-act="part" data-id="' + esc(f[0]) + '" data-k="part:' + esc(f[0]) + '" aria-pressed="' + (S.part === f[0]) + '">' + esc(f[1]) + ' <span class="mono">' + f[2] + '</span></button>').join(''));
+    const F = [['all', 'All', shots.length], ['pending-review', 'Pending review', c['pending-review'] || 0], ['needs-rework', 'Needs rework', c['needs-rework'] || 0], ['approved', 'Approved', c.approved || 0]];
+    setHtml($('#filters'), F.map(f => '<button class="fchip" type="button" data-act="filter" data-id="' + f[0] + '" data-k="filter:' + f[0] + '" aria-pressed="' + (S.filter === f[0]) + '">' + (f[0] === 'all' ? '' : glyph(f[0])) + f[1] + ' <span class="mono">' + f[2] + '</span></button>').join(''));
+    const blocks = [];
+    partScenes().forEach((sc, k) => {
+      const all = D.shots.filter(s => s.scene === sc.id && inPart(s));
       const vis = all.filter(s => S.filter === 'all' || shotStatus(s.id) === S.filter || s.id === S.sel);
       if (!vis.length) return;
-      const dur = all.reduce((a, s) => a + s.duration_s, 0);
+      const len = all.reduce((a, s) => a + s.duration_s, 0);
       const ap = all.filter(s => shotStatus(s.id) === 'approved').length;
-      h += '<section aria-labelledby="bn-' + sc.id + '" data-akuko-field="scene" data-akuko-unit="' + sc.id + '"><header class="banner"><h3 id="bn-' + sc.id + '"><span class="bn-n">SC ' + sceneN[sc.id] + '</span><span>' + esc(sc.slug) + '</span></h3>' +
-        '<p class="bn-m">' + all.length + ' ' + plural(all.length, 'shot') + ' · <span class="mono">' + clock(dur) + '</span> · ' + ap + '/' + all.length + ' approved' + (vis.length < all.length ? ' · ' + (all.length - vis.length) + ' hidden by filter' : '') + '</p></header>' +
-        '<ol>' + vis.map(shotItem).join('') + '</ol></section>';
+      const head = sc.slug === sc.id ? (sc.part || '') : sc.slug;
+      blocks.push({ key: 'sc:' + sc.id, at: all.reduce((m, s) => Math.min(m, s._in), Infinity), k: k, html: '<section aria-labelledby="bn-' + sc.id + '" data-akuko-field="scene" data-akuko-unit="' + sc.id + '"><header class="banner"><h3 id="bn-' + sc.id + '"><span class="bn-n">' + (sc.sheet ? esc(sc.id) : 'SC ' + sceneN[sc.id]) + '</span><span>' + esc(head) + '</span></h3>' +
+        '<p class="bn-m">' + all.length + ' ' + plural(all.length, 'shot') + ' · <span class="mono">' + (filmClock ? dur(len) + ' s' : clock(len)) + '</span> · ' + ap + '/' + all.length + ' approved' + (vis.length < all.length ? ' · ' + (all.length - vis.length) + ' hidden by filter' : '') + '</p></header>' +
+        '<ol>' + vis.map(shotItem).join('') + '</ol></section>' });
     });
-    $('#shotlist').innerHTML = h || '<p class="empty">' + (D.shots.length ? 'No shots match this filter.' : 'No shots yet. akuko adds them in the breakdown.') + '</p>';
+    /* cards (title, part cards, credits) are review items too, placed at their film time; a person approves each once */
+    const cards = partCards().filter(cd => S.filter === 'all' || assetStatus(cd) === S.filter);
+    cards.forEach((cd, k) => { blocks.push({ key: 'card:' + cd.id, at: cd.film ? cd.film.in_s : Infinity, k: -1 - k, html: cardItem(cd) }); });
+    if (cards.length) blocks.sort((a, b) => (a.at - b.at) || (a.k - b.k));
+    /* only the scene sections (and cards) whose HTML changed are replaced */
+    const list = $('#shotlist'), prev = list._akBlocks, ep = isSample() ? 's' : 'r';
+    if (prev && prev.ep === ep && blocks.length && prev.keys.length === blocks.length && list.children.length === blocks.length && prev.keys.every((k, i) => k === blocks[i].key)) {
+      blocks.forEach((b, i) => { if (prev.html[i] !== b.html) list.children[i].outerHTML = b.html; });
+    } else {
+      list.innerHTML = blocks.map(b => b.html).join('') || '<p class="empty">' + (D.shots.length ? 'No shots match this filter.' : 'No shots yet. akuko adds them in the breakdown.') + '</p>';
+    }
+    list._akBlocks = { ep: ep, keys: blocks.map(b => b.key), html: blocks.map(b => b.html) };
+  }
+  function cardItem(cd) {
+    const st = assetStatus(cd);
+    const len = cd.film ? cd.film.out_s - cd.film.in_s : 0;
+    return '<section class="card-blk" aria-label="Card ' + esc(cd.name || cd.id) + '"><ol><li class="shot" id="card-' + esc(cd.id) + '">' +
+      '<div class="card-row"><span class="ph-card" aria-hidden="true">CARD</span><span class="sr-main"><span class="sr-top"><span class="sr-id">' + esc(cd.id) + '</span><span class="sr-type">CARD</span>' +
+      (cd.film ? '<span class="sr-tc">' + dur(len) + 's · ' + stamp(cd.film.in_s) + '–' + stamp(cd.film.out_s) + '</span>' : '') + chip(st) + '</span>' +
+      '<span class="sr-act">' + esc(cd.name || 'Ready-made card') + (cd.uri ? ' · <span class="mono">' + esc(cd.uri) + '</span>' : '') + '</span>' +
+      approveAct(cd.id, 'Card', 'card:' + cd.id) + '</span></div></li></ol></section>';
   }
   function shotItem(s) {
     const st = shotStatus(s.id), sel = s.id === S.sel;
     return '<li class="shot' + (sel ? ' is-sel' : '') + '" id="shot-' + s.id + '" data-akuko-field="shot" data-akuko-unit="' + s.id + '">' +
       '<button class="shot-row" type="button" data-act="sel" data-id="' + s.id + '" data-k="sel:' + s.id + '" data-hover="' + s.id + '" aria-expanded="' + sel + '"' + (sel ? ' aria-controls="det-' + s.id + '"' : '') + '>' +
       '<span class="thumb" data-akuko-field="panel">' + panelSVG(s, false) + '</span>' +
-      '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + s.id + '</span><span class="sr-type" data-akuko-field="shot-type">' + esc(s.type) + '</span><span class="sr-tc" data-akuko-field="duration">' + s.duration_s + 's · ' + tc(s._in) + '–' + tc(s._out) + '</span></span>' +
+      '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + s.id + '</span><span class="sr-type" data-akuko-field="shot-type">' + esc(s.type) + '</span>' + (s.tier ? '<span class="flag">Tier ' + esc(s.tier) + '</span>' : '') + (s.removed ? '<span class="flag flag-off">Left the sheet</span>' : '') + '<span class="sr-tc" data-akuko-field="duration">' + dur(s.duration_s) + 's · ' + stamp(s._in) + '–' + stamp(s._out) + '</span></span>' +
       '<span class="sr-act">' + esc(s.action) + '</span></span><span data-akuko-field="status" data-akuko-status="' + akStatus(st) + '">' + chip(st) + '</span></button>' +
       (sel ? detail(s) : '') + '</li>';
   }
@@ -1303,21 +1433,37 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         : 'Generated after you approve “' + job.label + '” (est. ' + money(job.estimate) + ').';
     }
 
+    const kfa = assetsById[id + '_keyframe'];
+    const kfFrame = kfa ? '<div class="ph-frame" data-st="' + esc(assetStatus(kfa)) + '">Key frame<small>' + esc((ST[assetStatus(kfa)] || { label: assetStatus(kfa) }).label) + (kfa.uri ? ' · not shown in this board' : '') + '</small></div>' : '<div class="ph-frame" data-st="not-started">Key frame<small>not generated</small></div>';
+    if (kfa) { const ks = assetStatus(kfa); kf = ks === 'pending-review' || ks === 'needs-rework' ? 'Waiting for you under Bible · Other items to review.' : ks === 'approved' ? 'Approved.' : 'Planned; not made yet.'; }
+    /* what an imported shot list carries (WP-25): part, tier, framing, lighting, motion note, lines, the sheet row */
+    const lt = s.lighting && bibleById[s.lighting] ? bibleById[s.lighting].item : null;
+    const sheet = [
+      s.part ? ['Part', esc(s.part)] : null,
+      s.tier ? ['Tier', esc(s.tier)] : null,
+      s.framing ? ['Framing', esc(s.framing)] : null,
+      s.motion_note ? ['Motion note', esc(s.motion_note)] : null,
+      s.lighting ? ['Lighting', '<span class="mono">' + esc(s.lighting) + '</span>' + (lt && lt.description ? ' · ' + esc(lt.description) : '')] : null,
+      s.source ? ['Sheet row', '<span class="mono">' + esc(s.source.id) + (s.source.row ? ' · row ' + esc(s.source.row) : '') + '</span>' + (s.removed ? ' · <span class="flag flag-off">Left the sheet</span>' : '')] : null,
+    ].filter(Boolean).map(r => '<div><dt>' + r[0] + '</dt><dd>' + r[1] + '</dd></div>').join('') +
+      (s.lines.length ? '<div class="wide"><dt>Lines</dt><dd>' + s.lines.map(l => '<p><span class="mono">' + esc(l.id) + '</span> · ' + esc(l.kind) + (l.text ? ' · ' + (l.character ? esc(l.character) + ': ' : '') + esc(l.text) : '') + '</p>').join('') + '</dd></div>' : '') +
+      (s.notes ? '<div class="wide"><dt>Sheet notes</dt><dd>' + esc(s.notes) + '</dd></div>' : '');
     const comments = shotComments(id);
     const thread = comments.length ? '<ol>' + comments.map(noteItem).join('') + '</ol>' : '<p class="fine thread-none">No notes yet.</p>';
 
     return '<div class="detail" id="det-' + id + '" role="region" aria-label="Shot ' + id + ' detail" data-akuko-view="shot-detail" data-akuko-unit="' + id + '">' +
-      '<figure class="panel-big" data-akuko-field="panel">' + panelSVG(s, true) + '<figcaption class="panel-cap"><span>Sketch panel · framing diagram drawn from blocking</span><span class="mono">' + esc(s.type) + ' · ' + s.duration_s + ' s</span></figcaption></figure>' +
+      '<figure class="panel-big" data-akuko-field="panel">' + panelSVG(s, true) + '<figcaption class="panel-cap"><span>Sketch panel · framing diagram drawn from blocking</span><span class="mono">' + esc(s.type) + ' · ' + dur(s.duration_s) + ' s</span></figcaption></figure>' +
       rv +
       '<dl class="specs">' +
       '<div><dt>Camera</dt><dd data-akuko-field="camera">' + esc(s.camera) + (s.move ? ' <span class="fine">(' + esc(MOVE[s.move] || s.move) + ')</span>' : '') + '</dd></div>' +
-      '<div><dt>Duration</dt><dd class="mono" data-akuko-field="duration">' + s.duration_s + ' s · ' + tc(s._in) + ' → ' + tc(s._out) + '</dd></div>' +
+      '<div><dt>' + (s.film ? 'Duration · film time' : 'Duration') + '</dt><dd class="mono" data-akuko-field="duration">' + dur(s.duration_s) + ' s · ' + stamp(s._in) + ' → ' + stamp(s._out) + '</dd></div>' +
       '<div class="wide"><dt>Action</dt><dd data-akuko-field="action">' + esc(s.action) + '</dd></div>' +
-      '<div class="wide"><dt>From the script · scene ' + sceneN[s.scene] + '</dt><dd><blockquote class="quote" data-akuko-field="script-line">' + esc(s.script_line) + '</blockquote>' +
+      sheet +
+      '<div class="wide"><dt>From the script · scene ' + esc(D.scenes.find(x => x.id === s.scene) ? sceneLabel(D.scenes.find(x => x.id === s.scene)) : sceneN[s.scene]) + '</dt><dd><blockquote class="quote" data-akuko-field="script-line">' + esc(s.script_line) + '</blockquote>' +
       '<div class="quote-row"><button class="btn btn-sm" type="button" data-act="toscript" data-id="' + id + '" data-k="toscript:' + id + '">Show in script</button></div></dd></div>' +
-      '<div class="wide"><dt>Draft prompt</dt><dd><pre class="prompt" data-akuko-field="prompt">' + esc(s.prompt) + '</pre><p class="fine prompt-note">Draft only. Nothing is sent to a paid model until a spend is approved.</p></dd></div>' +
+      '<div class="wide"><dt>Draft prompt</dt><dd><pre class="prompt" data-akuko-field="prompt">' + esc(s.prompt) + '</pre>' + (s.negative ? '<p class="fine prompt-note">Negative: <span class="mono">' + esc(s.negative) + '</span></p>' : '') + '<p class="fine prompt-note">Draft only. Nothing is sent to a paid model until a spend is approved.</p></dd></div>' +
       '<div class="wide"><dt>Bible refs</dt><dd><div class="refs" data-akuko-field="refs">' + refs + '</div></dd></div>' +
-      '<div class="wide"><dt>Key frame</dt><dd class="kf"><div class="ph-frame" data-st="not-started">Key frame<small>not generated</small></div><p class="fine kf-note">' + esc(kf) + '</p></dd></div>' +
+      '<div class="wide"><dt>Key frame</dt><dd class="kf">' + kfFrame + '<p class="fine kf-note">' + esc(kf) + '</p></dd></div>' +
       '</dl>' +
       '<section class="thread" aria-label="Notes on ' + id + '" data-akuko-field="comments"><h4 class="sub-h">Notes <span class="mono">' + comments.length + '</span></h4>' + thread + '</section>' +
       '</div>';
@@ -1355,13 +1501,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         '<dt class="tot">' + (m.awaiting ? 'Left if you approve' : 'Left') + '</dt><dd class="tot money" data-akuko-field="left-if-approved">' + money(m.left) + '</dd></dl>' +
         (D._note ? '<p class="fine">' + esc(D._note) + '</p>' : '') + '</div>';
     }
-    $('#p-spend').innerHTML = h;
+    setHtml($('#p-spend'), h);
     renderPin(m);
   }
   /* what the sticky bar shows once the gate has scrolled out of view (wide layout) */
   function renderPin(m) {
     const aw = awaitingSpend(), pin = $('#rail-pin');
-    if (!m) { pin.innerHTML = ''; return; }
+    if (!m) { setHtml(pin, ''); return; }
     const sum = aw.reduce((x, j) => x + j.estimate, 0);
     let h = '<p class="pin-line"><b>Spend gate</b> · ' + (aw.length ? 'estimate <span class="money">' + money(sum) + '</span> · ' : 'nothing waiting · ') + '<span class="money">' + money(m.spent) + '</span> spent of <span class="money">' + money(m.b.cap) + '</span> cap · <span class="money">' + money(m.left) + '</span> ' + (aw.length ? 'left if you approve' : 'left') + '</p><div class="pin-act">';
     if (aw.length === 1) {
@@ -1370,7 +1516,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         '<button class="btn btn-sm" type="button" data-act="spend-no" data-akuko-action="decline-spend" data-akuko-unit="' + j.id + '" data-id="' + j.id + '" data-k="pin-no:' + j.id + '">Not now</button>';
     }
     h += '<button class="linkbtn" type="button" data-act="gate-top" data-k="pin-top">Open gate</button></div>';
-    pin.innerHTML = h;
+    setHtml(pin, h);
   }
   function syncStuck() {
     const rail = $('#rail'), g = $('#p-spend');
@@ -1445,7 +1591,95 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       '<section class="bib-group" aria-labelledby="bg-loc"><h3 class="bib-gh" id="bg-loc"><span>Locations</span><span class="mono">' + B.locations.length + '</span></h3>' + B.locations.map(l => bibEntry(l, 'location')).join('') + '</section>';
     if (B.styles.length) h += '<section class="bib-group" aria-labelledby="bg-style"><h3 class="bib-gh" id="bg-style"><span>Style</span></h3>' + B.styles.map(styleEntry).join('') + '</section>';
     if (looseAssets.length) h += '<section class="bib-group" aria-labelledby="bg-other"><h3 class="bib-gh" id="bg-other"><span>Other items to review</span><span class="mono">' + looseAssets.length + '</span></h3>' + looseAssets.map(looseEntry).join('') + '</section>';
-    $('#p-bible').innerHTML = h + '</div>';
+    setHtml($('#p-bible'), h + '</div>');
+  }
+
+  /* ── gates: scope progress and who signed (WP-29) ────────
+     A gate (G-LOOK, G-PILOT) is passed only by a person with the signoff role. The board shows how far its scope is approved and
+     the recorded sign-off; it can't sign one (akuko records a sign-off with decisions/cli.ts signoff, on the signer's word).
+     Which units a gate covers is the rule in decisions/gates.ts#unitsInGate, repeated here; default-board.test.ts checks they agree. */
+  function gateUnits(g) {
+    const sc = g.scope || {};
+    const want = { shots: sc.shots || [], scenes: sc.scenes || [], parts: sc.parts || [] };
+    const filtered = want.shots.length + want.scenes.length + want.parts.length > 0;
+    const removed = x => !!(x && x.source && x.source.removed_at);
+    const matches = s => !filtered || want.shots.indexOf(s.id) !== -1 || (s.scene != null && want.scenes.indexOf(s.scene) !== -1) || (s.part != null && want.parts.indexOf(s.part) !== -1);
+    const shots = D.shots.filter(s => !s.removed && matches(s));
+    const shotIds = {}; shots.forEach(s => { shotIds[s.id] = true; });
+    const named = {}; shots.forEach(s => { s.refs.forEach(r => { named[r] = true; }); if (s.lighting) named[s.lighting] = true; });
+    const entries = [].concat(P.bible.characters || [], P.bible.locations || [], P.bible.styles || []).filter(e => !removed(e) && (!filtered || named[e.id]));
+    const entryIds = {}; entries.forEach(e => { entryIds[e.id] = true; });
+    const assets = D.assets.filter(a => !a.removed && (!filtered || (a.owner && (shotIds[a.owner] || entryIds[a.owner])) || (a.kind === 'card' && a._part != null && want.parts.indexOf(a._part) !== -1)));
+    const ok = st => sc.stage == null || st === sc.stage;
+    return [].concat(
+      shots.filter(s => ok(s.stage)).map(s => ({ id: s.id, status: shotStatus(s.id) })),
+      assets.filter(a => ok(a.stage)).map(a => ({ id: a.id, status: assetStatus(a) })),
+      entries.filter(e => ok(e.stage)).map(e => ({ id: e.id, status: entryStatus(bibleById[e.id] ? bibleById[e.id].item : { id: e.id, status: e.status }) })));
+  }
+  const person = id => D.people.find(x => x.id === id);
+  function gateScopeText(g) {
+    const sc = g.scope || {}, bits = [];
+    if (sc.parts && sc.parts.length) bits.push((sc.parts.length > 1 ? 'parts ' : 'part ') + sc.parts.join(', '));
+    if (sc.scenes && sc.scenes.length) bits.push((sc.scenes.length > 1 ? 'scenes ' : 'scene ') + sc.scenes.join(', '));
+    if (sc.shots && sc.shots.length) bits.push(sc.shots.length + ' ' + plural(sc.shots.length, 'named shot'));
+    const where = bits.length ? bits.join(' and ') : 'the whole film';
+    return sc.stage ? stageLabel(sc.stage) + ' · ' + where : 'everything in ' + where;
+  }
+  function gateCard(g) {
+    const us = gateUnits(g), n = us.length;
+    const k = st => us.filter(u => u.status === st).length;
+    const ap = k('approved'), wt = k('pending-review'), bk = k('needs-rework'), rest = n - ap - wt - bk;
+    const signed = g.signed || null, who = signed ? person(signed.by) : null;
+    const state = signed ? 'Signed' : !n ? 'Nothing in scope yet' : ap === n ? 'Ready to sign' : 'In progress';
+    const pct = v => (n ? (v / n * 100).toFixed(2) : '0');
+    const signers = D.people.filter(x => x.role === g.needs).map(x => x.name);
+    const notes = [];
+    if (signed && n && ap < n) notes.push('Signed while ' + (n - ap) + ' of ' + n + ' were not approved.');
+    const later = signed ? us.filter(u => { const x = D.shots.find(s => s.id === u.id) || D.assets.find(a => a.id === u.id); const raw = x && (P.shots.find(s => s.id === u.id) || P.assets.find(a => a.id === u.id)); return raw && raw.updated_at && Date.parse(raw.updated_at) > Date.parse(signed.at); }).length : 0;
+    if (later) notes.push(later + ' changed after it was signed.');
+    const one = g.scope && g.scope.parts && g.scope.parts.length === 1 && PARTS.indexOf(g.scope.parts[0]) !== -1 ? g.scope.parts[0] : null;
+    return '<article class="gt" id="gate-' + esc(g.id) + '" data-gate="' + esc(g.id) + '" aria-labelledby="gt-' + esc(g.id) + '">' +
+      '<div class="gt-h"><h4 class="gt-id" id="gt-' + esc(g.id) + '">' + esc(g.id) + '</h4><span class="chip" data-st="' + (signed ? 'approved' : ap === n && n ? 'pending-review' : 'not-started') + '">' + glyph(signed ? 'approved' : ap === n && n ? 'pending-review' : 'not-started') + esc(state) + '</span></div>' +
+      (g.title ? '<p class="gt-t">' + esc(g.title) + '</p>' : '') +
+      '<p class="gt-scope">' + esc(gateScopeText(g)) + '</p>' +
+      (n ? '<div class="bar" role="img" aria-label="' + esc(ap + ' of ' + n + ' approved' + (wt ? ', ' + wt + ' waiting for review' : '') + (bk ? ', ' + bk + ' sent back' : '')) + '">' +
+        [['ok', ap], ['wait', wt], ['back', bk]].filter(x => x[1] > 0).map(x => '<span class="seg seg-' + x[0] + '" style="width:' + pct(x[1]) + '%"></span>').join('') + '</div>' : '') +
+      '<p class="gt-count" data-gate-progress="' + esc(g.id) + '"><b>' + ap + '/' + n + '</b> approved' + (wt ? ' · ' + wt + ' waiting for review' : '') + (bk ? ' · ' + bk + ' sent back' : '') + (rest ? ' · ' + rest + ' not made yet' : '') + '</p>' +
+      (signed
+        ? '<div class="gt-sign" data-gate-signed="' + esc(g.id) + '">Signed by <b>' + esc(who ? who.name : signed.by) + '</b> (sign-off) · via ' + esc(signed.via) + ' · ' + esc(when(signed.at)) + (signed.note ? '<p class="fine">' + esc(signed.note) + '</p>' : '') + '<p class="fine">Recorded on their word: attested, not proven.</p></div>'
+        : '<p class="gt-count">Not signed. ' + (signers.length ? 'Only ' + esc(signers.join(', ')) + ' can sign it' : 'No one with the sign-off role is listed yet') + '; ask akuko for its sign-off page to send them.</p>') +
+      (notes.length ? '<ul class="gt-notes">' + notes.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
+      (one ? '<div class="gt-act"><button class="btn btn-sm" type="button" data-act="part" data-id="' + esc(one) + '" data-k="gate-part:' + esc(g.id) + '">Show ' + esc(one) + ' shots</button></div>' : '') +
+      '</article>';
+  }
+  function renderGates() {
+    const el = $('#p-gates'); if (!el) return;
+    if (!hasRail('gates')) { setHtml(el, ''); return; }
+    const ap = D.people.filter(x => x.role === 'approver').map(x => x.name), so = D.people.filter(x => x.role === 'signoff').map(x => x.name);
+    setHtml(el, '<div class="rp-body"><div class="rp-h"><h2 class="rh rh-tabbed" id="h-gates" tabindex="-1">Gates</h2><span class="fine">' + D.gates.length + ' ' + plural(D.gates.length, 'gate') + '</span></div>' +
+      '<div class="ppl">' + (ap.length ? '<p>Approves day to day: <b>' + esc(ap.join(', ')) + '</b></p>' : '') + (so.length ? '<p>Signs gates: <b>' + esc(so.join(', ')) + '</b></p>' : '<p class="fine">No one with the sign-off role yet.</p>') + '</div>' +
+      (D.gates.length ? D.gates.map(gateCard).join('') : '<p class="fine">No gates yet.</p>') +
+      '<p class="fine ledger-note">Gates are milestones: they don’t lock any stage. This board can’t sign one. A sign-off is recorded by akuko when you tell it who signed and how.</p></div>');
+  }
+  /* ── rules: read-only (WP-26 checks every paid job against them before the spend gate) ── */
+  function renderRules() {
+    const el = $('#p-rules'); if (!el) return;
+    const r = D.rules;
+    if (!r) { setHtml(el, ''); return; }
+    const name = id => (bibleById[id] ? bibleById[id].item.name : id);
+    const scope = sc => { if (!sc) return ''; const b = [sc.parts && sc.parts.length ? 'parts ' + sc.parts.join(', ') : '', sc.scenes && sc.scenes.length ? 'scenes ' + sc.scenes.join(', ') : '', sc.shots && sc.shots.length ? sc.shots.length + ' ' + plural(sc.shots.length, 'shot') : ''].filter(Boolean); return b.length ? ' <span class="fine">(only in ' + esc(b.join(', ')) + ')</span>' : ''; };
+    const list = items => (items.length ? '<ul>' + items.map(x => '<li>' + x + '</li>').join('') + '</ul>' : '<p class="fine">None.</p>');
+    const allow = (r.uploads && r.uploads.allow) || [];
+    setHtml(el, '<div class="rp-body"><div class="rp-h"><h2 class="rh rh-tabbed" id="h-rules" tabindex="-1">Rules</h2><span class="fine">' + (r.required ? 'required' : 'checked') + '</span></div>' +
+      '<p class="fine">' + (r.required ? 'Required: akuko refuses any paid job that breaks one of these, or when they are missing.' : 'akuko checks every paid job against these before anything is spent.') + ' Read-only here.</p>' +
+      '<dl class="rules-dl">' +
+      '<dt>Never in a prompt</dt><dd>' + list((r.banned || []).map(b => '<b>' + esc(b.term) + '</b>' + (b.except && b.except.length ? ' <span class="fine">(allowed: ' + esc(b.except.join(', ')) + ')</span>' : '') + scope(b.scope) + (b.note ? ' · ' + esc(b.note) : ''))) + '</dd>' +
+      '<dt>Always in a prompt</dt><dd>' + list((r.require || []).map(q => '“' + esc(q.text) + '” in the ' + (q.applies_to === 'negative' ? 'negative prompt' : 'prompt') + scope(q.scope) + (q.note ? ' · ' + esc(q.note) : ''))) + '</dd>' +
+      '<dt>Outside files akuko may upload</dt><dd>' + list(allow.map(u => esc(u.label) + ' <span class="mono fine">' + esc(String(u.sha256).slice(0, 12)) + '…</span>' + (u.for && u.for.length ? ' · only for ' + esc(u.for.map(name).join(', ')) : '') + (u.slices ? ' · and slices of it' : '') + (u.consent_ref ? ' · consent ' + esc(u.consent_ref) : ''))) + '</dd>' +
+      '<dt>Never from a photo</dt><dd>' + list((r.never_from_photo || []).map(id => esc(name(id)))) + '</dd>' +
+      '<dt>Exceptions</dt><dd>' + list((r.exempt || []).map(e => e.shots.length + ' ' + plural(e.shots.length, 'shot') + ' skip ' + esc(e.skip.join(', ')) + (e.note ? ' · ' + esc(e.note) : ''))) + '</dd>' +
+      '<dt>Consent on record</dt><dd>' + list((r.consent || []).map(c => esc(c.who) + ': ' + esc(c.what) + ' <span class="fine">(' + esc(c.date) + ')</span>')) + '</dd>' +
+      '</dl></div>');
   }
 
   /* ── ledger ───────────────────────────────────────────── */
@@ -1462,11 +1696,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     }).join('');
     const total = D.ledger.reduce((a, r) => a + r.actual, 0);
     const match = !D.budget || Math.abs(total - D.budget.spent) < 0.005;
-    $('#p-ledger').innerHTML = '<div class="rp-body"><div class="rp-h"><h2 class="rh rh-tabbed" id="h-ledger" tabindex="-1">Ledger</h2><span class="fine">' + D.ledger.length + ' paid ' + plural(D.ledger.length, 'call') + '</span></div>' +
+    setHtml($('#p-ledger'), '<div class="rp-body"><div class="rp-h"><h2 class="rh rh-tabbed" id="h-ledger" tabindex="-1">Ledger</h2><span class="fine">' + D.ledger.length + ' paid ' + plural(D.ledger.length, 'call') + '</span></div>' +
       '<table class="ledger"><caption class="vh">Paid calls so far</caption><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Unit</th><th scope="col" class="amt">Charged</th></tr></thead>' +
       '<tbody>' + rows + '</tbody><tfoot><tr><th scope="row" colspan="2">Total charged</th><td class="amt money" data-akuko-field="ledger-total">' + money(total) + '</td></tr></tfoot></table>' +
       (D.budget ? '<p class="check">' + (match ? glyph('approved') + '<span>Matches the budget’s spent figure (' + money(D.budget.spent) + ').</span>' : glyph('needs-rework') + '<span>Budget says ' + money(D.budget.spent) + ' spent; the ledger totals ' + money(total) + '.</span>') + '</p>' : '') +
-      (D._note ? '<p class="fine ledger-note">' + esc(D._note) + '</p>' : '') + '</div>';
+      (D._note ? '<p class="fine ledger-note">' + esc(D._note) + '</p>' : '') + '</div>');
   }
 
   /* ── footer: where decisions go, and how fresh the data is ── */
@@ -1510,7 +1744,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const typing = ae && ae.id === 'compose-text' ? { s: ae.selectionStart, e: ae.selectionEnd } : null;
     document.documentElement.setAttribute('data-akuko-mode', S.mode);
     renderHeader(); renderNext(); renderStages(); renderNav();
-    paintScript(); renderShots(); renderGate(); renderBible(); renderLedger(); renderFoot();
+    paintScript(); renderShots(); renderGate(); renderBible(); renderLedger(); renderGates(); renderRules(); renderFoot();
     if (typing) {
       const ta = $('#compose-text');
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(typing.s, typing.e); } catch (e) { /* ignore */ } }
@@ -1591,7 +1825,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     });
   }
   function firstWaitingBible() {
-    const a = pendingAssets()[0];
+    const a = pendingAssets().filter(x => x.kind !== 'card')[0];
     if (a) { const o = Object.keys(bibleById).find(k => bibleById[k].item.assets.some(x => x.id === a.id)); return o || a.id; }
     const e = pendingEntries()[0];
     return e ? e.id : '';
@@ -1646,7 +1880,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         if (n) selectShot(n, 'gate', { focus: 'sel:' + n });
         else if (S.sel && shotStatus(S.sel) === 'pending-review') selectShot(S.sel, 'gate', { focus: 'sel:' + S.sel });
         else if (awaitingSpend().length) openGate();
-        else if (waitingOther()) openBible(firstWaitingBible());
+        else if (firstWaitingBible()) openBible(firstWaitingBible());
+        else if (CARDS.some(cd => assetStatus(cd) === 'pending-review')) {
+          const cd = CARDS.find(x => assetStatus(x) === 'pending-review');
+          if (S.part !== 'all' && cd._part !== S.part) S.part = 'all';
+          S.filter = 'all'; if (!isWide()) S.view = 'shots'; save(); renderAll('unit-ok:card:' + cd.id);
+          requestAnimationFrame(() => reveal(document.getElementById('card-' + cd.id), 'start'));
+        }
         break;
       }
       case 'toscript': {
@@ -1661,6 +1901,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       }
       case 'ref': openBible(id); break;
       case 'filter': S.filter = id; commit('filter:' + id); break;
+      case 'part': {
+        if (id !== 'all' && PARTS.indexOf(id) === -1) return;
+        S.part = id;
+        if (S.sel && shotsById[S.sel] && !inPart(shotsById[S.sel])) { const f = partShots().find(s => shotStatus(s.id) === 'pending-review') || partShots()[0]; S.sel = f ? f.id : null; S.compose = null; S.flash = null; }
+        if (!isWide()) S.view = 'shots';
+        announce(id === 'all' ? 'Showing every part' : 'Showing ' + id + ' only');
+        commit('part:' + id);
+        requestAnimationFrame(() => { const h = $('#h-shots'); if (h) reveal(h, 'start'); });
+        break;
+      }
       case 'view': {
         S.view = id; save(); renderAll('view:' + id);
         if (isMobile()) { const nav = $('#desknav'); const y = nav.getBoundingClientRect().top + window.scrollY; if (window.scrollY > y) window.scrollTo({ top: y, behavior: 'auto' }); }
