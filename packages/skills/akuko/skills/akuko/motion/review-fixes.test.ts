@@ -38,7 +38,9 @@ describe('idle clips never cost money', () => {
     const p = idleProject();
     assert.throws(() => buildMotionJob(p, { provider: 'manual' }), /Nothing is waiting to be made/);
     assert.throws(() => buildMotionJob(p, { provider: 'manual', scene: 'sc1' }), /Nothing is waiting to be made/);
-    assert.equal(refreshMotionStage(p).stages.motion.state, p.stages.motion.state, 'idle clips do not move the stage');
+    // WP-32 (old WP-31): idle clips are counted nowhere, so a stage with only idle clips has nothing left to make.
+    assert.equal(p.stages.motion.state, 'in-progress');
+    assert.equal(refreshMotionStage(p).stages.motion.state, 'in-review', 'idle clips never hold the stage in progress');
     assert.ok(motionStatus(p).every((r) => r.idle !== undefined));
   });
 

@@ -32,7 +32,10 @@ const CONFIG = givenConfig();
 // ── the synthetic project ────────────────────────────────────────────────
 const PART_SIZES = [22, 30, 10, 16, 31, 15, 11, 34, 19, 23]; // 211 shots in P1..P10
 const SHOT_S = 6;
-const LINE_S = 5; // + 0.4 s pad = 5.4 s audio, 5.4 s billed at 0.10 = 0.54 per line
+// Each line starts on its shot's first frame, so the lip-sync step's lead-in (PAD_BEFORE_S, 0.2 s) is clamped away by the
+// shot and only the tail (PAD_AFTER_S, 0.3 s) is added (WP-32: the step's own span rule): 5.3 s, billed at 0.10 = 0.53 per shot.
+const LINE_S = 5;
+const PER_LINE = 0.53;
 
 interface Built { project: AkukoProjectInput; shotIds: string[]; byPart: Map<string, string[]>; tierA: string[] }
 
@@ -135,8 +138,8 @@ describe('the stated breakdown', () => {
 
   it('prices lip-sync for video-with-a-line and lipsync shots only; thought lines are skipped', () => {
     assert.equal(e.stages.lipsync.units, 7);
-    near(e.stages.lipsync.low, 7 * 0.54);
-    near(e.stages.lipsync.likely, 7 * 0.54 * 1.5);
+    near(e.stages.lipsync.low, 7 * PER_LINE);
+    near(e.stages.lipsync.likely, 7 * PER_LINE * 1.5);
     assert.ok(e.notes.some((n) => /23 tier-A shots with a spoken line could be lip-synced/.test(n)), e.notes.join('\n'));
   });
 
@@ -195,10 +198,10 @@ describe('overrides', () => {
     near(e.stages.motion.low, 15);
   });
 
-  it('--lipsync-lines 26 prices 26 spoken lines at 0.54', () => {
+  it('--lipsync-lines 26 prices 26 spoken lines at 0.53 (one shot each)', () => {
     const e = estimateFilm(parse(build()), { config: CONFIG, imageProvider: 'gemini-image', lipsyncLines: 26 });
     assert.equal(e.stages.lipsync.units, 26);
-    near(e.stages.lipsync.low, 26 * 0.54);
+    near(e.stages.lipsync.low, 26 * PER_LINE);
     assert.ok(!e.notes.some((n) => /could be lip-synced/.test(n)), 'with an explicit count there is no candidate note');
   });
 
@@ -382,9 +385,9 @@ describe('long shots, short lines, part view', () => {
   it('prices a line under 5 s with the 480p fabric model', () => {
     const b = build();
     const l = b.project.audio!.lines![0]!; // belongs to a video shot, so it is priced by default
-    l.film_out_s = l.film_in_s + 3; // 3.0 + 0.4 pad = 3.4 s, below h3-max's 5 s
+    l.film_out_s = l.film_in_s + 3; // 3.0 + the 0.3 s tail = 3.3 s, below h3-max's 5 s
     const e = estimateFilm(parse(b), { config: CONFIG, imageProvider: 'gemini-image' });
-    near(e.stages.lipsync.low, 3.4 * 0.1 + 6 * 0.54);
+    near(e.stages.lipsync.low, 3.3 * 0.1 + 6 * PER_LINE);
     assert.ok(e.prices.lines.some((x) => /veed\/fabric-1\.0#480p/.test(x)), e.prices.lines.join('\n'));
     assert.ok(e.prices.lines.some((x) => /minimax\/h3-max/.test(x)));
   });
@@ -408,7 +411,7 @@ describe('the printout', () => {
     assert.match(lines[1]!, /^!! Over budget at the likely estimate/);
     assert.ok(lines.some((l) => /^Made = units already made/.test(l)));
     assert.ok(lines.some((l) => /Music and sound effects are not priced/.test(l)));
-    assert.ok(lines.some((l) => /several lines/.test(l)));
+    assert.ok(lines.some((l) => /one span covering its spoken lines/.test(l)));
     const w = lines.indexOf('Warnings:');
     assert.equal(lines[w - 1], '', 'a blank line before Warnings');
     assert.ok(e.warnings.some((x) => x.startsWith('Over budget')), 'the verdict stays in Warnings');
