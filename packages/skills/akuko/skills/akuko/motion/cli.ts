@@ -36,6 +36,7 @@ import { createFalVideoProvider } from '../providers/fal-video/index.ts';
 import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
+import { guardGate } from '../rules/guard.ts';
 import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion } from './plan.ts';
 import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
 
@@ -124,7 +125,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     const manual = createManualProvider(host, { now: clock });
     const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
     const providers: Provider[] = [manual.provider, createFalVideoProvider(host, { now: clock, loadRef })];
-    const gate = createSpendGate({ host, providers, level, now: clock });
+    // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     // The job file is written the moment a job is submitted, before collecting, so `collect` can always pick it up.
     const saveJob = async (job: Job, handle: JobHandle): Promise<void> => {
       await mkdir(join(dir, 'motion', 'jobs'), { recursive: true });

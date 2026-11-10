@@ -15,6 +15,8 @@ import { parseProviderConfig, type AkukoProviderConfig } from '../../providers/c
 import { tinyProject } from '../../providers/__fixtures__/fake-host.ts';
 import { run } from './cli.ts';
 import { checkProject, orphanReservations, type Finding } from './project-checks.ts';
+import { rulesReport } from './rules-checks.ts';
+import { rulesFolder } from '../../rules/__fixtures__/project.ts';
 
 const NOW = '2026-11-07T12:00:00Z';
 
@@ -113,6 +115,43 @@ describe('provider config drift', () => {
     assert.match(none.find((x) => x.code === 'no-budget')?.fix ?? '', /\/akuko setup/);
     const gbp = checkProject(fixtureProject({ budget: { cap: 10, currency: 'GBP', spent: 0 } }), config(), { now: NOW });
     assert.ok(codes(gbp).includes('currency-mismatch'));
+  });
+});
+
+describe('project rules (WP-26)', () => {
+  it('no rules: says so, and finds nothing', async () => {
+    const { dir, project } = await rulesFolder((p) => { delete p.rules; });
+    const r = rulesReport(project, dir);
+    assert.equal(r.summary, 'rules: none recorded (not required)');
+    assert.deepEqual(r.findings, []);
+  });
+
+  it('counts the allowed files and names the ones not found among the files the project points at (matched by content)', async () => {
+    // The face crop is attached as a reference; the birds photo is attached nowhere; the master is the project's master.
+    const { dir, project } = await rulesFolder((p) => { p.audio = { master: { uri: 'audio/master.wav', duration_s: 60, sample_rate: 48000, start_tc: '00:00:00:00' }, lines: [] }; });
+    const r = rulesReport(project, dir);
+    assert.match(r.summary, /^rules: 3 banned terms, 2 required texts, 3 allowed files, 1 never-from-photo, 1 exemption; required: no$/);
+    assert.equal(r.allowed, 3);
+    assert.equal(r.missing, 1);
+    assert.deepEqual(codes(r.findings), ['rules-allowed-missing']);
+    assert.match(r.findings[0]!.message, /"Two birds"/);
+  });
+
+  it('warns when rules are required but empty, and about exemptions that do nothing', async () => {
+    const { dir, project } = await rulesFolder((p) => {
+      p.rules = { required: true, banned: [], require: [], uploads: { allow: [] }, never_from_photo: [], exempt: [{ shots: ['S01-010'], skip: ['never-from-photo'] }], consent: [] };
+    });
+    const r = rulesReport(project, dir);
+    assert.deepEqual(codes(r.findings), ['rules-required-empty', 'rules-setup']);
+  });
+
+  it('the CLI prints the rules line and stays exit 0', async () => {
+    const { dir } = await rulesFolder();
+    const lines: string[] = [];
+    assert.equal(run([dir, '--now', NOW], (l) => lines.push(l)), 0);
+    const out = lines.join(String.fromCharCode(10));
+    assert.match(out, /rules: 3 banned terms.*required: no; 2 of 3 allowed files not found on disk/);
+    assert.match(out, /Allowed file "Master mix"/);
   });
 });
 

@@ -41,7 +41,7 @@ The unit is one planned asset per shot (`sc1_sh1_clip`, kind `clip`), owned by t
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../motion/cli.ts <command> --project <folder>` (B and C: the command line uses the local folder host). On host A, Node may run in claude.ai's workspace but the project lives in the board artifact's database (`../lib/hosts.md`): import `plan.ts` and `run.ts` and pass them the `ClaudeArtifactHost`, not this command line. Paid providers are still refused on host A, so use the manual provider and the rules in `../lib/spend.md` §Host A.
+All commands: `node --experimental-strip-types ../motion/cli.ts <command> --project <folder>` (B and C: the command line uses the local folder host). On host A, Node may run in claude.ai's workspace but the project lives in the board artifact's database (`../lib/hosts.md`): import `plan.ts` and `run.ts` and pass them the `ClaudeArtifactHost` and a gate built with `guardedGate()` from `../rules/guard.ts` (never a bare `createSpendGate`, so the project rules are checked), not this command line. Paid providers are still refused on host A, so use the manual provider and the rules in `../lib/spend.md` §Host A.
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If the stage is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: one planned clip per shot. Safe to repeat. It also lists any shot already at the retry limit.
@@ -74,6 +74,10 @@ Video is priced per second, so a retry loop is where money goes. Each shot may h
 ## When a person sends a clip back
 
 Folding turns it into `needs-rework` with their words. Run `step --units <clip id>` for it: the old file is cleared (it stays stored; the "Revised: ..." comment says where), their words are added to the prompt, the new take fills the same asset (job `..._r<n+1>`), and it goes to `pending-review` again. A paid regeneration needs a new approval and counts toward the limit.
+
+## Rules check
+
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every job is checked against them before the spend gate: banned terms (not in the negative prompt) and required text in the clip prompt (it carries the shot's own `prompt`), and for a paid job the start frame by its content hash. An approved key frame that akuko generated passes; a key frame brought back by hand is an outside file and needs its sha256 in `rules.uploads.allow`. A `require` rule on the negative prompt refuses every clip for now, because this stage doesn't send `shot.negative` yet. A breach prints `Refused (rules-breach): …`, naming each rule and the offending text or file; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent, and a refused job is not a paid attempt. **Tell the person what it says and stop.** Don't reword a prompt, swap the start frame or edit `rules` to get past it: the person decides. Before a paid run, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, and show the person anything it lists.
 
 ## Limits to know
 
