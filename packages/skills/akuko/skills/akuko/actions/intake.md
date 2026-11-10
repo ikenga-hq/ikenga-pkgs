@@ -60,6 +60,15 @@ requires_capabilities:
    - Result: `script.source` (and `script.screenplay`) set; assets `script-source` (and `script-screenplay`) at `pending-review`; `stages.intake` = `in-review`.
 7. **Stop at the review gate.** Tell the person what to review (the screenplay, or on the direct route the source as it stands), and that **breakdown opens when they approve intake**. Don't start the breakdown. Offer `status`.
 
+## The person already has a shot list (route `import`)
+
+If the person brings a **shot list** (a spreadsheet of shots, tokens and timings) instead of a story, the route is `import`. There is nothing to adapt and no `script/source.md` to write.
+
+- Do **not** ask the screenplay questions of step 4. Create the project if there is none (step 2), then follow `breakdown.md` §Import a shot list: `cli.ts import` records the intake for you (the shot-list file as the asset `script-sheet`, and the film script as `script-source` when one is given, both at `pending-review`; `stages.intake` = `in-review`).
+- To record intake alone, before importing: `cli.ts intake --project <folder> --route import [--sheet <file>] [--film-script <md>]`.
+- **Intake is approved when the person approves those assets.** That opens breakdown, as for any route. The import writes the breakdown units at once, but the breakdown stage stays `locked` until then. If intake was already approved, the import puts breakdown `in-review`.
+- A project that already has shots from a screenplay breakdown is never imported into: say so, and offer a project of its own.
+
 ## Rules it inherits
 
 - Detect the host first; read and write the project only through the host adapter (`../hosts/`).

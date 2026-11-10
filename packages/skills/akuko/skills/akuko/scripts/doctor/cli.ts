@@ -4,17 +4,19 @@
  *   node --experimental-strip-types scripts/doctor/cli.ts [project-dir | akuko.json] [--now ISO]
  *
  * Prints which provider keys are set (names only, never values), the provider
- * config drift, and, when a project is found, its budget / ledger checks.
+ * config drift, and, when a project is found, its budget / ledger checks and
+ * its rules status (WP-26: present or required, allowed files missing on disk).
  * Exit 0 even with warnings (they are advice); exit 1 only when `akuko.json`
  * exists but is not a valid project.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { AkukoProjectSchema } from '../../schema/akuko-project.ts';
 import { loadProviderConfig } from '../../providers/config.ts';
 import { keyPresence } from '../../setup/setup.ts';
 import { checkProject, configFindings, formatFinding, type Finding } from './project-checks.ts';
+import { rulesReport } from './rules-checks.ts';
 
 /** Where to check that a key can actually buy images (no network call is made). */
 export const BILLING_HINT: Record<string, string> = {
@@ -75,7 +77,9 @@ export function run(args: string[], out: (line: string) => void = console.log): 
       return 1;
     }
     out(`project: ${parsed.data.project.title} (${file})`);
-    findings = checkProject(parsed.data, config, { now });
+    const rules = rulesReport(parsed.data, dirname(file));
+    out(`  ${rules.summary}${rules.allowed ? `; ${rules.missing} of ${rules.allowed} allowed file${rules.allowed === 1 ? '' : 's'} not found on disk` : ''}`);
+    findings = [...checkProject(parsed.data, config, { now }), ...rules.findings];
   }
 
   if (findings.length === 0) out('  no findings');

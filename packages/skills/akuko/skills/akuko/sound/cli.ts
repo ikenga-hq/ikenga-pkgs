@@ -35,6 +35,7 @@ import type { Job, JobHandle, Provider } from '../providers/contract.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { createElevenLabsProvider } from '../providers/tts/elevenlabs/index.ts';
 import { createSpendGate } from '../spend/gate.ts';
+import { guardGate } from '../rules/guard.ts';
 import { rebuildNarration } from './narration.ts';
 import { SoundError, planSound, soundStatus } from './plan.ts';
 import { attachWords, collectVoiceover, finalizeSound, generateVoiceover, ingestSoundFile, ingestVoiceover, type StepResult } from './run.ts';
@@ -154,7 +155,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     const level = (await host.detect()).level;
     const manual = createManualProvider(host, { now: clock });
     const providers: Provider[] = [manual.provider, createElevenLabsProvider(host, { now: clock })];
-    const gate = createSpendGate({ host, providers, level, now: clock });
+    // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     const deps = { host, gate, now: clock };
 
     if (cmd === 'step') {

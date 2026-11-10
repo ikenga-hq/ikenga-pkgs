@@ -23,14 +23,17 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AkukoProject } from '../schema/akuko-project.ts';
 import { writeFileAtomic } from '../hosts/local.ts';
 import { audioTracks, renderAudioEdl, renderVideoEdl } from './edl.ts';
 import { FCPXML_VERSION, renderFcpxml } from './fcpxml.ts';
-import { buildPlan, type ExportPlan, type MediaFile } from './plan.ts';
+import { buildPlan, startOf, type ExportPlan, type MediaFile } from './plan.ts';
+import { fpsForMasterProject } from './master.ts';
+import { renderMasterReadme } from './readme-master.ts';
+import { readWavHeader } from './masterfile.ts';
 import { probeFile } from './probe.ts';
-import { HandoffError, parseFps, timecode, START_FRAMES } from './timecode.ts';
+import { HandoffError, parseFps, timecode } from './timecode.ts';
 
 export const MANIFEST = 'export-manifest.json';
 export const MANIFEST_FORMAT = 'akuko-resolve-export';
@@ -47,6 +50,8 @@ export interface ExportOptions {
   format?: TimelineFormat;
   /** Host A and similar: no media to copy. Writes the timeline and a download list only. */
   timelineOnly?: boolean;
+  /** A project with `audio.master`: reference the master in place instead of copying it (it can be hundreds of MB). Default: copy. */
+  linkMedia?: boolean;
 }
 
 export interface ExportResult {
@@ -79,11 +84,32 @@ export function localPath(projectDir: string, uri: string): string | undefined {
   return rel.startsWith('..') || isAbsolute(rel) ? undefined : p;
 }
 
-export async function planFromFolder(o: Pick<ExportOptions, 'project' | 'projectDir' | 'fps' | 'timelineOnly'>): Promise<ExportPlan> {
-  const fps = parseFps(o.fps);
+/** Where `audio.master.uri` is: relative to the project folder (it may go up out of it) or absolute. */
+function masterPath(projectDir: string, uri: string): string | undefined {
+  if (/^file:/i.test(uri)) {
+    try {
+      return fileURLToPath(uri);
+    } catch {
+      return undefined;
+    }
+  }
+  if (isAbsolute(uri)) return uri;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(uri)) return undefined;
+  return resolve(projectDir, ...uri.split('/'));
+}
+
+export async function planFromFolder(o: Pick<ExportOptions, 'project' | 'projectDir' | 'fps' | 'timelineOnly' | 'linkMedia'>): Promise<ExportPlan> {
+  const fps = o.project.audio.master ? fpsForMasterProject(o.project, o.fps) : parseFps(o.fps);
   return buildPlan({
     project: o.project,
     fps,
+    ...(o.linkMedia ? { linkMaster: true } : {}),
+    resolveMaster: async (uri) => {
+      const p = masterPath(o.projectDir, uri);
+      if (p === undefined || !existsSync(p)) return { exists: false };
+      const h = await readWavHeader(p).catch(() => undefined);
+      return { exists: true, src: p, href: pathToFileURL(p).href, ...(h ? { durationS: h.durationS, sampleRate: h.sampleRate, channels: h.channels } : {}) };
+    },
     ...(o.timelineOnly ? { timelineOnly: true } : {}),
     exists: (uri) => {
       const p = localPath(o.projectDir, uri);
@@ -108,6 +134,7 @@ export function shiftSrt(srt: string, hours = 1): string {
 }
 
 export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; timelineOnly: boolean; edlFiles: string[] }): string {
+  if (plan.master) return renderMasterReadme(plan, o);
   const { fps } = plan;
   const total = timecode(plan.totalFrames, fps);
   const L: string[] = [];
@@ -139,9 +166,9 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
     );
   }
   L.push('## Timeline', '', '| # | Shot | Record in | Length | On the video track |', '|---|---|---|---|---|');
-  const what = { clip: 'clip', still: 'still (key frame)', gap: 'gap: nothing approved', 'no-duration': 'left off: no duration' } as const;
+  const what = { clip: 'clip', lipsync: 'lip-sync clip', still: 'still (key frame)', gap: 'gap: nothing approved', 'no-duration': 'left off: no duration', removed: 'left off: removed from the sheet' } as const;
   for (const s of plan.shots) {
-    L.push(`| ${s.n} | ${s.shot} | ${timecode(START_FRAMES(fps) + s.recIn, fps)} | ${frames(s.frames)} | ${what[s.uses]} |`);
+    L.push(`| ${s.n} | ${s.shot} | ${timecode(startOf(plan) + s.recIn, fps)} | ${frames(s.frames)} | ${what[s.uses]} |`);
   }
   L.push('');
   L.push('Durations are whole frames: a shot\'s seconds times the frame rate, rounded to the nearest frame (halves up, at least one frame), shot by shot, so the timeline is exactly the sum of its shots. A clip longer than its shot is cut at the shot\'s end; one that is shorter is followed by a gap and named in LEFT-OUT.md. Nothing is stretched.', '');
@@ -150,7 +177,7 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
   }
   if (plan.audio.length > 0) {
     L.push('## Audio', '', '| Track | File | At | Length |', '|---|---|---|---|');
-    for (const a of plan.audio) L.push(`| A${a.track} (${a.role}) | ${a.media.dest.split('/').pop()} | ${timecode(START_FRAMES(fps) + a.recIn, fps)} | ${frames(a.frames)}${a.note ? `, ${a.note}` : ''} |`);
+    for (const a of plan.audio) L.push(`| A${a.track} (${a.role}) | ${a.media.dest.split('/').pop()} | ${timecode(startOf(plan) + a.recIn, fps)} | ${frames(a.frames)}${a.note ? `, ${a.note}` : ''} |`);
     L.push('');
   }
   if (plan.captions.length > 0) {
@@ -173,6 +200,11 @@ export function renderLeftOut(plan: ExportPlan): string {
     for (const x of plan.leftOut) L.push(`| ${x.unit} | ${x.what} | ${x.why} |`);
     L.push('');
   }
+  if (plan.covered && plan.covered.length > 0) {
+    L.push('## Covered by the master audio', '', 'These sound units exist in the project, but the master audio is the whole sound of the film and is laid whole, so none of them is on the timeline.', '', '| Unit | What |', '|---|---|');
+    for (const x of plan.covered) L.push(`| ${x.unit} | ${x.what} |`);
+    L.push('');
+  }
   if (plan.notPlaced.length > 0) {
     L.push('## Approved audio with no place on the timeline', '', 'These are copied into `audio/` but not placed (they have no film, scene or shot placement). Drop them in by hand.', '');
     for (const m of plan.notPlaced) L.push(`- ${m.dest} (${m.asset})`);
@@ -188,7 +220,7 @@ export function renderLeftOut(plan: ExportPlan): string {
 
 export function renderDownloadList(plan: ExportPlan): string {
   const L = ['# Files to download', '', 'Save each file under the name shown, in the folder shown, next to `timeline.fcpxml`.', '', '| Save as | Source | Unit |', '|---|---|---|'];
-  for (const m of plan.media) L.push(`| ${m.dest} | ${m.uri} | ${m.asset ?? ''} |`);
+  for (const m of plan.media) L.push(`| ${m.href ? `(referenced in place, not copied) ${m.dest}` : m.dest} | ${m.uri} | ${m.asset ?? ''} |`);
   L.push('');
   return L.join('\n');
 }
@@ -237,7 +269,8 @@ export async function writeExport(o: ExportOptions): Promise<ExportResult> {
   const copies: Array<{ m: MediaFile; src: string }> = [];
   if (!timelineOnly) {
     for (const m of [...new Map([...plan.media, ...plan.captions].map((x) => [x.dest, x])).values()]) {
-      const src = localPath(o.projectDir, m.uri);
+      if (m.href !== undefined) continue; // referenced in place (--link-media): nothing to copy
+      const src = m.src ?? localPath(o.projectDir, m.uri);
       if (src === undefined) throw new HandoffError(`${m.uri} is not a file inside the project folder.`);
       copies.push({ m, src });
     }

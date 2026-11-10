@@ -19,7 +19,8 @@ import { parseFountain } from './fountain.ts';
 export type IntakeRoute =
   | 'screenplay'  // the source already is a screenplay: keep it as-is
   | 'adapt'       // prose adapted to a Fountain screenplay, then broken down
-  | 'direct';     // prose broken down as it stands; no screenplay is written
+  | 'direct'      // prose broken down as it stands; no screenplay is written
+  | 'import';     // the person's own shot list is imported (breakdown/import/); no source text is required
 
 /** `fountain` when the text has scene headings; otherwise `prose`. */
 export function detectSourceKind(text: string): 'fountain' | 'prose' {
@@ -84,8 +85,11 @@ function scriptAsset(id: string, name: string, uri: string, mime: string, tag: s
 
 export interface CompleteIntake {
   route: IntakeRoute;
-  /** Where the source text was stored; default `script/source.md`. */
+  /** Where the source text was stored; default `script/source.md`. On the `import` route there is no default: only a film script that was given is recorded. */
   sourceUri?: string;
+  /** `import` route: the shot-list file as given, recorded as the asset `script-sheet` that the person approves. */
+  sheetUri?: string;
+  sheetMime?: string;
   /** Where the screenplay was stored; default `script/screenplay.fountain`. Required unless route is `direct`. */
   screenplayUri?: string;
   now?: () => Date;
@@ -100,13 +104,18 @@ export interface CompleteIntake {
 export function completeIntake(project: AkukoProject, c: CompleteIntake): AkukoProject {
   const now = (c.now ?? (() => new Date()))().toISOString();
   const out = structuredClone(project);
-  const sourceUri = c.sourceUri ?? SOURCE_PATH;
-  out.script.source = sourceUri;
+  const sourceUri = c.route === 'import' ? c.sourceUri : (c.sourceUri ?? SOURCE_PATH);
+  if (sourceUri !== undefined) out.script.source = sourceUri;
   const upsert = (a: Asset) => {
     if (!out.assets.some((x) => x.id === a.id)) out.assets.push(a);
   };
-  upsert(scriptAsset('script-source', 'Source text', sourceUri, 'text/markdown', 'source', now));
-  if (c.route === 'direct') {
+  if (sourceUri !== undefined) {
+    upsert(scriptAsset('script-source', c.route === 'import' ? 'Film script' : 'Source text', sourceUri, 'text/markdown', 'source', now));
+  }
+  if (c.route === 'import') {
+    delete out.script.screenplay;
+    if (c.sheetUri !== undefined) upsert(scriptAsset('script-sheet', 'Shot list', c.sheetUri, c.sheetMime ?? 'application/octet-stream', 'sheet', now));
+  } else if (c.route === 'direct') {
     delete out.script.screenplay;
   } else {
     const uri = c.screenplayUri ?? SCREENPLAY_PATH;

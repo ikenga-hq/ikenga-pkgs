@@ -2,7 +2,7 @@
  * akuko — command line for the DaVinci Resolve handoff (hosts B and C). Free: no provider, no spend.
  *
  *   node --experimental-strip-types handoff/cli.ts export --project <folder>
- *        [--out <folder>] [--format fcpxml|edl|both] [--fps 24] [--timeline-only]
+ *        [--out <folder>] [--format fcpxml|edl|both] [--fps 24] [--timeline-only] [--link-media]
  *
  *   export   writes the export folder (default `<project>/export/resolve`): approved media copied in
  *            shot order, `timeline.fcpxml` (and EDLs with --format edl|both), README.md, LEFT-OUT.md,
@@ -11,6 +11,11 @@
  *            records none, so this is the only place it is chosen.
  *   --timeline-only   copy nothing; write the timeline and DOWNLOAD-LIST.md. For a project whose
  *            files are not on this machine (claude.ai): clip lengths are not checked.
+ *   --link-media   a project with `audio.master`: reference the master WAV in place instead of copying it
+ *            (default: copy). The frame rate then comes from `project.fps`; --fps must agree with it.
+ *
+ * A project with `audio.master` is exported on the master clock: every approved shot and card at its film
+ * time, the master whole on A1 (see `master.ts`).
  */
 
 import { resolve } from 'node:path';
@@ -53,11 +58,13 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       ...(fps ? { fps } : {}),
       format,
       ...(opt.has('timeline-only') ? { timelineOnly: true } : {}),
+      ...(opt.has('link-media') ? { linkMedia: true } : {}),
     });
     const p = r.plan;
     const out = [
       `Exported ${p.shots.length} shot${p.shots.length === 1 ? '' : 's'}, ${timecode(p.totalFrames, p.fps)} (${p.totalFrames} frames at ${p.fps.label} fps), to ${r.outDir}`,
-      `  on the video track: ${p.shots.filter((s) => s.uses === 'clip').length} clip(s), ${p.shots.filter((s) => s.uses === 'still').length} still(s), ${p.shots.filter((s) => s.uses === 'gap').length} gap(s)${p.shots.some((s) => s.uses === 'no-duration') ? `, ${p.shots.filter((s) => s.uses === 'no-duration').length} left off (no duration)` : ''}`,
+      ...(p.master ? [`  master clock: starts at ${p.master.startTc}, ${p.cards?.length ?? 0} card(s), ${p.moves?.length ?? 0} camera move(s) on stills, the master ${p.master.linked ? 'referenced in place' : 'copied'}; ${p.covered?.length ?? 0} sound unit(s) covered by the master`] : []),
+      `  on the video track: ${p.shots.filter((s) => s.uses === 'clip' || s.uses === 'lipsync').length} clip(s), ${p.shots.filter((s) => s.uses === 'still').length} still(s), ${p.shots.filter((s) => s.uses === 'gap').length} gap(s)${p.shots.some((s) => s.uses === 'no-duration') ? `, ${p.shots.filter((s) => s.uses === 'no-duration').length} left off (no duration)` : ''}`,
       `  audio: ${p.audio.length} placed${p.notPlaced.length ? `, ${p.notPlaced.length} not placed` : ''}${p.captions.length ? ', captions copied' : ''}`,
       `  files: ${r.written.length} written, ${r.unchanged.length} already up to date${r.removed.length ? `, ${r.removed.length} removed (no longer in the export)` : ''}`,
       ...(r.keptModified.length ? [`  kept (you changed them since the last export): ${r.keptModified.join(', ')}`] : []),
