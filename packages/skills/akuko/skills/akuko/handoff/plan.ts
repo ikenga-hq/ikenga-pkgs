@@ -106,7 +106,7 @@ export interface ShotRow {
   frames: number;
   recIn: number;
   /** What is on the video track. */
-  uses: 'clip' | 'still' | 'gap' | 'no-duration' | 'lipsync';
+  uses: 'clip' | 'still' | 'gap' | 'no-duration' | 'lipsync' | 'removed';
 }
 
 /** What a master-clock plan records about the locked audio. */

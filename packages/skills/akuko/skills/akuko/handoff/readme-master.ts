@@ -16,8 +16,8 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
   const start = startOf(plan);
   const tc = (f: number): string => timecode(start + f, fps);
   const L: string[] = [];
-  const nShots = plan.shots.filter((s) => s.uses !== 'no-duration').length;
-  const placed = plan.shots.filter((s) => s.uses !== 'gap' && s.uses !== 'no-duration').length;
+  const nShots = plan.shots.filter((s) => s.uses !== 'no-duration' && s.uses !== 'removed').length;
+  const placed = plan.shots.filter((s) => s.uses !== 'gap' && s.uses !== 'no-duration' && s.uses !== 'removed').length;
   const nCards = plan.cards?.length ?? 0;
   L.push(`# ${plan.title}: DaVinci Resolve handoff (master clock)`, '');
   L.push(`${placed} of ${plan.shots.length} shots and ${nCards} card${nCards === 1 ? '' : 's'} are on the timeline, each at its **film time**, over the locked master audio. ${timecode(plan.totalFrames, fps)} (${frames(plan.totalFrames)}) at ${fps.label} fps, ${plan.width} x ${plan.height}; the timeline starts at **${m.startTc}**. Written by akuko; only material a person approved is on it.`, '');
@@ -79,6 +79,11 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
       '|---|---|---|---|',
     );
     for (const mv of plan.moves) L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')} |`);
+    L.push('');
+  }
+  if (plan.leftOut.length > 0) {
+    L.push('## Left out', '', 'Not on the timeline (the reasons are in `LEFT-OUT.md` too):', '');
+    for (const x of plan.leftOut) L.push(`- ${x.unit} (${x.what}): ${x.why}`);
     L.push('');
   }
   const silent = plan.media.filter((x) => x.hasAudio && x.role === 'clip');

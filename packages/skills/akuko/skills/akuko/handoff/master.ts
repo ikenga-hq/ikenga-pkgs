@@ -155,6 +155,12 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
   let shotNo = 0;
   for (const shot of ordered) {
     const n = ++shotNo;
+    if (shot.source?.removed_at !== undefined) {
+      // A re-import flagged this row as gone from the sheet: never placed, even if approved material exists.
+      shots.push({ n, shot: shot.id, frames: 0, recIn: 0, uses: 'removed' });
+      leftOut.push({ unit: shot.id, what: 'shot', why: `removed from the sheet (${shot.source.removed_at}); not placed` });
+      continue;
+    }
     const lip = pick(lipsyncs, shot, 'lipsync');
     const clip = pick(clips, shot, 'clip');
     const still = pick(keyframes, shot, 'keyframe');
@@ -200,6 +206,11 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
   // ── cards ─────────────────────────────────────────────────────────────
   for (const c of p.assets.filter((a) => a.kind === 'card')) {
     const label = c.source?.id ?? c.id;
+    if (c.source?.removed_at !== undefined) {
+      // A removed card keeps its film time (the schema needs one); it must not land over the row that replaced it.
+      leftOut.push({ unit: c.id, what: 'card', why: `removed from the sheet (${c.source.removed_at}); not placed` });
+      continue;
+    }
     if (!usable(c) || !exists(c.file.uri)) {
       if (started(c)) leftOut.push({ unit: c.id, what: 'card', why: whyNot(c, exists) });
       continue;

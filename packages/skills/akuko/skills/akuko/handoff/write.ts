@@ -166,7 +166,7 @@ export function renderReadme(plan: ExportPlan, o: { format: TimelineFormat; time
     );
   }
   L.push('## Timeline', '', '| # | Shot | Record in | Length | On the video track |', '|---|---|---|---|---|');
-  const what = { clip: 'clip', lipsync: 'lip-sync clip', still: 'still (key frame)', gap: 'gap: nothing approved', 'no-duration': 'left off: no duration' } as const;
+  const what = { clip: 'clip', lipsync: 'lip-sync clip', still: 'still (key frame)', gap: 'gap: nothing approved', 'no-duration': 'left off: no duration', removed: 'left off: removed from the sheet' } as const;
   for (const s of plan.shots) {
     L.push(`| ${s.n} | ${s.shot} | ${timecode(startOf(plan) + s.recIn, fps)} | ${frames(s.frames)} | ${what[s.uses]} |`);
   }

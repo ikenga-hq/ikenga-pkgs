@@ -226,3 +226,47 @@ describe('master clock: review fixes', () => {
     assert.deepEqual(validate(parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8')), dtd), []);
   });
 });
+
+describe('master clock: units removed from the sheet, shots with no film time', () => {
+  const REMOVED = '2026-11-10T09:00:00Z';
+
+  it('a removed shot is never placed, even approved; it is listed as removed from the sheet', async () => {
+    const { project, dir } = await build();
+    const shot = project.shots.find((s) => s.id === 'S01-020')!; // approved key frame, film time kept
+    shot.source = { ...shot.source!, removed_at: REMOVED };
+    const out = join(await scratch(), 'resolve');
+    const r = await writeExport({ project, projectDir: dir, outDir: out });
+    assert.ok(r.plan.video.every((v) => v.shot !== 'S01-020'), 'not on the timeline');
+    assert.ok(!r.plan.media.some((m) => m.shot === 'S01-020'), 'its approved key frame is not exported');
+    assert.deepEqual(r.plan.shots.find((s) => s.shot === 'S01-020')!.uses, 'removed');
+    assert.match(r.plan.leftOut.find((x) => x.unit === 'S01-020')!.why, /removed from the sheet/);
+    assert.equal(r.plan.video.reduce((n, v) => n + v.frames, 0), r.plan.totalFrames, 'the film time it had is a gap, not closed up');
+    assert.match(readFileSync(join(out, 'README.md'), 'utf8'), /S01-020 \(shot\): removed from the sheet/);
+    assert.match(readFileSync(join(out, 'LEFT-OUT.md'), 'utf8'), /S01-020[^\n]*removed from the sheet/);
+  });
+
+  it('a removed card (which keeps its film time) is never placed, so it cannot cover the row that replaced it', async () => {
+    const { project, dir } = await build();
+    const card = project.assets.find((a) => a.id === 'card_S00-020')!; // approved, film 0 - 1 s
+    card.source = { ...card.source!, removed_at: REMOVED };
+    const plan = await planFromFolder({ project, projectDir: dir });
+    assert.ok(plan.video.every((v) => v.card === undefined), 'no card on the timeline');
+    assert.ok(!plan.media.some((m) => m.asset === 'card_S00-020'));
+    assert.deepEqual(plan.cards, []);
+    assert.match(plan.leftOut.find((x) => x.unit === 'card_S00-020')!.why, /removed from the sheet/);
+    assert.deepEqual(plan.video[0]!.kind, 'gap', 'its slot is empty');
+    assert.equal(plan.video[0]!.frames, 36, 'the empty slot joins the scene-start gap');
+  });
+
+  it('an approved shot with no film time is left out as "no film time" and nothing crashes', async () => {
+    const { project, dir } = await build();
+    delete project.shots.find((s) => s.id === 'S02-010')!.film; // its clip is approved
+    const out = join(await scratch(), 'resolve');
+    const r = await writeExport({ project, projectDir: dir, outDir: out });
+    assert.ok(r.plan.video.every((v) => v.shot !== 'S02-010'));
+    assert.match(r.plan.leftOut.find((x) => x.unit === 'S02-010')!.why, /no film time/);
+    assert.equal(r.plan.shots.find((s) => s.shot === 'S02-010')!.uses, 'no-duration');
+    assert.match(readFileSync(join(out, 'README.md'), 'utf8'), /S02-010 \(shot\): it has no film time/);
+    assert.equal(r.plan.video.reduce((n, v) => n + v.frames, 0), r.plan.totalFrames);
+  });
+});
