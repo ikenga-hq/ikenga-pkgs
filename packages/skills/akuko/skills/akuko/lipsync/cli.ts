@@ -107,7 +107,7 @@ function partHead(p: AkukoProject, part: string): string {
   const o = partOpenness(p, part);
   if (!o.open) return partRefusal(o, partsOf(p));
   const st = p.stages.motion.state;
-  return `${part}: open for motion (its key frames and the bible entries they use are approved).${st === 'locked' ? ' The motion stage itself stays locked until the whole film opens; the part's progress is on its units.' : ''}`;
+  return `${part}: open for motion (its key frames and the bible entries they use are approved).${st === 'locked' ? " The motion stage itself stays locked until the whole film opens; the part's progress is on its units." : ''}`;
 }
 
 export async function run(argv: string[], now: () => Date = () => new Date(), io: CliIo = {}): Promise<CliResult> {
