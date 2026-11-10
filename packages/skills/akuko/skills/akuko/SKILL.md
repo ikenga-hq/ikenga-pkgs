@@ -50,6 +50,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "storyboard", "sketch board", "beat board", "board" | [`actions/board.md`](actions/board.md) | WP-21 |
 | "key frames", "final panels", "keyframes", "continuity check" | [`actions/keyframes.md`](actions/keyframes.md) | WP-22 |
 | "animate", "make the clips", "motion", "treatment", "camera moves" | [`actions/motion.md`](actions/motion.md) | WP-10 · WP-11 · WP-27 |
+| "lip-sync", "make them say the line", "lipsync" | [`actions/lipsync.md`](actions/lipsync.md) | WP-28b |
 | "voice-over", "music", "sound effects", "sound" | [`actions/sound.md`](actions/sound.md) | WP-12 |
 | "animatic", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | WP-13 (stub) |
 | "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
