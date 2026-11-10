@@ -37,13 +37,13 @@ The look is D-01's; only behaviour was added, and only where the project has the
 - **Rules** and **Gates** are two more tabs beside Bible and Ledger (shown only when the project has them). Both are read-only. A gate shows its scope, its progress (approved / waiting / sent back / not made), and, once recorded, who signed it, how and when, with "attested, not proven". The units a gate covers follow `decisions/gates.ts#unitsInGate`; `default-board.test.ts` checks the panel agrees with it. **No control on the board signs a gate or is aimed at one**: a sign-off is recorded by `decisions/cli.ts signoff` (`actions/review.md` §4).
 - **211 shots stay responsive.** Each click re-renders the board, but a container is re-parsed only when its HTML changed, and the shot list replaces only the scene sections that changed. Measured with the synthetic 211-shot film (`__fixtures__/big-project.ts`), 2026-11-10:
 
-  | | Chromium (Claude desktop app's browser pane) | jsdom (`default-board.test.ts`, a busy machine) |
+  | | Chromium (Claude desktop app's browser pane) | jsdom (`default-board.test.ts`, quiet machine · busy machine) |
   |---|---|---|
   | open a shot, every part shown | 87–118 ms | — |
-  | approve a shot, one part shown | — | 0.8 s |
-  | approve a card, every part shown | — | 2.9 s |
-  | show one part (P7) | 197 ms | 4.3 s |
-  | back to every part (rebuilds 211 rows and the script) | 585 ms | 8.9 s |
+  | approve a shot, one part shown | — | 0.7 s · 1.5 s |
+  | approve a card, every part shown | — | 1.4 s · 2.9 s |
+  | show one part (P7) | 197 ms | 1.0 s · 4.3 s |
+  | back to every part (rebuilds 211 rows and the script) | 585 ms | 1.9 s · 8.9 s |
 
   jsdom parses HTML many times slower than a browser; the test prints its numbers and only fails on a click slower than 30 s.
 
