@@ -462,7 +462,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .gt-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 10px; }
 .gt-id { font: 600 15px/1.3 var(--ak-font-mono); }
 .gt-t { margin-top: 2px; font: 500 16px/1.35 var(--ak-font-display); }
-.gt-scope, .gt-count { margin-top: 6px; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.gt-scope, .gt-count { margin-top: 6px; font: 500 14px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
 .gt-count b { color: var(--ak-fg); }
 .gt .bar { margin-top: 8px; }
 .seg-ok { background: var(--ak-success); }
@@ -470,7 +470,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .seg-back { background: var(--ak-danger); }
 .gt-sign { margin-top: 10px; padding: 10px 12px; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-md); font-size: 14px; }
 .gt-sign b { font-weight: 700; }
-.gt-notes { margin-top: 8px; display: grid; gap: 4px; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg); }
+.gt-notes { margin-top: 8px; display: grid; gap: 4px; font: 500 14px/1.45 var(--ak-font-sans); color: var(--ak-fg); }
 .gt-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .ppl { display: grid; gap: 4px; margin-bottom: 6px; font-size: 14px; }
 .rules-dl { display: grid; gap: 4px 0; }
@@ -822,7 +822,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const disp = s => (s === 'pending' ? 'not-started' : s);
     const assetById = {};
     p.assets.forEach(a => { assetById[a.id] = a; });
-    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '', name: a.name || '', film: a.film || null, uri: (a.file && a.file.uri) || '', removed: !!(a.source && a.source.removed_at) });
+    /* removed from the shot list: the unit itself, or its owner (decisions/fold.ts#removedAt) */
+    const goneAt = {};
+    [].concat(p.shots, p.bible.characters || [], p.bible.locations || [], p.bible.styles || []).forEach(x => { if (x.source && x.source.removed_at) goneAt[x.id] = x.source.removed_at; });
+    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '', name: a.name || '', film: a.film || null, uri: (a.file && a.file.uri) || '',
+      removed: !!(a.source && a.source.removed_at) || !!(a.owner && goneAt[a.owner]), removed_at: (a.source && a.source.removed_at) || (a.owner && goneAt[a.owner]) || '' });
     const scenePart = {};
     p.scenes.forEach(s => { scenePart[s.id] = s.part || null; });
     const lineById = {};
@@ -1069,9 +1073,12 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const waitingOther = () => pendingAssets().length + pendingEntries().length;
   const awaitingSpend = () => D.pending_spend.filter(j => jobStatus(j) === 'awaiting-approval');
   const bound = j => (j.approved_max != null ? j.approved_max : j.estimate);
+  /* the next shot waiting for review: in the part shown when there is one, else anywhere (selectShot then opens its part) */
   function nextPending(from) {
-    const list = D.shots.filter(s => live(s) && shotStatus(s.id) === 'pending-review' && s.id !== from);
-    if (!list.length) return null;
+    const any = D.shots.filter(s => live(s) && shotStatus(s.id) === 'pending-review' && s.id !== from);
+    if (!any.length) return null;
+    const here = any.filter(inPart);
+    const list = here.length ? here : any;
     const i = D.shots.findIndex(s => s.id === from);
     const after = list.find(s => D.shots.indexOf(s) > i);
     return (after || list[0]).id;
@@ -1819,6 +1826,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   /* ── actions ──────────────────────────────────────────── */
   function selectShot(id, from, opts) {
     if (!shotsById[id] || shotsById[id].removed) return;
+    if (!inPart(shotsById[id])) { S.part = shotsById[id].part || 'all'; S.compose = null; }
     const toggle = from === 'row' && S.sel === id;
     S.sel = toggle ? null : id;
     if (!S.compose || S.compose.id !== S.sel) S.compose = null;

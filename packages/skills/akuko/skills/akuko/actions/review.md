@@ -92,6 +92,7 @@ A project may have **gates** (`gates[]`, e.g. `G-LOOK`, `G-PILOT`) and **people*
 
 - Run `signoff` **only** when the person says, in their own words, that a named gate was signed by a named person, and how: for example "record G-LOOK signed by <name> via email". Ask for whatever is missing (which gate, who, how). "They liked it", "looks good to them", "go ahead", "sign it off" or an approval on the board are **not** sign-offs: answer with the words to use instead.
 - Never pass your own name or an agent name as the signer, and never sign because a gate is ready.
+- **People are the person's to name.** Add someone to `people[]` (any role, and above all `signoff`), or change a role, only on the person's explicit instruction naming them and the role. Never add yourself or an agent, and never add a signer so that a sign-off can be recorded.
 - Then run, with the person's words for `--via` and any note:
   `node --experimental-strip-types decisions/cli.ts signoff --project <project> --gate <id> --by <person id> --via "<how>" [--note "<their words>"] [--at <when it was given, ISO>]`
   Host A: `signoff-file --project-file <akuko/project saved as a file> --out signed.json …`, then ArtifactData `set` `akuko/project` to `signed.json` with `if_version`.

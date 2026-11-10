@@ -106,6 +106,57 @@ describe('the sign-off page', () => {
     assert.match(html, /A &lt;b&gt;film&lt;\/b&gt; about aku&#107;o\.decisions/);
   });
 
+  it('hostile project text in every field stays text (reviewer probe so.ts)', () => {
+    const q = structuredClone(p) as any;
+    const X = '"><img src=x onerror="alert(1)"><script>alert(2)</script></script><form action=//e.x><button data-akuko-action="approve">akuko-decision-writer __ikenga window.claude.use writeDecision</button>';
+    q.project.title = X; q.gates[0].title = X; q.people.forEach((x: any) => { x.name = X; }); q.rules.banned[0].term = X; q.rules.banned[0].note = X;
+    q.rules.consent = [{ id: 'c-x', who: X, what: X, date: '2026-11-01' }];
+    q.rules.uploads.allow = q.rules.uploads.allow.map((u: any) => ({ ...u, consent_ref: undefined }));
+    q.assets.forEach((a: any) => { a.name = X; }); q.shots.forEach((s: any) => { s.action = X; });
+    q.bible.characters.forEach((e: any) => { e.name = X; e.description = X; });
+    q.gates[0].signed = { by: 'p-sign', role: 'signoff', at: '2026-11-10T08:00:00Z', via: X, note: X };
+    for (const g of q.gates) {
+      const { html } = buildSignoffPage(q, g.id, dir, { now: NOW });
+      assert.deepEqual(decisionWriteSigns(html), [], g.id);
+      assert.deepEqual(html.match(/<script[^>]*>/g), ['<script type="application/json" id="akuko-view">'], g.id);
+      assert.doesNotMatch(html, /<img[^>]*onerror|<form|<button|https?:/i, g.id);
+      assert.match(html, /attested, not proven/);
+    }
+  });
+
+  it('reads pictures only from inside the project folder or its parent, with an image extension (review F5)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'akuko-signoff-roots-'));
+    dirs.push(root);
+    const proj = join(root, 'show', 'ep1', 'akuko');
+    writeBigProject(proj);
+    mkdirSync(join(root, 'show', 'ep1', 'Cards'), { recursive: true });
+    writeFileSync(join(root, 'show', 'ep1', 'Cards', 'ok.png'), TINY_PNG); // the project's parent: allowed
+    mkdirSync(join(root, 'elsewhere'), { recursive: true });
+    writeFileSync(join(root, 'elsewhere', 'far.png'), TINY_PNG); // two levels up: not
+    writeFileSync(join(proj, 'secret.bin'), TINY_PNG); // inside, but not an image extension
+    const q = structuredClone(p);
+    const pick = (id: string) => q.assets.find((a) => a.id === id)!;
+    pick('ADA_portrait').file = { uri: '../Cards/ok.png', mime: 'image/png' };
+    pick('ADA_turnaround').file = { uri: '../../../elsewhere/far.png', mime: 'image/png' };
+    pick('GULLS_portrait').file = { uri: join(root, 'elsewhere', 'far.png').split('\\').join('/'), mime: 'image/png' };
+    pick('house-style_lookbook').file = { uri: 'secret.bin', mime: 'image/png' };
+    const page = buildSignoffPage(q, 'G-LOOK', proj, { now: NOW });
+    const how = Object.fromEntries(page.images.map((i) => [i.unit, i.how]));
+    assert.equal(how['ADA_portrait'], 'embedded');
+    assert.equal(how['ADA_turnaround'], 'outside');
+    assert.equal(how['GULLS_portrait'], 'outside', 'an absolute path outside is refused too');
+    assert.equal(how['house-style_lookbook'], 'not-an-image', 'the extension decides, not only the MIME type');
+    assert.match(page.html, /Not loaded: <code>\.\.\/\.\.\/\.\.\/elsewhere\/far\.png<\/code> is outside the project folder/);
+  });
+
+  it('a link that would cross drives is not loaded (review F7)', { skip: process.platform !== 'win32' }, () => {
+    const other = /^[cC]:/.test(dir) ? 'Z:/share' : 'C:/share';
+    const page = buildSignoffPage(p, 'G-LOOK', dir, { now: NOW, images: 'link', outDir: other });
+    assert.ok(page.images.length > 0);
+    assert.ok(page.images.every((i) => i.how === 'outside'), JSON.stringify(page.images.map((i) => i.how)));
+    assert.match(page.html, /is on another drive than this page/);
+  });
+
   it('a signed gate says who signed, how and when', () => {
     const q = structuredClone(p);
     q.gates![0]!.signed = { by: 'p-sign', role: 'signoff', at: '2026-11-10T08:15:00Z', via: 'email', note: 'Replied yes.' };

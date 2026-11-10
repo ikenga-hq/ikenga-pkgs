@@ -24,14 +24,20 @@
  * shrink a picture; for a large gate use `link` and share the folder, or make
  * smaller previews first.
  *
+ * Only pictures inside the project folder or its parent (where a sheet's
+ * `../Cards-and-Credits` sits) are read, judged after resolving links
+ * (realpath), and only with an image extension (and an image MIME type when
+ * the asset names one). Anything else is listed as not loaded, as is a link
+ * that would cross drives.
+ *
  * How the sign-off comes back (R9-11): the signer tells the person who sent
  * the page, in their own words; that person records it with `decisions/cli.ts
  * signoff`. Attested, not proven.
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rulesOf, STAGE_LABEL, type AkukoProject, type StageId } from '../schema/akuko-project.ts';
 import { gateStatus, type GateStatus, type GateUnit } from '../decisions/gates.ts';
@@ -50,7 +56,7 @@ export interface SignoffPageOptions {
   now?: () => Date;
 }
 
-export interface SignoffPageImage { unit: string; uri: string; how: 'embedded' | 'linked' | 'missing' | 'not-an-image' | 'remote' | 'none'; bytes?: number; sha256?: string; why?: string }
+export interface SignoffPageImage { unit: string; uri: string; how: 'embedded' | 'linked' | 'missing' | 'not-an-image' | 'remote' | 'outside' | 'none'; bytes?: number; sha256?: string; why?: string }
 
 export interface SignoffPage {
   html: string;
@@ -82,6 +88,7 @@ const KIND_TXT: Record<string, string> = { portrait: 'Portrait', turnaround: 'Tu
 /** Where a project-relative URI is on disk (it may go up out of the folder, like `../Cards/x.png`); undefined for a remote one. */
 function onDisk(projectDir: string, uri: string): string | undefined {
   if (/^file:/i.test(uri)) return fileURLToPath(uri);
+  if (/^[a-z]:[\\/]/i.test(uri)) return resolve(uri); // a Windows absolute path, not a URI scheme
   if (/^[a-z][a-z0-9+.-]*:/i.test(uri) || uri.startsWith('/_blob/')) return undefined;
   return isAbsolute(uri) ? uri : resolve(projectDir, ...uri.split('/'));
 }
@@ -89,15 +96,20 @@ function onDisk(projectDir: string, uri: string): string | undefined {
 function picture(projectDir: string, outDir: string, u: GateUnit, mime: string | undefined, o: Required<Pick<SignoffPageOptions, 'images' | 'maxImageBytes' | 'maxTotalBytes'>>, budget: { used: number }): { img: SignoffPageImage; html: string } {
   const uri = u.file!;
   const path = onDisk(projectDir, uri);
-  const type = mime && mime.startsWith('image/') ? mime : IMAGE_MIME[extname(path ?? uri).toLowerCase()];
+  const ext = extname(path ?? uri).toLowerCase();
+  const type = IMAGE_MIME[ext] !== undefined && (mime === undefined || mime.startsWith('image/')) ? IMAGE_MIME[ext] : undefined;
   const label = `${esc(KIND_TXT[u.kind] ?? u.kind)} ${esc(u.id)}`;
   const box = (inner: string) => `<div class="pic">${inner}</div>`;
   const note = (t: string) => box(`<p class="pic-none">${t}</p>`);
   if (!path) return { img: { unit: u.id, uri, how: 'remote' }, html: note(`Stored at <code>${esc(uri)}</code>: not loaded here (this page makes no network calls).`) };
   if (!existsSync(path)) return { img: { unit: u.id, uri, how: 'missing' }, html: note(`File not found: <code>${esc(uri)}</code>.`) };
-  const bytes = statSync(path).size;
+  const real = realpathSync(path);
+  const roots = [projectDir, dirname(resolve(projectDir))].map((r) => { try { return realpathSync(r); } catch { return resolve(r); } });
+  const inside = (r: string) => { const rel = relative(r, real); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)); };
+  if (!roots.some(inside)) return { img: { unit: u.id, uri, how: 'outside' }, html: note(`Not loaded: <code>${esc(uri)}</code> is outside the project folder.`) };
+  const bytes = statSync(real).size;
   if (!type) return { img: { unit: u.id, uri, how: 'not-an-image', bytes }, html: note(`Not a picture (${esc(extname(path) || 'no extension')}): <code>${esc(uri)}</code>, ${mb(bytes)}.`) };
-  const data = readFileSync(path);
+  const data = readFileSync(real);
   const sha256 = createHash('sha256').update(data).digest('hex');
   if (o.images === 'none') return { img: { unit: u.id, uri, how: 'none', bytes, sha256 }, html: note(`Picture not included: <code>${esc(uri)}</code>.`) };
   const encoded = o.images === 'embed' ? Math.ceil(bytes / 3) * 4 + `data:${type};base64,`.length : Infinity;
@@ -107,6 +119,7 @@ function picture(projectDir: string, outDir: string, u: GateUnit, mime: string |
   }
   const why = o.images === 'link' ? 'linked' : bytes > o.maxImageBytes ? `too large to embed (${mb(bytes)}, limit ${mb(o.maxImageBytes)})` : `the page's embedding limit (${mb(o.maxTotalBytes)}) is used up`;
   const rel = relative(outDir, path).split(sep).join('/');
+  if (isAbsolute(rel) || /^[a-z]:/i.test(rel)) return { img: { unit: u.id, uri, how: 'outside', bytes, sha256, why }, html: note(`Not loaded: <code>${esc(uri)}</code> is on another drive than this page (${esc(why)}).`) };
   return {
     img: { unit: u.id, uri, how: 'linked', bytes, sha256, why },
     html: box(`<img src="${esc(encodeURI(rel))}" alt="${label}" loading="lazy"><p class="pic-cap">Shown from <code>${esc(uri)}</code> (${esc(why)}): it appears when this page sits next to the project.</p>`),

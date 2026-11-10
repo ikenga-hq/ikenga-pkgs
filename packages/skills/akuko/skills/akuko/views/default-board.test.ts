@@ -637,6 +637,79 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     p.close();
   });
 
+  // Review F1 (reviewer's probe "next across parts"): the next-shot actions never dead-end in a one-part view.
+  it('"Review next shot" in a part with nothing waiting opens the next waiting shot and its part', async () => {
+    const q = clone(BIG);
+    for (const s of q.shots) if (s.part === 'P7' && s.status !== 'approved') s.status = 'approved';
+    const waiting = q.shots.filter((s) => s.status === 'pending-review');
+    assert.ok(waiting.length > 0 && waiting.every((s) => s.part !== 'P7'));
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    const sel = p.d.querySelector('.shot.is-sel');
+    assert.ok(sel, 'a shot is selected');
+    const id = sel.getAttribute('data-akuko-unit');
+    assert.ok(waiting.some((s) => s.id === id), `${id} is waiting for review`);
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), q.shots.find((s) => s.id === id)!.part, 'its part is shown');
+    assert.ok(p.d.querySelector(`[data-akuko-view="shot-detail"][data-akuko-unit="${id}"]`), 'and its detail is open');
+    p.close();
+  });
+
+  it('in a part with a shot waiting, "next" stays in that part', async () => {
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    const id = p.d.querySelector('.shot.is-sel')?.getAttribute('data-akuko-unit');
+    assert.equal(BIG.shots.find((s) => s.id === id)?.part, 'P7');
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), 'P7');
+    p.close();
+  });
+
+  it('a spend job naming a shot of another part opens that part when you pick the shot (reviewer probe)', async () => {
+    const q = clone(BIG);
+    const s1 = q.shots.find((s) => s.part === 'P1')!;
+    q.pending_spend = [{ id: 'job_x', stage: 'keyframes', label: 'Key frames P1', units: [s1.id], provider: 'Gemini image', model: 'm', estimate: 0.5, status: 'awaiting-approval' }];
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    assert.equal(p.d.querySelectorAll('#p-spend [data-akuko-field="job"]').length, 1, 'the spend gate shows every job, whatever part is shown');
+    assert.equal(p.num('waiting-spend'), 1);
+    click(p, `#p-spend [data-act="sel-unit"][data-id="${s1.id}"]`);
+    await p.tick();
+    assert.equal(p.d.querySelector('#parts [aria-pressed="true"]').getAttribute('data-id'), 'P1');
+    assert.equal(p.d.querySelector('.shot.is-sel')?.getAttribute('data-akuko-unit'), s1.id);
+    p.close();
+  });
+
+  // Review F2: a removed shot's key frame is out of review too.
+  it("a removed shot's waiting key frame is not in \"your move\" and has no approve", async () => {
+    const q = clone(BIG);
+    const before = BIG.assets.filter((a) => a.status === 'pending-review').length;
+    const kf = q.assets.find((a) => a.id === 'S11-050_keyframe')!;
+    assert.equal(kf.status, 'pending-review');
+    q.shots.find((s) => s.id === 'S11-050')!.source = { kind: 'sheet', id: 'S11-050', removed_at: '2026-11-10T07:00:00Z' };
+    const p = await boot({ host: 'B', project: asPage(q) });
+    assert.equal(p.num('waiting-other'), before - 1);
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-050_keyframe"]').length, 0);
+    assert.match(p.text('#bib-S11-050_keyframe'), /Removed from the sheet/);
+    p.close();
+  });
+
+  it('text from the project never becomes markup on the board (reviewer probe)', async () => {
+    const q = clone(BIG) as any;
+    const X = '"><img src=x onerror="window.__pwn=1"><script>window.__pwn=2</script>akuko-decision __ikenga';
+    q.project.title = X; q.gates[0].title = X; q.people[1].name = X; q.rules.banned[0].term = X; q.rules.banned[0].note = X;
+    q.assets.find((a: any) => a.kind === 'card').name = X;
+    Object.assign(q.shots[0], { action: X, prompt: X, notes: X, negative: X, motion_note: X, framing: X });
+    q.scenes[0].summary = X;
+    q.gates[0].signed = { by: q.people[1].id, role: 'signoff', at: '2026-11-10T08:00:00Z', via: X, note: X };
+    const p = await boot({ host: 'B', project: q });
+    click(p, `[data-act="sel"][data-id="${q.shots[0].id}"]`);
+    await p.tick();
+    assert.equal(p.d.querySelectorAll('img').length, 0);
+    assert.equal(p.w.__pwn, undefined);
+    assert.ok(p.text('#gate-G-LOOK').includes('"><img src=x'), 'shown as text');
+    p.close();
+  });
+
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S11-030', 'sketch'], ['card_P7-CARD', 'export'], ['S11-050_keyframe', 'keyframes']] as const;

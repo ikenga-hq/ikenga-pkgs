@@ -91,6 +91,20 @@ export type RejectCode =
 /** When a unit left the imported shot list (WP-25 sets `source.removed_at`), else undefined. Such a unit takes no decisions and doesn't hold its stage back. */
 export const removedFromSheet = (u: object): string | undefined => (u as { source?: { removed_at?: string } }).source?.removed_at;
 
+/**
+ * When a unit is out of review because its row left the shot list: its own
+ * `source.removed_at`, else its owner's (a `<shot>_keyframe` of a removed
+ * shot, an image of a removed bible entry). The one rule folding, the gates
+ * (`decisions/gates.ts`) and the default board use.
+ */
+export function removedAt(p: AkukoProject, u: object): string | undefined {
+  const own = removedFromSheet(u);
+  if (own !== undefined) return own;
+  const owner = (u as { owner?: string }).owner;
+  const o = owner === undefined ? undefined : findUnit(p, owner)?.unit;
+  return o === undefined ? undefined : removedFromSheet(o);
+}
+
 export interface Rejection {
   id: string;
   action: Decision['action'];
@@ -355,9 +369,10 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
     };
 
     // A unit that left the shot list takes no new decision (WP-29): each is refused with a notice, nothing is applied.
-    const removedAt = removedFromSheet(unit);
-    if (removedAt !== undefined) {
-      for (const d of ds) if (fresh.has(d.id) && !noticed.has(d.id)) notice(d, 'removed-from-sheet', `"${unitId}" was removed from the shot list (${removedAt}); it is kept for the record but takes no decisions. Nothing was applied.`);
+    const gone = removedAt(p, unit);
+    if (gone !== undefined) {
+      const why = removedFromSheet(unit) !== undefined ? `"${unitId}" was removed from the shot list (${gone})` : `"${unitId}" belongs to "${(unit as { owner?: string }).owner}", which was removed from the shot list (${gone})`;
+      for (const d of ds) if (fresh.has(d.id) && !noticed.has(d.id)) notice(d, 'removed-from-sheet', `${why}; it is kept for the record but takes no decisions. Nothing was applied.`);
       if (notices.length) unit.comments = sortComments([...unit.comments, ...notices]);
       continue;
     }
@@ -503,7 +518,9 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
     if (fresh.has(cause.id)) applied.add(cause.id);
   }
 
-  // 4. Stages: approved only when every unit in it is approved.
+  // 4. Stages: approved only when every unit in it is approved. A stage that holds a unit removed from the
+  //    shot list is re-rolled on every fold too, so a removal alone (a re-import, no decision) can release it.
+  for (const { unit } of listUnits(p)) if (removedAt(p, unit) !== undefined) touchedStages.add(unit.stage);
   if (touchedStages.size > 0) recomputeStages(p, touchedStages);
 
   // 5. Record every decision read (rejected ones too, so people can see them), in order.
@@ -518,7 +535,7 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
 /** Stage gating after units changed (lib/state.md §Stages): approve / re-open, then unlock and move `current_stage`. */
 function recomputeStages(p: AkukoProject, touched: Set<StageId>): void {
   // A unit removed from the shot list never holds its stage back (WP-29).
-  const units = listUnits(p).map((u) => u.unit).filter((u) => removedFromSheet(u) === undefined);
+  const units = listUnits(p).map((u) => u.unit).filter((u) => removedAt(p, u) === undefined);
   for (const s of touched) {
     const inStage = units.filter((u) => u.stage === s);
     if (inStage.length === 0) continue;

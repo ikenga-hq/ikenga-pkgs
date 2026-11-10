@@ -37,6 +37,7 @@
 
 import { AkukoProjectSchema, type AkukoProject, type Asset, type BibleEntry, type Gate, type GateSignature, type Person, type Shot, type UnitStatus } from '../schema/akuko-project.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
+import { removedAt } from './fold.ts';
 
 export type GateUnitType = 'shot' | 'asset' | 'entry';
 
@@ -142,7 +143,7 @@ export function unitsInGate(p: AkukoProject, gate: Pick<Gate, 'scope'>): { units
   }
   const entryIds = new Set(entries.filter(({ e }) => !filtered || named.has(e.id)).map(({ e }) => e.id));
   const assets = p.assets.filter((a) => {
-    if (removedRow(a)) return false;
+    if (removedAt(p, a) !== undefined) return false; // removed itself, or its owner (a shot or entry) was
     if (!filtered) return true;
     if (a.owner !== undefined && (shotIds.has(a.owner) || entryIds.has(a.owner))) return true;
     if (a.kind === 'card') { const part = cardPart(p, a); return part !== undefined && want.parts.has(part); }
