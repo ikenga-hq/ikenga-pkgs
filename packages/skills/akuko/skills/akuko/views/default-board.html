@@ -448,6 +448,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .f-lbl { align-self: center; margin-right: 2px; font: 600 12px/1 var(--ak-font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ak-fg-muted); }
 .filters:not([hidden]) + .filters { margin-top: 6px; }
 .filters[hidden] { display: none; }
+.removed-grp > summary { cursor: pointer; list-style: none; }
+.removed-grp > summary::-webkit-details-marker { display: none; }
+.removed-grp > summary h3::before { content: "▸"; color: var(--ak-fg-muted); }
+.removed-grp[open] > summary h3::before { content: "▾"; }
+.removed-grp .card-row { opacity: .8; }
 .ph-card { display: grid; place-content: center; width: 112px; aspect-ratio: 16 / 9; background: var(--ak-bg-raised); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-xs); font: 700 12px/1 var(--ak-font-sans); letter-spacing: .1em; color: var(--ak-fg-muted); }
 .card-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 14px; align-items: center; padding: 10px 20px; }
 .card-row .bib-act { margin-top: 6px; }
@@ -822,7 +827,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     p.scenes.forEach(s => { scenePart[s.id] = s.part || null; });
     const lineById = {};
     ((p.audio && p.audio.lines) || []).forEach(l => { lineById[l.id] = l; });
-    const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes || [], comments: e.comments || [],
+    const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes || [], comments: e.comments || [], removed: !!(e.source && e.source.removed_at), removed_at: (e.source && e.source.removed_at) || '',
       assets: (e.refs || []).filter(r => assetById[r]).map(r => asset(assetById[r])) });
     const styles = (p.bible.styles || []).map(entry);
     return {
@@ -835,7 +840,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         action: s.action || '', script_line: s.script_line || '', prompt: s.prompt || '', refs: s.refs || [], blocking: s.blocking || [],
         move: MV[s.camera_move] || (!s.camera_move || s.camera_move === 'unset' || s.camera_move === 'static' ? null : s.camera_move), comments: s.comments || [],
         part: s.part || (s.scene && scenePart[s.scene]) || null, film: s.film || null, tier: s.tier || '', framing: s.framing || '', motion_note: s.motion_note || '', lighting: s.lighting || '', negative: s.negative || '',
-        notes: s.notes || '', removed: !!(s.source && s.source.removed_at), source: s.source || null,
+        notes: s.notes || '', removed: !!(s.source && s.source.removed_at), removed_at: (s.source && s.source.removed_at) || '', source: s.source || null,
         lines: (s.lines || []).map(l => Object.assign({ id: l.id, kind: l.kind }, lineById[l.id] ? { text: lineById[l.id].text || '', character: lineById[l.id].character || '' } : {})) })),
       bible: { characters: (p.bible.characters || []).map(entry), locations: (p.bible.locations || []).map(entry), styles: styles },
       assets: p.assets.map(asset),
@@ -943,7 +948,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const RAILS = ['bible', 'ledger', 'gates', 'rules'];
   const FILTERS = ['all', 'pending-review', 'needs-rework', 'approved'];
   const hostMode = () => { const m = document.documentElement.getAttribute('data-mode'); return m === 'light' || m === 'dark' ? m : null; };
-  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null };
+  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null, showRemoved: false };
   const saved = store.read();
   if (saved && saved.v === 2) {
     if (saved.sel && shotsById[saved.sel]) S.sel = saved.sel;
@@ -958,9 +963,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   function save() { store.write({ v: 2, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, part: S.part, mode: S.modeChosen ? S.mode : null }); }
   /* parts: what the one-part view shows. "all" shows the whole film. */
   const inPart = s => S.part === 'all' || s.part === S.part;
-  const partShots = () => D.shots.filter(inPart);
+  /* units removed from the imported shot list (source.removed_at) are kept for the record: shown in a collapsed group, never
+     reviewed, never counted in "your move" (folding refuses a decision on one, decisions/fold.ts) */
+  const live = s => !s.removed;
+  const partShots = () => D.shots.filter(s => live(s) && inPart(s));
+  const partRemoved = () => D.shots.filter(s => s.removed && inPart(s)).concat(CARDS.filter(c => c.removed && (S.part === 'all' || c._part === S.part)));
   const partScenes = () => D.scenes.filter(sc => S.part === 'all' || sc.part === S.part || D.shots.some(s => s.scene === sc.id && s.part === S.part));
-  const partCards = () => CARDS.filter(c => S.part === 'all' || c._part === S.part);
+  const partCards = () => CARDS.filter(c => !c.removed && (S.part === 'all' || c._part === S.part));
   const hasRail = id => (id === 'gates' ? D.gates.length > 0 || D.people.length > 0 : id === 'rules' ? !!D.rules : true);
   /* Decisions this page holds that the project does not have yet. Ones already folded into the project (their ids are in its
      decisions) are left out of the copy, so a second copy never resends them. Nothing here deletes a decision. */
@@ -1050,18 +1059,18 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   function counts() {
     const c = { 'approved': 0, 'pending-review': 0, 'needs-rework': 0 };
-    D.shots.forEach(s => { const st = shotStatus(s.id); c[st] = (c[st] || 0) + 1; });
+    D.shots.forEach(s => { if (s.removed) return; const st = shotStatus(s.id); c[st] = (c[st] || 0) + 1; });
     return c;
   }
   /* what is waiting for the person, counted exactly as views/contract.md says */
   const hasAssetRef = e => e.assets.length > 0;
-  function pendingAssets() { return D.assets.filter(a => assetStatus(a) === 'pending-review'); }
-  function pendingEntries() { return Object.keys(bibleById).map(k => bibleById[k].item).filter(e => !hasAssetRef(e) && entryStatus(e) === 'pending-review'); }
+  function pendingAssets() { return D.assets.filter(a => !a.removed && assetStatus(a) === 'pending-review'); }
+  function pendingEntries() { return Object.keys(bibleById).map(k => bibleById[k].item).filter(e => !e.removed && !hasAssetRef(e) && entryStatus(e) === 'pending-review'); }
   const waitingOther = () => pendingAssets().length + pendingEntries().length;
   const awaitingSpend = () => D.pending_spend.filter(j => jobStatus(j) === 'awaiting-approval');
   const bound = j => (j.approved_max != null ? j.approved_max : j.estimate);
   function nextPending(from) {
-    const list = D.shots.filter(s => shotStatus(s.id) === 'pending-review' && s.id !== from);
+    const list = D.shots.filter(s => live(s) && shotStatus(s.id) === 'pending-review' && s.id !== from);
     if (!list.length) return null;
     const i = D.shots.findIndex(s => s.id === from);
     const after = list.find(s => D.shots.indexOf(s) > i);
@@ -1157,7 +1166,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     let h = '<header class="page-head"><p class="pg-title">' + esc(String(PR.title || '').toUpperCase()) + '</p>' + (PR.source ? '<p class="pg-src">' + esc(PR.source) + '</p>' : '') + '</header>';
     const sheet = D.shots.some(s => s.source && s.source.kind === 'sheet');
     partScenes().forEach(sc => {
-      const shots = D.shots.filter(s => s.scene === sc.id && inPart(s));
+      const shots = D.shots.filter(s => s.scene === sc.id && live(s) && inPart(s));
       const paras = [];
       shots.forEach(s => {
         /* an imported shot list may carry no script line: show its dialogue lines, else what happens */
@@ -1288,7 +1297,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       else if (st.state === 'in-progress') g = '<span class="g g-prog" aria-hidden="true"></span>';
       else if (st.state === 'waiting-spend') g = '<span class="g g-money" aria-hidden="true"></span>';
       else if (st.state === 'locked') g = LOCK;
-      if (st.current && D.shots.length) s += ' · ' + c.approved + '/' + D.shots.length + ' approved';
+      const nLive = D.shots.filter(live).length;
+      if (st.current && nLive) s += ' · ' + c.approved + '/' + nLive + ' approved';
       if (st.id === 'bible' && wo) s += ' · ' + wo + ' to review';
       const jobs = D.pending_spend.filter(j => j.stage === st.id);
       if (jobs.length) {
@@ -1338,13 +1348,13 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     }
     const pe = $('#parts');
     pe.hidden = PARTS.length < 2;
-    setHtml(pe, PARTS.length < 2 ? '' : '<span class="f-lbl" aria-hidden="true">Part</span>' + [['all', 'All parts', D.shots.length]].concat(PARTS.map(pt => [pt, pt, D.shots.filter(s => s.part === pt).length]))
+    setHtml(pe, PARTS.length < 2 ? '' : '<span class="f-lbl" aria-hidden="true">Part</span>' + [['all', 'All parts', D.shots.filter(live).length]].concat(PARTS.map(pt => [pt, pt, D.shots.filter(s => live(s) && s.part === pt).length]))
       .map(f => '<button class="fchip" type="button" data-act="part" data-id="' + esc(f[0]) + '" data-k="part:' + esc(f[0]) + '" aria-pressed="' + (S.part === f[0]) + '">' + esc(f[1]) + ' <span class="mono">' + f[2] + '</span></button>').join(''));
     const F = [['all', 'All', shots.length], ['pending-review', 'Pending review', c['pending-review'] || 0], ['needs-rework', 'Needs rework', c['needs-rework'] || 0], ['approved', 'Approved', c.approved || 0]];
     setHtml($('#filters'), F.map(f => '<button class="fchip" type="button" data-act="filter" data-id="' + f[0] + '" data-k="filter:' + f[0] + '" aria-pressed="' + (S.filter === f[0]) + '">' + (f[0] === 'all' ? '' : glyph(f[0])) + f[1] + ' <span class="mono">' + f[2] + '</span></button>').join(''));
     const blocks = [];
     partScenes().forEach((sc, k) => {
-      const all = D.shots.filter(s => s.scene === sc.id && inPart(s));
+      const all = D.shots.filter(s => s.scene === sc.id && live(s) && inPart(s));
       const vis = all.filter(s => S.filter === 'all' || shotStatus(s.id) === S.filter || s.id === S.sel);
       if (!vis.length) return;
       const len = all.reduce((a, s) => a + s.duration_s, 0);
@@ -1358,6 +1368,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const cards = partCards().filter(cd => S.filter === 'all' || assetStatus(cd) === S.filter);
     cards.forEach((cd, k) => { blocks.push({ key: 'card:' + cd.id, at: cd.film ? cd.film.in_s : Infinity, k: -1 - k, html: cardItem(cd) }); });
     if (cards.length) blocks.sort((a, b) => (a.at - b.at) || (a.k - b.k));
+    const gone = partRemoved();
+    if (gone.length) blocks.push({ key: 'removed', at: Infinity, k: 0, html: removedGroup(gone) });
     /* only the scene sections (and cards) whose HTML changed are replaced */
     const list = $('#shotlist'), prev = list._akBlocks, ep = isSample() ? 's' : 'r';
     if (prev && prev.ep === ep && blocks.length && prev.keys.length === blocks.length && list.children.length === blocks.length && prev.keys.every((k, i) => k === blocks[i].key)) {
@@ -1366,6 +1378,21 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       list.innerHTML = blocks.map(b => b.html).join('') || '<p class="empty">' + (D.shots.length ? 'No shots match this filter.' : 'No shots yet. akuko adds them in the breakdown.') + '</p>';
     }
     list._akBlocks = { ep: ep, keys: blocks.map(b => b.key), html: blocks.map(b => b.html) };
+  }
+  /* units that left the shot list: a collapsed group, no controls that decide anything, not selectable */
+  function removedGroup(list) {
+    return '<section class="removed-blk" aria-label="Removed from the sheet"><details class="removed-grp" id="removed-grp"' + (S.showRemoved ? ' open' : '') + '><summary class="banner"><h3><span class="bn-n">' + list.length + '</span><span>Removed from the sheet</span></h3>' +
+      '<p class="bn-m">Kept for the record. Not reviewed, not counted, and akuko refuses a decision on them.</p></summary><ol>' +
+      list.map(u => {
+        const shot = !!shotsById[u.id];
+        const st = shot ? shotStatus(u.id) : assetStatus(u);
+        const when2 = u.removed_at ? ' · ' + when(u.removed_at) : '';
+        return '<li class="shot"' + (shot ? ' data-akuko-field="shot" data-akuko-unit="' + esc(u.id) + '"' : '') + ' id="gone-' + esc(u.id) + '"><div class="card-row">' +
+          (shot ? '<span class="thumb" data-akuko-field="panel">' + panelSVG(u, false) + '</span>' : '<span class="ph-card" aria-hidden="true">CARD</span>') +
+          '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + esc(u.id) + '</span>' + (shot ? '<span class="sr-type" data-akuko-field="shot-type">' + esc(u.type) + '</span><span class="sr-tc" data-akuko-field="duration">' + dur(u.duration_s) + 's · ' + stamp(u._in) + '–' + stamp(u._out) + '</span>' : '') +
+          '<span class="flag flag-off">Left the sheet' + esc(when2) + '</span></span><span class="sr-act">' + esc(shot ? u.action : (u.name || '')) + '</span></span>' +
+          (shot ? '<span data-akuko-field="status" data-akuko-status="' + akStatus(st) + '">' + chip(st) + '</span>' : '') + '</div></li>';
+      }).join('') + '</ol></details></section>';
   }
   function cardItem(cd) {
     const st = assetStatus(cd);
@@ -1545,6 +1572,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   /* ── bible ────────────────────────────────────────────── */
   function usedIn(bid) { return D.shots.filter(s => (s.refs || []).indexOf(bid) !== -1).length; }
   function approveAct(unit, label, key) {
+    const u = assetsById[unit] || (bibleById[unit] && bibleById[unit].item);
+    if (u && u.removed) return '<div class="bib-act"><span class="flag flag-off">Removed from the sheet</span><span class="fine">Kept for the record; not reviewed.</span></div>';
     const st = effStatus(unit, (assetsById[unit] || (bibleById[unit] && bibleById[unit].item)).status);
     if (st === 'pending-review' || st === 'needs-rework') return '<div class="bib-act"><span>' + esc(label) + ' is waiting for you</span><button class="btn btn-sm btn-primary" type="button" data-act="unit-ok" data-akuko-action="approve" data-akuko-unit="' + esc(unit) + '" data-id="' + esc(unit) + '" data-k="unit-ok:' + esc(key) + '">Approve ' + esc(label.toLowerCase()) + '</button></div>';
     const t = undoTarget(unit, ['approve']);
@@ -1789,7 +1818,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
   /* ── actions ──────────────────────────────────────────── */
   function selectShot(id, from, opts) {
-    if (!shotsById[id]) return;
+    if (!shotsById[id] || shotsById[id].removed) return;
     const toggle = from === 'row' && S.sel === id;
     S.sel = toggle ? null : id;
     if (!S.compose || S.compose.id !== S.sel) S.compose = null;
@@ -1946,6 +1975,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       case 'load': { const fi = $('#file-in'); if (fi) fi.click(); break; }
     }
   });
+  document.addEventListener('toggle', e => { if (e.target && e.target.id === 'removed-grp') S.showRemoved = e.target.open; }, true);
   document.addEventListener('submit', e => {
     const f = e.target.closest('form[data-form="compose"]');
     if (!f) return;
@@ -1999,7 +2029,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     lastSig = sig;
     setProject(p);
     if (S.sel && !shotsById[S.sel]) { S.sel = null; S.compose = null; S.flash = null; }
-    if (!S.sel) { const f = D.shots.find(s => s.status === 'pending-review'); S.sel = (f || D.shots[0] || { id: null }).id; }
+    if (S.sel && shotsById[S.sel] && shotsById[S.sel].removed) S.sel = null;
+    if (!S.sel) { const f = D.shots.find(s => live(s) && s.status === 'pending-review'); S.sel = (f || D.shots.find(live) || { id: null }).id; }
     buildScript();
     renderAll();
   }
@@ -2057,7 +2088,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   });
 
   /* ── boot ─────────────────────────────────────────────── */
-  if (!S.sel) { const p0 = D.shots.find(s => s.status === 'pending-review'); S.sel = (p0 || D.shots[0] || { id: null }).id; }
+  if (S.sel && shotsById[S.sel] && shotsById[S.sel].removed) S.sel = null;
+  if (!S.sel) { const p0 = D.shots.find(s => live(s) && s.status === 'pending-review'); S.sel = (p0 || D.shots.find(live) || { id: null }).id; }
   buildScript();
   renderAll();
   W.onChange(scheduleRender);

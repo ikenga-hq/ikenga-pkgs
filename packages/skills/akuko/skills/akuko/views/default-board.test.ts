@@ -614,6 +614,29 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     p.close();
   });
 
+  it('units removed from the sheet sit in a collapsed group with no approve, and "your move" leaves them out', async () => {
+    const q = clone(BIG);
+    const at = '2026-11-10T07:00:00Z';
+    const gone = q.shots.find((s) => s.id === 'S11-030')!;
+    assert.equal(gone.status, 'pending-review');
+    gone.source = { kind: 'sheet', id: gone.id, removed_at: at };
+    q.assets.find((a) => a.id === 'card_P7-CARD')!.source = { kind: 'sheet', id: 'P7-CARD', removed_at: at };
+    const p = await boot({ host: 'B', project: asPage(q), url: 'https://board.test/views/default-board.html#part=P7' });
+    assert.equal(p.num('waiting-shots'), BIG.shots.filter((s) => s.status === 'pending-review').length - 1);
+    assert.equal(p.num('waiting-other'), BIG.assets.filter((a) => a.status === 'pending-review').length - 1);
+    const grp = p.d.querySelector('#removed-grp');
+    assert.ok(grp, 'the group is there');
+    assert.equal(grp.open, false, 'collapsed');
+    assert.deepEqual(Array.from(grp.querySelectorAll('li')).map((li: any) => li.id), ['gone-S11-030', 'gone-card_P7-CARD']);
+    assert.match(p.text('#removed-grp summary'), /^2 ?Removed from the sheet/);
+    assert.equal(grp.querySelectorAll('button, [data-akuko-action]').length, 0, 'nothing in it decides anything');
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-030"], [data-akuko-action][data-akuko-unit="card_P7-CARD"]').length, 0);
+    assert.equal(p.d.querySelectorAll('#shotlist [data-akuko-field="shot"]').length - grp.querySelectorAll('[data-akuko-field="shot"]').length, 10, 'the part lists its 10 live shots');
+    assert.equal(p.d.querySelectorAll('#lining .tag').length, 10);
+    assert.equal(p.d.querySelector('[data-act="sel"][data-id="S11-030"]'), null, 'a removed shot is never opened for review');
+    p.close();
+  });
+
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S11-030', 'sketch'], ['card_P7-CARD', 'export'], ['S11-050_keyframe', 'keyframes']] as const;

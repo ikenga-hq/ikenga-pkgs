@@ -85,7 +85,11 @@ export type RejectCode =
   | 'not-reviewable'      // nothing to decide on yet (unit pending / draft)
   | 'spend-refused'       // canApprove() refused (budget, amount shown, cap)
   | 'already-ran'         // the job already ran or is running; spend decisions can't change it
-  | 'conflict';           // same id as a stored decision with different content (ignored)
+  | 'conflict'            // same id as a stored decision with different content (ignored)
+  | 'removed-from-sheet'; // the unit left the imported shot list (source.removed_at): kept for the record, takes no decisions (WP-29)
+
+/** When a unit left the imported shot list (WP-25 sets `source.removed_at`), else undefined. Such a unit takes no decisions and doesn't hold its stage back. */
+export const removedFromSheet = (u: object): string | undefined => (u as { source?: { removed_at?: string } }).source?.removed_at;
 
 export interface Rejection {
   id: string;
@@ -350,6 +354,14 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
       }
     };
 
+    // A unit that left the shot list takes no new decision (WP-29): each is refused with a notice, nothing is applied.
+    const removedAt = removedFromSheet(unit);
+    if (removedAt !== undefined) {
+      for (const d of ds) if (fresh.has(d.id) && !noticed.has(d.id)) notice(d, 'removed-from-sheet', `"${unitId}" was removed from the shot list (${removedAt}); it is kept for the record but takes no decisions. Nothing was applied.`);
+      if (notices.length) unit.comments = sortComments([...unit.comments, ...notices]);
+      continue;
+    }
+
     // Refusals by provenance on this unit get a visible notice.
     for (const d of ds) {
       const v = rNew.eligible.get(d.id);
@@ -505,7 +517,8 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
 
 /** Stage gating after units changed (lib/state.md §Stages): approve / re-open, then unlock and move `current_stage`. */
 function recomputeStages(p: AkukoProject, touched: Set<StageId>): void {
-  const units = listUnits(p).map((u) => u.unit);
+  // A unit removed from the shot list never holds its stage back (WP-29).
+  const units = listUnits(p).map((u) => u.unit).filter((u) => removedFromSheet(u) === undefined);
   for (const s of touched) {
     const inStage = units.filter((u) => u.stage === s);
     if (inStage.length === 0) continue;
