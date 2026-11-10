@@ -26,8 +26,10 @@ import type { Job, JobItem } from '../providers/contract.ts';
 import { AUDIO_SUFFIX, falVideoLimits, fitSeconds, type Fit } from '../providers/fal-video/index.ts';
 import { requestedChanges } from '../bible/plan.ts';
 import { jobRan } from '../keyframes/plan.ts';
+import { removedAt } from '../decisions/fold.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { motionPrompt } from './prompts.ts';
+import { wantsClip } from './treatment.ts';
 
 export const MOTION_STAGE = 'motion' as const;
 /** Tag every planned clip asset carries. */
@@ -43,6 +45,8 @@ export const assetIdFor = (shotId: string): string => `${shotId}_clip`;
 const keyframeIdFor = (shotId: string): string => `${shotId}_keyframe`;
 export const isClip = (a: Asset): boolean => a.stage === MOTION_STAGE && a.tags.includes(CLIP_TAG);
 export const clipAssets = (p: AkukoProject): Asset[] => p.assets.filter(isClip);
+/** Clips that are still part of the film: a clip of a shot removed from the sheet is kept for the record and left out (WP-27, WP-29). */
+export const liveClips = (p: AkukoProject): Asset[] => clipAssets(p).filter((a) => removedAt(p, a) === undefined);
 
 const hasFile = (a: Asset | undefined): boolean => a?.file !== undefined;
 const approvedWithFile = (a: Asset | undefined): boolean => a !== undefined && a.status === 'approved' && hasFile(a);
@@ -67,12 +71,18 @@ export function assertOpen(p: AkukoProject): void {
 
 export interface PlanResult { project: AkukoProject; created: string[] }
 
-/** Create the planned clip asset for every shot that has none. Safe to run again. */
+/**
+ * Create the planned clip asset for every shot that wants a paid clip and has none. Safe to run again.
+ * A shot wants one when its treatment is `video`, or when it has no tier and no treatment (today's
+ * behaviour). `still`, `still-move` and `lipsync` shots get none (`treatment.ts`); a shot removed from the
+ * sheet gets none.
+ */
 export function planMotion(project: AkukoProject, now: string): PlanResult {
   assertOpen(project);
   const p = structuredClone(project);
   const created: string[] = [];
   for (const shot of p.shots) {
+    if (removedAt(p, shot) !== undefined || !wantsClip(shot)) continue;
     const id = assetIdFor(shot.id);
     if (p.assets.some((a) => a.id === id)) continue;
     p.assets.push({
@@ -170,7 +180,7 @@ export interface StatusRow {
 }
 
 export function motionStatus(p: AkukoProject): StatusRow[] {
-  return clipAssets(p).map((a) => {
+  return liveClips(p).map((a) => {
     const r = unitReadiness(p, a);
     const t = paidAttempts(p, a.id);
     return { shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, attempts: t.count, spent: t.spent };
@@ -262,7 +272,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   const config = o.config ?? loadProviderConfig();
   const max = o.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(max) || max < 1) throw new MotionError('--max-attempts must be a whole number of 1 or more.');
-  const all = clipAssets(p);
+  const all = liveClips(p);
   const byId = new Map(all.map((a) => [a.id, a]));
 
   let candidates: Asset[];
@@ -323,6 +333,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       aspect_ratio: p.project.aspect_ratio,
       duration_s: used,
       count: 1,
+      ...(shot.negative?.trim() ? { negative: shot.negative } : {}),
       ...(shot.seed !== undefined ? { seed: shot.seed } : {}),
       refs: [{ id: kf.id, uri: kf.file!.uri, role: 'start-frame', note: 'the approved key frame: the first frame of the clip' }],
     };
@@ -446,7 +457,7 @@ export function repairFileless(project: AkukoProject, ts: string): { project: Ak
 export function refreshStageState(project: AkukoProject): AkukoProject {
   const rec = project.stages.motion;
   if (rec.state === 'locked') return project;
-  const units = clipAssets(project);
+  const units = liveClips(project);
   if (units.length === 0) return project;
   if (rec.state === 'approved' && units.every(approvedWithFile)) return project;
   const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');

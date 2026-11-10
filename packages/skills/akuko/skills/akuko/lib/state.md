@@ -398,6 +398,16 @@ It prints one line per breach with its shot id (`bible:<id>` for an entry, `line
 - **Units removed from the sheet** (`source.removed_at`, set by WP-25's re-import; never deleted) are kept for the record and leave review. "Removed" means the unit's own `source.removed_at`, **or its owner's** (the `<shot>_keyframe` of a removed shot; one rule, `decisions/fold.ts#removedAt`). The stage roll-up in folding (`recomputeStages`) **excludes them**, so a removed shot still waiting for review never keeps its stage from `approved`; every fold also re-rolls each stage that holds a removed unit, so a removal alone (a re-import, with no decision) releases the stage on the next fold; a new decision aimed at one is refused (`removed-from-sheet`, with a `Not applied: …` notice) and changes nothing; gates don't count them; the board lists them in a collapsed "Removed from the sheet" group with no decision control and leaves them out of "your move". A decision folded before the row was removed stays as it was. Each paid stage's own readiness check (`bible/plan.ts`, `keyframes/plan.ts`, `sound/plan.ts`: "every shot / entry approved") still counts them; that is outside WP-29 and is a follow-up.
 - **The sign-off page** (`views/publish.ts --project <dir> --signoff <gate> [--out <file>] [--images embed|link|none]`) is read-only: no script, no button, no network; check-view reports it SKIP. It shows the units in scope with their pictures, ids and statuses, the house rules, and what signing means, and is sent as a file or a private link. Pictures are embedded up to 3 MiB each and 12 MB in all, then referenced by a path relative to the page; only pictures inside the project folder or its parent (after resolving links) with an image extension are read, anything else is listed as not loaded (`views/signoff.ts`).
 
+#### Treatments and moves (WP-27)
+
+*Owner: WP-27. Code: `../motion/treatment.ts`, `../motion/treat.ts`, `../motion/moves.ts`, `../motion/cli.ts` (`treat`, `moves`), `../motion/plan.ts`. Agent rules: `../actions/motion.md` §Treatments.*
+
+- **Default table** (`DEFAULT_TREATMENT`, `treatmentOf`): a shot's own `treatment`, else by `tier` (A `still-move`, B `still-move`, C `still`), else none (today's behaviour). Paid treatments (`video`, `lipsync`) are opt-in: only `treat`, on the person's words, sets them. `isHeroCandidate` (tier A) and `isLipsyncCandidate` (tier A with a spoken line) only flag.
+- **Planning.** `planMotion` makes `<shot>_clip` only for `wantsClip` shots (`video`, or no tier and no treatment). Status, jobs and stage state read `liveClips`, which leaves out clips of removed shots (`decisions/fold.ts#removedAt`); keyframes plan, status and readiness skip removed shots the same way.
+- **`treat`** writes `shot.treatment` only: free, no ledger. Off `video`, a clip that has a file, a status past `pending`/`draft`, or any ledger entry is kept and warned about; an empty plan is dropped.
+- **`moves`** parses `motion_note` (first clause) into `shot.move`; `--apply` writes only where `move` is absent. Scales stay at or above 1 so a drift never shows the frame edge.
+- **Negatives.** Key-frame and clip job items send `negative: shot.negative` when set, so `require … applies_to: negative` is checked against the shot's own negative.
+
 ## Open questions
 
 *Anyone may append one line per question, with their WP id.*

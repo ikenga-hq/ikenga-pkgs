@@ -17,6 +17,10 @@
  *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>]
  *           record a clip the person made for a manual job
  *   collect --job <id>        poll a paid job submitted earlier and record its clips
+ *   treat   --shot <id>[,<id>...] --as still|still-move|video|lipsync
+ *                             record a shot's treatment. Free. Only on the person's words: paid treatments are opt-in
+ *   moves   [--apply]         list the camera moves parsed from each still-move shot's motion note; --apply writes them
+ *                             (only onto shots with no move yet). Free, no approval: the person reviews them in Resolve
  *   sync                      repair and refresh the stage state, after decisions were folded
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
@@ -38,6 +42,11 @@ import { createManualProvider } from '../providers/manual/index.ts';
 import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion } from './plan.ts';
+import { ShotTreatmentSchema } from '../schema/akuko-project.ts';
+import { removedAt } from '../decisions/fold.ts';
+import { applyMoves, planMoves } from './moves.ts';
+import { treatShots } from './treat.ts';
+import { wantsMove } from './treatment.ts';
 import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
 
 export interface CliResult { code: number; out: string }
@@ -120,6 +129,39 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: repaired.length ? `Reset ${repaired.join(', ')} to pending (no clip).` : 'Nothing to repair.' };
     }
 
+    if (cmd === 'treat') {
+      const shots = str(opt.get('shot'))?.split(',').map((x) => x.trim()).filter(Boolean);
+      const as = ShotTreatmentSchema.safeParse(str(opt.get('as')));
+      if (!shots?.length) return { code: 2, out: 'akuko: --shot <id>[,<id>...] is required.' };
+      if (!as.success) return { code: 2, out: 'akuko: --as takes still, still-move, video or lipsync.' };
+      const r = treatShots(await host.readState(), shots, as.data);
+      if (r.changed.length > 0) await host.writeState(r.project);
+      const out = [
+        r.changed.length ? `Set ${r.changed.join(', ')} to "${as.data}".` : 'Nothing changed.',
+        ...(r.unchanged.length ? [`Already "${as.data}": ${r.unchanged.join(', ')}.`] : []),
+        ...(r.dropped.length ? [`Dropped the empty planned clip${r.dropped.length === 1 ? '' : 's'} ${r.dropped.join(', ')} (never started, never paid).`] : []),
+        ...r.warnings,
+        ...(as.data === 'video' ? ['A video shot gets a paid clip: run plan, then step (each shows its spend line first).'] : []),
+      ];
+      return { code: 0, out: out.join(NL) };
+    }
+    if (cmd === 'moves') {
+      const project = await host.readState();
+      const shots = project.shots.filter((s) => wantsMove(s) && removedAt(project, s) === undefined);
+      const rows = planMoves(shots);
+      if (rows.length === 0) return { code: 0, out: 'No still-move shots.' };
+      const lines = rows.map((r) => {
+        const m = r.move ? `scale ${r.move.from_scale} -> ${r.move.to_scale}, x ${r.move.x}, y ${r.move.y}` : 'no move';
+        const tag = r.has_move ? 'has a move already, kept' : r.move ? (opt.get('apply') === true ? 'applied' : 'would set') : r.kind;
+        return `${r.shot}: "${r.note}" -> ${r.kind}: ${m} [${tag}]${r.warning ? `  WARNING ${r.warning}` : ''}`;
+      });
+      if (opt.get('apply') !== true) return { code: 0, out: [...lines, 'Nothing written. Run again with --apply to record these moves (only on shots with no move yet).'].join(NL) };
+      const next = structuredClone(project);
+      const { applied } = applyMoves(rows, next);
+      if (applied.length > 0) await host.writeState(next);
+      return { code: 0, out: [...lines, applied.length ? `Recorded moves on ${applied.length} shot${applied.length === 1 ? '' : 's'}.` : 'No move was written.'].join(NL) };
+    }
+
     // Commands below talk to providers, always through the gate.
     const level = (await host.detect()).level;
     const manual = createManualProvider(host, { now: clock });
@@ -182,7 +224,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join(NL) };
     }
 
-    return { code: 2, out: 'akuko: command must be plan, status, step, ingest, collect or sync.' };
+    return { code: 2, out: 'akuko: command must be plan, status, treat, moves, step, ingest, collect or sync.' };
   } catch (err) {
     if (err instanceof MotionError) return { code: 1, out: err.message };
     return { code: 1, out: `akuko: ${err instanceof Error ? err.message : String(err)}` };
