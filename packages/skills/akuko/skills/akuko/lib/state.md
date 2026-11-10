@@ -233,6 +233,76 @@ Every action starts by folding: `readDecisions(since?)` through the host adapter
 | `pending_spend` `awaiting-approval` / `approved` | `declined` | person | `decline-spend` folded (not after the job ran) |
 | `pending_spend` `approved` / `declined` | `awaiting-approval` | person | `undo` of the spend decision folded (not after the job ran) |
 
+## Real projects: sheet, master clock, rules, sign-off
+
+*Owner: **WP-24** (gate G-SCHEMA-2). The fields below are in the schema; the packages named in "Read by" build the behaviour. Every field is optional, so a project made by breakdown, or converted from Studio or freeform, is unchanged.*
+
+A real project can arrive with its own shot list (a spreadsheet), locked audio that sets the timing, house rules, and a second person who signs milestones. These fields carry that. "Writes" is who sets the field; "Read by" is who acts on it.
+
+**Shot ids from a sheet.** An imported shot keeps the sheet's id: `S11-010`, `S16b-010`, `S00-010` (`SHEET_SHOT_ID`), beside breakdown's `sc<N>_sh<M>`. A sheet id has exactly one `-` and no `_`, so it can't be confused with a canonical id, a unit built from a shot id (`<shot>_keyframe`, `<shot>_clip`, `<shot>_vo`, `<shot>_lipsync`: `shotUnitId()` / `parseShotUnitId()`), a provider output id (`<unit>-<stage>`, `-2`) or a job id. `isSheetShotId()` tests the **pattern** only; it does not mean "this is a shot" (a ready-made row can have the same form, see cards). Writes: WP-25. Read by: every stage, unchanged.
+
+**Sheet source** (`source {kind: "sheet", id, row?, removed_at?}`, on shots, scenes, assets and bible entries). `id` is the sheet's own id for the row (no `_`); `row` is the 1-based spreadsheet row. Re-import is keyed by `id` (WP-25): text and timing are refreshed, approvals and assets never touched. A row that has left the sheet gets `removed_at` (a timestamp) and is kept, never deleted. Writes: WP-25. Read by: WP-25, WP-29 (shows removed rows).
+
+**Imported bible entries.** A sheet token becomes a bible entry **whose id is the token** (`ADA-NOW` is a valid id: letters, digits, `.`, `_`, `-`), with the token in `source.id`. A lighting code becomes a `bible.styles` entry whose id is the code and whose `description` holds the lighting phrase; `shot.lighting` names it (integrity). The style block and negative become the house style entry (WP-25).
+
+**Shot** (`shots[]`)
+
+| Field | Meaning | Writes | Read by |
+|---|---|---|---|
+| `source` | The sheet row the shot came from (above). | WP-25 | WP-25 (re-import) |
+| `film {in_s, out_s}` | Where the shot sits on the master clock, in seconds; `out_s > in_s`. Shots in one scene must not overlap (a shot inside a longer one counts); touching (in = previous out) and gaps are fine. Within the master's length when `audio.master` is set. | WP-25 | WP-23b (timeline), WP-27, WP-28b, WP-29, WP-30 |
+| `duration_s` (existing) | When `film` is set too, it must equal `film.out_s − film.in_s` (integrity, to 1 µs). | WP-25 | every stage |
+| `part` | Part of the film, e.g. `P7`. Also on the scene. | WP-25 | WP-26 (scope), WP-29 (filter, gate scope), WP-30 (per part) |
+| `lighting` | The sheet's lighting code: a `bible.styles` id (integrity). | WP-25 | WP-25 (prompt rebuild), WP-26 |
+| `negative` | The shot's negative prompt, rebuilt per shot like `prompt` (the sheet's NEGATIVE). | WP-25 | key frame and motion providers, WP-26 (`require.applies_to: "negative"`) |
+| `tier` | `A` hero, `B` standard, `C` simple. | WP-25 | WP-27 (default treatment), WP-30 |
+| `framing`, `motion_note` | Free text from the sheet. | WP-25 | WP-27 (moves parsed from the note) |
+| `lines[] {id, kind}` | Dialogue lines the shot covers; `id` is an `audio.lines[].id` of the same `kind`. | WP-25 (linked by film time) | WP-28b (spoken lines only), WP-29 |
+| `treatment` | `still` · `still-move` · `video` · `lipsync`. **Absent = today's behaviour: every shot gets a `<shot>_clip` unit.** | WP-27 (default from tier; the person picks the video shots) | WP-27 (motion planning), WP-28b, WP-30, WP-23b |
+| `move {from_scale, to_scale, x, y, ease?}` | A camera move on the still, in KenBurns's terms (`blocks/compositions/ken-burns.html`): scales are a factor of the frame (1 = whole frame, 0.5–3); `x`/`y` are the drift in pixels of a 1920×1080 frame over the move (negative = left / up). Runs for the shot's whole length. `ease` is `none` · `ease-in` · `ease-out` · `ease-in-out`, absent = `none` (constant speed). **The KenBurns block ignores `ease` today** (always constant speed); a renderer with eases maps them (GSAP `sine.in` / `sine.out` / `sine.inOut`; FCPXML keyframe ease in / out / in and out). | WP-27 | WP-27 (preview), WP-23b (FCPXML keyframes, EDL note) |
+
+**Scene** (`scenes[]`): `part` and `source` as on the shot (a sheet scene: `S11`, `S16b`). Writes: WP-25. Read by: WP-29, WP-30.
+
+**Project**
+
+| Field | Meaning | Writes | Read by |
+|---|---|---|---|
+| `project.fps` | The timeline frame rate: one of `handoff/timecode.ts`'s labels (`23.976`, `24`, `25`, `29.97`, `30`, `50`, `59.94`, `60`). Absent: chosen at export (`--fps`, default 24). | WP-25 / the person | WP-23b |
+| `audio.master {uri, duration_s, sample_rate, start_tc, sha256?}` | Locked audio that is the master clock: every `film` time is seconds on it, 0 = its first sample. `uri` is relative to the project folder and **may go up out of it** (`../Audio/mix.wav`, when the project folder sits next to the audio), or absolute; akuko only reads it. `start_tc` is `HH:MM:SS:FF` (e.g. `00:00:00:00`); when `project.fps` is set, `FF` is below the rate (integrity; without `project.fps`, WP-23b checks it against `--fps`). Every shot, card, line and word time must lie within `duration_s` (integrity). `sha256` notices a changed master. | WP-25 / the person | WP-23b (laid uncut from frame 0), WP-28b (slices), WP-30 |
+| `audio.lines[] {id, character?, kind, film_in_s, film_out_s, clip_uri?, text?, words?}` | Dialogue on the master: `spoken` (lip-sync candidate) or `thought` (needs nothing). `clip_uri` is the line's own clip, a path like `audio.master.uri`. `words[] {w, t_s}`: each word's start, seconds on the master clock. Ids are unique. | WP-25 (from the quotes file) | WP-28b, WP-29, WP-30 |
+
+**Assets**
+
+- **`card`**: finished, ready-made material (title, part cards, credits). Not generated, never planned or priced by a stage, placed by `film` time. A card must have `film` and a `file` (integrity).
+  - **Id:** `card_<sheet id>`, with the sheet id in `source.id` (`card_S00-020` for `S00-020`, `card_P1-CARD` for `P1-CARD`, `card_CREDITS-010` for `CREDITS-010`). A card's id must not have the sheet-shot form (integrity), so it never looks like a shot.
+  - **Status:** recorded at stage `export`, status `pending-review`. **A person approves each card once on the board**, like any other material; code never writes `approved`.
+  - **Handoff:** cards are treated like everything else: approved cards are placed at their film time, and the rest are listed as left out with their status.
+  - Stored under `cut/cards/` when akuko stores one (`hosts/shared.ts`). Writes: WP-25. Read by: WP-23b, WP-29.
+  - *Why a kind, not an origin flag on another kind:* code finds assets by kind or by stage + tag (key frames and clips by stage and tag, references sent to providers by `kind: "reference"`, music and SFX placement by kind). A flag on an existing kind would put finished material in those paths (a "finished" reference would be uploaded to a provider; a "finished" key frame used as a shot's still). A new kind is skipped by every existing path, and every exhaustive map over kinds has to place it explicitly (the compiler checks it).
+- **`lipsync`**: the `<shot>_lipsync` unit (stage `motion`, owner = the shot), the same shape as `<shot>_clip`. Writes: WP-28b. Read by: WP-23b (on the shot's slot), WP-29, WP-30.
+- `film {in_s, out_s}` may be set on any asset; a card needs it. `source` may be set on any asset (a card's sheet row).
+
+**`rules`** (top level; absent = no rules, read through `rulesOf(p)`, which fills the empty defaults). Declarative data only; WP-26 checks every paid job against it **before** the spend gate and refuses a breach. Writes: the person (WP-25 may seed it from the house rules). Read by: WP-26 (guard, `rules/cli.ts check`, doctor); WP-28b (audio uploads).
+
+| Field | Meaning |
+|---|---|
+| `required` | `true`: a paid call refuses when the rules are missing or invalid. |
+| `banned[] {term, scope?, except?, note?}` | A term that must not appear in a prompt or negative (whole word, any case); `except` lists words that contain it and are allowed (e.g. `Gore-Tex`). |
+| `require[] {text, applies_to: prompt\|negative, scope?, note?}` | Text that must be in every prompt (`shot.prompt`) or negative (`shot.negative`) in scope. |
+| `uploads.allow[] {sha256, label, consent_ref?, for?, slices?, note?}` | Files akuko did not generate may be uploaded only if their **content hash** is listed (64 lowercase hex). `consent_ref` names a `consent[].id`. `for` (bible ids) limits the file to references for those entries, so an allowed photo of one person can't be used for another (absent = any use; WP-26 enforces). `slices: true` also allows time-slices cut from this exact file, e.g. a line cut from the master WAV (WP-28b checks the source file's hash, then uploads the slice). |
+| `never_from_photo[]` | Bible entry ids that may only use generated references, never a photo. |
+| `exempt[] {shots, skip, note?}` | Shots that skip some rules, e.g. `skip: ["house-style"]` for reference shots. Rule names are WP-26's. |
+| `consent[] {id, who, what, date, note?}` | Consents the person holds. Recorded, not verified. |
+
+`scope` is `{shots?, scenes?, parts?}` (any match; the same names as a gate's scope); absent = the whole film. Every id named must exist (integrity; a part exists when a shot or scene carries it).
+
+**People and gates** (R9-5, R9-11). Writes: the person (people, gates); the sign-off record, WP-29's sign-off command. Read by: WP-29 (board, sign-off page).
+
+- `people[] {id, name, role}`: `approver` approves day to day; `signoff` alone passes a gate. The role is `signoff`, not "host": a host is where akuko runs (A/B/C). Ids are unique.
+- `gates[] {id, title?, scope {stage?, shots?, scenes?, parts?}, needs: "signoff", signed?}`: a milestone such as `G-LOOK` or `G-PILOT`. Scope ids must exist. Gate ids share the unit-id namespace.
+- `gates[].signed {by, role, at, via, note?}` **is the sign-off record**, written by a command (WP-29), never by a view or the fold: `by` is a `people[].id` whose role is the gate's `needs`, `role` is that role, `via` says how it was given (`email`, `in person`, `shared page`). The person running akuko records it on the signer's word: **attested, not proven**. The agent never signs.
+- **No decision variant carries a sign-off** (decided for G-SCHEMA-2): the board's decision format, `views/decision.schema.json`, stays as it is. Today's fold ignores `people`, `gates` and `rules`; a board decision aimed at a gate id is refused as `unknown-unit` and not stored (`schema/real-project.test.ts`).
+
 ## Open questions
 
 *Anyone may append one line per question, with their WP id.*

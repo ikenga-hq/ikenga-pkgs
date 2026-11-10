@@ -1,0 +1,5 @@
+---
+"@ikenga/skill-akuko": minor
+---
+
+akuko: the project format can now describe a real production that arrives with its own shot list, locked audio and house rules. Shots can keep a spreadsheet's ids (`S11-010`) and carry their sheet row, their place on the master audio (`film` in/out seconds), part, lighting code, tier, framing, motion note, dialogue lines, a treatment (`still`, `still-move`, `video`, `lipsync`) and a camera move on the still. Projects can declare a frame rate, a master audio file and its dialogue lines; record finished title and credit cards (`card` assets) and lip-sync clips (`lipsync` assets); hold declarative project rules (banned terms, required text, an upload allow-list by file hash, consent records); and name people (`approver`, `signoff`) and sign-off gates. Every field is optional, so existing `akuko.json` files are unchanged, and the integrity check covers the new references. The behaviour that uses these fields (importer, master clock, rules guard, lip-sync, sign-off) comes in later releases.
