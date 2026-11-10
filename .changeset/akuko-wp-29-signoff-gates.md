@@ -1,0 +1,5 @@
+---
+"@ikenga/skill-akuko": minor
+---
+
+akuko: sign-off gates and a board for long shot lists. A gate (such as G-LOOK or G-PILOT) is passed only when a person with the `signoff` role signs it: `decisions/cli.ts signoff --project <dir> --gate <id> --by <person> --via "<how>"` records it on their word (attested, not proven), refusing the wrong role, an unknown gate or a gate already signed (`--replace` keeps the old record). `decisions/cli.ts gates` shows what each gate covers and how much of it is approved; gates never lock a stage. `views/publish.ts --signoff <gate>` writes a read-only sign-off page (no scripts, no buttons, no network) that shows exactly what is being signed, with pictures, approval status and the house rules. The default board (now 0.3) handles a 211-shot imported shot list: a part filter and one-part links (`#part=P7`), film times on the master clock, cards approved once in the shot list, and read-only Rules and Gates panels. Decisions from 0.1 and 0.2 boards still fold.

@@ -303,6 +303,22 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 - `gates[].signed {by, role, at, via, note?}` **is the sign-off record**, written by a command (WP-29), never by a view or the fold: `by` is a `people[].id` whose role is the gate's `needs`, `role` is that role, `via` says how it was given (`email`, `in person`, `shared page`). The person running akuko records it on the signer's word: **attested, not proven**. The agent never signs.
 - **No decision variant carries a sign-off** (decided for G-SCHEMA-2): the board's decision format, `views/decision.schema.json`, stays as it is. Today's fold ignores `people`, `gates` and `rules`; a board decision aimed at a gate id is refused as `unknown-unit` and not stored (`schema/real-project.test.ts`).
 
+#### Sign-off gates (WP-29)
+
+*Owner: WP-29. Code: `../decisions/gates.ts`, `../decisions/cli.ts` (`signoff`, `signoff-file`, `gates`), `../views/signoff.ts`. Agent rules: `../actions/review.md` §Sign-off.*
+
+- **Two levels.** A person approves units day to day (decisions, folded as above). A gate is passed only when `gates[].signed` names a person whose role is the gate's `needs` (`signoff`). An approver's approvals never pass a gate; a signoff person's sign-off never approves a unit.
+- **Only a command writes `gates[].signed`**: `decisions/cli.ts signoff --project <dir> --gate <id> --by <person id> --via "<how>" [--note …] [--at <ISO>] [--replace]` (host A: `signoff-file`, on the saved `akuko/project` doc). It refuses, writing nothing, when the gate is unknown (`unknown-gate`), the person is unknown (`unknown-person`) or has not the gate's role (`wrong-role`), the gate is already signed (`already-signed`), or `via` / `at` is unusable (`bad-input`). `at` defaults to now. Folding never writes it, and no view can (`decisions/gates.test.ts`).
+- **Re-signing** (`--replace`) keeps the old record: the new `note` ends with `Replaces: signed by <by> (<role>) at <at> via <via>; note: <old note>`, so a chain of re-signs stays readable in `akuko.json`. There is no unsign command; replacing is the only change.
+- **Attested, not proven.** The person running akuko records the sign-off on the signer's word. On host B nothing checks who the signer is; the record says how it was given (`via`).
+- **What a gate covers** (`unitsInGate`, used by `gateStatus`, the board and the sign-off page):
+  1. In-scope shots: every shot when the scope names no `shots` / `scenes` / `parts`; else a shot whose id, scene, or part (its own, else its scene's) is named.
+  2. With no shot filter, every shot, asset and bible entry; with one, the in-scope shots, the assets they own, the bible entries they name (`refs`, `lighting`), the assets those entries own, and the cards whose part is named. A card's part is the part of the first shot that starts at or after it (else the last shot's: end credits).
+  3. `scope.stage` keeps only units at that stage: G-LOOK `{stage: "bible"}` is the bible images; G-PILOT `{stage: "keyframes", parts: ["P7"]}` the P7 key frames.
+  Rows with `source.removed_at` are never counted; they are listed as removed.
+- **Gate status** (`gateStatus`, `decisions/cli.ts gates`): the units in scope, how many are approved / waiting / sent back / not made, and the state: `signed`, `ready` (all approved, not signed), `open`, or `empty` (nothing at that stage yet). It notes a gate signed while units were still open, and units changed (`updated_at`) after the sign-off. **Gates are informational: they never lock or unlock a stage.** The person decides when to move on.
+- **The sign-off page** (`views/publish.ts --project <dir> --signoff <gate> [--out <file>] [--images embed|link|none]`) is read-only: no script, no button, no network; check-view reports it SKIP. It shows the units in scope with their pictures, ids and statuses, the house rules, and what signing means, and is sent as a file or a private link. Pictures are embedded up to 3 MiB each and 12 MB in all, then referenced by a path relative to the page (`views/signoff.ts`).
+
 ## Open questions
 
 *Anyone may append one line per question, with their WP id.*

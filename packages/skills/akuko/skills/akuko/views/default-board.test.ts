@@ -521,14 +521,15 @@ describe('default board: copy decisions (A-4)', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () => {
-  const BIG = bigProject() as unknown as Project & AkukoProject;
+  const BIG: AkukoProject = bigProject();
+  const asPage = (x: AkukoProject) => clone(x) as unknown as Project;
   const shotEls = (p: Page) => p.d.querySelectorAll('[data-akuko-field="shot"]').length;
   const timings: Record<string, number> = {};
   const timed = async (label: string, fn: () => void, p: Page) => { const t = performance.now(); fn(); await p.tick(10); timings[label] = Math.round(performance.now() - t); };
 
   it('renders every shot and card; the part filter shows one part (P7: 11 shots and its card) and back', async () => {
     const t0 = performance.now();
-    const p = await boot({ host: 'B', project: clone(BIG) });
+    const p = await boot({ host: 'B', project: asPage(BIG) });
     timings['open the board (jsdom, includes parsing the page)'] = Math.round(performance.now() - t0);
     assert.equal(shotEls(p), 211);
     assert.equal(p.d.querySelectorAll('[id^="card-card_"]').length, 12);
@@ -552,7 +553,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   });
 
   it('a link with #part=P7 opens the one-part view; approving a shot there re-renders only what changed', async () => {
-    const p = await boot({ host: 'B', project: clone(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
     assert.equal(shotEls(p), 11);
     const id = 'S11-030';
     click(p, `[data-act="sel"][data-id="${id}"]`);
@@ -567,7 +568,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   });
 
   it('cards are review items: one approve each, then undo, never a second approve', async () => {
-    const p = await boot({ host: 'B', project: clone(BIG) });
+    const p = await boot({ host: 'B', project: asPage(BIG) });
     const before = p.num('waiting-other');
     const sel = '[data-akuko-action="approve"][data-akuko-unit="card_P7-CARD"]';
     assert.equal(p.d.querySelectorAll(sel).length, 1);
@@ -583,8 +584,8 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   });
 
   it('shows the rules (read-only) and the gates with their scope progress, matching decisions/gates.ts', async () => {
-    const signed = signGate(clone(BIG) as AkukoProject, { gate: 'G-LOOK', by: 'p-sign', via: 'email', note: 'Replied yes.', at: '2026-11-10T08:15:00Z' }).project;
-    const p = await boot({ host: 'B', project: clone(signed) as unknown as Project });
+    const signed = signGate(clone(BIG), { gate: 'G-LOOK', by: 'p-sign', via: 'email', note: 'Replied yes.', at: '2026-11-10T08:15:00Z' }).project;
+    const p = await boot({ host: 'B', project: asPage(signed) });
     const tabs = Array.from(p.d.querySelectorAll('#rail-tabs [role="tab"]')).map((t: any) => t.getAttribute('data-id'));
     assert.deepEqual(tabs, ['bible', 'ledger', 'gates', 'rules']);
     const rules = p.text('#p-rules');
@@ -605,7 +606,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   });
 
   it('the shot detail carries what the sheet gave it: part, tier, framing, lighting, lines, film time', async () => {
-    const p = await boot({ host: 'B', project: clone(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
+    const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
     click(p, '[data-act="sel"][data-id="S11-070"]');
     await p.tick();
     const det = p.text('[data-akuko-view="shot-detail"]').replace(/\s+/g, '');
@@ -614,7 +615,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   });
 
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
-    const p = clone(BIG) as AkukoProject;
+    const p = clone(BIG);
     const units = [['S11-030', 'sketch'], ['card_P7-CARD', 'export'], ['S11-050_keyframe', 'keyframes']] as const;
     for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);

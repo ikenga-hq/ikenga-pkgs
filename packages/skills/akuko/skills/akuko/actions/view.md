@@ -120,6 +120,19 @@ Never bypass the gate: no raw publish, no hand-edited conformed list, no strippi
 
 Stop. Never approve anything yourself, and do not run the next stage.
 
+## Real projects: the board for a long shot list, and the sign-off page
+
+**The default board (`default-board@0.3`)** handles an imported shot list (hundreds of shots, parts, a master clock):
+
+- A **Part** filter (P1…P10 and "All parts") shows one part at a time: its scenes, shots, cards and script. A link can open one part: `views/default-board.html#part=P7`. The "your move" counts stay for the whole film.
+- Shots on a master clock show their film time (`m:ss.ss`); the shot detail adds part, tier, framing, lighting, motion note, dialogue lines, the negative prompt and the sheet row (and "Left the sheet" for a removed row).
+- **Cards** (title, part cards, credits) appear in the shot list at their film time; a person approves each once.
+- **Rules** (read-only) and **Gates** panels sit beside Bible and Ledger: each gate's scope, how much of it is approved, and who signed it and how. The board can't sign a gate.
+
+When the person asks "show me P7", publish the default board and give them the `#part=P7` link; don't design a new page.
+
+**The sign-off page** answers "what is <signer> signing?": `node --experimental-strip-types views/publish.ts --project <folder> --signoff <gate id>`. It is a read-only page (no script, no buttons, no network) and `check-view` SKIPs it. How the sign-off comes back and is recorded: `./review.md` §4.
+
 ## Worked examples
 
 `evals/views/<ask>/view.html`, built from the converted *The Beating* fixture by `evals/views/build.ts` (`node --experimental-strip-types evals/views/build.ts`), pinned by `evals/views/views.test.ts`:

@@ -9,7 +9,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkView } from '../scripts/check-view/check.mjs';
 import { decisionWriteSigns } from '../scripts/check-view/predicates.mjs';
 import { gateStatus } from '../decisions/gates.ts';
 import { bigProject, TINY_PNG, writeBigProject } from './__fixtures__/big-project.ts';
@@ -116,7 +115,12 @@ describe('the sign-off page', () => {
 
   it('passes check-view: SKIP, read-only (not applicable)', { timeout: 300_000 }, async () => {
     const { html } = buildSignoffPage(p, 'G-PILOT', dir, { now: NOW });
-    const r = await checkView(html, {});
+    const file = join(dir, 'views', 'signoff-check.html');
+    mkdirSync(join(dir, 'views'), { recursive: true });
+    writeFileSync(file, html);
+    const out = await new Promise<string>((resolve, reject) => execFile(process.execPath, [join(SKILL, 'scripts', 'check-view.mjs'), file, '--json'], { cwd: SKILL, timeout: 280_000, maxBuffer: 64 * 1024 * 1024 }, (e, o) => (e && typeof (e as { code?: unknown }).code !== 'number' ? reject(e) : resolve(o))));
+    const [r] = JSON.parse(out) as { ok: boolean; skipped?: boolean; view: string; failures: unknown[] }[];
+    assert.ok(r);
     assert.deepEqual(r.failures, []);
     assert.equal(r.ok, true);
     assert.equal(r.skipped, true);
