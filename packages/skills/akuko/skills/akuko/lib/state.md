@@ -305,12 +305,12 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 
 #### Rules guard (WP-26)
 
-*Owner: WP-26. Code: `../rules/` (`check.ts` the checks, `refs.ts` provenance and hashes, `guard.ts` the gate wrapper, `cli.ts` the preflight).*
+*Owner: WP-26. Code: `../rules/` (`check.ts` the checks, `refs.ts` provenance and hashes, `text.ts` matching, `guard.ts` the gate wrapper, `cli.ts` the preflight).*
 
-**Where it runs.** The four paid-stage command lines build their gate as `guardGate(createSpendGate(…), reader, {projectDir, providers})`. The guard's `quote()` and `run()` check the job first. On a breach they return an ordinary refusal and **the wrapped gate is never called**: nothing is priced, reserved, written or sent. `collect()` passes through.
+**Where it runs.** The four paid-stage command lines build their gate as `guardGate(createSpendGate(…), reader, {projectDir, providers})`. `guardedGate({host, providers, level, now, reader?, projectDir?})` does the same in one call; any TypeScript caller that hands a gate to a stage's `run.ts` (host A with the `ClaudeArtifactHost` included) builds it that way, never with a bare `createSpendGate`. The guard's `quote()` and `run()` check the job first. On a breach they return an ordinary refusal and **the wrapped gate is never called**: nothing is priced, reserved, written or sent. `collect()` passes through.
 - The codes live in `rules/guard.ts`, not in the frozen gate: `rules-breach` (a rule was broken) and `rules-missing` (rules required but empty, or invalid).
 - The callers (`*/run.ts`) report any refusal's `code` and `message` the same way, before reading the cost. The command line prints `Refused (rules-breach): …`, one line per breach.
-- The guard reads the project fresh on every call, through its own host on the same folder: an extra read on the gate's host would move that host's conflict mark. It checks a copy of the job, and hands that same copy to the gate.
+- The guard reads the project fresh on every call. On B and C it reads through its own host on the same folder: an extra read on the gate's host would move that host's conflict mark. It checks a copy of the job, and hands that same copy to the gate.
 
 **When.**
 - No `rules` block: nothing is checked. A `rules` block, even one with only banned terms, turns on every rule below.
@@ -318,15 +318,18 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 - **Reference rules run on paid jobs only** (billing from `providers/config.json`; an unknown provider counts as paid). They are about what akuko itself uploads, and the manual provider uploads nothing.
 
 **What is checked, per job item:**
-- the `prompt` (for an audio job this is the spoken text: sound puts the narration in `prompt`), the `negative`, the `camera` note, and each ref's `note` (providers put notes into the prompt);
+- banned terms: the `prompt` (for an audio job this is the spoken text: sound puts the narration in `prompt`), the `camera` note, and each ref's `note` (providers put notes into the prompt). **Not the `negative`**: listing a word there is how a prompt avoids it;
+- required text: the `prompt` or the `negative`, as the rule says;
 - for a paid job, every `ref`: its `uri` (or its asset's `file.uri`) is resolved relative to the project folder (it may go up out of it) and hashed (sha256, streamed). A ref with no file at all (a provider voice id) has nothing to upload and is skipped.
 
 **What an item is about.** A unit that is a shot, or an asset owned by a shot (`<shot>_keyframe`, `<shot>_clip`, a later take), is that shot: its scene, its part (`shot.part`, else the scene's), its bible ids (`refs[]` plus `lighting`) and its subjects (the characters and locations among them). A bible entry, or an asset owned by one, is about that entry.
 
+**Text is normalised before matching** (`rules/text.ts` `foldText`): text, terms and exceptions alike go through Unicode NFKC (fullwidth letters become ASCII, composed and decomposed accents compare equal, a no-break space is a space), lose invisible format characters (`\p{Cf}`: zero-width spaces and joiners, soft hyphens), have every dash (`\p{Pd}`) mapped to `-`, and are case-folded in full (`ß` = `ss`, `İ` = `i`). Breach messages quote the folded text.
+
 **Rule semantics**
 
-- **`banned`**: whole word, any case, Unicode-aware. A match may not touch a letter, digit or combining mark. Spaces, hyphens, apostrophes, underscores and punctuation are boundaries: `gore` matches `Gore-Tex` and `GORE's`, not `gorey`. A multi-word term matches across any whitespace. A match inside a whole-word match of an `except` entry is allowed (`except: ["Gore-Tex"]`). Unscoped terms apply to every job, bible jobs included; a scoped term applies only to shots in its scope. Terms are matched in the negative too, so a word meant for the negative must not also be banned.
-- **`require`**: the text must be in what is sent, the item's `prompt` (`applies_to: prompt`) or `negative`. Case-insensitive substring, whitespace collapsed, the required text's own closing full stop ignored. It applies to **picture outputs of shots** (`keyframe`, `clip`) in scope, not to voice text, bible images or lip-sync. A job that sends no negative breaks a `negative` requirement. *Today the key-frame and motion plans don't send `shot.negative`, so a `negative` requirement refuses every such job until they do.*
+- **`banned`**: whole word. A match may not touch a letter, digit or combining mark. Spaces, dashes, apostrophes, underscores and punctuation are boundaries: `gore` matches `Gore-Tex` and `GORE's`, not `gorey`. A multi-word term matches across any run of whitespace, dashes or underscores (`kelvo dyne` matches `Kelvo–Dyne`). A match inside a whole-word match of an `except` entry is allowed (`except: ["Gore-Tex"]`). **Plurals and other inflections are separate words: list each form as its own term** (`zorbex`, `zorbexes`). Unscoped terms apply to every job, bible jobs included; a scoped term applies only to shots in its scope.
+- **`require`**: the text must be in what is sent, the item's `prompt` (`applies_to: prompt`) or `negative`. Folded substring, whitespace collapsed, the required text's own closing full stop ignored. It applies to **picture outputs of shots** (`keyframe`, `clip`) in scope, not to voice text, bible images or lip-sync. A job that sends no negative breaks a `negative` requirement. *Today the key-frame and motion plans don't send `shot.negative`, so a `negative` requirement refuses every such job until they do.*
 - **`scope`** `{shots, scenes, parts}`: any match; absent = the whole film. A scoped rule never applies to a bible job.
 - **`exempt[] {shots, skip}`**: the skip names are `banned`, `banned:<term>`, `require`, `require:<text>` and `house-style`.
   - `house-style` skips the `require` rules whose text is part of the house style: the description and notes of the bible style entry `house-style` (the id WP-25 imports the sheet's style block under).
@@ -334,13 +337,11 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
   - Reference rules can't be skipped. The preflight and doctor report a skip name that does nothing.
 - **`required`**: `true` with nothing to enforce (no banned terms, required text, allowed files or never-from-photo entries) refuses every paid job as `rules-missing`; manual jobs still run. Rules that fail `RulesSchema`, or have a blank term or text, refuse every job.
 - **`uploads.allow`**: a ref that is not generated (below) is **external**. It may be sent only if its sha256 is listed. The name and path don't matter: a renamed copy of an allowed file is the allowed file. A remote (`https:`, `mem:`…), missing or unreadable file can't be hashed, and is refused.
-- **`for`**: an allowed file may be a reference only for those bible ids. An external ref is a reference **for**:
-  1. the entry that owns its asset; else
-  2. the bible entry its `id` names; else
-  3. every subject of the item (a picture attached to a shot counts for every character and location in it).
-
-  With `for` set, every one of those must be listed (a ref that is for nothing is refused too).
-- **`never_from_photo`**: an external ref whose targets include such an entry is refused, even when its hash is allowed. A job for that entry, or a shot showing it, can use only generated references for it.
+- **What a ref is a reference for** is read from the project state, never from the job (a ref's `id` naming a bible entry counts for nothing):
+  - in a **bible job**: the entry the job is for, always, plus the entry that owns the ref's asset if that is another one;
+  - in a **shot**: the bible entry that owns the ref's asset; else every subject of the shot (a picture attached to a shot counts for every character and location in it).
+- **`for`**: an allowed file may be a reference only for those bible ids. With `for` set, every target above must be listed (a ref that is for nothing is refused too).
+- **`never_from_photo`**: an external ref whose targets include such an entry is refused, even when its hash is allowed. A **generated** ref for such an entry must also be **verified**: its asset has a sha256 `file.hash` and the bytes on disk still match it. A generated ref without one is treated as unverifiable and refused.
 
 **"Generated", precisely** (`rules/refs.ts` `generatingJob`). A ref is generated when it resolves to an asset whose id is `ref.id`, and whose `file.uri` is the ref's `uri` when the ref has one, and:
 - the asset's kind is not `reference` or `card`;
@@ -349,16 +350,33 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 
 A file brought back by hand is never generated, whatever the ledger says: the person made it somewhere akuko didn't see. When `file.hash` is a sha256 (the local host records one in `storeAsset`) and the file is readable, the bytes must still match it; a swapped file is refused as `generated-changed`.
 
-**Slices (for WP-28b).** A time-slice akuko cuts from an allowed file (a line from the master WAV) is a new file with a new hash. The cutter writes this token in the ref's `note`: `slice-of=sha256:<64 hex of the source file>[@<in_s>-<out_s>]` (`sliceNote()` / `parseSliceNote()` in `rules/refs.ts`). The guard accepts the slice when the source hash is allowed with `slices: true`, and applies that entry's `for`. The token is honoured only on audio and video files. `providers/contract.ts` is unchanged: `note` is an existing field.
+**Slices: the contract for WP-28b.** A time-slice akuko cuts from an allowed file (a line from the master WAV) is a new file with a new hash. Its provenance lives **in the project state, never in the job**. The cutter records each slice as an asset:
+- `provider: "akuko-cut"` (`SLICE_PROVIDER`);
+- a tag `slice-of:sha256:<64 hex of the source file>@<in_s>-<out_s>` (`sliceTag()` / `parseSliceTag()`), seconds on the source;
+- `file: {uri, hash}` with the slice's own sha256 (the local host's `storeAsset` records it).
+
+The lip-sync job's ref then names that asset (`ref.id` = its id, `ref.uri` = its `file.uri`). The guard accepts the slice when all of these hold:
+- the source hash is in `rules.uploads.allow` with `slices: true` (that entry's `for` then applies);
+- the slice's bytes are audio or video **by content** (RIFF/WAVE, ID3 or an MPEG frame, an MP4/MOV `ftyp` box, FLAC, Ogg, WebM/Matroska), whatever the extension;
+- its `file.hash`, when it is a sha256, matches the bytes;
+- `0 ≤ in_s < out_s`, and `out_s` is within the source's length when the project knows it: `audio.master.duration_s` when `audio.master.sha256` is the source hash, else the WAV header of a project file (the master, a line clip, an asset) with that hash.
+
+A `slice-of` note, or anything else in the job, makes nothing a slice. `providers/contract.ts` is unchanged.
 
 **Free preflight:** `node --experimental-strip-types rules/cli.ts check --project <dir> [--json]` checks:
-- every shot's own `prompt`, `negative` and `camera` (rows with `source.removed_at` are skipped);
+- every shot's own `prompt` (banned and required text), `negative` (required text only), `camera`, `narration` and `script_line` (banned); rows with `source.removed_at` are skipped;
+- every dialogue line's `text` (`audio.lines[]`) against the banned terms in scope for the shot that carries it;
 - every bible entry's name, description and notes, against the unscoped banned terms;
 - every listed reference file as if it were about to be uploaded: each entry's `refs[]`, and the `reference` assets attached to an entry or a shot.
 
-It prints one line per breach with its shot id (`bible:<id>` for an entry), and exits 1 on any breach. At run time the guard sees the full prompt a stage builds (its framing text, the bible descriptions, the look), so a run can still refuse what the preflight passed. `rules/cli.ts hash <file…>` prints the sha256 an allow entry takes.
+It prints one line per breach with its shot id (`bible:<id>` for an entry, `line:<id>` for a line no shot carries), and exits 1 on any breach. At run time the guard sees the full prompt a stage builds (its framing text, the bible descriptions, the look), so a run can still refuse what the preflight passed. `rules/cli.ts hash <file…>` prints the sha256 an allow entry takes.
 
-**Doctor** prints the rules line (present or not, the counts, required or not) and how many allowed files are not among the files the project points at: every non-card asset's file, the master and each line's clip, matched by hash (the master's recorded `sha256` is trusted when its file is there). It warns about required-but-empty rules and skip names that do nothing.
+**Doctor** prints the rules line (present or not, the counts, required or not) and how many allowed files are not among the files the project points at: every non-card asset's file, the master and each line's clip, matched by hash. It warns about required-but-empty rules and skip names that do nothing.
+
+**Known limits**
+- **Check to read.** The guard hashes a file, then the provider reads it again to upload it. A file swapped in between is sent unchecked. `providers/**` is frozen, so a loader that checks the hash as it reads is a follow-up.
+- **Doctor trusts `audio.master.sha256`.** When the master's file is there, doctor uses the recorded hash without re-hashing it (a master can be hundreds of MB). The guard itself hashes whatever a job sends.
+- **Look-alike letters** from other scripts (a Cyrillic `о` inside a Latin word) are not mapped, accents still count (`cafe` ≠ `café`), and HTML entities are not decoded: prompts are plain text.
 
 ## Open questions
 

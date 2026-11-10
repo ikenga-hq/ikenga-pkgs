@@ -66,7 +66,7 @@ A pure function of the word timings: a cue starts at its first word's start and 
 
 ## Rules check
 
-When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every voice-over job is checked against them before the spend gate: the spoken text against the banned terms. Required text doesn't apply to voice-over, and the voice is a provider id, not a file, so there is no reference check. A breach prints `Refused (rules-breach): …`, naming the term and the line it is in; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent. **Tell the person what it says and stop.** Narration is never rewritten by you, and neither are the rules: the person decides. The free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, lists breaches in prompts and references; it does not read narration.
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every voice-over job is checked against them before the spend gate: the spoken text against the banned terms. Required text doesn't apply to voice-over, and the voice is a provider id, not a file, so there is no reference check. A breach prints `Refused (rules-breach): …`, naming the term and the line it is in; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent. **Tell the person what it says and stop.** Narration is never rewritten by you, and neither are the rules: the person decides. Before a paid run, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`: it also reads each shot's narration and script line, and the text of the dialogue lines, and lists any banned term in them.
 
 ## Limits to know
 

@@ -2,6 +2,11 @@
  * akuko — the project rules guard (WP-26, R9-4).
  *
  *   const gate = guardGate(createSpendGate({ host, providers, level, now }), reader, { projectDir, providers });
+ *   const gate = guardedGate({ host, providers, level, now, reader, projectDir });   // the same, in one call
+ *
+ * Any code that hands a gate to a stage's `run.ts` (the CLIs, and TypeScript
+ * callers on host A with the `ClaudeArtifactHost`) builds it this way, never
+ * with a bare `createSpendGate`.
  *
  * Wraps a spend gate from the outside (`spend/**` is frozen). `quote()` and
  * `run()` first check the job against the project's `rules` (`check.ts`);
@@ -23,7 +28,7 @@
 import { loadProviderConfig } from '../providers/config.ts';
 import type { Cost, Job, Provider, ProviderBilling } from '../providers/contract.ts';
 import { jobUnits } from '../providers/contract.ts';
-import type { QuoteResult, Refusal, RunResult, SpendGate } from '../spend/gate.ts';
+import { createSpendGate, type QuoteResult, type Refusal, type RunResult, type SpendGate, type SpendGateOptions } from '../spend/gate.ts';
 import type { AkukoProject } from '../schema/akuko-project.ts';
 import { type Breach, checkJob, formatBreach, isPaidJob } from './check.ts';
 import { newHashCache, type HashCache } from './refs.ts';
@@ -109,4 +114,21 @@ export function guardGate(gate: SpendGate, project: ProjectSource, opts: GuardOp
     },
     collect: (handle) => gate.collect(handle),
   };
+}
+
+export interface GuardedGateOptions extends SpendGateOptions {
+  /** Where the guard reads the project. Default: the gate's own host (fine for the artifact host; on B and C pass a second local host on the same folder). */
+  reader?: ProjectSource;
+  projectDir?: string;
+  cache?: HashCache;
+}
+
+/** A spend gate with the rules guard in front of it: `createSpendGate(o)` wrapped by `guardGate`. */
+export function guardedGate(o: GuardedGateOptions): GuardedGate {
+  const { reader, projectDir, cache, ...gateOpts } = o;
+  return guardGate(createSpendGate(gateOpts), reader ?? gateOpts.host, {
+    providers: gateOpts.providers,
+    ...(projectDir !== undefined ? { projectDir } : {}),
+    ...(cache !== undefined ? { cache } : {}),
+  });
 }

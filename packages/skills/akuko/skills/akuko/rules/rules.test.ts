@@ -9,10 +9,12 @@ import type { Job, JobHandle } from '../providers/contract.ts';
 import type { QuoteResult, RunResult, SpendGate } from '../spend/gate.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
 import { checkJob, checkProjectRules, type Breach } from './check.ts';
-import { RULES_BREACH, RULES_MISSING, guardGate } from './guard.ts';
-import { canBeSlice, parseSliceNote, sliceNote } from './refs.ts';
-import { bannedMatches, containsRequired } from './text.ts';
-import { FILES, HASH, STYLE, job, rulesFolder, rulesProject } from './__fixtures__/project.ts';
+import { RULES_BREACH, RULES_MISSING, guardGate, guardedGate } from './guard.ts';
+import { SLICE_PROVIDER, mediaKind, parseSliceTag, sliceTag, wavSeconds } from './refs.ts';
+import { bannedHits, bannedMatches, containsRequired, foldText, snippet } from './text.ts';
+import { FILES, HASH, MASTER_S, STYLE, job, rulesFolder, rulesProject } from './__fixtures__/project.ts';
+import { createLocalHost } from '../hosts/local.ts';
+import { createManualProvider } from '../providers/manual/index.ts';
 
 const rulesOf = (bs: Breach[]): string[] => bs.map((b) => b.rule);
 
@@ -48,6 +50,64 @@ describe('text matching', () => {
   });
 });
 
+describe('text normalisation (review probes)', () => {
+  const caught = (text: string, term: string, except: string[] = []) => bannedMatches(text, term, except).length > 0;
+
+  it('zero-width characters and soft hyphens inside a word do not hide it', () => {
+    assert.ok(caught('Zor​bex sign', 'zorbex'));
+    assert.ok(caught('Zor­bex sign', 'zorbex'));
+    assert.ok(caught('Zor⁠bex', 'zorbex'));
+  });
+
+  it('fullwidth letters, a no-break space and NFD vs NFC compare equal', () => {
+    assert.ok(caught('Ｚｏｒｂｅｘ fullwidth', 'zorbex'));
+    assert.ok(caught('café decomposed', 'café'));
+    assert.ok(caught('café precomposed', 'café'));
+    assert.ok(caught('Kelvo Dyne', 'kelvo dyne'));
+  });
+
+  it('full case folding: ß / SS and dotted capital I', () => {
+    assert.ok(caught('STRASSE', 'straße'));
+    assert.ok(caught('straße', 'strasse'));
+    assert.ok(caught('İSTANBUL', 'istanbul'));
+  });
+
+  it('a multi-word term matches across dashes of any kind, underscores and line breaks', () => {
+    for (const t of ['Kelvo–Dyne', 'Kelvo—Dyne', 'Kelvo-Dyne', 'Kelvo_Dyne', 'Kelvo\nDyne']) assert.ok(caught(t, 'kelvo dyne'), t);
+    assert.ok(caught('a Kelvo–Dyne van', 'Kelvo-Dyne'), 'an en dash matches a hyphen in the term');
+  });
+
+  it('known limits: accents still count, plurals are separate terms, look-alike letters are not mapped', () => {
+    assert.ok(!caught('café', 'cafe'));
+    assert.ok(!caught('Zorbexes', 'zorbex'));
+    assert.ok(caught('Zorbexes', 'zorbexes'));
+    assert.ok(!caught('Zоrbex', 'zorbex'));
+  });
+
+  it('exceptions are normalised too, and snippets quote the folded text', () => {
+    assert.deepEqual(bannedMatches('a GORE–TEX jacket', 'gore', ['Gore-Tex']), []);
+    assert.ok(caught('zorbex silk and zorbex', 'zorbex', ['zorbex silk']));
+    const h = bannedHits('An  Ａｃｍｅ​ sign', 'acme');
+    assert.equal(foldText('Ａｃｍｅ​'), 'acme');
+    assert.equal(snippet(h.folded, h.spans[0]!), 'an acme sign');
+  });
+
+  it('required text is folded the same way', () => {
+    assert.ok(containsRequired('Silhouettes­Only', 'silhouettesonly'));
+    assert.ok(containsRequired('ＳＩＬＨＯＵＥＴＴＥＳ only', 'silhouettes only'));
+  });
+});
+
+describe('media sniffing', () => {
+  it('knows audio and video by their first bytes, and a WAV\'s length from its header', () => {
+    assert.equal(mediaKind(FILES.master.data), 'wav');
+    assert.equal(mediaKind(FILES.photoAsWav.data), undefined);
+    assert.equal(mediaKind(new Uint8Array([0x49, 0x44, 0x33, 4])), 'mp3');
+    assert.equal(mediaKind(new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])), 'mp4');
+    assert.equal(wavSeconds(FILES.master.data, FILES.master.data.length), MASTER_S);
+  });
+});
+
 describe('checkJob: text rules', () => {
   it('banned: a term in the prompt is a breach naming the rule and the text', async () => {
     const p = rulesProject();
@@ -55,7 +115,7 @@ describe('checkJob: text rules', () => {
     assert.equal(r.outcome, 'rules-breach');
     const b = r.breaches.find((x) => x.rule === 'banned')!;
     assert.equal(b.shot, 'S01-010');
-    assert.match(b.message, /banned term "acme" in the prompt: ".*Acme crate/);
+    assert.match(b.message, /banned term "acme" in the prompt: ".*acme crate/);
     assert.match(b.message, /a brand name/);
   });
 
@@ -65,10 +125,16 @@ describe('checkJob: text rules', () => {
     assert.deepEqual(rulesOf((await checkJob(p, job({ unit: 'S01-010', prompt: `Gore on the floor, ${STYLE}` }))).breaches), ['banned']);
   });
 
-  it('banned: the negative, the camera note and the reference notes are checked too', async () => {
+  it('banned: the camera note and the reference notes are checked too', async () => {
     const p = rulesProject();
-    const r = await checkJob(p, job({ unit: 'S01-010', prompt: STYLE, negative: 'acme logos', camera: 'acme dolly', refs: [{ id: 'x', note: 'like the acme ad' }] }, { provider: 'manual' }));
-    assert.deepEqual(r.breaches.map((b) => b.field), ['negative prompt', 'camera note', 'note on ref x']);
+    const r = await checkJob(p, job({ unit: 'S01-010', prompt: STYLE, camera: 'acme dolly', refs: [{ id: 'x', note: 'like the acme ad' }] }, { provider: 'manual' }));
+    assert.deepEqual(r.breaches.map((b) => b.field), ['camera note', 'note on ref x']);
+  });
+
+  it('banned: a term only in the negative prompt passes (that is how a prompt avoids it)', async () => {
+    const p = rulesProject();
+    assert.deepEqual((await checkJob(p, job({ unit: 'S01-010', prompt: STYLE, negative: 'no acme logos, no gore' }))).breaches, []);
+    assert.deepEqual((await checkJob(p, job({ unit: 'KIT', output: 'portrait', prompt: 'x', negative: 'no acme' }, { stage: 'bible' }))).breaches, []);
   });
 
   it('banned: a scoped term applies only to shots in its scope, and never to a bible job', async () => {
@@ -214,17 +280,89 @@ describe('checkJob: references, by content hash', () => {
     assert.deepEqual(r.breaches, []);
   });
 
-  it('slices: a slice of a file allowed with slices: true is accepted; of one without, refused; a picture cannot claim to be a slice', async () => {
+  describe('slices (provenance recorded in the project by akuko\'s cutter)', () => {
+    /** A slice asset as the cutter records it. */
+    const cut = (id: string, uri: string, tag: string, extra: Record<string, unknown> = {}) => ({
+      id, kind: 'vo' as const, stage: 'motion' as const, status: 'approved' as const, owner: 'S03-020', comments: [], provider: SLICE_PROVIDER, tags: [tag],
+      file: { uri, mime: 'audio/wav' }, ...extra,
+    });
+    const lip = (ref: { id: string; uri: string; note?: string }) =>
+      job({ unit: 'S03-020', prompt: `silhouettes only, ${STYLE}`, output: 'lipsync', refs: [{ role: 'audio', ...ref }] }, { kind: 'video', stage: 'motion' });
+
+    it('the tag helpers round-trip and refuse a non-span', () => {
+      assert.deepEqual(parseSliceTag(sliceTag(HASH.master, 0.25, 0.75)), { sha256: HASH.master, in_s: 0.25, out_s: 0.75 });
+      assert.throws(() => sliceTag(HASH.master, 1, 1));
+      assert.equal(parseSliceTag('slice-of:sha256:abc@0-1'), undefined);
+    });
+
+    it('a recorded slice of a file allowed with slices: true is accepted', async () => {
+      const { dir, project: p } = await rulesFolder((q) => { q.assets.push(cut('L001_cut', FILES.slice.path, sliceTag(HASH.master, 0.5, 1), { file: { uri: FILES.slice.path, mime: 'audio/wav', hash: HASH.slice } })); });
+      assert.deepEqual((await checkJob(p, lip({ id: 'L001_cut', uri: FILES.slice.path }), { projectDir: dir })).breaches, []);
+    });
+
+    it('a note claiming a slice counts for nothing: a stranger\'s WAV and a renamed photo are refused (review probes P3, P3b)', async () => {
+      const { dir, project: p } = await rulesFolder();
+      const note = `slice-of=sha256:${HASH.master}@0-1`;
+      for (const uri of [FILES.strangerVoice.path, FILES.photoAsWav.path]) {
+        const r = await checkJob(p, lip({ id: 'v', uri, note }), { projectDir: dir });
+        assert.deepEqual(rulesOf(r.breaches), ['uploads'], uri);
+        assert.match(r.breaches[0]!.message, /its hash is not in rules.uploads.allow/);
+      }
+    });
+
+    it('a recorded "slice" whose bytes are not audio or video is refused, whatever its extension', async () => {
+      const { dir, project: p } = await rulesFolder((q) => { q.assets.push(cut('fake_cut', FILES.photoAsWav.path, sliceTag(HASH.master, 0, 1))); });
+      const r = await checkJob(p, lip({ id: 'fake_cut', uri: FILES.photoAsWav.path }), { projectDir: dir });
+      assert.match(r.breaches[0]!.message, /recorded as a slice, but its content is not audio or video/);
+    });
+
+    it('a slice past the end of its source, of a source not allowed with slices, or not from the cutter is refused', async () => {
+      const { dir, project: p } = await rulesFolder((q) => {
+        // The master, with no recorded sha256: it is found by hashing and its length read from its WAV header (2 s).
+        q.audio = { master: { uri: FILES.master.path, duration_s: 99, sample_rate: 8000, start_tc: '00:00:00:00' }, lines: [] };
+        q.assets.push(cut('late_cut', FILES.slice.path, sliceTag(HASH.master, 1.8, 2.5)));
+        q.assets.push(cut('birds_cut', FILES.slice.path, sliceTag(HASH.birds, 0, 0.5)));                         // birds allowed, but not slices: true
+        q.assets.push(cut('hand_cut', FILES.slice.path, sliceTag(HASH.master, 0, 0.5), { provider: 'manual' })); // not the cutter
+      });
+      const late = await checkJob(p, lip({ id: 'late_cut', uri: FILES.slice.path }), { projectDir: dir });
+      assert.match(late.breaches[0]!.message, /ends at 2.5 s, past the end of its source \(2 s\)/);
+      const birds = await checkJob(p, lip({ id: 'birds_cut', uri: FILES.slice.path }), { projectDir: dir });
+      assert.match(birds.breaches[0]!.message, /is a slice of sha256 .* not in rules.uploads.allow with slices: true/);
+      const hand = await checkJob(p, lip({ id: 'hand_cut', uri: FILES.slice.path }), { projectDir: dir });
+      assert.match(hand.breaches[0]!.message, /its hash is not in rules.uploads.allow/);
+    });
+
+    it('the source length comes from audio.master when its sha256 is the source hash', async () => {
+      const { dir, project: p } = await rulesFolder((q) => {
+        q.audio = { master: { uri: FILES.master.path, duration_s: 1.2, sample_rate: 8000, start_tc: '00:00:00:00', sha256: HASH.master }, lines: [] };
+        q.assets.push(cut('L001_cut', FILES.slice.path, sliceTag(HASH.master, 1, 1.5)));
+      });
+      const r = await checkJob(p, lip({ id: 'L001_cut', uri: FILES.slice.path }), { projectDir: dir });
+      assert.match(r.breaches[0]!.message, /past the end of its source \(1.2 s\)/);
+    });
+  });
+
+  it('never_from_photo can\'t be switched off by the id a job claims (review probes P1, P1b, P2)', async () => {
     const { dir, project: p } = await rulesFolder();
-    const note = sliceNote(HASH.master, 12.5, 14.25);
-    assert.deepEqual(parseSliceNote(`line L001; ${note}`), { sha256: HASH.master, in_s: 12.5, out_s: 14.25 });
-    assert.ok(canBeSlice('audio/x.wav') && !canBeSlice('x.png'));
-    const ok = await checkJob(p, job({ unit: 'S03-020', prompt: `silhouettes only, ${STYLE}`, refs: [{ id: 'L001', uri: FILES.slice.path, role: 'audio', note }] }, { kind: 'video', stage: 'motion' }), { projectDir: dir });
-    assert.deepEqual(ok.breaches.filter((b) => b.rule !== 'require'), []);
-    const notSlices = await checkJob(p, job({ unit: 'S03-020', prompt: `silhouettes only, ${STYLE}`, refs: [{ id: 'L001', uri: FILES.slice.path, note: sliceNote(HASH.birds) }] }), { projectDir: dir });
-    assert.match(notSlices.breaches[0]!.message, /is a slice of sha256 .* not in rules.uploads.allow with slices: true/);
-    const picture = await checkJob(p, job({ unit: 'S03-020', prompt: `silhouettes only, ${STYLE}`, refs: [{ id: 'p', uri: FILES.street.path, note }] }), { projectDir: dir });
-    assert.deepEqual(rulesOf(picture.breaches), ['uploads']);
+    const kitJob = (ref: { id: string; uri: string }) => job({ unit: 'KIT', output: 'portrait', prompt: 'portrait', refs: [ref] }, { stage: 'bible' });
+    for (const ref of [{ id: 'x', uri: FILES.birds.path }, { id: 'HARBOUR', uri: FILES.birds.path }, { id: 'ADA', uri: FILES.crop.path }]) {
+      const r = await checkJob(p, kitJob(ref), { projectDir: dir });
+      assert.ok(rulesOf(r.breaches).includes('never-from-photo'), `${ref.id} → ${rulesOf(r.breaches).join(',')}`);
+    }
+    // The consented crop as an ADA-owned reference in KIT's bible job: for KIT and ADA, so both rules refuse it.
+    const owned = await checkJob(p, kitJob({ id: 'ref_ada_crop', uri: FILES.crop.path }), { projectDir: dir });
+    assert.deepEqual(rulesOf(owned.breaches), ['never-from-photo', 'uploads']);
+  });
+
+  it('a generated ref for a never-from-photo entry must carry a sha256 its file still matches', async () => {
+    const { dir, project: p } = await rulesFolder((q) => { delete q.assets.find((a) => a.id === 'KIT_portrait')!.file!.hash; });
+    const r = await checkJob(p, job({ unit: 'S02-010', prompt: STYLE, refs: [{ id: 'KIT_portrait', uri: FILES.kitGenerated.path }] }), { projectDir: dir });
+    assert.deepEqual(rulesOf(r.breaches), ['never-from-photo']);
+    assert.match(r.breaches[0]!.message, /can't be verified as generated/);
+    // The same unverified file for an entry that isn't never-from-photo is fine.
+    const q2 = structuredClone(p);
+    q2.rules!.never_from_photo = [];
+    assert.deepEqual((await checkJob(q2, job({ unit: 'S02-010', prompt: STYLE, refs: [{ id: 'KIT_portrait', uri: FILES.kitGenerated.path }] }), { projectDir: dir })).breaches, []);
   });
 
   it('a free (manual) job gets the text rules only: akuko uploads nothing for it', async () => {
@@ -357,6 +495,34 @@ describe('checkProjectRules (the preflight)', () => {
       'bible:KIT never-from-photo', // the hand-made portrait listed for KIT
       'bible:KIT uploads',
     ]);
-    assert.deepEqual(c.counts, { shots: 5, entries: 5, refs: 4 });
+    assert.deepEqual(c.counts, { shots: 5, entries: 5, refs: 4, lines: 0 });
+  });
+
+  it('checks narration, script lines and dialogue line text for banned terms, but not the negative', async () => {
+    const { dir, project: p } = await rulesFolder((q) => {
+      q.shots.find((s) => s.id === 'S03-010')!.prompt = `Guests dance, silhouettes only, ${STYLE}`;
+      q.shots.find((s) => s.id === 'S01-010')!.narration = 'I bought it at Acme.';
+      q.shots.find((s) => s.id === 'S01-010')!.negative = 'no acme logos';
+      q.shots.find((s) => s.id === 'S02-010')!.script_line = 'KIT: zorblax, again.';
+      q.shots.find((s) => s.id === 'S03-020')!.lines = [{ id: 'Q01', kind: 'spoken' }];
+      q.audio = { lines: [{ id: 'Q01', kind: 'spoken', film_in_s: 0, film_out_s: 1, text: 'Meet me by the ACME sign.' }, { id: 'Q02', kind: 'thought', film_in_s: 1, film_out_s: 2, text: 'Gore everywhere.' }] };
+    });
+    const c = await checkProjectRules(p, { projectDir: dir });
+    assert.deepEqual(c.breaches.map((b) => `${b.where} ${b.field}`), ['S01-010 narration', 'S02-010 script line', 'S03-020 line Q01', 'line:Q02 line Q02']);
+    assert.equal(c.counts.lines, 2);
+  });
+});
+
+describe('guardedGate()', () => {
+  it('builds the gate with the guard in front: a breach never reaches the gate, and the gate writes nothing', async () => {
+    const { dir } = await rulesFolder();
+    const host = createLocalHost({ projectDir: dir });
+    const manual = createManualProvider(host);
+    const g = guardedGate({ host, providers: [manual.provider], level: 'B', reader: createLocalHost({ projectDir: dir }), projectDir: dir });
+    const before = await host.readState();
+    const r = await g.run(job({ unit: 'S01-010', prompt: `an acme box, ${STYLE}` }, { provider: 'manual' }));
+    assert.equal(r.status === 'refused' ? r.refusal.code : r.status, RULES_BREACH);
+    assert.deepEqual(await host.readState(), before);
+    assert.equal((await g.quote(job({ unit: 'S01-010', prompt: STYLE }, { provider: 'manual' }))).paid, false, 'a clean job reaches the real gate');
   });
 });

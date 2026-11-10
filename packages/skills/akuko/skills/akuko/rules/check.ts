@@ -12,7 +12,7 @@ import type { Job, JobItem, JobRef, Provider } from '../providers/contract.ts';
 import type { AkukoProject, Asset, BibleEntry, RuleScope, Rules, Scene, Shot } from '../schema/akuko-project.ts';
 import { RulesSchema, findUnit } from '../schema/akuko-project.ts';
 import { MANUAL_PROVIDER, classifyRef, type HashCache, type RefOrigin } from './refs.ts';
-import { bannedMatches, containsRequired, normalizeRequired, snippet } from './text.ts';
+import { bannedHits, bannedMatches, containsRequired, foldText, normalizeRequired, snippet } from './text.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Breaches
@@ -133,7 +133,7 @@ function inScope(scope: RuleScope | undefined, c: Context): boolean {
 function skipsFor(rules: Rules, shot: Shot | undefined): Set<string> {
   const out = new Set<string>();
   if (!shot) return out;
-  for (const e of rules.exempt) if (e.shots.includes(shot.id)) for (const s of e.skip) out.add(s.trim().toLocaleLowerCase('en'));
+  for (const e of rules.exempt) if (e.shots.includes(shot.id)) for (const s of e.skip) out.add(foldText(s.trim()));
   return out;
 }
 
@@ -144,7 +144,7 @@ const houseStyleText = (p: AkukoProject): string | undefined => {
 
 /** True when `skips` switch this banned term off for the shot. */
 const skipsBanned = (skips: Set<string>, term: string): boolean =>
-  skips.has('banned') || skips.has(`banned:${term.trim().toLocaleLowerCase('en')}`);
+  skips.has('banned') || skips.has(`banned:${foldText(term.trim())}`);
 
 /** True when `skips` switch this required text off: `require`, `require:<text>`, or `house-style` for text that is part of the house style. */
 function skipsRequire(skips: Set<string>, text: string, house: string | undefined): boolean {
@@ -172,9 +172,9 @@ function bannedIn(rules: Rules, c: Context, fields: TextField[], skips: Set<stri
     if (!inScope(b.scope, c) || skipsBanned(skips, b.term)) continue;
     for (const f of fields) {
       if (!f.text) continue;
-      const hits = bannedMatches(f.text, b.term, b.except ?? []);
+      const { folded, spans: hits } = bannedHits(f.text, b.term, b.except ?? []);
       if (hits.length === 0) continue;
-      const text = snippet(f.text, hits[0]!);
+      const text = snippet(folded, hits[0]!);
       out.push({
         rule: 'banned', where: where(c, unit), ...(unit ? { unit } : {}), ...ids(c), field: f.field, text,
         message: `banned term "${b.term}" in the ${f.field}${hits.length > 1 ? ` (${hits.length} times)` : ''}: "${text}"${b.note ? ` (${b.note})` : ''}`,
@@ -209,16 +209,18 @@ const ids = (c: Context): Pick<Breach, 'shot' | 'entry'> => ({ ...(c.shot ? { sh
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * The bible ids an external ref is a reference FOR: the entry that owns the
- * asset, else the bible entry the ref names, else every subject of the item
- * (strict: a picture attached to a shot counts as a reference for every
- * character and location in that shot; a bible job's subject is its entry).
+ * The bible ids a ref is a reference FOR. Decided from the project state
+ * only, never from what the job claims (`ref.id` names no entry here):
+ * - in a bible job, the entry the job is for, always, plus the entry that
+ *   owns the ref's asset if that is another one;
+ * - in a shot, the bible entry that owns the ref's asset; else every subject
+ *   of the shot (a picture attached to a shot counts as a reference for every
+ *   character and location in it).
  */
-function targetsOf(p: AkukoProject, ref: Pick<JobRef, 'id'>, asset: Asset | undefined, c: Context): string[] {
-  const all = bibleIdsOf(p);
-  if (asset?.owner !== undefined && all.has(asset.owner)) return [asset.owner];
-  if (all.has(ref.id)) return [ref.id];
-  return c.subjects;
+function targetsOf(p: AkukoProject, asset: Asset | undefined, c: Context): string[] {
+  const owner = asset?.owner !== undefined && bibleIdsOf(p).has(asset.owner) ? asset.owner : undefined;
+  if (c.entry) return [...new Set([c.entry.id, ...(owner ? [owner] : [])])];
+  return owner ? [owner] : c.subjects;
 }
 
 async function refBreaches(
@@ -232,13 +234,22 @@ async function refBreaches(
   const origin = await classifyRef(p, ref, ctx);
   const base = { where: where(c, unit), ...(unit ? { unit } : {}), ...ids(c), ref: ref.id };
   const out: Breach[] = [];
-  if (origin.kind === 'no-file' || origin.kind === 'generated') return { origin, breaches: out };
+  if (origin.kind === 'no-file') return { origin, breaches: out };
+  if (origin.kind === 'generated') {
+    // A generated file is trusted for a never-from-photo entry only when its recorded sha256 still matches the bytes.
+    const forbidden = origin.verified ? [] : targetsOf(p, origin.asset, c).filter((t) => rules.never_from_photo.includes(t));
+    if (forbidden.length) {
+      out.push({ ...base, rule: 'never-from-photo', file: origin.asset.file?.uri ?? ref.uri ?? '',
+        message: `ref ${ref.id} was generated by job ${origin.job}, but it has no recorded sha256 that its file still matches, so it can't be verified as generated; ${forbidden.join(', ')} may only use verified generated references (rules.never_from_photo)` });
+    }
+    return { origin, breaches: out };
+  }
   if (origin.kind === 'generated-changed') {
     out.push({ ...base, rule: 'generated-changed', file: origin.uri, sha256: origin.actual,
       message: `ref ${ref.id} (${origin.uri}) was generated by job ${origin.job}, but the file has changed since (sha256 ${short(origin.actual)}, recorded ${short(origin.expected)}); it is treated as a different file` });
     return { origin, breaches: out };
   }
-  const targets = targetsOf(p, ref, origin.asset, c);
+  const targets = targetsOf(p, origin.asset, c);
   const forbidden = targets.filter((t) => rules.never_from_photo.includes(t));
   if (forbidden.length) {
     out.push({ ...base, rule: 'never-from-photo', file: origin.uri, ...(origin.kind === 'external' ? { sha256: origin.sha256 } : {}),
@@ -248,6 +259,11 @@ async function refBreaches(
     const why = origin.reason === 'missing' ? 'the file is not there' : origin.reason === 'remote' ? 'it is not a local file, so its content cannot be checked' : `it cannot be read${origin.detail ? ` (${origin.detail})` : ''}`;
     out.push({ ...base, rule: 'uploads', file: origin.uri,
       message: `ref ${ref.id} (${origin.uri}) is not a file akuko generated and ${why}; only files whose sha256 is in rules.uploads.allow can be sent` });
+    return { origin, breaches: out };
+  }
+  if (origin.sliceProblem) {
+    out.push({ ...base, rule: 'uploads', file: origin.uri, sha256: origin.sha256,
+      message: `ref ${ref.id} (${origin.uri}) is recorded as a slice, but ${origin.sliceProblem}; it can't be sent as a slice` });
     return { origin, breaches: out };
   }
   const via = origin.slice;
@@ -300,7 +316,7 @@ export function isPaidJob(job: Pick<Job, 'provider'>, providers?: Provider[]): b
 function itemFields(job: Job, item: JobItem): TextField[] {
   return [
     { field: job.kind === 'audio' ? 'spoken text' : 'prompt', text: item.prompt },
-    { field: 'negative prompt', text: item.negative },
+    // Not the negative: listing a word there is how a prompt avoids it (orchestrator decision, WP-26 review).
     { field: 'camera note', text: item.camera },
     ...(item.refs ?? []).map((r) => ({ field: `note on ref ${r.id}`, text: r.note })),
   ];
@@ -347,7 +363,7 @@ export interface ProjectCheck {
   breaches: Breach[];
   /** Rule-setup problems that are not breaches (e.g. an exemption naming an unknown rule). */
   warnings: string[];
-  counts: { shots: number; entries: number; refs: number };
+  counts: { shots: number; entries: number; refs: number; lines: number };
 }
 
 const hasFile = (a: Asset): boolean => a.file?.uri !== undefined;
@@ -357,13 +373,13 @@ export function ruleWarnings(p: AkukoProject, rules: Rules): string[] {
   const out: string[] = [];
   for (const e of rules.exempt) {
     for (const raw of e.skip) {
-      const s = raw.trim().toLocaleLowerCase('en');
+      const s = foldText(raw.trim());
       if ((UNSKIPPABLE as readonly string[]).includes(s)) out.push(`exempt names "${raw}", which can't be skipped (reference rules always apply); it has no effect`);
       else if (!(SKIP_NAMES as readonly string[]).includes(s) && !s.startsWith('banned:') && !s.startsWith('require:')) {
         out.push(`exempt names "${raw}", which is not a rule akuko knows (${SKIP_NAMES.join(', ')}, banned:<term>, require:<text>); it has no effect`);
       } else if (s === 'house-style' && !p.bible.styles.some((x) => x.id === HOUSE_STYLE_ID)) {
         out.push(`exempt names "house-style", but there is no bible style entry "${HOUSE_STYLE_ID}" holding the house style; it skips nothing`);
-      } else if (s.startsWith('banned:') && !rules.banned.some((b) => `banned:${b.term.trim().toLocaleLowerCase('en')}` === s)) {
+      } else if (s.startsWith('banned:') && !rules.banned.some((b) => `banned:${foldText(b.term.trim())}` === s)) {
         out.push(`exempt names "${raw}", but no banned term matches it; it has no effect`);
       } else if (s.startsWith('require:') && !rules.require.some((r) => `require:${normalizeRequired(r.text)}` === s)) {
         out.push(`exempt names "${raw}", but no required text matches it; it has no effect`);
@@ -383,16 +399,19 @@ export function ruleWarnings(p: AkukoProject, rules: Rules): string[] {
 }
 
 /**
- * The preflight: every shot's own prompt and negative (not yet wrapped in a
- * stage's framing text), every bible entry's name, description and notes
- * (they go into prompts) against unscoped banned terms, and every listed
+ * The preflight: every shot's own prompt (banned terms and required text),
+ * negative (required text only), camera note, narration and script line
+ * (banned terms), not yet wrapped in a stage's framing text; every dialogue
+ * line's text (`audio.lines[].text`, as its shot); every bible entry's name,
+ * description and notes (they go into prompts) against unscoped banned
+ * terms; and every listed
  * reference file as if it were about to be uploaded: each bible entry's
  * `refs[]` and the `reference` assets the person attached to an entry or a
  * shot. Free: nothing is built, priced or sent.
  */
 export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions, 'providers'> = {}): Promise<ProjectCheck> {
   const st = rulesStatus(p);
-  const counts = { shots: 0, entries: 0, refs: 0 };
+  const counts = { shots: 0, entries: 0, refs: 0, lines: 0 };
   if (st.invalid) {
     return { status: st, warnings: [], counts, breaches: [{ rule: 'required', where: '(project)', message: `the project rules are not valid (${st.invalid})` }] };
   }
@@ -409,7 +428,12 @@ export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions
     counts.shots++;
     const c = shotContext(p, shot);
     const skips = skipsFor(rules, shot);
-    breaches.push(...bannedIn(rules, c, [{ field: 'prompt', text: shot.prompt }, { field: 'negative prompt', text: shot.negative }, { field: 'camera note', text: shot.camera }], skips));
+    breaches.push(...bannedIn(rules, c, [
+      { field: 'prompt', text: shot.prompt },
+      { field: 'camera note', text: shot.camera },
+      { field: 'narration', text: shot.narration ?? undefined },
+      { field: 'script line', text: shot.script_line },
+    ], skips));
     breaches.push(...requireIn(rules, p, c, { prompt: shot.prompt, negative: shot.negative }, skips));
     for (const a of p.assets) {
       if (a.kind !== 'reference' || a.owner !== shot.id || !hasFile(a)) continue;
@@ -430,6 +454,15 @@ export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions
       counts.refs++;
       breaches.push(...(await refBreaches(p, rules, c, { id: a.id, uri: a.file!.uri }, ctx)).breaches);
     }
+  }
+
+  // Dialogue lines on the master (their text is what lip-sync and voice steps would speak), checked as their shot.
+  for (const line of p.audio?.lines ?? []) {
+    if (!line.text) continue;
+    counts.lines++;
+    const shot = p.shots.find((s) => s.lines?.some((l) => l.id === line.id) && !s.source?.removed_at);
+    const c: Context = shot ? shotContext(p, shot) : { bibleIds: [], subjects: [] };
+    breaches.push(...bannedIn(rules, c, [{ field: `line ${line.id}`, text: line.text }], skipsFor(rules, shot), `line:${line.id}`));
   }
 
   return { status: st, breaches, warnings: ruleWarnings(p, rules), counts };

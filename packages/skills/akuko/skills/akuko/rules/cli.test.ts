@@ -32,7 +32,7 @@ describe('rules cli', () => {
     const r = await run(['check', '--project', dir]);
     assert.equal(r.code, 1, r.out);
     const lines = r.out.split('\n');
-    assert.ok(lines.includes('BREACH S02-010 [banned] banned term "acme" in the prompt: "Kit next to an ACME van" (a brand name)'), r.out);
+    assert.ok(lines.includes('BREACH S02-010 [banned] banned term "acme" in the prompt: "kit next to an acme van" (a brand name)'), r.out);
     assert.ok(lines.some((l) => l.startsWith('BREACH S02-010 [require] the prompt lacks required text "painterly 35mm grain')), r.out);
     assert.ok(lines.some((l) => l.startsWith('BREACH bible:KIT [never-from-photo] ref KIT_sketch')), r.out);
     assert.ok(lines.some((l) => /^warn: exempt names "uploads", which can't be skipped/.test(l)), r.out);

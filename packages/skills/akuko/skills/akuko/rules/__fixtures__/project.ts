@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import type { Job, JobItem } from '../../providers/contract.ts';
 import { serializeProject } from '../../hosts/local.ts';
 import { AkukoProjectSchema, type AkukoProject } from '../../schema/akuko-project.ts';
+import { wavBytes } from '../../sound/wav.ts';
 import { sha256Bytes } from '../refs.ts';
 
 export const T0 = '2026-11-09T10:00:00Z';
@@ -16,6 +17,14 @@ export const T0 = '2026-11-09T10:00:00Z';
 export const STYLE = 'painterly 35mm grain, muted teal palette';
 
 const bytes = (label: string): Uint8Array => new TextEncoder().encode(`synthetic file: ${label}\n`);
+/** A real 16-bit mono WAV of silence (8 kHz), `seconds` long; `mark` tells copies apart. */
+const wav = (seconds: number, mark: number): Uint8Array => {
+  const pcm = new Uint8Array(Math.round(seconds * 8000) * 2);
+  pcm[0] = mark;
+  return wavBytes(pcm, 8000);
+};
+/** The master's length in seconds. */
+export const MASTER_S = 2;
 
 /** The files written into the folder, by role. Paths are relative to the project folder. */
 export const FILES = {
@@ -25,8 +34,10 @@ export const FILES = {
   kitGenerated: { path: 'bible/characters/KIT/refs/kit-portrait.png', data: bytes('a portrait akuko generated') },
   kitByHand: { path: 'bible/characters/KIT/refs/kit-by-hand.png', data: bytes('a portrait brought back by hand') },
   birds: { path: 'inbox/birds.png', data: bytes('an allowed photo of two birds') },
-  master: { path: 'audio/master.wav', data: bytes('a master mix') },
-  slice: { path: 'audio/slices/L001.wav', data: bytes('a line cut from the master') },
+  master: { path: 'audio/master.wav', data: wav(MASTER_S, 1) },
+  slice: { path: 'audio/slices/L001.wav', data: wav(0.5, 2) },
+  strangerVoice: { path: 'inbox/someone-else.wav', data: wav(0.5, 3) },
+  photoAsWav: { path: 'inbox/photo.wav', data: bytes('a photo, renamed .wav') },
 } as const;
 
 export const HASH = Object.fromEntries(Object.entries(FILES).map(([k, f]) => [k, sha256Bytes(f.data)])) as Record<keyof typeof FILES, string>;

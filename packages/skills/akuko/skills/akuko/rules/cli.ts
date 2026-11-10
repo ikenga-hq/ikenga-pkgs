@@ -51,7 +51,7 @@ export function summaryLine(c: Pick<ProjectCheck, 'status'>): string {
 
 export function formatCheck(c: ProjectCheck, title: string): string {
   const lines = [`Rules check: ${title}`, `  ${summaryLine(c)}`];
-  if (c.status.present) lines.push(`  checked: ${plural(c.counts.shots, 'shot')}, ${plural(c.counts.entries, 'bible entry', 'bible entries')}, ${plural(c.counts.refs, 'reference file')}`);
+  if (c.status.present) lines.push(`  checked: ${plural(c.counts.shots, 'shot')}, ${plural(c.counts.entries, 'bible entry', 'bible entries')}, ${plural(c.counts.refs, 'reference file')}${c.counts.lines ? `, ${plural(c.counts.lines, 'dialogue line')}` : ''}`);
   for (const b of c.breaches) lines.push(`BREACH ${formatBreach(b)}`);
   for (const w of c.warnings) lines.push(`warn: ${w}`);
   lines.push(c.breaches.length

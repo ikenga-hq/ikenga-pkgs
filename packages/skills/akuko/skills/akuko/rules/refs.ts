@@ -26,20 +26,34 @@
  * 4. **Unchanged.** When the asset's `file.hash` is a sha256 (what the local
  *    host records in `storeAsset`) and the file is readable, the bytes on disk
  *    must still hash to it. A swapped file is refused as `generated-changed`.
+ * 5. **Verified, for a never-from-photo entry.** A generated ref that is a
+ *    reference for a `never_from_photo` entry must also have a sha256
+ *    `file.hash` that the bytes on disk match (`verified`); without one it is
+ *    treated as unverifiable and refused (`check.ts`).
  *
  * ## Slices (for WP-28b)
  *
  * A time-slice cut by akuko from an allowed file (a line cut from the master
- * WAV) is a new file with a new hash. The cutter records where it came from
- * in the ref's `note`, with the token `sliceNote()` builds:
+ * WAV) is a new file with a new hash. Its provenance lives in the project
+ * state, never in the job: the cutter records the slice as an **asset** with
  *
- *     slice-of=sha256:<64 hex of the SOURCE file>@<in_s>-<out_s>
+ *     provider: "akuko-cut"                                      (SLICE_PROVIDER)
+ *     tags:     ["slice-of:sha256:<64 hex of the SOURCE>@<in_s>-<out_s>"]   (sliceTag())
+ *     file:     { uri, hash: <sha256 of the slice> }             (the local host records it)
  *
- * (`@<in>-<out>` is optional, seconds on the source). The guard accepts the
- * slice when the source hash is allowed with `slices: true`, and applies that
- * entry's `for`. The token is honoured only on audio or video files, so a
- * picture can't claim it. `providers/contract.ts` is unchanged: `note` is an
- * existing free-text field.
+ * and the job's ref names that asset (`ref.id` = the asset id, `ref.uri` its
+ * `file.uri`). The guard accepts the slice when all of:
+ * - the source hash is in `rules.uploads.allow` with `slices: true` (that
+ *   entry's `for` then applies);
+ * - the slice's bytes are audio or video by content (RIFF/WAVE, ID3 or an
+ *   MPEG frame, an MP4/MOV `ftyp` box, FLAC, Ogg, WebM/Matroska), whatever
+ *   the file's extension;
+ * - the slice's `file.hash`, when it is a sha256, matches the bytes;
+ * - `0 ≤ in_s < out_s`, and `out_s` is within the source's duration when the
+ *   source can be found: `audio.master.duration_s` when its `sha256` is the
+ *   source hash, else the WAV header of a project file with that hash.
+ *
+ * Nothing in the job (`ref.note` or any other field) can make a file a slice.
  */
 
 import { createHash } from 'node:crypto';
@@ -53,31 +67,6 @@ import type { AkukoProject, Asset } from '../schema/akuko-project.ts';
 export const MANUAL_PROVIDER = 'manual';
 const SHA256 = /^[0-9a-f]{64}$/;
 const JOB_TAG = jobTag('');
-
-// ─────────────────────────────────────────────────────────────────────────
-// Slice provenance
-// ─────────────────────────────────────────────────────────────────────────
-
-export interface SliceOf { sha256: string; in_s?: number; out_s?: number }
-
-const SLICE_RE = /(?:^|\s)slice-of=sha256:([0-9a-f]{64})(?:@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?))?(?=\s|$|[;,.])/;
-
-/** The token a slice's `ref.note` carries: `slice-of=sha256:<hex>[@<in>-<out>]`. */
-export function sliceNote(sha256: string, in_s?: number, out_s?: number): string {
-  if (!SHA256.test(sha256)) throw new Error('sliceNote: sha256 must be 64 lowercase hex characters');
-  return `slice-of=sha256:${sha256}${in_s !== undefined && out_s !== undefined ? `@${in_s}-${out_s}` : ''}`;
-}
-
-export function parseSliceNote(note: string | undefined): SliceOf | undefined {
-  if (!note) return undefined;
-  const m = SLICE_RE.exec(note);
-  if (!m) return undefined;
-  return { sha256: m[1]!, ...(m[2] !== undefined && m[3] !== undefined ? { in_s: Number(m[2]), out_s: Number(m[3]) } : {}) };
-}
-
-const TIME_MEDIA = /\.(wav|mp3|m4a|aac|flac|ogg|opus|aif|aiff|mp4|mov|webm|mkv)$/i;
-/** Only audio and video files can be time-slices. */
-export const canBeSlice = (uri: string): boolean => TIME_MEDIA.test(uri.split(/[?#]/)[0] ?? '');
 
 // ─────────────────────────────────────────────────────────────────────────
 // Generated or not
@@ -176,14 +165,117 @@ export async function hashUri(uri: string, projectDir: string | undefined, cache
   }
 }
 
+/** The first `n` bytes of a located file (or inline data), and its size. */
+function headOf(loc: Located, n = 65536): { head: Uint8Array; size: number } | undefined {
+  if (loc.kind === 'data') return { head: loc.data.subarray(0, n), size: loc.data.length };
+  if (loc.kind !== 'path' || !existsSync(loc.path)) return undefined;
+  try {
+    const size = statSync(loc.path).size;
+    const buf = Buffer.alloc(Math.min(n, size));
+    const fd = openSync(loc.path, 'r');
+    try { readSync(fd, buf, 0, buf.length, 0); } finally { closeSync(fd); }
+    return { head: buf, size };
+  } catch {
+    return undefined;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Slice provenance
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The provider id the cutter records on a slice asset (WP-28b). */
+export const SLICE_PROVIDER = 'akuko-cut';
+
+export interface SliceOf { sha256: string; in_s: number; out_s: number }
+
+const SLICE_TAG = /^slice-of:sha256:([0-9a-f]{64})@(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/;
+
+/** The tag the cutter puts on a slice asset: `slice-of:sha256:<source hex>@<in_s>-<out_s>`. */
+export function sliceTag(sha256: string, in_s: number, out_s: number): string {
+  if (!SHA256.test(sha256)) throw new Error('sliceTag: sha256 must be 64 lowercase hex characters');
+  if (!(Number.isFinite(in_s) && Number.isFinite(out_s) && in_s >= 0 && out_s > in_s)) throw new Error('sliceTag: need 0 <= in_s < out_s');
+  return `slice-of:sha256:${sha256}@${in_s}-${out_s}`;
+}
+
+export function parseSliceTag(tag: string): SliceOf | undefined {
+  const m = SLICE_TAG.exec(tag);
+  return m ? { sha256: m[1]!, in_s: Number(m[2]), out_s: Number(m[3]) } : undefined;
+}
+
+/** The slice provenance akuko's cutter recorded on an asset, if any. */
+export function sliceOf(a: Asset | undefined): SliceOf | undefined {
+  if (!a || a.provider !== SLICE_PROVIDER || a.kind === 'card') return undefined;
+  for (const t of a.tags) {
+    const s = parseSliceTag(t);
+    if (s) return s;
+  }
+  return undefined;
+}
+
+const ascii = (b: Uint8Array, o: number, n: number): string => String.fromCharCode(...b.subarray(o, o + n));
+
+/** What a file's first bytes say it is, among the media a slice can be. */
+export function mediaKind(head: Uint8Array): 'wav' | 'mp3' | 'mp4' | 'flac' | 'ogg' | 'matroska' | undefined {
+  if (head.length >= 12 && ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 4) === 'WAVE') return 'wav';
+  if (head.length >= 3 && ascii(head, 0, 3) === 'ID3') return 'mp3';
+  if (head.length >= 2 && head[0] === 0xff && (head[1]! & 0xe0) === 0xe0) return 'mp3';
+  if (head.length >= 8 && ascii(head, 4, 4) === 'ftyp') return 'mp4';
+  if (head.length >= 4 && ascii(head, 0, 4) === 'fLaC') return 'flac';
+  if (head.length >= 4 && ascii(head, 0, 4) === 'OggS') return 'ogg';
+  if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return 'matroska';
+  return undefined;
+}
+
+const u32 = (b: Uint8Array, o: number): number => (b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16) | (b[o + 3]! << 24)) >>> 0;
+
+/** A WAV's length in seconds from its header (first bytes + file size); undefined if it can't tell. Any sample format. */
+export function wavSeconds(head: Uint8Array, fileSize: number): number | undefined {
+  if (mediaKind(head) !== 'wav') return undefined;
+  let byteRate: number | undefined;
+  for (let o = 12; o + 8 <= head.length;) {
+    const id = ascii(head, o, 4);
+    const size = u32(head, o + 4);
+    const body = o + 8;
+    if (id === 'fmt ' && body + 12 <= head.length) byteRate = u32(head, body + 8);
+    else if (id === 'data') {
+      if (!byteRate) return undefined;
+      const bytes = size === 0 || size === 0xffffffff || body + size > fileSize ? fileSize - body : size;
+      return bytes / byteRate;
+    }
+    o = body + size + (size % 2);
+  }
+  return undefined;
+}
+
+export interface RefContext { projectDir?: string | undefined; cache?: HashCache | undefined }
+
+/** The source's length in seconds, when the project knows it (see the header). */
+async function sourceSeconds(p: AkukoProject, sha256: string, ctx: RefContext): Promise<number | undefined> {
+  const m = p.audio?.master;
+  if (m?.sha256 === sha256) return m.duration_s;
+  const uris = [m?.uri, ...(p.audio?.lines ?? []).map((l) => l.clip_uri), ...p.assets.filter((a) => a.kind !== 'card').map((a) => a.file?.uri)];
+  for (const uri of new Set(uris.filter((u): u is string => u !== undefined))) {
+    const h = await hashUri(uri, ctx.projectDir, ctx.cache);
+    if (!h.ok || h.sha256 !== sha256) continue;
+    const hd = headOf(locate(uri, ctx.projectDir));
+    const secs = hd ? wavSeconds(hd.head, hd.size) : undefined;
+    if (secs !== undefined) return secs;
+    if (m && uri === m.uri) return m.duration_s;
+  }
+  return undefined;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // One ref
 // ─────────────────────────────────────────────────────────────────────────
 
 export type RefOrigin =
-  | { kind: 'generated'; asset: Asset; job: string }
+  /** `verified`: the asset has a sha256 `file.hash` and the bytes on disk match it. */
+  | { kind: 'generated'; asset: Asset; job: string; verified: boolean }
   | { kind: 'generated-changed'; asset: Asset; job: string; uri: string; expected: string; actual: string }
-  | { kind: 'external'; uri: string; sha256: string; asset?: Asset; slice?: SliceOf }
+  /** `slice`: the asset is a slice akuko's cutter recorded; `sliceProblem` says why it can't count as one. */
+  | { kind: 'external'; uri: string; sha256: string; asset?: Asset; slice?: SliceOf; sliceProblem?: string }
   | { kind: 'unverifiable'; uri: string; reason: 'missing' | 'remote' | 'unreadable'; asset?: Asset; detail?: string }
   | { kind: 'no-file' };                 // nothing to upload, e.g. a provider voice id
 
@@ -195,11 +287,18 @@ export function refAsset(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>): Asse
   return a;
 }
 
-export async function classifyRef(
-  p: AkukoProject,
-  ref: Pick<JobRef, 'id' | 'uri' | 'note'>,
-  ctx: { projectDir?: string | undefined; cache?: HashCache | undefined },
-): Promise<RefOrigin> {
+async function sliceProblem(p: AkukoProject, asset: Asset, slice: SliceOf, uri: string, sha256: string, ctx: RefContext): Promise<string | undefined> {
+  const hd = headOf(locate(uri, ctx.projectDir));
+  if (!hd || mediaKind(hd.head) === undefined) return 'its content is not audio or video';
+  const recorded = asset.file?.hash;
+  if (recorded !== undefined && SHA256.test(recorded) && recorded !== sha256) return 'the file has changed since the cutter recorded it';
+  if (!(slice.in_s >= 0 && slice.out_s > slice.in_s)) return `its range ${slice.in_s}-${slice.out_s} s is not a span`;
+  const secs = await sourceSeconds(p, slice.sha256, ctx);
+  if (secs !== undefined && slice.out_s > secs + 1e-6) return `its range ends at ${slice.out_s} s, past the end of its source (${Number(secs.toFixed(3))} s)`;
+  return undefined;
+}
+
+export async function classifyRef(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>, ctx: RefContext): Promise<RefOrigin> {
   const asset = refAsset(p, ref);
   const uri = ref.uri ?? asset?.file?.uri;
   if (uri === undefined) return { kind: 'no-file' };
@@ -210,12 +309,15 @@ export async function classifyRef(
     if (recorded !== undefined && SHA256.test(recorded)) {
       const h = await hashUri(uri, ctx.projectDir, ctx.cache);
       if (h.ok && h.sha256 !== recorded) return { kind: 'generated-changed', asset, job, uri, expected: recorded, actual: h.sha256 };
+      return { kind: 'generated', asset, job, verified: h.ok };
     }
-    return { kind: 'generated', asset, job };
+    return { kind: 'generated', asset, job, verified: false };
   }
 
   const h = await hashUri(uri, ctx.projectDir, ctx.cache);
   if (!h.ok) return { kind: 'unverifiable', uri, reason: h.reason, ...(asset ? { asset } : {}), ...(h.detail ? { detail: h.detail } : {}) };
-  const slice = canBeSlice(uri) ? parseSliceNote(ref.note) : undefined;
-  return { kind: 'external', uri, sha256: h.sha256, ...(asset ? { asset } : {}), ...(slice ? { slice } : {}) };
+  const slice = sliceOf(asset);
+  if (!asset || !slice) return { kind: 'external', uri, sha256: h.sha256, ...(asset ? { asset } : {}) };
+  const problem = await sliceProblem(p, asset, slice, uri, h.sha256, ctx);
+  return { kind: 'external', uri, sha256: h.sha256, asset, slice, ...(problem ? { sliceProblem: problem } : {}) };
 }
