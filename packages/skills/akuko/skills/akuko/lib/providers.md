@@ -102,3 +102,41 @@ This is the no-key path. It is lifted in shape from Studio's
 The person brings files back by attaching them in chat, or by dropping them
 in the project folder. Never mark the result approved: the person approves
 it on the board.
+
+## The fal lip-sync provider (`providers/lipsync/fal/`)
+
+Id `fal-lipsync`; paid direct API (key `FAL_KEY`); hosts B and C only (R-11); kind `video`.
+It turns a picture plus a spoken line into a lip-synced video. One request per
+unit (`<shot>_lipsync`); the output is a `lipsync` asset, `pending-review`.
+
+**A job item** carries:
+
+| ref role | meaning |
+|----------|---------|
+| `audio` | the spoken line, already cut to the shot (exactly one) |
+| `start-frame` | a still: image + audio mode |
+| `source-video` | an approved clip: video + audio mode (exactly one of the two pictures) |
+
+`duration_s` is the length of that segment in seconds. It is checked against the
+model's limits and priced from config. A path ref is read from disk and sent as a
+`data:` URI; an `https:` URI is passed to fal as is (same as `fal` / `fal-video`;
+the loader is `mediaRefLoader`, because the shared one only knows image types).
+No new upload mechanism. The audio of the returned file is the supplied line:
+keep this video's sound out of the edit if a master track is used.
+
+**Models** (ids and prices in `providers/config.json`, read from fal's own pages on 2026-11-10):
+
+| mode | role | endpoint | price | limits akuko enforces |
+|------|------|----------|-------|------------------------|
+| image + audio | default | `minimax/h3-max/lip-sync/image-to-video` (768P) | $0.08 / s | audio 5-15 s (fal allows 15 min, but over 15 s bills 1.2x) |
+| image + audio | fallback | `veed/fabric-1.0` as `#480p` / `#720p` | $0.08 / $0.15 per s | none stated by fal |
+| video + audio | default | `fal-ai/kling-video/lipsync/audio-to-video` | $0.014 / s, rounded up to 5 s | segment 2-10 s, audio 5 MB, video 100 MB |
+| video + audio | fallback | `veed/lipsync/v2` | $0.07 / s of output | none stated by fal |
+
+With no `model` on the job, a still job uses `default_model` and a clip job the
+first video model in config order (`defaultLipsyncModel`). A model must match the
+picture kind; a mismatch is refused. A fallback is chosen by naming another
+configured model, which is a different job hash and so needs its own approval.
+The Kling price is the dearer of two readings on fal's own pages (see the
+config `source`); the estimate rounds each segment up to a 5 s step.
+Over-limit audio is refused with the limit, never trimmed.

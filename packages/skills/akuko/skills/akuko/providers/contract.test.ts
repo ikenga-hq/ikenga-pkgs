@@ -37,6 +37,8 @@ import { createFalImageProvider } from './fal/index.ts';
 import { REF_URI, mockFal, mockGemini } from './gemini-image/__fixtures__/mock-net.ts';
 import { createFalVideoProvider } from './fal-video/index.ts';
 import { mockFalVideo } from './fal-video/__fixtures__/mock-net.ts';
+import { createFalLipsyncProvider } from './lipsync/fal/index.ts';
+import { mockFalLipsync } from './lipsync/fal/__fixtures__/mock-net.ts';
 import { createElevenLabsProvider } from './tts/elevenlabs/index.ts';
 import { mockElevenLabs } from '../sound/__fixtures__/audio.ts';
 
@@ -70,6 +72,18 @@ const clipJob = (provider: string): Job => ({
   items: [
     { unit: 'sc1_sh1', prompt: 'A long dark hallway, the camera slowly pushes in', output: 'clip', duration_s: 5, aspect_ratio: '16:9', refs: [{ id: 'kf1', uri: REF_URI, role: 'start-frame' }] },
     { unit: 'sc1_sh2', prompt: 'A hand on a latch', output: 'clip', duration_s: 10, refs: [{ id: 'kf2', uri: REF_URI, role: 'start-frame' }] },
+  ],
+});
+
+const lipsyncJob = (provider: string): Job => ({
+  id: 'job_ls_test_r1',
+  stage: 'motion',
+  kind: 'video',
+  provider,
+  label: 'Lip-sync for scene 1',
+  items: [
+    { unit: 'sc1_sh1', prompt: '', output: 'lipsync', duration_s: 6, refs: [{ id: 'kf1', uri: REF_URI, role: 'start-frame' }, { id: 'line1', uri: 'data:audio/wav;base64,UklGRg==', role: 'audio' }] },
+    { unit: 'sc1_sh2', prompt: '', output: 'lipsync', duration_s: 8, refs: [{ id: 'kf2', uri: REF_URI, role: 'start-frame' }, { id: 'line2', uri: 'data:audio/wav;base64,UklGRg==', role: 'audio' }] },
   ],
 });
 
@@ -119,6 +133,12 @@ const PROVIDERS: ProviderSpec[] = [
     config: loadProviderConfig(),
     make: (host) => ({ provider: createFalVideoProvider(host, { fetch: mockFalVideo().fetch, apiKey: 'test-key', now: () => '2026-11-09T10:00:00Z' }) }),
     job: () => clipJob('fal-video'),
+  },
+  {
+    name: 'fal-lipsync (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createFalLipsyncProvider(host, { fetch: mockFalLipsync().fetch, apiKey: 'test-key', now: () => '2026-11-10T10:00:00Z' }) }),
+    job: () => lipsyncJob('fal-lipsync'),
   },
   {
     name: 'elevenlabs (network mocked, with timings)',
