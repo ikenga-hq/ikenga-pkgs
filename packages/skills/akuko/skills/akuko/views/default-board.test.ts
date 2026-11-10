@@ -555,7 +555,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('a link with #part=P7 opens the one-part view; approving a shot there re-renders only what changed', async () => {
     const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
     assert.equal(shotEls(p), 11);
-    const id = 'S11-030';
+    const id = 'S19-030';
     click(p, `[data-act="sel"][data-id="${id}"]`);
     await p.tick();
     const sideways = p.d.querySelector('#p-ledger > .rp-body');
@@ -607,17 +607,17 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
 
   it('the shot detail carries what the sheet gave it: part, tier, framing, lighting, lines, film time', async () => {
     const p = await boot({ host: 'B', project: asPage(BIG), url: 'https://board.test/views/default-board.html#part=P7' });
-    click(p, '[data-act="sel"][data-id="S11-070"]');
+    click(p, '[data-act="sel"][data-id="S19-070"]');
     await p.tick();
     const det = p.text('[data-akuko-view="shot-detail"]').replace(/\s+/g, '');
-    for (const want of ['Part P7', 'Lighting L-DUSK · low amber dusk light', 'Sheet row S11-070', 'Q01 · spoken · ADA-NOW: An invented line.', 'Negative: text, signs, logos, captions']) assert.ok(det.includes(want.replace(/\s+/g, '')),`detail lacks ${want}: ${det.slice(0, 400)}`);
+    for (const want of ['Part P7', 'Lighting L-DUSK · low amber dusk light', 'Sheet row S19-070', 'Q01 · spoken · ADA-NOW: An invented line.', 'Negative: text, signs, logos, captions']) assert.ok(det.includes(want.replace(/\s+/g, '')),`detail lacks ${want}: ${det.slice(0, 400)}`);
     p.close();
   });
 
   it('units removed from the sheet sit in a collapsed group with no approve, and "your move" leaves them out', async () => {
     const q = clone(BIG);
     const at = '2026-11-10T07:00:00Z';
-    const gone = q.shots.find((s) => s.id === 'S11-030')!;
+    const gone = q.shots.find((s) => s.id === 'S19-030')!;
     assert.equal(gone.status, 'pending-review');
     gone.source = { kind: 'sheet', id: gone.id, removed_at: at };
     q.assets.find((a) => a.id === 'card_P7-CARD')!.source = { kind: 'sheet', id: 'P7-CARD', removed_at: at };
@@ -627,13 +627,13 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     const grp = p.d.querySelector('#removed-grp');
     assert.ok(grp, 'the group is there');
     assert.equal(grp.open, false, 'collapsed');
-    assert.deepEqual(Array.from(grp.querySelectorAll('li')).map((li: any) => li.id), ['gone-S11-030', 'gone-card_P7-CARD']);
+    assert.deepEqual(Array.from(grp.querySelectorAll('li')).map((li: any) => li.id), ['gone-S19-030', 'gone-card_P7-CARD']);
     assert.match(p.text('#removed-grp summary'), /^2 ?Removed from the sheet/);
     assert.equal(grp.querySelectorAll('button, [data-akuko-action]').length, 0, 'nothing in it decides anything');
-    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-030"], [data-akuko-action][data-akuko-unit="card_P7-CARD"]').length, 0);
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S19-030"], [data-akuko-action][data-akuko-unit="card_P7-CARD"]').length, 0);
     assert.equal(p.d.querySelectorAll('#shotlist [data-akuko-field="shot"]').length - grp.querySelectorAll('[data-akuko-field="shot"]').length, 10, 'the part lists its 10 live shots');
     assert.equal(p.d.querySelectorAll('#lining .tag').length, 10);
-    assert.equal(p.d.querySelector('[data-act="sel"][data-id="S11-030"]'), null, 'a removed shot is never opened for review');
+    assert.equal(p.d.querySelector('[data-act="sel"][data-id="S19-030"]'), null, 'a removed shot is never opened for review');
     p.close();
   });
 
@@ -683,13 +683,13 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it("a removed shot's waiting key frame is not in \"your move\" and has no approve", async () => {
     const q = clone(BIG);
     const before = BIG.assets.filter((a) => a.status === 'pending-review').length;
-    const kf = q.assets.find((a) => a.id === 'S11-050_keyframe')!;
+    const kf = q.assets.find((a) => a.id === 'S19-050_keyframe')!;
     assert.equal(kf.status, 'pending-review');
-    q.shots.find((s) => s.id === 'S11-050')!.source = { kind: 'sheet', id: 'S11-050', removed_at: '2026-11-10T07:00:00Z' };
+    q.shots.find((s) => s.id === 'S19-050')!.source = { kind: 'sheet', id: 'S19-050', removed_at: '2026-11-10T07:00:00Z' };
     const p = await boot({ host: 'B', project: asPage(q) });
     assert.equal(p.num('waiting-other'), before - 1);
-    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S11-050_keyframe"]').length, 0);
-    assert.match(p.text('#bib-S11-050_keyframe'), /Removed from the sheet/);
+    assert.equal(p.d.querySelectorAll('[data-akuko-action][data-akuko-unit="S19-050_keyframe"]').length, 0);
+    assert.match(p.text('#bib-S19-050_keyframe'), /Removed from the sheet/);
     p.close();
   });
 
@@ -712,7 +712,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
 
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
-    const units = [['S11-030', 'sketch'], ['card_P7-CARD', 'export'], ['S11-050_keyframe', 'keyframes']] as const;
+    const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
     for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });

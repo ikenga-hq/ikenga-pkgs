@@ -48,16 +48,19 @@ const PAGE_STYLE = [
 ].join('');
 
 const sceneKey = (s: Shot): string => s.scene ?? 'unassigned';
+/** A shot whose row left the shot list is kept for the record only: it gets no beat-board cell. */
+const live = (s: Shot): boolean => s.source?.removed_at === undefined;
 
 /** Build every beat board for a project. Same project, same bytes. */
 export function buildBeatBoards(project: Pick<AkukoProject, 'project' | 'scenes' | 'shots' | 'script'>): BeatBoard[] {
   const aspect = project.project.aspect_ratio;
+  const shotsIn = project.shots.filter(live);
   const order = [...project.scenes.map((s) => s.id), 'unassigned'];
-  const extra = [...new Set(project.shots.map(sceneKey))].filter((k) => !order.includes(k));
+  const extra = [...new Set(shotsIn.map(sceneKey))].filter((k) => !order.includes(k));
   const boards: BeatBoard[] = [];
 
   for (const key of [...order, ...extra]) {
-    const shots = project.shots.filter((s) => sceneKey(s) === key);
+    const shots = shotsIn.filter((s) => sceneKey(s) === key);
     if (shots.length === 0) continue;
     const scene = project.scenes.find((s) => s.id === key);
     const of = Math.ceil(shots.length / PANELS_PER_BOARD);

@@ -21,7 +21,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { STAGES, type AkukoProject, type Asset, type AssetKind, type BibleEntry } from '../schema/akuko-project.ts';
+import { STAGES, removedAt, type AkukoProject, type Asset, type AssetKind, type BibleEntry } from '../schema/akuko-project.ts';
 import { jobTag } from '../providers/outputs.ts';
 import type { Job, JobItem, JobRef } from '../providers/contract.ts';
 import { BIBLE_ROLES, promptFor, type BibleRole, type PromptContext } from './prompts.ts';
@@ -99,7 +99,8 @@ export function assertOpen(p: AkukoProject): void {
       throw new BibleError(`The bible stage is locked: ${id} is "${p.stages[id].state}". It opens when a person has approved every earlier stage (the breakdown's shots and checklist entries, then the sketch board).`);
     }
   }
-  const open = bibleEntries(p).filter((e) => e.entry.status !== 'approved');
+  // An entry whose row left the shot list takes no review, so it never holds the stage back.
+  const open = bibleEntries(p).filter((e) => e.entry.status !== 'approved' && removedAt(p, e.entry) === undefined);
   if (open.length > 0) {
     throw new BibleError(`These checklist entries are not approved yet: ${open.map((e) => e.entry.id).join(', ')}. The bible starts from approved entries.`);
   }
@@ -118,6 +119,7 @@ export function planBible(project: AkukoProject, now: string): PlanResult {
   const p = structuredClone(project);
   const created: string[] = [];
   for (const { kind, entry } of bibleEntries(p)) {
+    if (removedAt(p, entry) !== undefined) continue; // left the shot list: nothing is planned for it
     for (const role of rolesFor(kind, entry)) {
       const id = assetIdFor(entry.id, role);
       if (p.assets.some((a) => a.id === id)) continue;

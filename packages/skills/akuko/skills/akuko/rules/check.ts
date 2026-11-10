@@ -468,5 +468,5 @@ export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions
   return { status: st, breaches, warnings: ruleWarnings(p, rules), counts };
 }
 
-/** One line per breach: `S11-070 [banned] banned term "x" in the prompt: "…"`. */
+/** One line per breach: `S19-070 [banned] banned term "x" in the prompt: "…"`. */
 export const formatBreach = (b: Breach): string => `${b.where} [${b.rule}] ${b.message}`;

@@ -16,7 +16,7 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 import { blankComments, conformanceHash, escapeJsonForScript, findJsonBlock, PROJECT_BLOCK } from './hash.mjs';
 import { decisionWriteSigns } from './predicates.mjs';
 import { hiddenReason, smallText } from './hidden.mjs';
-import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, unitsById } from './expected.mjs';
+import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, removedAt, unitsById } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
@@ -632,13 +632,13 @@ function checkControls(page, p, fail) {
   const control = (a, u) => [...d.querySelectorAll(`${sel('data-akuko-action', a)}${sel('data-akuko-unit', u)}`)].find((e) => !hiddenReason(w, e));
   const detail = inViews(d, 'shot-detail').map((e) => e.getAttribute('data-akuko-unit')).find((u) => units.has(u ?? ''));
   const ds = detail ? units.get(detail) : null;
-  if (ds && (ds.status === 'pending-review' || ds.status === 'needs-rework')) {
+  if (ds && removedAt(p, ds) === undefined && (ds.status === 'pending-review' || ds.status === 'needs-rework')) {
     for (const a of ['approve', 'request-changes', 'note']) if (!control(a, ds.id)) fail('contract', 'missing-control', `shot detail for ${ds.id} has no visible "${a}" control`);
   }
   for (const j of p.pending_spend.filter((x) => x.status === 'awaiting-approval')) {
     for (const a of ['approve-spend', 'decline-spend']) if (!control(a, j.id)) fail('contract', 'missing-control', `the paid job ${j.id} has no visible "${a}" control`);
   }
-  for (const a of p.assets.filter((x) => x.status === 'pending-review')) if (!control('approve', a.id)) fail('contract', 'missing-control', `${a.id} is waiting for review but has no visible approve control`);
+  for (const a of p.assets.filter((x) => x.status === 'pending-review' && removedAt(p, x) === undefined)) if (!control('approve', a.id)) fail('contract', 'missing-control', `${a.id} is waiting for review but has no visible approve control`);
   return { detail: ds, control };
 }
 
@@ -708,7 +708,7 @@ async function clickTests(html, p, manifest, fail) {
   // 1. a shot: approve → undo, request changes, note
   let page = await load(html, p, 'A');
   const shot = target(page);
-  if (shot && (shot.status === 'pending-review' || shot.status === 'needs-rework')) {
+  if (shot && removedAt(p, shot) === undefined && (shot.status === 'pending-review' || shot.status === 'needs-rework')) {
     const ym = expectedYourMove(p);
     const ap = await one(page, 'approve', shot.id);
     if (ap && shot.status === 'pending-review' && inViews(page.d, 'your-move').length) {
@@ -734,7 +734,7 @@ async function clickTests(html, p, manifest, fail) {
 
   // 3. a bible asset, and the script link selecting a shot
   page = await load(html, p, 'A');
-  const asset = p.assets.find((a) => a.status === 'pending-review');
+  const asset = p.assets.find((a) => a.status === 'pending-review' && removedAt(p, a) === undefined);
   if (asset) await one(page, 'approve', asset.id);
   const sel0 = target(page)?.id;
   const tagEl = [...page.d.querySelectorAll('[data-akuko-view="script-link"] [data-akuko-field="script-tag"]')].find((e) => e.getAttribute('data-akuko-unit') !== sel0 && !hiddenReason(page.w, e));

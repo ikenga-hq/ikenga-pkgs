@@ -229,6 +229,7 @@ export function lintBoard(project: Pick<AkukoProject, 'shots'>): BoardIssue[] {
   const issues: BoardIssue[] = [];
   const warn = (rule: BoardRule, shot: string, message: string) => issues.push({ severity: 'warning', rule, shot, message });
   for (const s of project.shots) {
+    if (s.source?.removed_at !== undefined) continue; // left the shot list: kept for the record, not linted
     if (s.blocking.length === 0) {
       warn('no-blocking', s.id, `${s.id} has no blocking, so its panel shows only the grid and the camera note. Add blocking from what the script says, or leave it.`);
       continue;
@@ -334,6 +335,7 @@ export async function drawSketchPanels(project: AkukoProject, host: SketchHost, 
   const rep: SketchReport = { project: out, drawn: [], redrawn: [], stillSentBack: [], unchanged: [], waiting: [], lint: lintBoard(out), changed: false };
 
   for (const shot of out.shots) {
+    if (shot.source?.removed_at !== undefined) continue; // left the shot list: no panel is drawn or waited on
     const first = shot.stage === 'breakdown' && shot.status === 'approved';
     const revise = shot.stage === 'sketch' && shot.status === 'needs-rework';
     if (shot.stage === 'breakdown' && !first) { rep.waiting.push(shot.id); continue; }

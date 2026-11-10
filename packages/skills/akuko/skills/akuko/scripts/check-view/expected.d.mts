@@ -16,3 +16,4 @@ export declare function expectedMoney(p: AkukoProject): {
 export declare function expectedYourMove(p: AkukoProject): Record<'waiting-shots' | 'waiting-spend' | 'waiting-other', number>;
 export declare const approveSpendText: (p: AkukoProject, job: PendingSpend) => string;
 export declare function mutateProject(p: AkukoProject): AkukoProject;
+export declare function removedAt(p: AkukoProject, u: object): string | undefined;
