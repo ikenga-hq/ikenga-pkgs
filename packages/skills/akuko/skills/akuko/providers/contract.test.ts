@@ -8,7 +8,7 @@
 // a submitted job in a test.
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -39,7 +39,7 @@ import { createFalVideoProvider } from './fal-video/index.ts';
 import { mockFalVideo } from './fal-video/__fixtures__/mock-net.ts';
 import { createFalLipsyncProvider } from './lipsync/fal/index.ts';
 import { mockFalLipsync } from './lipsync/fal/__fixtures__/mock-net.ts';
-import { wavDataUri } from './lipsync/fal/__fixtures__/media.ts';
+import { silentWav } from './lipsync/fal/__fixtures__/media.ts';
 import { tmpdir } from 'node:os';
 import { createElevenLabsProvider } from './tts/elevenlabs/index.ts';
 import { mockElevenLabs } from '../sound/__fixtures__/audio.ts';
@@ -77,6 +77,10 @@ const clipJob = (provider: string): Job => ({
   ],
 });
 
+/** Lines are WAV files in a project folder of their own (the lip-sync provider reads only confined files). */
+const LS_DIR = mkdtempSync(join(tmpdir(), 'akuko-contract-ls-'));
+for (const s of [6, 3]) writeFileSync(join(LS_DIR, `line${s}.wav`), silentWav(s));
+
 const lipsyncJob = (provider: string): Job => ({
   id: 'job_ls_test_r1',
   stage: 'motion',
@@ -84,8 +88,8 @@ const lipsyncJob = (provider: string): Job => ({
   provider,
   label: 'Lip-sync for scene 1',
   items: [
-    { unit: 'sc1_sh1', prompt: '', output: 'lipsync', duration_s: 6, refs: [{ id: 'kf1', uri: REF_URI, role: 'start-frame' }, { id: 'line1', uri: wavDataUri(6), role: 'audio', note: 'seconds=6' }] },
-    { unit: 'sc1_sh2', prompt: '', output: 'lipsync', duration_s: 3, refs: [{ id: 'kf2', uri: REF_URI, role: 'start-frame' }, { id: 'line2', uri: wavDataUri(3), role: 'audio', note: 'seconds=3' }] },
+    { unit: 'sc1_sh1', prompt: '', output: 'lipsync', duration_s: 6, refs: [{ id: 'kf1', uri: REF_URI, role: 'start-frame' }, { id: 'line1', uri: 'line6.wav', role: 'audio', note: 'seconds=6' }] },
+    { unit: 'sc1_sh2', prompt: '', output: 'lipsync', duration_s: 3, refs: [{ id: 'kf2', uri: REF_URI, role: 'start-frame' }, { id: 'line2', uri: 'line3.wav', role: 'audio', note: 'seconds=3' }] },
   ],
 });
 
@@ -139,7 +143,7 @@ const PROVIDERS: ProviderSpec[] = [
   {
     name: 'fal-lipsync (network mocked)',
     config: loadProviderConfig(),
-    make: (host) => ({ provider: createFalLipsyncProvider(host, { projectDir: tmpdir(), fetch: mockFalLipsync().fetch, apiKey: 'test-key', now: () => '2026-11-10T10:00:00Z' }) }),
+    make: (host) => ({ provider: createFalLipsyncProvider(host, { projectDir: LS_DIR, fetch: mockFalLipsync().fetch, apiKey: 'test-key', now: () => '2026-11-10T10:00:00Z' }) }),
     job: () => lipsyncJob('fal-lipsync'),
   },
   {

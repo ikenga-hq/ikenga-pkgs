@@ -22,8 +22,7 @@
  *   - model ids and prices live only in providers/config.json
  *   - hosts B and C only: a paid direct API is refused on host A (R-11)
  *   - `estimate()` is arithmetic on config; it reads local files (to measure
- *     them) but makes no network call, except to download an `https:` audio
- *     ref it must measure
+ *     them) and makes no network call
  *   - EVERYTHING is checked before the first request: paths, sizes, lengths,
  *     limits for every unit. A bad unit 2 is refused before unit 1 is queued.
  *   - files are confined to `projectDir` plus the caller's `allowRoots`
@@ -122,7 +121,7 @@ export function falLipsyncLimits(model: string): (LipsyncLimits & { endpoint: st
 }
 
 const inRange = (v: number, min?: number, max?: number): boolean =>
-  (min === undefined || v >= min - LENGTH_TOLERANCE_S) && (max === undefined || v <= max + LENGTH_TOLERANCE_S);
+  (min === undefined || v >= min - LENGTH_TOLERANCE_S) && (max === undefined || v <= max); // no slack on a maximum: 15.04 s must not reach a 15 s model (fal bills 1.2x above it)
 
 /**
  * The model a unit of this mode runs when the job names none: the first
@@ -172,7 +171,6 @@ const EXT: Record<'audio' | 'video' | 'image', Record<string, string>> = {
   video: { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v' },
   image: { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' },
 };
-const WAV_MIMES = new Set(['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave']);
 
 export interface FalLipsyncOptions {
   /** The project folder. Required: files are read only from inside it (and `allowRoots`). */
@@ -298,15 +296,17 @@ export function createFalLipsyncProvider(host: WaveOneHost, opts: FalLipsyncOpti
   async function source(uri: string, role: 'audio' | 'video' | 'image', what: string): Promise<{ src: Source; size?: number }> {
     if (/^http:\/\//i.test(uri)) throw new FalLipsyncError(`${what}: plain http: is refused; use https: or a project file`);
     if (/^https:\/\//i.test(uri)) {
+      if (role === 'audio') throw new FalLipsyncError(`${what}: an https: address is refused for audio: fal would fetch it after it was measured, so the bill would have no bound. Use a WAV file in the project folder`);
       if (role === 'video') throw new FalLipsyncError(`${what}: a clip at an https: address cannot be measured here; use a file in the project folder`);
       return { src: { kind: 'url', url: uri } };
     }
     if (uri.startsWith('data:')) {
+      if (role === 'audio') throw new FalLipsyncError(`${what}: a data: URI is refused for audio; use a WAV file in the project folder`);
       if (role === 'video') throw new FalLipsyncError(`${what}: a clip cannot be given as a data: URI (its length is read from the file); use a file in the project folder`);
       const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(uri);
       if (!m) throw new FalLipsyncError(`${what} has a malformed data: URI`);
       const mime = (m[1] ?? '').toLowerCase();
-      if (role === 'audio' ? !WAV_MIMES.has(mime) : !mime.startsWith('image/')) throw new FalLipsyncError(`${what}: data: URI type ${mime} is not allowed${role === 'audio' ? ' (WAV only)' : ''}`);
+      if (!mime.startsWith('image/')) throw new FalLipsyncError(`${what}: data: URI type ${mime} is not allowed`);
       const size = m[2] ? Math.floor(((m[3] ?? '').length * 3) / 4) : (m[3] ?? '').length;
       if (size > maxUpload) throw overCap(what, size, maxUpload);
       return { src: { kind: 'data', uri }, size };
@@ -324,14 +324,8 @@ export function createFalLipsyncProvider(host: WaveOneHost, opts: FalLipsyncOpti
 
   /** The audio's real length in seconds. WAV only. */
   async function measureAudio(src: Source, what: string): Promise<{ seconds: number; bytes: number }> {
-    let bytes: Uint8Array;
-    if (src.kind === 'file') bytes = new Uint8Array(await readFile(src.path));
-    else if (src.kind === 'data') bytes = new Uint8Array(Buffer.from(src.uri.slice(src.uri.indexOf(',') + 1), 'base64'));
-    else {
-      const res = await fetchOf(opts.fetch)(src.url);
-      if (!res.ok) throw new FalLipsyncError(`${what}: could not download it to measure it (HTTP ${res.status})`);
-      bytes = new Uint8Array(await res.arrayBuffer());
-    }
+    if (src.kind !== 'file') throw new FalLipsyncError(`${what}: the audio must be a WAV file in the project folder`);
+    const bytes = new Uint8Array(await readFile(src.path));
     try {
       const w = parseWav(bytes);
       if (w.frames === 0) throw new FalLipsyncError(`${what} has no audio in it`);

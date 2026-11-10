@@ -14,7 +14,6 @@ import { costProblems, type Job, type JobItem } from '../../contract.ts';
 import { SpendGateBypassError, createSpendGate, isSealed } from '../../../spend/gate.ts';
 import { createFakeHost, tinyProject } from '../../__fixtures__/fake-host.ts';
 import { REF_URI } from '../../gemini-image/__fixtures__/mock-net.ts';
-import type { FetchLike } from '../../gemini-image/image-common.ts';
 import { MP4_BYTES, mockFalLipsync } from './__fixtures__/mock-net.ts';
 import { mp4Bytes, silentWav, wavDataUri } from './__fixtures__/media.ts';
 import {
@@ -49,16 +48,17 @@ const put = (bytes: Uint8Array, ext: string, dir = DIR): string => {
 };
 mkdirSync(join(DIR, 'sub'));
 
+const wavFile = (s: number): string => put(silentWav(s), '.wav');
 const audioRef = (uri: string, s: number) => ({ id: 'line', uri, role: 'audio', note: secondsNote(s) });
 /** Image mode: a still plus a spoken line of `s` seconds (duration_s = the audio's seconds). */
-const stillItem = (unit: string, s: number, audio = wavDataUri(s)): JobItem => ({
+const stillItem = (unit: string, s: number, audio = wavFile(s)): JobItem => ({
   unit, prompt: '', output: 'lipsync', duration_s: s,
   refs: [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(audio, s)],
 });
 /** Video mode: a real mp4 file of `clipS` and a line of `audioS`; `basis` is the billing basis the job declares. */
 const clipItem = (unit: string, clipS: number, audioS: number, basis = clipS, clipPath = put(mp4Bytes(clipS), '.mp4')): JobItem => ({
   unit, prompt: '', output: 'lipsync', duration_s: basis,
-  refs: [{ id: 'clip', uri: clipPath, role: 'source-video', note: secondsNote(clipS) }, audioRef(wavDataUri(audioS), audioS)],
+  refs: [{ id: 'clip', uri: clipPath, role: 'source-video', note: secondsNote(clipS) }, audioRef(wavFile(audioS), audioS)],
 });
 
 const job = (items: JobItem[], over: Partial<Job> = {}): Job => ({
@@ -183,21 +183,36 @@ describe('fal lip-sync provider: request bodies are pinned per model', () => {
     assert.equal(chooseLipsyncModel(config, 'video', 3, 6), KLING);
   });
 
-  it('an https still passes through as the url; an https line is downloaded only to be measured and is sent as the url', async () => {
-    const net = mockFalLipsync();
-    const wav = silentWav(6);
-    const f: FetchLike = async (url, init) => (String(url) === 'https://files.example.com/a.wav'
-      ? (net.calls.push({ url: String(url), method: 'GET', headers: {}, body: undefined }), new Response(wav, { status: 200 }))
-      : net.fetch(url, init));
+  it('an https still passes through as the url and is not downloaded', async () => {
     const j = stills();
-    j.items[0]!.refs = [{ id: 'kf', uri: 'https://files.example.com/a.png', role: 'start-frame' }, audioRef('https://files.example.com/a.wav', 6)];
-    const s = setup({ ...net, fetch: f });
-    const r = await approveAndRun(s, j);
-    assert.equal(r.status, 'submitted');
-    const body = net.calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    j.items[0]!.refs = [{ id: 'kf', uri: 'https://files.example.com/a.png', role: 'start-frame' }, audioRef(wavFile(6), 6)];
+    const { body, s } = await firstPost(j);
     assert.equal(body.image_url, 'https://files.example.com/a.png');
-    assert.equal(body.audio_url, 'https://files.example.com/a.wav');
-    assert.ok(!net.calls.some((c) => c.url === 'https://files.example.com/a.png'), 'the still is not downloaded');
+    assert.ok(!s.net.calls.some((c) => c.url === 'https://files.example.com/a.png'), 'the still is not downloaded');
+  });
+
+  it('audio must be a confined project file: an https: or data: audio ref is refused (fal would fetch the URL after it was measured), with no network call', async () => {
+    const s = setup();
+    for (const uri of ['https://files.example.com/a.wav', wavDataUri(6)]) {
+      const j = stills({}, [6, 6]);
+      j.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(uri, 6)];
+      await assert.rejects(s.provider.estimate(j), /audio: (an https: address is refused for audio.*no bound|a data: URI is refused for audio)/);
+    }
+    assert.equal(s.net.calls.length, 0, 'nothing is downloaded to measure');
+  });
+
+  it('no slack on a maximum: a 15.04 s line (declared 15) routes to fabric, h3-max by name refuses it, and nothing is posted', async () => {
+    const j = job([stillItem('sc1_sh1', 15, wavFile(15.04))]);
+    const s = setup();
+    const c = await s.provider.estimate(j);
+    assert.equal(c.model, FABRIC_480);
+    assert.ok(Math.abs(c.amount - price(FABRIC_480) * 15.04) < 1e-9, 'priced at the larger measured length, on fabric');
+    await assert.rejects(s.provider.estimate({ ...j, model: H3 }), /takes audio of 5-15 s, not 15\.04 s/);
+    assert.equal(chooseLipsyncModel(config, 'image', 15.04), FABRIC_480);
+    assert.equal(chooseLipsyncModel(config, 'image', 15), H3);
+    assert.equal(s.net.calls.length, 0);
+    // a clip at 10.04 s is likewise over Kling's 10 s
+    await assert.rejects(s.provider.estimate(job([clipItem('sc1_sh1', 10, 3, 10, put(mp4Bytes(10.04), '.mp4'))], { model: KLING })), /takes a clip of 2-10 s, not 10\.04 s/);
   });
 });
 
@@ -261,7 +276,7 @@ describe('fal lip-sync provider: measure, do not trust', () => {
   it('a line declared 5 s that is really 12 s is refused, and nothing is posted', async () => {
     const s = setup();
     const j = stills({}, [6, 6]);
-    j.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(wavDataUri(12), 5)];
+    j.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(wavFile(12), 5)];
     j.items[0]!.duration_s = 5;
     await assert.rejects(s.provider.estimate(j), /declared 5 s but the file is 12\.00 s/);
     assert.equal(s.net.calls.length, 0);
@@ -274,7 +289,7 @@ describe('fal lip-sync provider: measure, do not trust', () => {
 
   it('within 0.05 s is accepted', async () => {
     const j = stills({}, [6, 6]);
-    j.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(wavDataUri(6.04), 6)];
+    j.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef(wavFile(6.04), 6)];
     await setup().provider.estimate(j);
   });
 
@@ -286,7 +301,7 @@ describe('fal lip-sync provider: measure, do not trust', () => {
     await assert.rejects(provider.estimate(j1), /not an allowed audio type .*convert other audio to WAV/);
     const j2 = stills({}, [6, 6]);
     j2.items[0]!.refs = [{ id: 'kf', uri: REF_URI, role: 'start-frame' }, audioRef('data:audio/mpeg;base64,AAAA', 6)];
-    await assert.rejects(provider.estimate(j2), /audio\/mpeg is not allowed \(WAV only\)/);
+    await assert.rejects(provider.estimate(j2), /a data: URI is refused for audio/);
     const j3 = stills({}, [6, 6]);
     const bad = silentWav(6);
     new DataView(bad.buffer, bad.byteOffset).setUint16(34, 24, true);

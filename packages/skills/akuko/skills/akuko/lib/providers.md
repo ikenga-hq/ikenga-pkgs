@@ -115,7 +115,7 @@ Each `JobItem` has `output: 'lipsync'`, `count` 1, and refs:
 
 | ref | meaning |
 |-----|---------|
-| `role: 'audio'` | the spoken line: a **WAV** file already cut to the shot. `note: 'seconds=<n>'` declares its length (`secondsNote(n)`). In image mode the note may be left out and `duration_s` stands for it. |
+| `role: 'audio'` | the spoken line: a **16-bit PCM WAV file in the project folder** (an `https:` or `data:` audio ref is refused), already cut to the shot. `note: 'seconds=<n>'` declares its length (`secondsNote(n)`). In image mode the note may be left out and `duration_s` stands for it. |
 | `role: 'start-frame'` | a still (image + audio mode): a png/jpg/webp file, `data:image/…`, or `https:` URL |
 | `role: 'source-video'` | an approved clip (video + audio mode): an mp4/mov/m4v **file in the project folder**. `note: 'seconds=<n>'` is required. |
 
@@ -138,10 +138,13 @@ accepted and also bills 10 s.
 ### Measure, don't trust
 
 Before the first request the provider reads the real length of every audio file
-(WAV only; anything else is refused with a message to convert) and, in video
+(16-bit PCM WAV only; anything else is refused with a message to convert) and, in video
 mode, of every clip (mp4/mov header, never loaded whole; uses `handoff/probe.ts`
 and `sound/wav.ts` read-only). A declared length more than 0.05 s from the
 measured one, or outside the model's limits, is refused and nothing is sent.
+The 0.05 s tolerance applies only to declared-versus-measured; **a model's
+maximum has no tolerance** (a 15.04 s line does not reach h3-max's 15 s limit,
+where fal bills 1.2x; it goes to fabric, or is refused if h3-max is named).
 Pricing uses the larger of declared and measured. Every unit is fully checked
 (paths, sizes, lengths, limits) before unit 1 is queued, so a bad unit 2 cannot
 be refused after unit 1 is already in fal's queue.
@@ -155,8 +158,9 @@ be refused after unit 1 is already in fal's queue.
 and only after the person has confirmed each folder; nothing in a job, a ref or
 `akuko.json` can add one. Extensions are allow-listed (audio `.wav`; video `.mp4`
 `.mov` `.m4v`; images `.png` `.jpg` `.jpeg` `.webp`). Plain `http:` is refused;
-`https:` is passed through (an `https:` audio line is downloaded once to be
-measured, and still sent as the URL; a clip cannot be an `https:` address).
+`https:` is passed through for a still only. **Audio and clips must be project
+files**: an `https:` or `data:` audio ref is refused, because fal would fetch
+the URL after it was measured and the bill would have no bound.
 
 Files go to fal inline as `data:` URIs, capped at `maxUploadBytes` (default
 4 MB), checked from `stat` before the file is read. Over the cap the job is
@@ -192,6 +196,13 @@ two readings on fal's own pages (see the config `source`).
   confirmed (for example a media folder outside the project).
 - **Uploading the person's clips and lines to fal is the person's call.** Say
   so in the spend line before approval.
+- **Refusals at estimate time surface from `gate.run` as an exception**, not as
+  `{ status: 'refused' }` (the gate quotes first, and the provider throws on a
+  bad file, length or path). Catch them and show the message.
+- Only **16-bit PCM WAV** audio is accepted; convert anything else before the job.
+- **Video mode is, in practice, unusable for typical approved clips** until fal
+  CDN upload exists: clips go inline under the 4 MB data-URI cap, and an
+  approved clip is usually bigger. Plan stills + audio (image mode) for now.
 - The returned video carries the line as its audio; leave that audio out of the
   edit when a master track is used.
 
