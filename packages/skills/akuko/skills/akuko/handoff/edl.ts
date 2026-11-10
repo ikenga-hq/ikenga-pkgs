@@ -20,6 +20,7 @@ import type { AudioEvent, ExportPlan, VideoEvent } from './plan.ts';
 import { timecode } from './timecode.ts';
 import { startOf } from './plan.ts';
 import { moveLabel } from './master.ts';
+import { pieceLabel } from './fcpxml.ts';
 
 /**
  * One reel name per file, never shared across kinds, at most 8 characters (the CMX 3600 reel field):
@@ -30,7 +31,9 @@ export function reelName(plan: ExportPlan, ev: VideoEvent | AudioEvent): string 
   if ('kind' in ev) {
     if (ev.kind === 'gap') return 'BL';
     if (ev.card !== undefined) return `C${String(plan.video.filter((v) => v.card !== undefined).indexOf(ev) + 1).padStart(3, '0')}`;
-    return `V${shotNo(ev.shot)}`;
+    // The key frame held around a lip-sync (WP-32) is another file than the lip-sync on the same shot: its own reel.
+    const held = ev.from === 'keyframe' && plan.shots.find((s) => s.shot === ev.shot)?.uses === 'lipsync';
+    return `V${shotNo(ev.shot)}${held ? 'K' : ''}`;
   }
   if (ev.role === 'master') return 'MASTER';
   if (ev.role === 'vo') return `A${shotNo(ev.shot)}`;
@@ -58,7 +61,7 @@ export function renderVideoEdl(plan: ExportPlan): string {
       out.push(eventLine(v.n, reelName(plan, v), 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));
       out.push(`* FROM CLIP NAME: ${fileName(v.media!.dest)}`);
       out.push(v.card !== undefined ? `* CARD ${v.card}` : `* SHOT ${v.shot}${v.kind === 'still' ? ' (still: a key frame held for the shot)' : ''}`);
-      if (v.move) out.push(`* ${moveLabel(v.shot, v.move)}`);
+      if (v.move) out.push(`* ${moveLabel(v.shot, v.move)}${pieceLabel(v.moveSpan, v.frames)}`);
     }
     out.push('');
   }

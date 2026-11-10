@@ -12,7 +12,7 @@
  *             but a shot imported from a sheet (`source.kind === 'sheet'`) with a missing or unreadable tier
  *             is `still`: never a paid clip by accident. Only an explicit `treatment` makes it video.
  *
- * WP-30 (`setup/estimate.ts`) keeps a local copy of this table pinned by a test.
+ * `setup/estimate.ts` (WP-30) imports `treatmentOf` from here (WP-32); its test still pins the table.
  */
 
 import type { AkukoProject, Shot, ShotTier, ShotTreatment } from '../schema/akuko-project.ts';
@@ -24,8 +24,15 @@ export const DEFAULT_TREATMENT: Readonly<Record<ShotTier, ShotTreatment>> = {
   C: 'still',
 };
 
+/**
+ * What every treatment helper reads from a shot: its own treatment, its tier, and whether it came from a sheet.
+ * One shape for all of them (WP-32), so a caller can never pass a shot without `source` to one helper and with it
+ * to another and get two answers.
+ */
+export type TreatmentInput = Pick<Shot, 'treatment' | 'tier'> & { source?: { kind?: string } | undefined };
+
 /** The treatment a shot gets: its own, else its tier's default, else `undefined` (legacy: a clip per shot). */
-export function treatmentOf(shot: Pick<Shot, 'treatment' | 'tier'> & { source?: { kind?: string } | undefined }): ShotTreatment | undefined {
+export function treatmentOf(shot: TreatmentInput): ShotTreatment | undefined {
   if (shot.treatment !== undefined) return shot.treatment;
   const byTier = shot.tier === undefined ? undefined : (DEFAULT_TREATMENT as Partial<Record<string, ShotTreatment>>)[shot.tier];
   if (byTier !== undefined) return byTier;
@@ -33,7 +40,7 @@ export function treatmentOf(shot: Pick<Shot, 'treatment' | 'tier'> & { source?: 
 }
 
 /** An imported (sheet) shot with no usable tier and no treatment: treated as `still`, so the person should hear about it. */
-export function isUntieredImport(shot: Pick<Shot, 'treatment' | 'tier'> & { source?: { kind?: string } | undefined }): boolean {
+export function isUntieredImport(shot: TreatmentInput): boolean {
   return shot.source?.kind === 'sheet' && shot.treatment === undefined && (shot.tier === undefined || !(shot.tier in DEFAULT_TREATMENT));
 }
 
@@ -52,13 +59,13 @@ export function candidateFlags(p: AkukoProject, live: (s: Shot) => boolean = () 
 }
 
 /** Does this shot get a paid `<shot>_clip` unit: an explicit `video`, or no tier and no treatment (today's behaviour). */
-export function wantsClip(shot: Pick<Shot, 'treatment' | 'tier'>): boolean {
+export function wantsClip(shot: TreatmentInput): boolean {
   const t = treatmentOf(shot);
   return t === undefined || t === 'video';
 }
 
 /** Does this shot get a free camera move on its still. */
-export function wantsMove(shot: Pick<Shot, 'treatment' | 'tier'>): boolean {
+export function wantsMove(shot: TreatmentInput): boolean {
   return treatmentOf(shot) === 'still-move';
 }
 

@@ -71,7 +71,11 @@ export interface AudioContext {
   allowRoots?: string[];
   /** `master`: the person chose the master cut over a line's own clip, for this run (`--from master`). */
   from?: 'master';
+  /** Only this part's lip-syncs are looked up, cut or hashed (`--part P7`, WP-32). */
+  part?: string;
 }
+
+const scopeOf = (ctx: Pick<AudioContext, 'part'>): { part?: string } => (ctx.part !== undefined ? { part: ctx.part } : {});
 
 /** Added to what the spend line says about audio read from outside the project folder (a line clip there, or one read through --allow-root). */
 export const OUTSIDE_WARNING = 'a file outside the project; check it holds only speech that may leave your machine (line clips can be cut from an unbleeped reference)';
@@ -181,7 +185,7 @@ export async function resolveAudio(p: AkukoProject, shot: Shot, ctx: AudioContex
 /** Audio lookups for every lip-sync still asked for (`currentUnits`: removed rows and orphans left out). */
 export async function resolveAll(p: AkukoProject, ctx: AudioContext): Promise<Map<string, AudioLookup>> {
   const out = new Map<string, AudioLookup>();
-  for (const a of currentUnits(p)) {
+  for (const a of currentUnits(p, scopeOf(ctx))) {
     const shot = p.shots.find((s) => s.id === a.owner);
     out.set(a.id, shot ? await resolveAudio(p, shot, ctx) : { ok: false, why: 'its shot is gone' });
   }
@@ -245,8 +249,8 @@ export async function cutAudio(project: AkukoProject, ctx: AudioContext & { now:
   type Job = { shot: Shot; lines: AudioLine[]; source: { kind: 'master' | 'clip'; uri: string; path: string; sha256?: string }; span: Span; range?: FrameRange; says: string };
   const jobs: Job[] = [];
   // A lip-sync no longer asked for is kept, and nothing is cut for it.
-  notes.push(...orphanedUnits(p).map(orphanLine));
-  for (const a of currentUnits(p)) {
+  notes.push(...orphanedUnits(p, scopeOf(ctx)).map(orphanLine));
+  for (const a of currentUnits(p, scopeOf(ctx))) {
     const shot = shotOf(p, a);
     const now = await resolveAudio(p, shot, ctx);
     const todo = a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework';
@@ -361,9 +365,9 @@ export async function masterHash(p: AkukoProject, projectDir: string): Promise<{
  * recorded hash) is a new job. A file that can't be read is left out (the job
  * then uses the recorded hash, or is refused without one).
  */
-export async function stillHashes(p: AkukoProject, ctx: Pick<AudioContext, 'projectDir'>): Promise<Map<string, string>> {
+export async function stillHashes(p: AkukoProject, ctx: Pick<AudioContext, 'projectDir' | 'part'>): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  for (const a of currentUnits(p)) {
+  for (const a of currentUnits(p, scopeOf(ctx))) {
     const kf = p.assets.find((x) => x.id === `${a.owner}_keyframe`);
     const path = kf?.file ? pathOf(kf.file.uri, ctx.projectDir) : undefined;
     if (!kf || !path || !existsSync(path)) continue;

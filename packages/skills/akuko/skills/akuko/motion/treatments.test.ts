@@ -11,7 +11,7 @@ import { checkIntegrity } from '../schema/integrity.ts';
 import { checkJob } from '../rules/check.ts';
 import { bibleApproved } from '../keyframes/__fixtures__/project.ts';
 import { assertOpen as kfAssertOpen, buildKeyframeJob, keyframeStatus, planKeyframes } from '../keyframes/plan.ts';
-import { buildMotionJob, clipAssets, motionStatus, planMotion, refreshStageState } from './plan.ts';
+import { buildMotionJob, clipAssets, motionStatus, planMotion, refreshMotionStage } from './plan.ts';
 import { applyMoves, parseMotionNote, planMoves } from './moves.ts';
 import { DEFAULT_TREATMENT, isHeroCandidate, isLipsyncCandidate, treatmentOf, wantsClip } from './treatment.ts';
 import { run } from './cli.ts';
@@ -85,7 +85,7 @@ describe('planMotion by treatment', () => {
       a.status = 'approved';
       a.file = { uri: `mem://${a.id}.mp4`, mime: 'video/mp4', hash: `h-${a.id}` };
     }
-    p = refreshStageState(p);
+    p = refreshMotionStage(p);
     assert.equal(p.stages.motion.state, 'in-review', 'every clip that can exist is approved: the still shots have no unit to wait on');
     assert.equal(motionStatus(p).length, 5);
   });

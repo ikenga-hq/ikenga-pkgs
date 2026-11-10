@@ -47,10 +47,30 @@ export function expectedMoney(p) {
   };
 }
 
+const TIER_TREATMENT = { A: 'still-move', B: 'still-move', C: 'still' };
+/** motion/treatment.ts#treatmentOf, in plain JS. */
+const treatmentOf = (s) => s.treatment ?? TIER_TREATMENT[s.tier] ?? (s.source?.kind === 'sheet' ? 'still' : undefined);
+const spoken = (p, s) => (s.lines ?? []).some((l) => l.kind === 'spoken' && (p.audio?.lines ?? []).some((x) => x.id === l.id && x.kind === 'spoken'));
+
+/**
+ * An idle motion unit (motion/stage.ts#isIdleMotionUnit, WP-32): a clip, lip-sync or line cut kept although its shot no
+ * longer asks for it. Like a removed row, it is shown but never counted in "your move".
+ */
+export function isIdleMotionUnit(p, a) {
+  if (a.stage !== 'motion') return false;
+  const tags = a.tags ?? [];
+  const kind = a.kind === 'lipsync' && tags.includes('lipsync') ? 'lipsync' : tags.includes('lipsync-audio') ? 'cut' : a.kind !== 'lipsync' && tags.includes('clip') ? 'clip' : undefined;
+  if (kind === undefined) return false;
+  const s = p.shots.find((x) => x.id === a.owner);
+  if (!s) return true;
+  if (kind === 'clip') { const t = treatmentOf(s); return !(t === undefined || t === 'video'); }
+  return !((s.treatment === 'lipsync' || s.treatment === 'video') && spoken(p, s));
+}
+
 /** The counts a "your move" summary must show. */
 export function expectedYourMove(p) {
   const assetIds = new Set(p.assets.map((a) => a.id));
-  const live = (u) => removedAt(p, u) === undefined;
+  const live = (u) => removedAt(p, u) === undefined && !isIdleMotionUnit(p, u);
   return {
     'waiting-shots': p.shots.filter((s) => live(s) && s.status === 'pending-review').length,
     'waiting-spend': p.pending_spend.filter((j) => j.status === 'awaiting-approval').length,

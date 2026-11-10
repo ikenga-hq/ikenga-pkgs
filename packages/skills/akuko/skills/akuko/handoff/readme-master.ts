@@ -29,6 +29,7 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
     `- **Audio track A1 is the master**, \`${m.media.dest.split('/').pop()}\`, whole, from its first sample at ${m.startTc}. It is never cut or moved: every picture is placed against it. ${m.linked ? `It is **referenced in place** (\`--link-media\`), not copied: it stays at \`${m.media.uri}\`, so keep it where it is, or relink it.` : 'It is **copied** into `audio/` (use `--link-media` to reference it in place instead, so a large file is not duplicated).'}`,
     `- **Picture (V1)**: each shot sits at \`film.in_s\` and lasts until \`film.out_s\`, in whole frames (seconds x the real frame rate, ${fps.label} fps, rounded to the nearest frame at both ends, so shots that touch in film time touch here). **Gaps are kept as gaps**: a pause between scenes is empty video, not closed up.`,
     "- Picture for a shot, in order: its approved **lip-sync clip**, else its approved **clip**, else its approved **key frame** as a still held for the whole slot, else a **gap** (listed in LEFT-OUT.md).",
+    "- A **lip-sync clip sits at its line's film time**, not at the shot's start: akuko records the span of the audio it sent (the spoken line plus a short lead-in and tail) on the lip-sync, and places the clip there, in whole frames. The shot's approved **key frame holds the rest of the slot**, before and after it, and the shot's camera move runs on across the whole slot, not restarted per piece. If the key frame is not approved, those pieces are **gaps** (listed in LEFT-OUT.md). A lip-sync with no recorded span (made before akuko recorded one, or cut from a line's own clip) is placed by today's lines, and a note below says so: check its lips against the master.",
     "- A clip **longer** than its slot is cut at the slot's end. A clip **shorter** is followed by a **gap** for the rest of the slot (nothing is stretched or frozen) and named in the notes: decide in Resolve whether to hold its last frame.",
     '- **Picture files never bring their own sound.** The master is the only sound; any clip that carries audio is muted in the timeline (and listed below).',
     '- Approved **cards** (title, part cards, credits) sit at their film times on V1. A card nobody approved is left out and listed.',
@@ -75,10 +76,15 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
       '',
       '`x` and `y` are pixels of a 1920 x 1080 frame (negative = left / up). In the FCPXML they are written as Apple documents them: percent of the frame height, y up. Eases map to keyframe interpolation (`ease-in` eases away from the first keyframe, `ease-out` into the last, `ease-in-out` both, `none` is linear); this mapping is also unverified in Resolve.',
       '',
+      "A shot with a lip-sync has its key frame in two pieces, before and after the lip-sync. The move is **not** restarted per piece: it runs across the shot's whole slot, so each piece starts and ends where the move is at that frame, and the two pieces join up as if the move had run on under the lip-sync. Each piece's keyframes are exact at its ends; inside a piece an eased move is followed with the piece's own easing, close to the whole curve but not exact. If you set a move by hand, key the whole slot's From and To and cut it around the lip-sync.",
+      '',
       '| Shot | Record in | Length | Move |',
       '|---|---|---|---|',
     );
-    for (const mv of plan.moves) L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')} |`);
+    for (const mv of plan.moves) {
+      const around = mv.around ? `; held around the lip-sync at ${tc(mv.around.recIn)} (${frames(mv.around.frames)})` : '';
+      L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')}${around} |`);
+    }
     L.push('');
   }
   if (plan.leftOut.length > 0) {

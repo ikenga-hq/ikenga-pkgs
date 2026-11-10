@@ -40,6 +40,7 @@ import {
   findUnit,
   listUnits,
   type AkukoProject,
+  type Asset,
   type Comment,
   type Decision,
   type StageId,
@@ -47,6 +48,7 @@ import {
   type UnitStatus,
 } from '../schema/akuko-project.ts';
 import { CHAT_VIEW, conformedViewIds, type ConformedInput } from './conformed.ts';
+import { isIdleMotionUnit, motionRollup, refreshMotionStage } from '../motion/stage.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Vocabulary
@@ -519,8 +521,9 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
   }
 
   // 4. Stages: approved only when every unit in it is approved. A stage that holds a unit removed from the
-  //    shot list is re-rolled on every fold too, so a removal alone (a re-import, no decision) can release it.
-  for (const { unit } of listUnits(p)) if (removedAt(p, unit) !== undefined) touchedStages.add(unit.stage);
+  //    shot list, or an idle motion unit, is re-rolled on every fold too, so a removal alone (a re-import, no
+  //    decision) or a treatment change can release it.
+  for (const { unit } of listUnits(p)) if (outOfRollup(p, unit)) touchedStages.add(unit.stage);
   if (touchedStages.size > 0) recomputeStages(p, touchedStages);
 
   // 5. Record every decision read (rejected ones too, so people can see them), in order.
@@ -532,23 +535,42 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
   return { project: AkukoProjectSchema.parse(p), report };
 }
 
+/**
+ * A unit that never holds its stage back: one removed from the shot list (WP-29), or an idle motion unit, kept
+ * although its shot no longer asks for it (a clip of a shot that is not a video shot, a lip-sync or line cut of a
+ * shot that no longer wants one: `motion/stage.ts#isIdleMotionUnit`, WP-32). Both are kept and shown, never deleted.
+ */
+const outOfRollup = (p: AkukoProject, u: Unit): boolean =>
+  removedAt(p, u) !== undefined || ('kind' in u && 'tags' in u && isIdleMotionUnit(p, u as Asset));
+
+/** Approve or re-open one stage from its counted units. A stage with nothing counted is left as it is. */
+function rollStage(p: AkukoProject, units: Unit[], s: StageId): void {
+  const rec = p.stages[s];
+  // A locked stage stays locked: a part piloted ahead of the rest (WP-32) never approves the stage early.
+  if (rec.state === 'locked') return;
+  const inStage = units.filter((u) => u.stage === s);
+  if (inStage.length === 0) return;
+  // Motion also waits for what its shots ask for and nobody has planned yet (a video shot with no clip).
+  const all = inStage.every((u) => u.status === 'approved') && (s !== 'motion' || motionRollup(p).unplanned.length === 0);
+  if (all && rec.state !== 'approved') rec.state = 'approved';
+  else if (!all && rec.state === 'approved') rec.state = 'in-review';
+}
+
 /** Stage gating after units changed (lib/state.md §Stages): approve / re-open, then unlock and move `current_stage`. */
 function recomputeStages(p: AkukoProject, touched: Set<StageId>): void {
-  // A unit removed from the shot list never holds its stage back (WP-29).
-  const units = listUnits(p).map((u) => u.unit).filter((u) => removedAt(p, u) === undefined);
-  for (const s of touched) {
-    const inStage = units.filter((u) => u.stage === s);
-    if (inStage.length === 0) continue;
-    const all = inStage.every((u) => u.status === 'approved');
-    const rec = p.stages[s];
-    if (all && rec.state !== 'approved') rec.state = 'approved';
-    else if (!all && rec.state === 'approved') rec.state = 'in-review';
-  }
+  const units = listUnits(p).map((u) => u.unit).filter((u) => !outOfRollup(p, u));
+  for (const s of touched) rollStage(p, units, s);
   let open = true;
   for (const { id } of STAGES) {
     const rec = p.stages[id];
-    if (open && rec.state === 'locked') rec.state = 'not-started';
-    if (rec.state !== 'approved') open = false;
+    if (open && rec.state === 'locked') {
+      rec.state = 'not-started';
+      // Units may be there already (a part worked ahead): roll the stage now it is open, and give motion its own
+      // honest state (in progress / in review), which only its units can say.
+      rollStage(p, units, id);
+      if (id === 'motion' && rec.state === 'not-started') p.stages.motion = refreshMotionStage(p).stages.motion;
+    }
+    if (p.stages[id].state !== 'approved') open = false;
   }
   p.current_stage = STAGES.find(({ id }) => p.stages[id].state !== 'approved')?.id ?? 'export';
 }
