@@ -55,7 +55,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
 | "I reviewed it", "apply my notes", "review" | [`actions/review.md`](actions/review.md) | WP-07a |
 | "show me …", "open the board", "view" | [`actions/view.md`](actions/view.md) | WP-07c |
-| "where are we", "what's next", "status" | [`actions/status.md`](actions/status.md) | — |
+| "where are we", "what's next", "status", "how much will it cost", "estimate" | [`actions/status.md`](actions/status.md) | WP-30 (whole-film estimate) |
 
 Export hands the approved film to DaVinci Resolve as a timeline plus media. MP4 masters, cutdowns and a Canva deck are parked (plan Round 7): if asked for an MP4, say so and offer the handoff.
 
