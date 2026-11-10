@@ -78,9 +78,9 @@ describe('master clock: review fixes', () => {
     await writeFile(join(dir, 'cut', 'cards', 'card_P2-CARD.mp4'), miniMp4(0.75));
     const out = join(await scratch(), 'resolve');
     const r = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
-    assert.ok(existsSync(join(out, 'media', 'card_S00-020.png')), 'no doubled card_ prefix');
+    assert.ok(existsSync(join(out, 'media', 'card_S01-007.png')), 'no doubled card_ prefix');
     assert.ok(existsSync(join(out, 'media', 'card_P2-CARD.mp4')));
-    assert.ok(!existsSync(join(out, 'media', 'card_card_S00-020.png')));
+    assert.ok(!existsSync(join(out, 'media', 'card_card_S01-007.png')));
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const assets = new Map(find(find(root, 'resources')[0]!, 'asset').map((a) => [a.attrs['id']!, a]));
     const refs: Array<{ el: XmlNode; asset: XmlNode }> = [];
@@ -96,7 +96,7 @@ describe('master clock: review fixes', () => {
         assert.notEqual(asset.attrs['duration'], '0s');
       }
     }
-    const title = refs.find((x) => /card_S00-020/.test(x.asset.attrs['name']!))!;
+    const title = refs.find((x) => /card_S01-007/.test(x.asset.attrs['name']!))!;
     assert.equal(title.el.name, 'video');
     const credits = refs.find((x) => /card_P2-CARD/.test(x.asset.attrs['name']!))!;
     assert.equal(credits.el.name, 'asset-clip', 'the credits-style mp4 card is a video asset');
@@ -247,13 +247,13 @@ describe('master clock: units removed from the sheet, shots with no film time', 
 
   it('a removed card (which keeps its film time) is never placed, so it cannot cover the row that replaced it', async () => {
     const { project, dir } = await build();
-    const card = project.assets.find((a) => a.id === 'card_S00-020')!; // approved, film 0 - 1 s
+    const card = project.assets.find((a) => a.id === 'card_S01-007')!; // approved, film 0 - 1 s
     card.source = { ...card.source!, removed_at: REMOVED };
     const plan = await planFromFolder({ project, projectDir: dir });
     assert.ok(plan.video.every((v) => v.card === undefined), 'no card on the timeline');
-    assert.ok(!plan.media.some((m) => m.asset === 'card_S00-020'));
+    assert.ok(!plan.media.some((m) => m.asset === 'card_S01-007'));
     assert.deepEqual(plan.cards, []);
-    assert.match(plan.leftOut.find((x) => x.unit === 'card_S00-020')!.why, /removed from the sheet/);
+    assert.match(plan.leftOut.find((x) => x.unit === 'card_S01-007')!.why, /removed from the sheet/);
     assert.deepEqual(plan.video[0]!.kind, 'gap', 'its slot is empty');
     assert.equal(plan.video[0]!.frames, 36, 'the empty slot joins the scene-start gap');
   });

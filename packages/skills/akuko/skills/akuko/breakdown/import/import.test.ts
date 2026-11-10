@@ -85,7 +85,7 @@ describe('the import', () => {
     const r = importSheet(fresh(), await inputFrom(), { now: T0 });
     const by = new Map(r.project.shots.map((s) => [s.id, s]));
     assert.equal(
-      by.get('S00-010')!.prompt,
+      by.get('S01-005')!.prompt,
       'a woman in her sixties, silver braid, green coat stands at the end of the pier, pale dawn light through haze, soft film grain, muted palette, 35mm',
     );
     assert.equal(by.get('S01-010')!.prompt, 'the same woman at twenty, dark braid, yellow raincoat and a small grey dog with one white ear in the a narrow kitchen with a tin kettle, warm lamplight, deep shadows, soft film grain, muted palette, 35mm');
@@ -145,14 +145,14 @@ describe('the import', () => {
   it('keeps the gap at the start of a scene (the film times are not snapped)', async () => {
     const r = importSheet(fresh(), await inputFrom(), { now: T0 });
     const first = r.project.shots.find((x) => x.id === 'S01-010')!;
-    const prevEnd = r.project.assets.find((a) => a.id === 'card_S00-020')!.film!.out_s;
+    const prevEnd = r.project.assets.find((a) => a.id === 'card_S01-007')!.film!.out_s;
     assert.equal(first.film!.in_s - prevEnd, 0.5);
   });
 
   it('turns ready-made rows into card assets with a relative file, and never approves one', async () => {
     const r = importSheet(fresh(), await inputFrom(), { now: T0 });
     const cards = r.project.assets.filter((a) => a.kind === 'card');
-    assert.deepEqual(cards.map((c) => c.id), ['card_S00-020', 'card_P2-CARD', 'card_CREDITS-010']);
+    assert.deepEqual(cards.map((c) => c.id), ['card_S01-007', 'card_P2-CARD', 'card_CREDITS-010']);
     const c = cards[1]!;
     assert.equal(c.stage, 'export');
     assert.equal(c.status, 'pending-review');
@@ -271,7 +271,7 @@ describe('lines', () => {
     const by = new Map(r.project.shots.map((s) => [s.id, s.lines?.map((l) => l.id)]));
     assert.deepEqual(by.get('S01-010'), ['QB', 'QA']);
     assert.equal(by.get('S01-020'), undefined);
-    assert.deepEqual(by.get('S00-010'), ['QC']);
+    assert.deepEqual(by.get('S01-005'), ['QC']);
   });
 
   it('records the clip as a path relative to the project, and says when one is missing', async () => {
@@ -384,7 +384,7 @@ describe('re-import', () => {
     assert.equal(r.project.assets.find((a) => a.id === 'S01-030_keyframe')!.status, 'approved');
     assert.equal(r.project.assets.find((a) => a.id === 'card_P2-CARD')!.status, 'approved');
     // the new shot sits in sheet order; the removed one goes to the end
-    assert.deepEqual(r.project.shots.map((s) => s.id), ['S00-010', 'S01-010', 'S01-025', 'S01-030', 'S02-010', 'S01-020']);
+    assert.deepEqual(r.project.shots.map((s) => s.id), ['S01-005', 'S01-010', 'S01-025', 'S01-030', 'S02-010', 'S01-020']);
     assert.equal(r.summary.counts.shots, 5);
     assert.ok(formatSummary(r).includes('left the sheet'));
     assert.match(formatSummary(r), /S01-030 \(.*prompt/);
@@ -440,7 +440,7 @@ describe('lint in imported mode', () => {
 
   it('checks that each sheet id is named in the film script', async () => {
     const r = importSheet(fresh(), await inputFrom(), { now: T0 });
-    const script = 'Scene one: `S00-010` the pier. Then `S01-010`, `S01-020` and S01-030.\nBut S02-0100 is a different id.';
+    const script = 'Scene one: `S01-005` the pier. Then `S01-010`, `S01-020` and S01-030.\nBut S02-0100 is a different id.';
     const missing = lintSheetIdsInScript(r.project, script).map((i) => i.shot);
     assert.deepEqual(missing, ['S02-010']);
     const via = importSheet(fresh(), await inputFrom(SHOT_ROWS, { filmScript: { uri: 's.md', text: script } }), { now: T0 });
@@ -479,10 +479,10 @@ describe('finding the ready-made files', () => {
     await asFile(dir, 'Cards/Show_Credits_roll.mp4', 'x');
     await asFile(dir, 'Cards/opening.png', 'x');
     const proj = join(dir, 'akuko');
-    const find = cardResolver(proj, join(dir, 'Cards'), { 'S00-020': 'opening.png' });
+    const find = cardResolver(proj, join(dir, 'Cards'), { 'S01-007': 'opening.png' });
     assert.equal(find('P2-CARD'), '../Cards/P2-CARD_title.png');
     assert.equal(find('CREDITS-010'), '../Cards/Show_Credits_roll.mp4');
-    assert.equal(find('S00-020'), '../Cards/opening.png');
+    assert.equal(find('S01-007'), '../Cards/opening.png');
     assert.equal(find('P9-CARD'), undefined);
   });
 });
@@ -492,7 +492,7 @@ describe('the command line', () => {
     const dir = await tmp();
     const sheet = await asFile(dir, 'sheet.xlsx', xlsx());
     const quotes = await asFile(dir, 'Audio/quotes.csv', quotesCsv());
-    const script = await asFile(dir, 'script.md', 'Shots: `S00-010`, `S01-010`, `S01-020`, `S01-030`, `S02-010`.');
+    const script = await asFile(dir, 'script.md', 'Shots: `S01-005`, `S01-010`, `S01-020`, `S01-030`, `S02-010`.');
     const wav = join(dir, 'Audio', 'film.wav');
     await writeWav(wav, MASTER_SECONDS);
     await asFile(dir, 'Cards/P2-CARD.png', 'x');
@@ -505,7 +505,7 @@ describe('the command line', () => {
 
   it('--dry-run reports and writes nothing', async () => {
     const { project, args } = await setup();
-    const r = await run([...args, '--dry-run', '--mapping', await asFile(project, '../map.json', JSON.stringify({ cards: { files: { 'S00-020': 'title.png' } } }))], T0);
+    const r = await run([...args, '--dry-run', '--mapping', await asFile(project, '../map.json', JSON.stringify({ cards: { files: { 'S01-007': 'title.png' } } }))], T0);
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /^Dry run, nothing written\. Imported: 5 shots, 3 cards, 3 scenes, 4 lines \(3 shots carry a line\)/);
     assert.match(r.out, /Parts: Cold-open 1 \(00:00\.00-00:04\.50\); P1 3 \(00:08\.00-00:30\.00\); P2 1/);
@@ -523,8 +523,8 @@ describe('the command line', () => {
     assert.equal(written.audio.master!.uri, '../Audio/film.wav');
     assert.equal(written.project.fps, '24');
     assert.equal(written.script.source, '../script.md');
-    assert.equal(written.assets.filter((a) => a.kind === 'card').length, 2); // S00-020 has no file here: left out and reported
-    assert.match(first.out, /S00-020\): a ready-made row, but no file was found/);
+    assert.equal(written.assets.filter((a) => a.kind === 'card').length, 2); // S01-007 has no file here: left out and reported
+    assert.match(first.out, /S01-007\): a ready-made row, but no file was found/);
     const before = await readFile(join(project, 'akuko.json'), 'utf8');
     const second = await run(args, T1);
     assert.equal(second.code, 0, second.out);

@@ -8,7 +8,7 @@
  */
 
 import type { AkukoProject, RuleScope } from './akuko-project.ts';
-import { SHA256_PATTERN, isSheetShotId, listUnits } from './akuko-project.ts';
+import { SHA256_PATTERN, isSheetShotId, listUnits, removedAt } from './akuko-project.ts';
 
 export interface IntegrityIssue {
   path: string;
@@ -157,9 +157,10 @@ function checkRealProject(
 
   // Film times must not overlap within a scene (gaps are fine; touching is fine).
   // Each shot is compared with the latest end seen so far, so a shot inside a longer one is caught.
+  // A row removed from the shot list is kept for the record only, so it never counts as an overlap.
   const byScene = new Map<string, { i: number; in_s: number; out_s: number }[]>();
   p.shots.forEach((s, i) => {
-    if (s.film && s.scene !== undefined) byScene.set(s.scene, [...(byScene.get(s.scene) ?? []), { i, ...s.film }]);
+    if (s.film && s.scene !== undefined && removedAt(p, s) === undefined) byScene.set(s.scene, [...(byScene.get(s.scene) ?? []), { i, ...s.film }]);
   });
   for (const list of byScene.values()) {
     const sorted = [...list].sort((a, b) => a.in_s - b.in_s || a.i - b.i);

@@ -62,7 +62,7 @@ describe('gate status (decisions/gates.ts)', () => {
   it('a card belongs to the part that starts after it; the end credits to the last part', () => {
     const card = (id: string) => p.assets.find((a) => a.id === id)!;
     assert.equal(cardPart(p, card('card_P7-CARD')), 'P7');
-    assert.equal(cardPart(p, card('card_S00-020')), 'COLD-OPEN');
+    assert.equal(cardPart(p, card('card_S01-007')), 'COLD-OPEN');
     assert.equal(cardPart(p, card('card_CREDITS-010')), 'P10');
   });
 
@@ -74,10 +74,10 @@ describe('gate status (decisions/gates.ts)', () => {
     const empty = gateStatus(q, 'G-SOUND');
     assert.equal(empty.state, 'empty');
     assert.match(empty.notes.join(), /nothing is in scope yet \(no units at stage sound\)/);
-    const s = q.shots.find((x) => x.id === 'S11-030')!;
+    const s = q.shots.find((x) => x.id === 'S19-030')!;
     s.source = { kind: 'sheet', id: s.id, removed_at: '2026-11-09T15:00:00Z' };
     const r = gateStatus(q, 'G-PILOT');
-    assert.deepEqual(r.removed, ['S11-030']);
+    assert.deepEqual(r.removed, ['S19-030']);
     assert.equal(r.total, 10);
     assert.match(r.notes.join(), /1 removed from the sheet/);
   });

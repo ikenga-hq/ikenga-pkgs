@@ -26,6 +26,7 @@ import { STAGES, type AkukoProject, type Asset, type BibleEntry, type Shot } fro
 import { jobTag } from '../providers/outputs.ts';
 import type { Job, JobItem, JobRef } from '../providers/contract.ts';
 import { BibleError, MAX_REFS, bibleAssets, requestedChanges, roleOf, type BibleRole } from '../bible/plan.ts';
+import { removedAt } from '../decisions/fold.ts';
 import { keyframePrompt, type KeyframeContext } from './prompts.ts';
 
 export { MAX_REFS };
@@ -41,6 +42,8 @@ export class KeyframeError extends BibleError {
 export const assetIdFor = (shotId: string): string => `${shotId}_keyframe`;
 export const isKeyframe = (a: Asset): boolean => a.stage === KEYFRAME_STAGE && a.tags.includes(KEYFRAME_TAG);
 export const keyframeAssets = (p: AkukoProject): Asset[] => p.assets.filter(isKeyframe);
+/** Key frames still part of the film: those of a shot removed from the sheet are kept for the record and left out (WP-27). */
+const liveKeyframes = (p: AkukoProject): Asset[] => keyframeAssets(p).filter((a) => removedAt(p, a) === undefined);
 
 const hasFile = (a: Asset): boolean => a.file !== undefined;
 const approvedWithFile = (a: Asset): boolean => a.status === 'approved' && hasFile(a);
@@ -61,7 +64,7 @@ export function assertOpen(p: AkukoProject): void {
       throw new KeyframeError(`The key-frame stage is locked: ${id} is "${p.stages[id].state}". It opens when a person has approved every earlier stage (breakdown, the sketch board, then the bible).`);
     }
   }
-  const open = p.shots.filter((s) => s.status !== 'approved');
+  const open = p.shots.filter((s) => s.status !== 'approved' && removedAt(p, s) === undefined);
   if (open.length > 0) throw new KeyframeError(`These shots are not approved yet: ${open.map((s) => s.id).join(', ')}.`);
   if (p.stages.keyframes.state === 'locked') throw new KeyframeError('The key-frame stage is still locked; fold the latest decisions first.');
 }
@@ -74,6 +77,7 @@ export function planKeyframes(project: AkukoProject, now: string): PlanResult {
   const p = structuredClone(project);
   const created: string[] = [];
   for (const shot of p.shots) {
+    if (removedAt(p, shot) !== undefined) continue;
     const id = assetIdFor(shot.id);
     if (p.assets.some((a) => a.id === id)) continue;
     p.assets.push({
@@ -199,7 +203,7 @@ export function supersededRefs(p: AkukoProject, a: Asset): string[] {
 }
 
 export function keyframeStatus(p: AkukoProject): StatusRow[] {
-  return keyframeAssets(p).map((a) => {
+  return liveKeyframes(p).map((a) => {
     const r = unitReadiness(p, a);
     return { shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, superseded: supersededRefs(p, a) };
   });
@@ -260,7 +264,7 @@ const REF_NOTE: Record<EntryKind, (name: string, role: BibleRole) => string> = {
  */
 export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   assertOpen(p);
-  const all = keyframeAssets(p);
+  const all = liveKeyframes(p);
   const byId = new Map(all.map((a) => [a.id, a]));
   let chosen: Asset[];
   if (o.units) {
@@ -318,6 +322,7 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       output: 'keyframe',
       aspect_ratio: p.project.aspect_ratio,
       count: 1,
+      ...(shot.negative?.trim() ? { negative: shot.negative } : {}),
       ...(shot.seed !== undefined ? { seed: shot.seed } : {}),
       ...(refs.length ? { refs } : {}),
     };
@@ -431,7 +436,7 @@ export function abandonUnits(current: AkukoProject, before: AkukoProject, ids: s
 export function repairFileless(project: AkukoProject, ts: string): { project: AkukoProject; repaired: string[] } {
   const p = structuredClone(project);
   const repaired: string[] = [];
-  for (const a of keyframeAssets(p)) {
+  for (const a of liveKeyframes(p)) {
     if ((a.status === 'approved' || a.status === 'pending-review') && !hasFile(a)) {
       a.status = 'pending';
       a.by_stage = { ...(a.by_stage ?? {}), [KEYFRAME_STAGE]: { status: 'pending' } };
@@ -447,7 +452,7 @@ export function repairFileless(project: AkukoProject, ts: string): { project: Ak
 export function refreshStageState(project: AkukoProject): AkukoProject {
   const rec = project.stages.keyframes;
   if (rec.state === 'locked') return project;
-  const units = keyframeAssets(project);
+  const units = liveKeyframes(project);
   if (units.length === 0) return project;
   if (rec.state === 'approved' && units.every(approvedWithFile)) return project;
   const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');

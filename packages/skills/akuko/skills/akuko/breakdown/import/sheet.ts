@@ -587,9 +587,9 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   out.shots.sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9));
 
   merge(out.scenes, [...wantScenes.values()], 'scene', ['part'], { noStamp: true });
-  merge(out.bible.characters, wantChars, 'character', ['name', 'description', 'notes'], { touchContent: true });
-  merge(out.bible.locations, wantLocs, 'location', ['name', 'description', 'notes'], { touchContent: true });
-  merge(out.bible.styles, wantStyles, 'style', ['name', 'description', 'notes'], { touchContent: true });
+  merge(out.bible.characters, wantChars, 'character', ['name', 'description', 'notes'], { touchContent: true, watch: ['description'] });
+  merge(out.bible.locations, wantLocs, 'location', ['name', 'description', 'notes'], { touchContent: true, watch: ['description'] });
+  merge(out.bible.styles, wantStyles, 'style', ['name', 'description', 'notes'], { touchContent: true, watch: ['description'] });
   merge(out.assets, wantCards, 'card', ['name', 'film', 'file'], { keepFile: true, watch: ['film', 'file'] });
 
   // lines
