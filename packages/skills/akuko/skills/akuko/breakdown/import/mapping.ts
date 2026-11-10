@@ -90,7 +90,7 @@ export const DEFAULT_MAPPING: ImportMapping = {
 };
 
 export type MappingOverride = {
-  [K in keyof ImportMapping]?: ImportMapping[K] extends Record<string, unknown> ? Partial<ImportMapping[K]> : ImportMapping[K];
+  [K in keyof ImportMapping]?: ImportMapping[K] extends object ? Partial<ImportMapping[K]> : ImportMapping[K];
 };
 
 /** The default mapping with a person's overrides laid on (one level deep: a key replaces the key). */

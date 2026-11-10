@@ -101,7 +101,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(scriptFile !== undefined && { filmScript: { uri: projectUri(dir, scriptFile), text: await readFile(scriptFile, 'utf8') } }),
         ...(masterFile !== undefined && { master: await describeMaster(dir, masterFile, { startTc: str(opt.get('start-tc')), hash: opt.has('hash') }) }),
         ...(fpsArg !== undefined && { fps: fpsArg as '24' }),
-        sheetFile: { uri: projectUri(dir, sheet), mime: /.csv$/i.test(sheet) ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+        sheetFile: { uri: projectUri(dir, sheet), mime: /\.csv$/i.test(sheet) ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
         cardFile: cardResolver(dir, cardsDir, mapping.cards.files),
       }, { now });
       const text = formatSummary(r, { dryRun: dry });
@@ -128,7 +128,7 @@ Wrote ${host.projectFile}. Every unit is waiting for review; nothing is approved
         await host.writeState(completeIntake(project, {
           route, now,
           ...(script !== undefined && { sourceUri: projectUri(dir, script) }),
-          ...(sheet !== undefined && { sheetUri: projectUri(dir, sheet), sheetMime: /.csv$/i.test(sheet) ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          ...(sheet !== undefined && { sheetUri: projectUri(dir, sheet), sheetMime: /\.csv$/i.test(sheet) ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         }));
         return { code: 0, out: 'Intake recorded (route: import); intake is waiting for review. Import the shot list with the import command.' };
       }

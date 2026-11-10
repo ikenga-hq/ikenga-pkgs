@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { lightingCsv, quotesCsv, SHOT_ROWS, shotCsv, tokensCsv, workbook, writeWav, xlsx, MASTER_SECONDS, SAMPLE_RATE, type SheetRow } from '../../fixtures/sheet-import/synthetic.ts';
+import { lightingCsv, QUOTE_HEADERS, quotesCsv, SHOT_ROWS, shotCsv, tokensCsv, workbook, writeWav, xlsx, MASTER_SECONDS, SAMPLE_RATE, type SheetRow } from '../../fixtures/sheet-import/synthetic.ts';
 import { makeXlsx } from '../../fixtures/sheet-import/make-xlsx.ts';
 import { AkukoProjectSchema, ShotSchema, type AkukoProject } from '../../schema/akuko-project.ts';
 import { checkIntegrity } from '../../schema/integrity.ts';
@@ -262,6 +262,16 @@ describe('lines', () => {
     assert.equal(r.summary.counts.lines, 4);
     assert.equal(r.warnings.filter((w) => /differ/.test(w)).length, 0);
     assert.deepEqual(r.integrity, []);
+  });
+
+  it('gives a line to the shot it starts in (a cut mid-line), or to the shot it overlaps most when it starts in a gap', async () => {
+    const q = (id: string, a: string, b: string): string[] => [id, 'Ada', 'spoken', 'S01', a, b, '', '', '', '', '1', 'x', '', '', ''];
+    const lines = tableOf('q', [QUOTE_HEADERS, q('QA', '00:11.50', '00:13.00'), q('QB', '00:07.60', '00:08.30'), q('QC', '00:03.00', '00:03.40')]);
+    const r = importSheet(fresh(), await inputFrom(SHOT_ROWS, { lines }), { now: T0 });
+    const by = new Map(r.project.shots.map((s) => [s.id, s.lines?.map((l) => l.id)]));
+    assert.deepEqual(by.get('S01-010'), ['QB', 'QA']);
+    assert.equal(by.get('S01-020'), undefined);
+    assert.deepEqual(by.get('S00-010'), ['QC']);
   });
 
   it('records the clip as a path relative to the project, and says when one is missing', async () => {

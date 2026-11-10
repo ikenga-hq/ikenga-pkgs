@@ -244,7 +244,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     const scene = cell(r, col.scene);
     if (scene === '' || !SHEET_ID_PATTERN.test(scene)) { skipped.push(`row ${r.row} (${id}): the scene "${scene}" is not usable as an id`); continue; }
     const secs = col.seconds >= 0 ? Number(cell(r, col.seconds)) : NaN;
-    if (Number.isFinite(secs) && Math.abs(secs - (b - a)) > 0.011) {
+    if (Number.isFinite(secs) && Math.abs(secs - (b - a)) > 0.06) {
       warn(`${id}: the "${String(m.shot.seconds)}" column says ${secs} s but the film times span ${round6(b - a)} s; the film times are used`);
     }
     rows.push({
@@ -262,7 +262,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   const usedAsLoc = new Set<string>();
   for (const r of rows) {
     r.characters.forEach((c) => usedAsChar.add(norm(c)));
-    if (r.location !== '') usedAsLoc.add(norm(r.location));
+    splitList(r.location).forEach((l) => usedAsLoc.add(norm(l)));
   }
   const kindOfToken = (k: string, tk: Token): 'characters' | 'locations' => {
     if (usedAsLoc.has(k) && !usedAsChar.has(k)) return 'locations';
@@ -289,7 +289,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     tokenIds.set(k, { id: tk.id, kind });
   }
   for (const l of lights.values()) {
-    if (l.phrase === '') { warn(`lighting ${l.code} has no phrase; it is left out`); continue; }
+    if (l.phrase === '') { if (norm(l.code) !== norm(m.refLighting)) warn(`lighting ${l.code} has no phrase; it is left out`); continue; }
     wantStyles.push(bibleOf(l.code, l.id, l.phrase, l.useFor !== '' ? [`Use for: ${l.useFor}`] : [], l.row, l.id));
   }
   const HOUSE = 'house-style';
@@ -328,10 +328,10 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
       if (tk) refs.push(tk.id);
       else warn(`${r.id}: character "${c}" is not in the Tokens table`);
     }
-    if (r.location !== '') {
-      const tk = tokenIds.get(norm(r.location));
+    for (const loc of splitList(r.location)) {
+      const tk = tokenIds.get(norm(loc));
       if (tk) refs.push(tk.id);
-      else warn(`${r.id}: location "${r.location}" is not in the Tokens table`);
+      else warn(`${r.id}: location "${loc}" is not in the Tokens table`);
     }
     const lightingId = light && light.phrase !== '' ? light.id : undefined;
     if (lightingId !== undefined) refs.push(lightingId);
@@ -431,13 +431,24 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
         ...(words.length > 0 && { words }),
       });
     }
-    // link: a shot covers a line when their film times overlap
+    // link by film time: a line belongs to the shot it STARTS in (a cut mid-line leaves it with the first shot,
+    // as a sheet's own lines column does); a line that starts in a gap goes to the shot it overlaps most.
+    const EPS = 0.0005;
     const OVERLAP = 0.05;
-    for (const s of wantShots) {
-      const f = s.film!;
-      const hit = wantLines.filter((l) => Math.min(f.out_s, l.film_out_s) - Math.max(f.in_s, l.film_in_s) > OVERLAP);
-      if (hit.length > 0) s.lines = hit.map((l) => ({ id: l.id, kind: l.kind }));
+    for (const l of wantLines) {
+      const startsIn = wantShots.find((s) => s.film!.in_s <= l.film_in_s + EPS && l.film_in_s < s.film!.out_s - EPS);
+      let home = startsIn;
+      if (!home) {
+        let best = OVERLAP;
+        for (const s of wantShots) {
+          const o = Math.min(s.film!.out_s, l.film_out_s) - Math.max(s.film!.in_s, l.film_in_s);
+          if (o > best) { best = o; home = s; }
+        }
+      }
+      if (home) (home.lines ??= []).push({ id: l.id, kind: l.kind });
     }
+    const startOf = new Map(wantLines.map((l) => [l.id, l.film_in_s]));
+    for (const s of wantShots) s.lines?.sort((x, y) => startOf.get(x.id)! - startOf.get(y.id)!);
     const lineById = new Map(wantLines.map((l) => [l.id, l]));
     for (const r of rows) {
       const byTime = new Set((wantShots.find((s) => s.id === r.id)?.lines ?? []).map((l) => l.id));

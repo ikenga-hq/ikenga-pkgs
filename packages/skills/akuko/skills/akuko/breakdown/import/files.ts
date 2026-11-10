@@ -48,13 +48,20 @@ export async function loadCsvTable(file: string): Promise<Table> {
   return tableOf(basename(file), parseCsv((await readFile(file)).toString('utf8')));
 }
 
-const key = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const tokensOf = (s: string): string[] => (s.toLowerCase().match(/[a-z]+|\d+/g) ?? []).map((t) => (/^\d+$/.test(t) ? String(Number(t)) : t));
+/** `want` appears in `have`, in order (not necessarily next to each other). */
+const inOrder = (want: string[], have: string[]): boolean => {
+  let at = 0;
+  for (const w of want) { at = have.indexOf(w, at); if (at < 0) return false; at++; }
+  return true;
+};
 
 /**
  * Find a ready-made row's file. In order: the mapping's `cards.files` (a name in the cards folder,
- * or a path); a file whose name contains the sheet id (`P7-CARD` finds `P7-CARD-title.png`); then,
- * when exactly one file matches, one whose name contains the id's word part (`CREDITS-010` finds
- * `Film_Rolling-Credits.mp4`). Anything else is not found, and the row is left out.
+ * or a path); a file whose name holds the id's words and numbers in order, leading zeros aside
+ * (`P7-CARD` finds `Film_P07_Part-Card.png`, and never `P10`); then, when exactly one file matches,
+ * one whose name holds the id's word part (`CREDITS-010` finds `Film_Rolling-Credits.mp4`). Anything else
+ * is not found, and the row is left out.
  */
 export function cardResolver(projectDir: string, cardsDir: string | undefined, files: Record<string, string>): (id: string) => string | undefined {
   const names: string[] = cardsDir && existsSync(cardsDir) ? readdirSync(cardsDir).filter((n) => /\.(png|jpe?g|webp|mp4|mov|webm)$/i.test(n)) : [];
@@ -65,14 +72,13 @@ export function cardResolver(projectDir: string, cardsDir: string | undefined, f
       return at !== undefined ? projectUri(projectDir, at) : undefined;
     }
     if (!cardsDir) return undefined;
-    const stem = (n: string) => key(n.replace(/\.[^.]+$/, ''));
-    const full = names.filter((n) => stem(n).includes(key(id)));
-    const exact = full.find((n) => stem(n) === key(id));
-    const one = exact ?? (full.length === 1 ? full[0] : undefined);
-    if (one !== undefined) return projectUri(projectDir, join(cardsDir, one));
-    const word = key(id.replace(/-\d+[A-Za-z]?$/, ''));
-    if (word.length >= 4) {
-      const loose = names.filter((n) => stem(n).includes(word));
+    const stem = (n: string) => tokensOf(n.replace(/\.[^.]+$/, ''));
+    const full = names.filter((n) => inOrder(tokensOf(id), stem(n)));
+    if (full.length === 1) return projectUri(projectDir, join(cardsDir, full[0]!));
+    const base = id.replace(/-\d+[A-Za-z]?$/, '');
+    const word = base === id ? [] : tokensOf(base).filter((t) => /^[a-z]{4,}$/.test(t));
+    if (word.length > 0) {
+      const loose = names.filter((n) => inOrder(word, stem(n)));
       if (loose.length === 1) return projectUri(projectDir, join(cardsDir, loose[0]!));
     }
     return undefined;
