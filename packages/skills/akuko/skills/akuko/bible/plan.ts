@@ -119,6 +119,7 @@ export function planBible(project: AkukoProject, now: string): PlanResult {
   const p = structuredClone(project);
   const created: string[] = [];
   for (const { kind, entry } of bibleEntries(p)) {
+    if (removedAt(p, entry) !== undefined) continue; // left the shot list: nothing is planned for it
     for (const role of rolesFor(kind, entry)) {
       const id = assetIdFor(entry.id, role);
       if (p.assets.some((a) => a.id === id)) continue;

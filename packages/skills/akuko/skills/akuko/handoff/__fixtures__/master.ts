@@ -4,7 +4,7 @@
  * A 10 s master WAV (mono, 24 kHz, silent) at 24 fps = 240 frames, two scenes, two cards:
  *
  *   film time     what                                   expected on the timeline
- *   0 - 1.0       card_S00-020 (title, approved PNG)     V1 frame 0, 24 frames
+ *   0 - 1.0       card_S01-007 (title, approved PNG)     V1 frame 0, 24 frames
  *   1.0 - 1.5     (scene S01 starts late)                a GAP of 12 frames
  *   1.5 - 4.0     S01-010: approved lip-sync clip AND    the lip-sync clip (preferred), frame 36, 60 frames
  *                 approved clip
@@ -57,7 +57,7 @@ export async function buildMasterProject(root: string, o: MasterFixtureOptions =
     id, kind, stage, status: 'approved', tags, comments: [], updated_at: NOW, file: { uri, mime: uri.endsWith('.png') ? 'image/png' : uri.endsWith('.wav') ? 'audio/wav' : 'video/mp4', hash: 'x' }, ...extra,
   });
   const files: Array<[string, Uint8Array]> = [
-    ['cut/cards/card_S00-020.png', PNG_BYTES],
+    ['cut/cards/card_S01-007.png', PNG_BYTES],
     ['motion/S01-010/S01-010_lipsync.mp4', miniMp4(2.5)],
     ['motion/S01-010/S01-010_clip.mp4', miniMp4(2.5)],
     ['board/keyframes/S01-020.png', PNG_BYTES],
@@ -83,7 +83,7 @@ export async function buildMasterProject(root: string, o: MasterFixtureOptions =
     ],
     bible: {},
     assets: [
-      approved('card_S00-020', 'card', 'export', [], 'cut/cards/card_S00-020.png', { name: 'Title', film: { in_s: 0, out_s: 1 }, source: { kind: 'sheet', id: 'S00-020', row: 2 } }),
+      approved('card_S01-007', 'card', 'export', [], 'cut/cards/card_S01-007.png', { name: 'Title', film: { in_s: 0, out_s: 1 }, source: { kind: 'sheet', id: 'S01-007', row: 2 } }),
       { id: 'card_P2-CARD', kind: 'card', stage: 'export', status: 'pending-review', tags: [], comments: [], name: 'Part 2 card', film: { in_s: 6.25, out_s: 7 }, source: { kind: 'sheet', id: 'P2-CARD', row: 5 }, file: { uri: 'cut/cards/card_P2-CARD.png', mime: 'image/png', hash: 'x' } },
       approved('S01-010_lipsync', 'lipsync', 'motion', ['lipsync'], 'motion/S01-010/S01-010_lipsync.mp4', { owner: 'S01-010' }),
       approved('S01-010_clip', 'clip', 'motion', ['clip'], 'motion/S01-010/S01-010_clip.mp4', { owner: 'S01-010' }),

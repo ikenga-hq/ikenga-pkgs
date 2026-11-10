@@ -108,6 +108,7 @@ export function planSound(project: AkukoProject, now: string, o: PlanOptions = {
     if (unknown.length) throw new SoundError(`unknown shot${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}.`);
   }
   for (const shot of p.shots) {
+    if (removedAt(p, shot) !== undefined) continue; // left the shot list: no voice-over is planned for it
     const id = assetIdFor(shot.id);
     const existing = p.assets.find((a) => a.id === id);
     const fromScript = blank(shot.narration) && !blank(shot.script_line) && confirmed(shot.id);

@@ -46,8 +46,8 @@ export function shotRow(r: Row): Cell[] {
 }
 
 export const SHOT_ROWS: Row[] = [
-  { id: 'S00-010', scene: 'S00', cue: 'The pier at first light.', secs: 4.5, tier: 'B', framing: 'MS', prompt: '[ADA-NOW] stands at the end of the pier', motion: 'Slow push-in', chars: 'ADA-NOW', loc: 'HARBOR', in: '00:00.00', out: '00:04.50', part: 'Cold open', light: 'L-DAWN' },
-  { id: 'S00-020', scene: 'CARD', prompt: '(Title card, white on black)', framing: '—', status: 'n/a', in: '00:04.50', out: '00:07.50', part: 'Cold open' },
+  { id: 'S01-005', scene: 'S00', cue: 'The pier at first light.', secs: 4.5, tier: 'B', framing: 'MS', prompt: '[ADA-NOW] stands at the end of the pier', motion: 'Slow push-in', chars: 'ADA-NOW', loc: 'HARBOR', in: '00:00.00', out: '00:04.50', part: 'Cold open', light: 'L-DAWN' },
+  { id: 'S01-007', scene: 'CARD', prompt: '(Title card, white on black)', framing: '—', status: 'n/a', in: '00:04.50', out: '00:07.50', part: 'Cold open' },
   // scene S01 starts after a gap (07.50 to 08.00)
   { id: 'S01-010', scene: 'S01', secs: 4, tier: 'A', framing: 'CU', prompt: '[ADA] and [BO] in the [KITCHEN]', motion: 'Hold', chars: 'ADA, BO', loc: 'KITCHEN', in: '00:08.00', out: '00:12.00', part: 'P1', light: 'L-LAMP', lines: 'Q1 Ada (spoken)' },
   { id: 'S01-020', scene: 'S01', secs: 8.5, tier: 'C', framing: 'Insert', prompt: '(Insert of a tin cup on the sill, used as written)', motion: 'Lateral drift', loc: 'KITCHEN', notes: 'SPLIT', in: '00:12.00', out: '00:20.50', part: 'P1', light: 'L-LAMP', lines: 'Q2 Ada (thought)' },

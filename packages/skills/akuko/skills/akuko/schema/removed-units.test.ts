@@ -10,8 +10,8 @@ import { describe, it } from 'node:test';
 
 import { AkukoProjectSchema, findUnit, listUnits, removedAt, type AkukoProject } from './akuko-project.ts';
 import { checkIntegrity } from './integrity.ts';
-import { assertOpen as bibleOpen, bibleEntries, BibleError } from '../bible/plan.ts';
-import { assertOpen as soundOpen, SoundError } from '../sound/plan.ts';
+import { assertOpen as bibleOpen, bibleEntries, BibleError, planBible } from '../bible/plan.ts';
+import { assertOpen as soundOpen, SoundError, planSound } from '../sound/plan.ts';
 import { breakdownApproved } from '../bible/__fixtures__/project.ts';
 import { keyframesApproved } from '../sound/__fixtures__/project.ts';
 import { shortStoryKeyframesApproved } from '../audit/__fixtures__/project.ts';
@@ -88,6 +88,32 @@ describe('readiness skips removed rows', () => {
     assert.throws(() => soundOpen(p), SoundError);
     p.shots[0]!.source = { kind: 'sheet', id: 'S02-030', removed_at: GONE };
     assert.doesNotThrow(() => soundOpen(p));
+  });
+});
+
+describe('planners skip removed rows', () => {
+  it('planBible plans nothing for a removed entry', () => {
+    const p = breakdownApproved();
+    const withImages = bibleEntries(p).find((e) => e.kind !== 'style' && planBible(p, '2026-11-10T08:00:00Z').created.some((id) => id.startsWith(e.entry.id)))!;
+    assert.ok(withImages, 'control: a live entry gets planned assets');
+    const q = structuredClone(p);
+    const e = [...q.bible.characters, ...q.bible.locations, ...q.bible.styles].find((x) => x.id === withImages.entry.id)!;
+    e.source = { kind: 'sheet', id: 'ADA', removed_at: GONE };
+    const made = planBible(q, '2026-11-10T08:00:00Z').created;
+    assert.ok(!made.some((id) => id.startsWith(e.id)), 'nothing is planned for the removed entry');
+    assert.ok(made.length > 0, 'the others still are');
+  });
+
+  it('planSound plans no voice-over for a removed shot', () => {
+    const p = keyframesApproved();
+    const live = planSound(p, '2026-11-10T08:00:00Z').created;
+    assert.ok(live.length > 0);
+    const victim = live[0]!.replace(/_vo$/, '');
+    const q = structuredClone(p);
+    q.shots.find((s) => s.id === victim)!.source = { kind: 'sheet', id: 'S02-030', removed_at: GONE };
+    const made = planSound(q, '2026-11-10T08:00:00Z').created;
+    assert.ok(!made.includes(live[0]!));
+    assert.equal(made.length, live.length - 1);
   });
 });
 

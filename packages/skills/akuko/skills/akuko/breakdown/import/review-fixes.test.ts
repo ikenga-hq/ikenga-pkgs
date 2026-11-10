@@ -126,22 +126,22 @@ describe('re-import and approvals', () => {
     const p = structuredClone(first.project);
     p.stages.intake = { state: 'approved' };
     p.stages.breakdown = { state: 'approved' };
-    approve(p, 'S00-010', 'S01-010', 'S01-030', 'S02-010');
-    // S00-010: new film out; S01-010: another character (refs); S01-030: only its notes change; S02-010: untouched
-    const rows = SHOT_ROWS.map((x) => (x.id === 'S00-010' ? { ...x, out: '00:04.40', secs: 4.4 } : x.id === 'S01-010' ? { ...x, chars: 'ADA' } : x.id === 'S01-030' ? { ...x, notes: 'a new note' } : x));
+    approve(p, 'S01-005', 'S01-010', 'S01-030', 'S02-010');
+    // S01-005: new film out; S01-010: another character (refs); S01-030: only its notes change; S02-010: untouched
+    const rows = SHOT_ROWS.map((x) => (x.id === 'S01-005' ? { ...x, out: '00:04.40', secs: 4.4 } : x.id === 'S01-010' ? { ...x, chars: 'ADA' } : x.id === 'S01-030' ? { ...x, notes: 'a new note' } : x));
     const r = importSheet(p, await inputFrom(rows), { now: T1 });
     const by = new Map(r.project.shots.map((s) => [s.id, s]));
-    assert.equal(by.get('S00-010')!.status, 'pending-review');
-    assert.match(by.get('S00-010')!.comments.at(-1)!.text, /Re-imported: film changed/);
+    assert.equal(by.get('S01-005')!.status, 'pending-review');
+    assert.match(by.get('S01-005')!.comments.at(-1)!.text, /Re-imported: film changed/);
     assert.equal(by.get('S01-010')!.status, 'pending-review');
     assert.match(by.get('S01-010')!.comments.at(-1)!.text, /refs/);
     assert.equal(by.get('S01-010')!.comments.at(-1)!.author, 'agent');
     assert.equal(by.get('S01-030')!.status, 'approved'); // notes are not a substance change
     assert.equal(by.get('S02-010')!.status, 'approved');
-    assert.equal(by.get('S00-010')!.by_stage!.breakdown!.status, 'pending-review');
+    assert.equal(by.get('S01-005')!.by_stage!.breakdown!.status, 'pending-review');
     assert.equal(r.project.stages.breakdown.state, 'in-review'); // an approved stage with a unit back in review is open again
     assert.equal(r.project.current_stage, 'breakdown');
-    assert.deepEqual(r.summary.changed.filter((c) => c.approved).map((c) => c.id), ['S00-010', 'S01-010']);
+    assert.deepEqual(r.summary.changed.filter((c) => c.approved).map((c) => c.id), ['S01-005', 'S01-010']);
     // the first import approved nothing, and nothing was approved by this one
     assert.equal(first.project.shots.filter((s) => s.status === 'approved').length, 0);
     assert.equal(r.project.shots.filter((s) => s.status === 'approved').length, 2);
@@ -150,20 +150,20 @@ describe('re-import and approvals', () => {
   it('does the same for an approved card whose time or file changed', async () => {
     const first = importSheet(fresh(), await inputFrom(), { now: T0 });
     const p = structuredClone(first.project);
-    approve(p, 'card_P2-CARD', 'card_S00-020');
+    approve(p, 'card_P2-CARD', 'card_S01-007');
     const rows = SHOT_ROWS.map((x) => (x.id === 'P2-CARD' ? { ...x, out: '00:35.00' } : x));
     const r = importSheet(p, await inputFrom(rows), { now: T1 });
     const by = new Map(r.project.assets.map((a) => [a.id, a]));
     assert.equal(by.get('card_P2-CARD')!.status, 'pending-review');
     assert.match(by.get('card_P2-CARD')!.comments.at(-1)!.text, /film/);
-    assert.equal(by.get('card_S00-020')!.status, 'approved');
+    assert.equal(by.get('card_S01-007')!.status, 'approved');
   });
 
   it('a removed card is not counted, drops to pending unless approved, and is live again when it returns', async () => {
     const first = importSheet(fresh(), await inputFrom(), { now: T0 });
     const p = structuredClone(first.project);
-    approve(p, 'card_S00-020');
-    const without = SHOT_ROWS.filter((x) => x.id !== 'P2-CARD' && x.id !== 'S00-020' && x.id !== 'S01-020');
+    approve(p, 'card_S01-007');
+    const without = SHOT_ROWS.filter((x) => x.id !== 'P2-CARD' && x.id !== 'S01-007' && x.id !== 'S01-020');
     const r = importSheet(p, await inputFrom(without), { now: T1 });
     const by = new Map(r.project.assets.map((a) => [a.id, a]));
     assert.equal(r.summary.counts.cards, 1);
@@ -171,8 +171,8 @@ describe('re-import and approvals', () => {
     assert.equal(by.get('card_P2-CARD')!.status, 'pending');
     assert.equal(by.get('card_P2-CARD')!.by_stage!.export!.status, 'pending');
     assert.ok(by.get('card_P2-CARD')!.source!.removed_at);
-    assert.equal(by.get('card_S00-020')!.status, 'approved'); // a person approved it: left alone
-    assert.ok(by.get('card_S00-020')!.source!.removed_at);
+    assert.equal(by.get('card_S01-007')!.status, 'approved'); // a person approved it: left alone
+    assert.ok(by.get('card_S01-007')!.source!.removed_at);
     assert.equal(r.project.shots.find((s) => s.id === 'S01-020')!.status, 'pending');
     const back = importSheet(r.project, await inputFrom(), { now: T1 });
     const again = new Map(back.project.assets.map((a) => [a.id, a]));

@@ -56,7 +56,7 @@ describe('master clock: placement', () => {
     assert.deepEqual(
       plan.video.map((v) => [v.kind, v.shot, v.recIn, v.frames]),
       [
-        ['still', 'S00-020', 0, 24], // the title card
+        ['still', 'S01-007', 0, 24], // the title card
         ['gap', '', 24, 12], // the scene-start gap, 1.0 - 1.5 s
         ['clip', 'S01-010', 36, 60],
         ['still', 'S01-020', 96, 54],
@@ -72,7 +72,7 @@ describe('master clock: placement', () => {
       at += v.frames;
     }
     assert.equal(at, plan.totalFrames);
-    assert.deepEqual(plan.cards, [{ asset: 'card_S00-020', sheetId: 'S00-020', recIn: 0, frames: 24 }]);
+    assert.deepEqual(plan.cards, [{ asset: 'card_S01-007', sheetId: 'S01-007', recIn: 0, frames: 24 }]);
   });
 
   it('picture order: lip-sync, else clip, else key frame, else a gap', async () => {
@@ -317,7 +317,7 @@ describe('master clock: the EDL', () => {
         ['BL', '00:00:09:00', '00:00:10:00'],
       ],
     );
-    assert.ok(v.events[0]!.comments.includes('CARD card_S00-020'));
+    assert.ok(v.events[0]!.comments.includes('CARD card_S01-007'));
     assert.ok(v.events[3]!.comments.some((c) => /^MOVE S01-020: scale 1 to 1\.15/.test(c)));
     // Source in-points are all 0 (picture starts at its first frame); the long clip is cut by its source out.
     assert.equal(v.events[5]!.srcIn, '00:00:00:00');

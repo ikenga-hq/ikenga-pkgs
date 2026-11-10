@@ -18,10 +18,10 @@ export const PART_SIZES: [string, number][] = [
   ['COLD-OPEN', 1], ['P1', 22], ['P2', 31], ['P3', 10], ['P4', 16], ['P5', 31],
   ['P6', 15], ['P7', 11], ['P8', 34], ['P9', 17], ['P10', 23],
 ];
-/** Scenes per part. P7 is exactly one scene, S11 (the pilot). */
+/** Scenes per part. P7 is exactly one scene, S19 (the pilot). */
 export const PART_SCENES: Record<string, string[]> = {
   'COLD-OPEN': ['S00'], P1: ['S01', 'S02'], P2: ['S03', 'S04'], P3: ['S05'], P4: ['S06', 'S07'], P5: ['S08', 'S09'],
-  P6: ['S10'], P7: ['S11'], P8: ['S12', 'S13', 'S14'], P9: ['S15', 'S16', 'S16b'], P10: ['S17', 'S18'],
+  P6: ['S10'], P7: ['S19'], P8: ['S12', 'S13', 'S14'], P9: ['S15', 'S16', 'S16a'], P10: ['S17', 'S18'],
 };
 
 const CHARS = [
@@ -59,7 +59,7 @@ export function bigProject(): AkukoProject {
     });
     t += lenCs;
   };
-  card('S00-020', 'Title card', 300);
+  card('S01-007', 'Title card', 300);
   t += 46;
   for (const [part, size] of PART_SIZES) {
     if (part !== 'COLD-OPEN') { card(`${part}-CARD`, `${part} card`, 400); t += 46; }
@@ -95,8 +95,8 @@ export function bigProject(): AkukoProject {
   const master = cs(t + 100);
 
   // Two lines in P7: one spoken, one thought.
-  const s7 = shots.find((s) => s.id === 'S11-070');
-  const s10 = shots.find((s) => s.id === 'S11-100');
+  const s7 = shots.find((s) => s.id === 'S19-070');
+  const s10 = shots.find((s) => s.id === 'S19-100');
   lines.push({ id: 'Q01', character: 'ADA-NOW', kind: 'spoken', film_in_s: s7.film.in_s + 0.2, film_out_s: s7.film.in_s + 1.6, text: 'An invented line.', words: [{ w: 'An', t_s: s7.film.in_s + 0.2 }, { w: 'invented', t_s: s7.film.in_s + 0.5 }, { w: 'line.', t_s: s7.film.in_s + 1.1 }] });
   lines.push({ id: 'Q02', character: 'ADA-NOW', kind: 'thought', film_in_s: s10.film.in_s + 0.3, film_out_s: s10.film.in_s + 1.3, text: 'An invented thought.' });
   s7.lines = [{ id: 'Q01', kind: 'spoken' }];
