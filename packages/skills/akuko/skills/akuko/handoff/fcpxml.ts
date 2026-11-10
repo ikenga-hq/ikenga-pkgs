@@ -11,14 +11,18 @@
  *
  * Shape (the same one Final Cut Pro exports; checked against Apple's `FCPXMLv1_8.dtd`):
  *   resources:  one `format` (the project's size and frame rate) and one `asset` per file;
- *   sequence:   `tcStart` 01:00:00:00, a `spine` of one `asset-clip` / `video` (still) / `gap` per
+ *   sequence:   `tcStart` 01:00:00:00 (a master-clock project: its `audio.master.start_tc`), a `spine` of one `asset-clip` / `video` (still) / `gap` per
  *               event, back to back, each with its own length in whole frames;
  *   audio:      `asset-clip`s on negative lanes, anchored to the video event they start under,
  *               so voice-over starts exactly at its shot's first frame.
  */
 
+import type { StillMove } from '../schema/akuko-project.ts';
 import type { AudioEvent, ExportPlan, MediaFile, VideoEvent } from './plan.ts';
-import { START_FRAMES, fcpFrameDuration, fcpTime } from './timecode.ts';
+import type { Fps } from './timecode.ts';
+import { fcpFrameDuration, fcpTime } from './timecode.ts';
+import { startOf } from './plan.ts';
+import { moveLabel } from './master.ts';
 
 export const FCPXML_VERSION = '1.8';
 
@@ -58,10 +62,48 @@ export interface FcpxmlOptions {
   fileUrl(dest: string): string;
 }
 
+/** FCPXML `interp` for the first and last keyframe of a move, from the move's `ease` (unverified in Resolve, see README). */
+export function easeInterps(ease: StillMove['ease']): [string, string] {
+  switch (ease) {
+    case 'ease-in': return ['easeOut', 'linear']; // slow start: eases away from the first keyframe
+    case 'ease-out': return ['linear', 'easeIn']; // slow finish: eases into the last keyframe
+    case 'ease-in-out': return ['ease', 'ease'];
+    default: return ['linear', 'linear'];
+  }
+}
+
+const n4 = (n: number): string => String(Number(n.toFixed(4)));
+
+/**
+ * `adjust-transform` keyframes for a still's move. Apple's FCPXML reference: `position` is in percent of the
+ * project's HEIGHT, +y up; `scale` is a factor. The schema's `x`/`y` are pixels of a 1920x1080 frame, +y down, so
+ * x% = x / 1080 x 100 and y% = -y / 1080 x 100. The animation runs across the whole slot.
+ */
+function transformXml(push: (indent: number, s: string) => void, ind: number, mv: StillMove, frames: number, fps: Fps, t: (n: number) => string): void {
+  const [i0, i1] = easeInterps(mv.ease);
+  const px = (v: number): number => (v / 1080) * 100;
+  const pos = `${n4(px(mv.x))} ${n4(-px(mv.y))}`;
+  push(ind, '<adjust-transform>');
+  push(ind + 1, '<param name="position">');
+  push(ind + 2, '<keyframeAnimation>');
+  push(ind + 3, `<keyframe time="0s" value="0 0" interp="${i0}"/>`);
+  push(ind + 3, `<keyframe time="${t(frames)}" value="${pos}" interp="${i1}"/>`);
+  push(ind + 2, '</keyframeAnimation>');
+  push(ind + 1, '</param>');
+  push(ind + 1, '<param name="scale">');
+  push(ind + 2, '<keyframeAnimation>');
+  push(ind + 3, `<keyframe time="0s" value="${n4(mv.from_scale)} ${n4(mv.from_scale)}" interp="${i0}"/>`);
+  push(ind + 3, `<keyframe time="${t(frames)}" value="${n4(mv.to_scale)} ${n4(mv.to_scale)}" interp="${i1}"/>`);
+  push(ind + 2, '</keyframeAnimation>');
+  push(ind + 1, '</param>');
+  push(ind, '</adjust-transform>');
+}
+
 export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   const { fps } = plan;
   const t = (frames: number): string => fcpTime(frames, fps);
-  const start = START_FRAMES(fps);
+  const start = startOf(plan);
+  const master = plan.master !== undefined;
   const formatName = appleFormatName(plan.width, plan.height, fps.label);
   const lines: string[] = [];
   const push = (indent: number, s: string): void => void lines.push(`${'  '.repeat(indent)}${s}`);
@@ -79,11 +121,12 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   const assets: MediaFile[] = plan.media.filter((m) => used.has(m.id));
   for (const m of assets) {
     const dur = m.role === 'still' ? '0s' : m.durationS !== undefined ? seconds(m.durationS) : t(used.get(m.id)!);
-    const a: string[] = [`id="${m.id}"`, `name="${esc(stem(m.dest))}"`, `src="${esc(o.fileUrl(m.dest))}"`, 'start="0s"', `duration="${dur}"`];
+    const a: string[] = [`id="${m.id}"`, `name="${esc(stem(m.dest))}"`, `src="${esc(m.href ?? o.fileUrl(m.dest))}"`, 'start="0s"', `duration="${dur}"`];
     if (m.role === 'clip' || m.role === 'still') {
       a.push('hasVideo="1"', 'format="r1"');
       // A clip with a sound track of its own (a motion clip made with audio) keeps it.
-      if (m.hasAudio) a.push('hasAudio="1"', 'audioSources="1"', `audioChannels="${m.channels ?? 2}"`, `audioRate="${m.sampleRate ?? 48000}"`);
+      // (master-clock project: picture only, never the sound of a picture file; it is muted on the event below)
+      if (m.hasAudio && !master) a.push('hasAudio="1"', 'audioSources="1"', `audioChannels="${m.channels ?? 2}"`, `audioRate="${m.sampleRate ?? 48000}"`);
     }
     else a.push('hasAudio="1"', 'audioSources="1"', `audioChannels="${m.channels ?? 2}"`, `audioRate="${m.sampleRate ?? 48000}"`);
     push(2, `<asset ${a.join(' ')}/>`);
@@ -109,13 +152,19 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
     const kids = anchored.get(v) ?? [];
     const open = v.kind === 'gap' ? `<gap ${common}` : v.kind === 'still' ? `<video ref="${v.media!.id}" ${common}` : `<asset-clip ref="${v.media!.id}" ${common} tcFormat="NDF"`;
     const close = v.kind === 'gap' ? '</gap>' : v.kind === 'still' ? '</video>' : '</asset-clip>';
-    if (kids.length === 0) push(6, `${open}/>`);
+    const mute = master && v.kind === 'clip' && v.media?.hasAudio === true;
+    const mv = v.kind === 'still' ? v.move : undefined;
+    if (kids.length === 0 && !mute && !mv) push(6, `${open}/>`);
     else {
       push(6, `${open}>`);
+      if (mv) transformXml(push, 7, mv, v.frames, plan.fps, t);
+      if (mute) push(7, '<adjust-volume amount="-96dB"/>');
       for (const a of kids) {
         // An anchored item's offset is in its parent's own time, which starts at the parent's `start` (0s here).
         push(7, `<asset-clip ref="${a.media.id}" lane="-${a.track}" offset="${t(a.recIn - v.recIn)}" name="${esc(stem(a.media.dest))}" start="0s" duration="${t(a.frames)}"/>`);
       }
+      // A marker per move: the same numbers in words, for a Resolve that does not read the keyframes (README).
+      if (mv) push(7, `<marker start="0s" duration="${t(1)}" value="${esc(moveLabel(v.shot, mv))}"/>`);
       push(6, close);
     }
   }
