@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { loadProviderConfig, parseProviderConfig, type AkukoProviderConfig } from '../providers/config.ts';
 import { AkukoProjectSchema, type AkukoProject, type AkukoProjectInput } from '../schema/akuko-project.ts';
 import { DEFAULT_TREATMENT_BY_TIER, ESTIMATE_STAGES, EstimateError, estimateFilm, formatEstimate, run, treatmentOf } from './estimate.ts';
+import { DEFAULT_TREATMENT, treatmentOf as motionTreatmentOf } from '../motion/treatment.ts';
+import { PAD_AFTER_S, PAD_BEFORE_S, wantedSpan } from '../lipsync/plan.ts';
 
 let fetchCalls = 0;
 const realFetch = globalThis.fetch;
@@ -437,5 +439,39 @@ describe('the printout', () => {
     const r = await run(['--project', dir]);
     assert.equal(r.code, 1);
     assert.match(r.out, /--image-provider/);
+  });
+});
+
+describe('lip-sync uses the lip-sync step\'s own span rule (WP-32)', () => {
+  it('pads a line inside its shot by the step\'s PAD_BEFORE_S and PAD_AFTER_S, imported, not re-declared', () => {
+    const b = build();
+    const l = b.project.audio!.lines![0]!; // a video shot's line; the shot runs 6 s from l.film_in_s
+    l.film_in_s += 1; // 1.0 to 6.0 s into the shot would end at the shot's end; make it 1.0 to 4.0 s
+    l.film_out_s = l.film_in_s + 3;
+    const e = estimateFilm(parse(b), { config: CONFIG, imageProvider: 'gemini-image' });
+    const s = 3 + PAD_BEFORE_S + PAD_AFTER_S; // 3.5 s, well inside the shot: both pads count
+    near(e.stages.lipsync.low, s * 0.1 + 6 * PER_LINE);
+    assert.ok(e.notes.some((n) => n.includes(`${PAD_BEFORE_S} s before the first and ${PAD_AFTER_S} s after the last`)));
+  });
+
+  it('prices a shot with two spoken lines as one span, as the step cuts it, and clamps to the shot', () => {
+    const b = build();
+    const first = b.project.shots!.find((x) => x.treatment === 'lipsync')!;
+    const at = first.film!.in_s;
+    b.project.audio!.lines!.push({ id: 'L99', kind: 'spoken', film_in_s: at + 5.5, film_out_s: at + 5.9 });
+    first.lines = [...(first.lines ?? []), { id: 'L99', kind: 'spoken' }];
+    const p = parse(b);
+    const e = estimateFilm(p, { config: CONFIG, imageProvider: 'gemini-image' });
+    assert.equal(e.stages.lipsync.units, 7, 'still one lip-sync per shot');
+    // That shot: lines from at+0 to at+5.9; the span runs from the shot's start (the lead-in is clamped) to its end at
+    // 6 s (the tail is clamped too): 6 s. The step's own wantedSpan gives the same length.
+    near(e.stages.lipsync.low, 6 * 0.1 + 6 * PER_LINE);
+    const sp = wantedSpan(p, p.shots.find((x) => x.id === first.id)!)!;
+    near(sp.out_s - sp.in_s, 6);
+  });
+
+  it('the treatment table is motion\'s own (imported, not a copy)', () => {
+    assert.equal(treatmentOf, motionTreatmentOf);
+    assert.equal(DEFAULT_TREATMENT_BY_TIER, DEFAULT_TREATMENT);
   });
 });
