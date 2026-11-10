@@ -13,6 +13,12 @@
       "sha256": "34ce373000472a8910769cfb12f215b9497dabfbd450d5f0761d6b570591ee45",
       "checked_at": "2026-11-09T15:10:37Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.3",
+      "sha256": "6f1124175d16fe6242fc402b5be9ce6c8ad8ed3b19ff920a7929f70516bdb753",
+      "checked_at": "2026-11-10T14:31:47Z",
+      "checker": "check-view@2"
     }
   ]
 }
