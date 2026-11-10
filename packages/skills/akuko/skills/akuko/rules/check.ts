@@ -261,11 +261,6 @@ async function refBreaches(
       message: `ref ${ref.id} (${origin.uri}) is not a file akuko generated and ${why}; only files whose sha256 is in rules.uploads.allow can be sent` });
     return { origin, breaches: out };
   }
-  if (origin.sliceProblem) {
-    out.push({ ...base, rule: 'uploads', file: origin.uri, sha256: origin.sha256,
-      message: `ref ${ref.id} (${origin.uri}) is recorded as a slice, but ${origin.sliceProblem}; it can't be sent as a slice` });
-    return { origin, breaches: out };
-  }
   const via = origin.slice;
   const allow = via
     ? rules.uploads.allow.find((a) => a.sha256 === via.sha256 && a.slices === true)
@@ -275,6 +270,11 @@ async function refBreaches(
       message: via
         ? `ref ${ref.id} (${origin.uri}) is a slice of sha256 ${short(via.sha256)}, which is not in rules.uploads.allow with slices: true`
         : `ref ${ref.id} (${origin.uri}, sha256 ${short(origin.sha256)}) is not a file akuko generated and its hash is not in rules.uploads.allow` });
+    return { origin, breaches: out };
+  }
+  if (origin.sliceProblem) {
+    out.push({ ...base, rule: 'uploads', file: origin.uri, sha256: origin.sha256,
+      message: `ref ${ref.id} (${origin.uri}) is recorded as a slice, but ${origin.sliceProblem}; it can't be sent as a slice` });
     return { origin, breaches: out };
   }
   if (allow.for !== undefined) {

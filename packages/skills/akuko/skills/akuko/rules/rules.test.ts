@@ -1,4 +1,4 @@
-// WP-26 — project rules: matching, every rule type, references by hash, and
+// WP-26 \u2014 project rules: matching, every rule type, references by hash, and
 // the guard in front of the spend gate. Synthetic rules and files only.
 
 import assert from 'node:assert/strict';
@@ -8,9 +8,11 @@ import { describe, it } from 'node:test';
 import type { Job, JobHandle } from '../providers/contract.ts';
 import type { QuoteResult, RunResult, SpendGate } from '../spend/gate.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
+import type { AkukoProject } from '../schema/akuko-project.ts';
 import { checkJob, checkProjectRules, type Breach } from './check.ts';
 import { RULES_BREACH, RULES_MISSING, guardGate, guardedGate } from './guard.ts';
-import { SLICE_PROVIDER, mediaKind, parseSliceTag, sliceTag, wavSeconds } from './refs.ts';
+import { SLICE_PROVIDER, mediaKind, parseSliceTag, sha256Bytes, sliceTag, wavSeconds } from './refs.ts';
+import { wavBytes } from '../sound/wav.ts';
 import { bannedHits, bannedMatches, containsRequired, foldText, snippet } from './text.ts';
 import { FILES, HASH, MASTER_S, STYLE, job, rulesFolder, rulesProject } from './__fixtures__/project.ts';
 import { createLocalHost } from '../hosts/local.ts';
@@ -30,7 +32,7 @@ describe('text matching', () => {
   it('is Unicode-aware: letters with accents are word characters', () => {
     assert.equal(bannedMatches('the Ünïcorn badge', 'ünïcorn').length, 1);
     assert.equal(bannedMatches('Ünïcorns', 'ünïcorn').length, 0);
-    assert.equal(bannedMatches('café', 'caf').length, 0, 'é is part of the word');
+    assert.equal(bannedMatches('caf\u00E9', 'caf').length, 0, '\u00E9 is part of the word');
   });
 
   it('a multi-word term matches across any whitespace', () => {
@@ -54,46 +56,53 @@ describe('text normalisation (review probes)', () => {
   const caught = (text: string, term: string, except: string[] = []) => bannedMatches(text, term, except).length > 0;
 
   it('zero-width characters and soft hyphens inside a word do not hide it', () => {
-    assert.ok(caught('Zor​bex sign', 'zorbex'));
-    assert.ok(caught('Zor­bex sign', 'zorbex'));
-    assert.ok(caught('Zor⁠bex', 'zorbex'));
+    assert.ok(caught('Zor\u200Bbex sign', 'zorbex'));
+    assert.ok(caught('Zor\u00ADbex sign', 'zorbex'));
+    assert.ok(caught('Zor\u2060bex', 'zorbex'));
+  });
+
+  it('every default-ignorable code point is dropped: combining grapheme joiner, variation selectors, Hangul fillers (re-review)', () => {
+    assert.ok(caught('Zor\u034Fbex', 'zorbex'));
+    assert.ok(caught('Zor\uFE0Fbex', 'zorbex'));
+    assert.ok(caught('Zorbex\uFE0F', 'zorbex'));
+    assert.ok(caught('Zor\u3164bex', 'zorbex'));
   });
 
   it('fullwidth letters, a no-break space and NFD vs NFC compare equal', () => {
     assert.ok(caught('Ｚｏｒｂｅｘ fullwidth', 'zorbex'));
-    assert.ok(caught('café decomposed', 'café'));
-    assert.ok(caught('café precomposed', 'café'));
-    assert.ok(caught('Kelvo Dyne', 'kelvo dyne'));
+    assert.ok(caught('cafe\u0301 decomposed', 'caf\u00E9'));
+    assert.ok(caught('caf\u00E9 precomposed', 'cafe\u0301'));
+    assert.ok(caught('Kelvo\u00A0Dyne', 'kelvo dyne'));
   });
 
-  it('full case folding: ß / SS and dotted capital I', () => {
-    assert.ok(caught('STRASSE', 'straße'));
-    assert.ok(caught('straße', 'strasse'));
-    assert.ok(caught('İSTANBUL', 'istanbul'));
+  it('full case folding: \u00DF / SS and dotted capital I', () => {
+    assert.ok(caught('STRASSE', 'stra\u00DFe'));
+    assert.ok(caught('stra\u00DFe', 'strasse'));
+    assert.ok(caught('\u0130STANBUL', 'istanbul'));
   });
 
   it('a multi-word term matches across dashes of any kind, underscores and line breaks', () => {
-    for (const t of ['Kelvo–Dyne', 'Kelvo—Dyne', 'Kelvo-Dyne', 'Kelvo_Dyne', 'Kelvo\nDyne']) assert.ok(caught(t, 'kelvo dyne'), t);
-    assert.ok(caught('a Kelvo–Dyne van', 'Kelvo-Dyne'), 'an en dash matches a hyphen in the term');
+    for (const t of ['Kelvo\u2013Dyne', 'Kelvo\u2014Dyne', 'Kelvo-Dyne', 'Kelvo_Dyne', 'Kelvo\nDyne']) assert.ok(caught(t, 'kelvo dyne'), t);
+    assert.ok(caught('a Kelvo\u2013Dyne van', 'Kelvo-Dyne'), 'an en dash matches a hyphen in the term');
   });
 
   it('known limits: accents still count, plurals are separate terms, look-alike letters are not mapped', () => {
-    assert.ok(!caught('café', 'cafe'));
+    assert.ok(!caught('caf\u00E9', 'cafe'));
     assert.ok(!caught('Zorbexes', 'zorbex'));
     assert.ok(caught('Zorbexes', 'zorbexes'));
-    assert.ok(!caught('Zоrbex', 'zorbex'));
+    assert.ok(!caught('Z\u043Erbex', 'zorbex'));
   });
 
   it('exceptions are normalised too, and snippets quote the folded text', () => {
-    assert.deepEqual(bannedMatches('a GORE–TEX jacket', 'gore', ['Gore-Tex']), []);
+    assert.deepEqual(bannedMatches('a GORE\u2013TEX jacket', 'gore', ['Gore-Tex']), []);
     assert.ok(caught('zorbex silk and zorbex', 'zorbex', ['zorbex silk']));
-    const h = bannedHits('An  Ａｃｍｅ​ sign', 'acme');
-    assert.equal(foldText('Ａｃｍｅ​'), 'acme');
+    const h = bannedHits('An  Ａｃｍｅ\u200B sign', 'acme');
+    assert.equal(foldText('Ａｃｍｅ\u200B'), 'acme');
     assert.equal(snippet(h.folded, h.spans[0]!), 'an acme sign');
   });
 
   it('required text is folded the same way', () => {
-    assert.ok(containsRequired('Silhouettes­Only', 'silhouettesonly'));
+    assert.ok(containsRequired('Silhouettes\u00ADOnly', 'silhouettesonly'));
     assert.ok(containsRequired('ＳＩＬＨＯＵＥＴＴＥＳ only', 'silhouettes only'));
   });
 });
@@ -103,7 +112,9 @@ describe('media sniffing', () => {
     assert.equal(mediaKind(FILES.master.data), 'wav');
     assert.equal(mediaKind(FILES.photoAsWav.data), undefined);
     assert.equal(mediaKind(new Uint8Array([0x49, 0x44, 0x33, 4])), 'mp3');
-    assert.equal(mediaKind(new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70])), 'mp4');
+    const ftyp = (brand: string) => new Uint8Array([0, 0, 0, 24, ...new TextEncoder().encode(`ftyp${brand}`)]);
+    for (const b of ['isom', 'mp42', 'M4A ', 'qt  ']) assert.equal(mediaKind(ftyp(b)), 'mp4', b);
+    for (const b of ['heic', 'heix', 'mif1', 'msf1', 'avif', 'zzzz']) assert.equal(mediaKind(ftyp(b)), undefined, b);
     assert.equal(wavSeconds(FILES.master.data, FILES.master.data.length), MASTER_S);
   });
 });
@@ -284,8 +295,10 @@ describe('checkJob: references, by content hash', () => {
     /** A slice asset as the cutter records it. */
     const cut = (id: string, uri: string, tag: string, extra: Record<string, unknown> = {}) => ({
       id, kind: 'vo' as const, stage: 'motion' as const, status: 'approved' as const, owner: 'S03-020', comments: [], provider: SLICE_PROVIDER, tags: [tag],
-      file: { uri, mime: 'audio/wav' }, ...extra,
+      file: { uri, mime: 'audio/wav', hash: HASH.slice }, ...extra,
     });
+    /** The master with its sha256 recorded: the source length is then known (2 s). */
+    const master = { master: { uri: FILES.master.path, duration_s: MASTER_S, sample_rate: 8000, start_tc: '00:00:00:00', sha256: HASH.master }, lines: [] };
     const lip = (ref: { id: string; uri: string; note?: string }) =>
       job({ unit: 'S03-020', prompt: `silhouettes only, ${STYLE}`, output: 'lipsync', refs: [{ role: 'audio', ...ref }] }, { kind: 'video', stage: 'motion' });
 
@@ -296,8 +309,31 @@ describe('checkJob: references, by content hash', () => {
     });
 
     it('a recorded slice of a file allowed with slices: true is accepted', async () => {
-      const { dir, project: p } = await rulesFolder((q) => { q.assets.push(cut('L001_cut', FILES.slice.path, sliceTag(HASH.master, 0.5, 1), { file: { uri: FILES.slice.path, mime: 'audio/wav', hash: HASH.slice } })); });
+      const { dir, project: p } = await rulesFolder((q) => { q.audio = master; q.assets.push(cut('L001_cut', FILES.slice.path, sliceTag(HASH.master, 0.5, 1))); });
       assert.deepEqual((await checkJob(p, lip({ id: 'L001_cut', uri: FILES.slice.path }), { projectDir: dir })).breaches, []);
+    });
+
+    it('fails closed (re-review S1-S4): no recorded hash, unknown source length, a range past it, a HEIC image, a 60 s file tagged as 1 s', async () => {
+      const heic = new Uint8Array([0, 0, 0, 24, ...new TextEncoder().encode('ftypheic'), ...new Uint8Array(64).fill(1)]);
+      const long = wavBytes(new Uint8Array(60 * 8000 * 2), 8000);
+      const msg = async (setup: (q: AkukoProject) => void, files: Record<string, Uint8Array> = {}): Promise<string> => {
+        const { dir, project: p } = await rulesFolder(setup);
+        for (const [path, data] of Object.entries(files)) await writeFile(join(dir, path), data);
+        const id = p.assets.at(-1)!.id;
+        const r = await checkJob(p, lip({ id, uri: p.assets.at(-1)!.file!.uri }), { projectDir: dir });
+        assert.equal(r.outcome, 'rules-breach');
+        return r.breaches.map((b) => b.message).join(' | ');
+      };
+      // S1: no file.hash on the slice asset.
+      assert.match(await msg((q) => { q.audio = master; q.assets.push(cut('s1', FILES.slice.path, sliceTag(HASH.master, 0, 0.5), { file: { uri: FILES.slice.path, mime: 'audio/wav' } })); }), /recorded no sha256/);
+      // S2: the source's length is unknown (no recorded master hash, and the master is no project file) ...
+      assert.match(await msg((q) => { q.assets.push(cut('s2', FILES.slice.path, sliceTag(HASH.master, 0, 99999))); }), /length of its source .* is unknown/);
+      // ... or the range runs past it.
+      assert.match(await msg((q) => { q.audio = master; q.assets.push(cut('s2b', FILES.slice.path, sliceTag(HASH.master, 0, 99999))); }), /past the end of its source \(2 s\)/);
+      // S3: a HEIC image dressed as an MP4.
+      assert.match(await msg((q) => { q.audio = master; q.assets.push(cut('s3', 'audio/photo.mp4', sliceTag(HASH.master, 0, 1), { file: { uri: 'audio/photo.mp4', mime: 'video/mp4', hash: sha256Bytes(heic) } })); }, { 'audio/photo.mp4': heic }), /content is not audio or video/);
+      // S4: a 60 s WAV tagged as one second.
+      assert.match(await msg((q) => { q.audio = master; q.assets.push(cut('s4', 'audio/long.wav', sliceTag(HASH.master, 0, 1), { file: { uri: 'audio/long.wav', mime: 'audio/wav', hash: sha256Bytes(long) } })); }, { 'audio/long.wav': long }), /it is 60 s long, but its range 0-1 s is 1 s/);
     });
 
     it('a note claiming a slice counts for nothing: a stranger\'s WAV and a renamed photo are refused (review probes P3, P3b)', async () => {
@@ -334,7 +370,7 @@ describe('checkJob: references, by content hash', () => {
 
     it('the source length comes from audio.master when its sha256 is the source hash', async () => {
       const { dir, project: p } = await rulesFolder((q) => {
-        q.audio = { master: { uri: FILES.master.path, duration_s: 1.2, sample_rate: 8000, start_tc: '00:00:00:00', sha256: HASH.master }, lines: [] };
+        q.audio = { master: { ...master.master, duration_s: 1.2 }, lines: [] };
         q.assets.push(cut('L001_cut', FILES.slice.path, sliceTag(HASH.master, 1, 1.5)));
       });
       const r = await checkJob(p, lip({ id: 'L001_cut', uri: FILES.slice.path }), { projectDir: dir });

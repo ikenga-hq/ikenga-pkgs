@@ -6,8 +6,10 @@
  *
  * **Normalised first.** Text, terms and exceptions all go through `foldText()`:
  * Unicode NFKC (fullwidth letters become ASCII, composed and decomposed accents
- * compare equal, a no-break space becomes a space), invisible format characters
- * removed (`\p{Cf}`: zero-width spaces and joiners, soft hyphens), every dash
+ * compare equal, a no-break space becomes a space), invisible characters
+ * removed (`\p{Default_Ignorable_Code_Point}`: zero-width spaces and joiners,
+ * soft hyphens, the combining grapheme joiner, variation selectors, Hangul
+ * fillers), every dash
  * (`\p{Pd}`: en dash, em dash, …) becomes `-`, then full case folding (`ß` and
  * `SS` compare equal, `İ` folds to `i`). Messages quote the folded text.
  *
@@ -32,7 +34,7 @@ const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function foldText(s: string): string {
   return s
     .normalize('NFKC')
-    .replace(/\p{Cf}/gu, '')
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
     .replace(/\p{Pd}/gu, '-')
     .toUpperCase()
     .toLowerCase()

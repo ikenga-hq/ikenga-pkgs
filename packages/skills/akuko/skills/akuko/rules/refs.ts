@@ -48,10 +48,14 @@
  * - the slice's bytes are audio or video by content (RIFF/WAVE, ID3 or an
  *   MPEG frame, an MP4/MOV `ftyp` box, FLAC, Ogg, WebM/Matroska), whatever
  *   the file's extension;
- * - the slice's `file.hash`, when it is a sha256, matches the bytes;
- * - `0 ≤ in_s < out_s`, and `out_s` is within the source's duration when the
- *   source can be found: `audio.master.duration_s` when its `sha256` is the
- *   source hash, else the WAV header of a project file with that hash.
+ * - the slice has a sha256 `file.hash` (the cutter must record one) and its
+ *   bytes match it;
+ * - `0 ≤ in_s < out_s`, and the source's length is known and `out_s` is
+ *   within it: `audio.master.duration_s` when its `sha256` is the source
+ *   hash, else the WAV header of a project file with that hash. An unknown
+ *   length is refused;
+ * - a WAV slice's own length is within `SLICE_LENGTH_TOLERANCE_S` (0.5 s) of
+ *   `out_s − in_s`. Other formats' lengths are not measured (known limit).
  *
  * Nothing in the job (`ref.note` or any other field) can make a file a slice.
  */
@@ -215,12 +219,18 @@ export function sliceOf(a: Asset | undefined): SliceOf | undefined {
 
 const ascii = (b: Uint8Array, o: number, n: number): string => String.fromCharCode(...b.subarray(o, o + n));
 
+/** ISO-BMFF major brands that are audio or video. Image brands (`heic`, `heix`, `mif1`, `msf1`, `avif`) and unknown ones are refused. */
+const FTYP_AV = new Set(['isom', 'iso2', 'mp41', 'mp42', 'M4A ', 'M4V ', 'qt  ', 'avc1', 'dash']);
+
+/** How far a WAV slice's own length may differ from `out_s - in_s` (the cutter adds a little lead-in and tail). */
+export const SLICE_LENGTH_TOLERANCE_S = 0.5;
+
 /** What a file's first bytes say it is, among the media a slice can be. */
 export function mediaKind(head: Uint8Array): 'wav' | 'mp3' | 'mp4' | 'flac' | 'ogg' | 'matroska' | undefined {
   if (head.length >= 12 && ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 4) === 'WAVE') return 'wav';
   if (head.length >= 3 && ascii(head, 0, 3) === 'ID3') return 'mp3';
   if (head.length >= 2 && head[0] === 0xff && (head[1]! & 0xe0) === 0xe0) return 'mp3';
-  if (head.length >= 8 && ascii(head, 4, 4) === 'ftyp') return 'mp4';
+  if (head.length >= 12 && ascii(head, 4, 4) === 'ftyp') return FTYP_AV.has(ascii(head, 8, 4)) ? 'mp4' : undefined;
   if (head.length >= 4 && ascii(head, 0, 4) === 'fLaC') return 'flac';
   if (head.length >= 4 && ascii(head, 0, 4) === 'OggS') return 'ogg';
   if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return 'matroska';
@@ -287,14 +297,24 @@ export function refAsset(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>): Asse
   return a;
 }
 
+/** Why a recorded slice can't count as one (fail closed: anything that can't be checked is refused). */
 async function sliceProblem(p: AkukoProject, asset: Asset, slice: SliceOf, uri: string, sha256: string, ctx: RefContext): Promise<string | undefined> {
   const hd = headOf(locate(uri, ctx.projectDir));
-  if (!hd || mediaKind(hd.head) === undefined) return 'its content is not audio or video';
+  const kind = hd ? mediaKind(hd.head) : undefined;
+  if (!hd || kind === undefined) return 'its content is not audio or video';
   const recorded = asset.file?.hash;
-  if (recorded !== undefined && SHA256.test(recorded) && recorded !== sha256) return 'the file has changed since the cutter recorded it';
+  if (recorded === undefined || !SHA256.test(recorded)) return 'the cutter recorded no sha256 for it (file.hash)';
+  if (recorded !== sha256) return 'the file has changed since the cutter recorded it';
   if (!(slice.in_s >= 0 && slice.out_s > slice.in_s)) return `its range ${slice.in_s}-${slice.out_s} s is not a span`;
   const secs = await sourceSeconds(p, slice.sha256, ctx);
-  if (secs !== undefined && slice.out_s > secs + 1e-6) return `its range ends at ${slice.out_s} s, past the end of its source (${Number(secs.toFixed(3))} s)`;
+  if (secs === undefined) return `the length of its source (sha256 ${slice.sha256.slice(0, 12)}…) is unknown: audio.master.sha256 is not that hash and no project file with it is a readable WAV`;
+  if (slice.out_s > secs + 1e-6) return `its range ends at ${slice.out_s} s, past the end of its source (${Number(secs.toFixed(3))} s)`;
+  if (kind === 'wav') {
+    const own = wavSeconds(hd.head, hd.size);
+    const want = slice.out_s - slice.in_s;
+    if (own === undefined) return 'its WAV header cannot be read, so its length cannot be checked';
+    if (Math.abs(own - want) > SLICE_LENGTH_TOLERANCE_S) return `it is ${Number(own.toFixed(3))} s long, but its range ${slice.in_s}-${slice.out_s} s is ${Number(want.toFixed(3))} s`;
+  }
   return undefined;
 }
 

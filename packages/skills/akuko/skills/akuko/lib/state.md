@@ -324,7 +324,7 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 
 **What an item is about.** A unit that is a shot, or an asset owned by a shot (`<shot>_keyframe`, `<shot>_clip`, a later take), is that shot: its scene, its part (`shot.part`, else the scene's), its bible ids (`refs[]` plus `lighting`) and its subjects (the characters and locations among them). A bible entry, or an asset owned by one, is about that entry.
 
-**Text is normalised before matching** (`rules/text.ts` `foldText`): text, terms and exceptions alike go through Unicode NFKC (fullwidth letters become ASCII, composed and decomposed accents compare equal, a no-break space is a space), lose invisible format characters (`\p{Cf}`: zero-width spaces and joiners, soft hyphens), have every dash (`\p{Pd}`) mapped to `-`, and are case-folded in full (`ß` = `ss`, `İ` = `i`). Breach messages quote the folded text.
+**Text is normalised before matching** (`rules/text.ts` `foldText`): text, terms and exceptions alike go through Unicode NFKC (fullwidth letters become ASCII, composed and decomposed accents compare equal, a no-break space is a space), lose invisible characters (`\p{Default_Ignorable_Code_Point}`: zero-width spaces and joiners, soft hyphens, the combining grapheme joiner, variation selectors, Hangul fillers), have every dash (`\p{Pd}`) mapped to `-`, and are case-folded in full (`ß` = `ss`, `İ` = `i`). Breach messages quote the folded text.
 
 **Rule semantics**
 
@@ -353,13 +353,16 @@ A file brought back by hand is never generated, whatever the ledger says: the pe
 **Slices: the contract for WP-28b.** A time-slice akuko cuts from an allowed file (a line from the master WAV) is a new file with a new hash. Its provenance lives **in the project state, never in the job**. The cutter records each slice as an asset:
 - `provider: "akuko-cut"` (`SLICE_PROVIDER`);
 - a tag `slice-of:sha256:<64 hex of the source file>@<in_s>-<out_s>` (`sliceTag()` / `parseSliceTag()`), seconds on the source;
-- `file: {uri, hash}` with the slice's own sha256 (the local host's `storeAsset` records it).
+- `file: {uri, hash}` with the slice's own sha256. **The cutter must record `file.hash`** (the local host's `storeAsset` does); a slice without one is refused.
 
 The lip-sync job's ref then names that asset (`ref.id` = its id, `ref.uri` = its `file.uri`). The guard accepts the slice when all of these hold:
 - the source hash is in `rules.uploads.allow` with `slices: true` (that entry's `for` then applies);
 - the slice's bytes are audio or video **by content** (RIFF/WAVE, ID3 or an MPEG frame, an MP4/MOV `ftyp` box, FLAC, Ogg, WebM/Matroska), whatever the extension;
-- its `file.hash`, when it is a sha256, matches the bytes;
-- `0 ≤ in_s < out_s`, and `out_s` is within the source's length when the project knows it: `audio.master.duration_s` when `audio.master.sha256` is the source hash, else the WAV header of a project file (the master, a line clip, an asset) with that hash.
+- its `file.hash` is a sha256 and matches the bytes;
+- `0 ≤ in_s < out_s`, the source's length is known, and `out_s` is within it: `audio.master.duration_s` when `audio.master.sha256` is the source hash, else the WAV header of a project file (the master, a line clip, an asset) with that hash. An unknown length is refused, so record `audio.master.sha256` (or keep the source among the project's files);
+- a WAV slice's own length is within 0.5 s of `out_s − in_s` (lead-in and tail allowed). The lengths of other formats are not measured.
+
+An MP4/MOV file counts as video only for audio/video `ftyp` brands (`isom`, `iso2`, `mp41`, `mp42`, `M4A `, `M4V `, `qt  `, `avc1`, `dash`); image brands such as HEIC and AVIF are refused. The allow-list check comes first, then these.
 
 A `slice-of` note, or anything else in the job, makes nothing a slice. `providers/contract.ts` is unchanged.
 
