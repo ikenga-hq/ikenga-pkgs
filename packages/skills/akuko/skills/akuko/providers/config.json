@@ -99,6 +99,55 @@
         }
       }
     },
+    "fal-lipsync": {
+      "label": "fal lip-sync (still or clip + a spoken line) — your fal key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "FAL_KEY",
+      "default_model": "minimax/h3-max/lip-sync/image-to-video",
+      "models": {
+        "minimax/h3-max/lip-sync/image-to-video": {
+          "price": {
+            "amount": 0.08,
+            "per": "second"
+          },
+          "last_verified": "2026-11-10",
+          "source": "IMAGE + AUDIO (default for a still with a spoken line). https://fal.ai/models/minimax/h3-max/lip-sync/image-to-video/llms.txt, read 2026-11-10: \"Billing is calculated per second of generated video\": 480p $0.05, 768p $0.08, 1080p $0.16, 2K $0.32 per second; videos over 15 s get a 1.2x multiplier. akuko always sends resolution \"768P\" and refuses a segment over 15 s (so the multiplier never applies). Request (https://fal.ai/models/minimax/h3-max/lip-sync/image-to-video/api): image_url (aspect ratio 0.4-2.5), audio_url (at least 5 s, up to 15 min), resolution, enable_transcription, seed; output video.url, duration (matches the audio). The pricing page https://fal.ai/pricing does not list it; the model page does."
+        },
+        "veed/fabric-1.0#480p": {
+          "price": {
+            "amount": 0.08,
+            "per": "second"
+          },
+          "last_verified": "2026-11-10",
+          "source": "IMAGE + AUDIO (fallback). https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10: \"480p - $0.08 per second, 720p - $0.15 per second\" (fal's page does not say whether those are audio or output seconds, so akuko prices max(audio, 1 s) of the line). Request: image_url, audio_url, resolution (\"720p\" or \"480p\", required); the page states no audio length limit; output video.url. akuko strips the \"#480p\" suffix and sends it as resolution. It is the default for a line under 5 s (h3-max needs 5 s or more)."
+        },
+        "veed/fabric-1.0#720p": {
+          "price": {
+            "amount": 0.15,
+            "per": "second"
+          },
+          "last_verified": "2026-11-10",
+          "source": "IMAGE + AUDIO (fallback, higher resolution). Same endpoint and page as the 480p entry (https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10): 720p $0.15 per second. akuko strips the \"#720p\" suffix and sends it as resolution. Same billing-basis gap as the 480p entry: fal does not say whether those are audio or output seconds; akuko prices max(audio, 1 s)."
+        },
+        "fal-ai/kling-video/lipsync/audio-to-video": {
+          "price": {
+            "amount": 0.014,
+            "per": "second"
+          },
+          "last_verified": "2026-11-10",
+          "source": "VIDEO + AUDIO (default for an approved clip). https://fal.ai/models/fal-ai/kling-video/lipsync/audio-to-video (and its llms.txt), read 2026-11-10: \"$0.014 per input video seconds, rolling up to closest 5 second increment\". fal's docs page https://fal.ai/docs/model-api-reference/video-generation-api/kling-video-lipsync, read the same day, words it as \"$0.014 per 5-second increment\"; the two disagree, so akuko prices the dearer reading ($0.014 per second, rounded up to 5 s) and the real bill may be lower. Request: video_url (.mp4/.mov, up to 100 MB, 2-10 s, 720p or 1080p, sides 720-1920 px), audio_url (2-60 s, up to 5 MB), enable_safety_checker; output video.url."
+        },
+        "veed/lipsync/v2": {
+          "price": {
+            "amount": 0.07,
+            "per": "second"
+          },
+          "last_verified": "2026-11-10",
+          "source": "VIDEO + AUDIO (fallback). https://fal.ai/models/veed/lipsync/v2/llms.txt, read 2026-11-10: \"$0.07 for every second of output video\". Request: video_url, audio_url (no limits stated on the page); output video.url."
+        }
+      }
+    },
     "example-direct-image": {
       "label": "EXAMPLE — paid direct image API (placeholder, replaced in WP-06)",
       "billing": "direct-api",
