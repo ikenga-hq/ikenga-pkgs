@@ -18,7 +18,8 @@
  *     unit that has already used attempts has fewer left;
  *   - prices from `providers/config.json` through `estimateFromConfig`, using the
  *     provider and model the project would run: the image provider for bible and
- *     key frames (`--image-provider`, default `gemini-image`), `fal-video` for
+ *     key frames (from `--image-provider`, else the ledger, else the assets; it
+ *     refuses rather than guess a cheaper one), `fal-video` for
  *     clips with the same "cover the shot" length fit the motion stage uses,
  *     `fal-lipsync` through `chooseLipsyncModel` on the line lengths, and
  *     ElevenLabs text-to-speech, which is 0 when `audio.master` is set.
@@ -34,6 +35,7 @@ import { createLocalHost } from '../hosts/local.ts';
 import { removedAt } from '../decisions/fold.ts';
 import { bibleEntries, rolesFor, assetIdFor as bibleAssetId } from '../bible/plan.ts';
 import { paidAttempts, DEFAULT_MAX_ATTEMPTS } from '../motion/plan.ts';
+import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { estimateFromConfig, loadProviderConfig, priceFor, type AkukoProviderConfig } from '../providers/config.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
 import { falVideoLimits, fitSeconds, FAL_VIDEO_PROVIDER_ID } from '../providers/fal-video/index.ts';
@@ -67,7 +69,6 @@ export function treatmentOf(shot: Shot): ShotTreatment | undefined {
 export const LINE_PAD_S = 0.4;
 
 export const DEFAULT_TRIES: [number, number, number] = [1, 1.5, 3];
-export const DEFAULT_IMAGE_PROVIDER = 'gemini-image';
 export const TTS_PROVIDER = 'elevenlabs';
 export const FILM_WIDE = '(film-wide)';
 export const NO_PART = '(no part)';
@@ -120,7 +121,7 @@ export interface Estimate {
   total: Range;
   budget: { cap: number; spent: number; sunk: number; reserved: number; remaining: number } | null;
   /** Prices used, one line each. */
-  prices: string[];
+  prices: { lines: string[]; source: { images: string; video: string } };
   /** Shot counts by treatment, in scope, removed rows excluded. */
   treatments: Record<string, number>;
   warnings: string[];
@@ -172,6 +173,51 @@ function priceJob(
   }
 }
 
+interface Chosen { provider: string; model?: string; source: string }
+
+/**
+ * The image provider and model bible and key-frame work runs on. Never a default:
+ * a guess cheaper than the real provider hides an overrun.
+ * Order: --image-provider; else the most recent paid (non-manual) ledger entry on a bible or
+ * key-frame unit; else the provider of the most recent bible or key-frame asset; else refuse.
+ */
+export function inferImageProvider(p: AkukoProject, o: Pick<EstimateOptions, 'imageProvider' | 'imageModel'>): Chosen {
+  if (o.imageProvider !== undefined) return { provider: o.imageProvider, ...(o.imageModel !== undefined ? { model: o.imageModel } : {}), source: 'from --image-provider' };
+  const byId = new Map(p.assets.map((a) => [a.id, a]));
+  const isImageUnit = (id: string): boolean => { const a = byId.get(id); return a ? a.stage === 'bible' || a.stage === 'keyframes' : id.endsWith('_keyframe'); };
+  for (let i = p.ledger.length - 1; i >= 0; i--) {
+    const e = p.ledger[i]!;
+    if (e.provider === MANUAL_PROVIDER_ID || !isImageUnit(e.unit)) continue;
+    const model = o.imageModel ?? e.model;
+    return { provider: e.provider, ...(model !== undefined ? { model } : {}), source: 'from the ledger (the most recent paid bible or key-frame call)' };
+  }
+  let best: Asset | undefined;
+  for (const a of p.assets) {
+    if ((a.stage !== 'bible' && a.stage !== 'keyframes') || a.provider === undefined || a.provider === MANUAL_PROVIDER_ID) continue;
+    if (best === undefined || (a.updated_at ?? '') >= (best.updated_at ?? '')) best = a;
+  }
+  if (best?.provider !== undefined) {
+    const model = o.imageModel ?? best.model;
+    return { provider: best.provider, ...(model !== undefined ? { model } : {}), source: `from the assets (${best.id} was made by it)` };
+  }
+  throw new EstimateError('Cannot tell which image provider this project uses: nothing paid has run for the bible or key frames yet. Pass --image-provider <id> (for example gemini-image or fal) so the estimate prices the provider you will really use; akuko will not guess a cheaper one.');
+}
+
+/** The video model clips run on: --video-model, else the ledger or assets of a fal-video clip, else the config default (said so). */
+function inferVideoModel(p: AkukoProject, config: AkukoProviderConfig, flag: string | undefined): { model: string | undefined; source: string } {
+  if (flag !== undefined) return { model: flag, source: 'from --video-model' };
+  const isClip = (id: string): boolean => { const a = p.assets.find((x) => x.id === id); return a ? a.stage === 'motion' && a.kind === 'clip' : id.endsWith('_clip'); };
+  for (let i = p.ledger.length - 1; i >= 0; i--) {
+    const e = p.ledger[i]!;
+    if (e.provider === FAL_VIDEO_PROVIDER_ID && e.model !== undefined && isClip(e.unit)) return { model: e.model, source: 'from the ledger (the most recent paid clip)' };
+  }
+  const a = [...p.assets].reverse().find((x) => x.kind === 'clip' && x.provider === FAL_VIDEO_PROVIDER_ID && x.model !== undefined);
+  if (a?.model !== undefined) return { model: a.model, source: `from the assets (${a.id})` };
+  let model: string | undefined;
+  try { model = priceFor(config, FAL_VIDEO_PROVIDER_ID).model; } catch { /* reported when priced */ }
+  return { model, source: 'the config default (no clip has been made yet; pass --video-model to change it)' };
+}
+
 const priceLine = (config: AkukoProviderConfig, provider: string, model?: string): string | undefined => {
   try {
     const r = priceFor(config, provider, model);
@@ -190,6 +236,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
   const warnings: string[] = [];
   const notes: string[] = [];
   const prices: string[] = [];
+  const source = { images: '', video: '' };
   const priced: Priced[] = [];
   const doneCount: Record<EstimateStage, number> = { bible: 0, keyframes: 0, motion: 0, lipsync: 0, sound: 0 };
   const assetById = new Map(project.assets.map((a) => [a.id, a]));
@@ -212,10 +259,12 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
   }
 
   // ── bible: film-wide ────────────────────────────────────────────────
-  const imageProvider = o.imageProvider ?? DEFAULT_IMAGE_PROVIDER;
-  const imageModel = o.imageModel;
+  const image = inferImageProvider(project, o);
+  const imageProvider = image.provider;
+  const imageModel = image.model;
+  source.images = `${imageProvider}${imageModel ? ' ' + imageModel : ''} ${image.source}`;
   const imgLine = priceLine(config, imageProvider, imageModel);
-  if (imgLine) prices.push(`images: ${imgLine}`);
+  prices.push(imgLine ? `images: ${imgLine} [${image.source}]` : `images: ${source.images}`);
   if (o.part === undefined) {
     const items: JobItem[] = [];
     for (const { kind, entry } of bibleEntries(project)) {
@@ -248,9 +297,11 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
 
   // ── motion clips: shots that get video ──────────────────────────────
   const videoProvider = FAL_VIDEO_PROVIDER_ID;
-  const videoModel = o.videoModel ?? ((): string | undefined => { try { return priceFor(config, videoProvider).model; } catch { return undefined; } })();
+  const video = inferVideoModel(project, config, o.videoModel);
+  const videoModel = video.model;
+  source.video = `${videoProvider}${videoModel ? ' ' + videoModel : ''} ${video.source}`;
   const vLine = priceLine(config, videoProvider, videoModel);
-  if (vLine) prices.push(`clips: ${vLine}`);
+  if (vLine) prices.push(`clips: ${vLine} [${video.source}]`);
   const explicitVideo = (s: Shot): boolean => s.treatment === 'video';
   let videoShots: Shot[];
   {
@@ -274,9 +325,13 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
       if (made(assetById.get(id))) { doneCount.motion++; continue; }
       const want = shotSeconds(s);
       if (want === undefined) { warnings.push(`${id}: the shot has no duration, so its clip is not priced.`); continue; }
-      const used = limits ? fitSeconds(want, limits.allowedSeconds, 'cover').seconds : want;
+      const fit = limits ? fitSeconds(want, limits.allowedSeconds, 'cover') : undefined;
+      const used = fit ? fit.seconds : want;
+      // A shot longer than the model's longest clip needs several clips; price them all.
+      const clips = fit?.capped ? Math.ceil(want / used - 1e-9) : 1;
+      if (clips > 1) warnings.push(`${s.id}: ${money(want)} s needs ${clips} clips of ${used} s (${videoModel}); consider a still-move instead.`);
       if (paidAttempts(project, id).count >= cap) { warnings.push(`${id} has used its ${cap} paid attempts; it is not priced (the person must ask for more).`); continue; }
-      items.push({ unit: id, prompt: '', output: 'clip', count: 1, duration_s: used });
+      items.push({ unit: id, prompt: '', output: 'clip', count: clips, duration_s: used });
       meta.set(id, { part: partOf(project, s), capped: true });
     }
     const costs = priceJob(config, videoProvider, videoModel, 'motion', items, warnings);
@@ -337,7 +392,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
         priced.push({ unit: shotId ? `${shotId}_lipsync#${it.unit}` : it.unit, part: meta.get(it.unit)!, stage: 'lipsync', cost: costs[it.unit] ?? 0, capped: true });
       }
     }
-    notes.push(`Lip-sync is priced per spoken line, image mode, with ${LINE_PAD_S} s of pad per line.`);
+    notes.push(`Lip-sync is priced per spoken line (image mode) plus ${LINE_PAD_S} s of pad per line. WP-28b may cut a shot with several lines as one span, so a shot with several lines can cost a little more or less than shown.`);
   }
 
   // ── sound: text-to-speech ───────────────────────────────────────────
@@ -355,7 +410,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
       items.push({ unit: id, prompt: text, output: 'vo', count: 1 });
       meta.set(id, partOf(project, s));
     }
-    if (masterSet) notes.push('Sound: narration comes from audio.master, so text-to-speech costs 0. Music and sound effects are not priced.');
+    if (masterSet) notes.push('Sound: narration comes from audio.master, so text-to-speech costs 0.');
     else {
       const l = priceLine(config, TTS_PROVIDER);
       if (l) prices.push(`voice-over: ${l}`);
@@ -411,6 +466,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
       }
     }
   }
+  notes.push('Music and sound effects are not priced.');
   if (tHigh > cap) notes.push(`Clips and lip-sync are capped at ${cap} paid attempts per shot, so their high estimate counts at most ${cap} tries.`);
 
   return {
@@ -422,7 +478,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
     parts,
     total,
     budget,
-    prices,
+    prices: { lines: prices, source },
     treatments,
     warnings,
     notes,
@@ -440,10 +496,12 @@ export function formatEstimate(e: Estimate): string {
   const cur = e.currency;
   const out: string[] = [];
   out.push(`Whole-film estimate: ${e.project}  (${e.scope.part ? `part ${e.scope.part}` : 'whole film'}; amounts in ${cur}; nothing is spent by this)`);
+  for (const w of e.warnings.filter((x) => x.startsWith('Over budget'))) out.push(`!! ${w}`);
   const ov = [e.scope.heroes !== null ? `${e.scope.heroes} clips` : '', e.scope.lipsyncLines !== null ? `${e.scope.lipsyncLines} lip-sync lines` : ''].filter(Boolean);
   if (ov.length) out.push(`Counts set by you: ${ov.join(', ')}.`);
   out.push(`Expected tries per unit: low ${e.tries.low}, likely ${e.tries.likely}, high ${e.tries.high}.`);
   out.push(`Shots by treatment: ${Object.entries(e.treatments).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}.`);
+  out.push('Made = units already made (a file exists, approved or waiting for review); they are left out of the money.');
   out.push('');
   out.push(`${pad('Stage', 12)}${'To make'.padStart(8)}${'Made'.padStart(6)}${'Low'.padStart(10)}${'Likely'.padStart(10)}${'High'.padStart(10)}`);
   for (const st of ESTIMATE_STAGES) {
@@ -463,7 +521,7 @@ export function formatEstimate(e: Estimate): string {
     out.push(`Budget: cap ${money(b.cap)}, spent ${money(b.spent)}, failed or cancelled ${money(b.sunk)}, in flight ${money(b.reserved)}; ${money(b.remaining)} left.`);
     for (const k of ['low', 'likely', 'high'] as const) out.push(`  after the ${k} estimate: ${money(micro(b.remaining - e.total[k]))} ${b.remaining - e.total[k] < -1e-9 ? '(OVER the cap)' : 'left'}`);
   } else out.push('Budget: none set.');
-  if (e.prices.length) { out.push(''); out.push('Prices used:'); for (const p of e.prices) out.push(`  ${p}`); }
+  if (e.prices.lines.length) { out.push(''); out.push('Prices used:'); for (const p of e.prices.lines) out.push(`  ${p}`); }
   if (e.warnings.length) { out.push(''); out.push('Warnings:'); for (const w of e.warnings) out.push(`  - ${w}`); }
   if (e.notes.length) { out.push(''); out.push('Notes:'); for (const n of e.notes) out.push(`  - ${n}`); }
   return out.join('\n');

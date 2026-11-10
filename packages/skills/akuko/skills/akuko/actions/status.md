@@ -42,8 +42,9 @@ Detect the host, read the project with `readState()` (on A: ArtifactData `get` `
    - **what is left if you approve** them.
 
    If `budget` is null, say no paid step can run until `/akuko setup` sets a cap.
-6. **Money still to spend** (only when the person asks "how much will it cost" or "what is left to spend"): run `../setup/estimate.ts` (see `./setup.md` §Whole-film estimate) and report its low / likely / high exactly, with its warnings. It is free and read-only.
-7. **Next step**: the first of: review the waiting units, decide the spend, run `/akuko review` for unfolded decisions, revise what was sent back, or the next stage's action.
+6. **Next step**: the first of: review the waiting units, decide the spend, run `/akuko review` for unfolded decisions, revise what was sent back, or the next stage's action.
+
+Only when the person asks "how much will it cost" or "what is left to spend": run `../setup/estimate.ts` (see `./setup.md` §Whole-film estimate) and report its low / likely / high exactly, with its warnings. It is free and read-only.
 
 ## Rules it inherits
 

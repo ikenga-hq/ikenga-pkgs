@@ -61,10 +61,10 @@ Setup may run before intake. When there is no `akuko.json`, `applySetup()` creat
 After the cap is set, or any time the person asks what the film will cost or whether the cap is enough, show the money still to spend:
 
 ```bash
-node --experimental-strip-types setup/estimate.ts --project <dir> [--heroes N] [--lipsync-lines N] [--tries low,likely,high] [--part P7] [--json]
+node --experimental-strip-types setup/estimate.ts --project <dir> [--heroes N] [--lipsync-lines N] [--tries low,likely,high] [--part P7] [--image-provider <id>] [--json]
 ```
 
-It makes no call and writes nothing. It prints the money per stage (bible, key frames, motion clips, lip-sync, sound), per part and for the whole film, as a low / likely / high range (default tries 1 / 1.5 / 3), against `budget.cap` and what is already spent, and warns when an estimate is over the cap. Work already made, and money already in the ledger, is left out. `--heroes N` and `--lipsync-lines N` replace the counts so the person can try "15 heroes, 26 lines". Say the numbers back exactly, and never choose the counts for the person. Details: `../lib/state.md` §Whole-film estimate (WP-30).
+It makes no call and writes nothing. It prints the money per stage (bible, key frames, motion clips, lip-sync, sound), per part and for the whole film, as a low / likely / high range (default tries 1 / 1.5 / 3), against `budget.cap` and what is already spent, and warns when an estimate is over the cap. Work already made, and money already in the ledger, is left out. `--heroes N` and `--lipsync-lines N` replace the counts so the person can try "15 heroes, 26 lines". The image provider is read from the ledger, else the assets; before anything paid has run, pass `--image-provider <id>` (the command refuses rather than guess a cheaper one), and say which provider you priced. Say the numbers back exactly, and never choose the counts for the person. Details: `../lib/state.md` §Whole-film estimate (WP-30).
 
 ## Finish
 
