@@ -11,6 +11,11 @@
  *   Slow push-in     scale 1.00 → 1.08, no drift
  *   Slow pull-back   scale 1.08 → 1.00, no drift
  *   Lateral drift    scale 1.06 → 1.06, x +40 px (left: −40 px)
+ *   Drift up / down  scale 1.06 → 1.06, y −30 / +30 px (the spare picture above and below is 32 px)
+ *
+ * Sign convention: it is the schema's (`StillMove`): negative x = the picture drifts left, negative y = up.
+ * "left", "right", "up", "down" in a note name the direction the picture drifts in the frame. A note
+ * written about the camera's own direction would be the opposite; the person reviews moves in the editor.
  *   Hold             no move
  *   anything else    no move, with a warning
  *
@@ -22,6 +27,7 @@ import type { Shot, StillMove } from '../schema/akuko-project.ts';
 export const PUSH: StillMove = { from_scale: 1, to_scale: 1.08, x: 0, y: 0, ease: 'ease-in-out' };
 export const PULL: StillMove = { from_scale: 1.08, to_scale: 1, x: 0, y: 0, ease: 'ease-in-out' };
 export const DRIFT_PX = 40;
+export const DRIFT_PY = 30;
 export const DRIFT_SCALE = 1.06;
 
 export interface ParsedMove {
@@ -39,9 +45,12 @@ export function parseMotionNote(note: string | undefined): ParsedMove {
   const head = (text.split(/[;,]/)[0] ?? '').toLowerCase();
   if (/\bwhip\b|\bsnap\b|\bcrash\b/.test(head)) return { kind: 'unknown', warning: `"${text}": fast moves are not made as still moves (house rule: slow moves only); no move recorded.` };
   if (/^\s*(static|hold|locked|still|no move)\b/.test(head)) return { kind: 'hold' };
-  if (/\b(push|dolly in|zoom in|move in|creep in)\b/.test(head)) return { kind: 'push-in', move: { ...PUSH } };
-  if (/\b(pull|dolly out|zoom out|move out|back out)\b/.test(head)) return { kind: 'pull-back', move: { ...PULL } };
+  if (/\b(pull|rack)[\s-]+focus\b|\bfocus[\s-]+(pull|shift)\b/.test(head)) return { kind: 'unknown', warning: `"${text}": a focus change is not a camera move; no move recorded.` };
+  if (/\b(push|pull|dolly|zoom|move|creep|back)[\s-]+(out|away)\b|\bpull[\s-]?back\b/.test(head)) return { kind: 'pull-back', move: { ...PULL } };
+  if (/\b(push|dolly|zoom|move|creep|pull)[\s-]*in\b|\bpush\b/.test(head)) return { kind: 'push-in', move: { ...PUSH } };
+  if (/\bpull\b/.test(head)) return { kind: 'pull-back', move: { ...PULL } };
   if (/\b(drift|lateral|truck|slide|pan)\b/.test(head)) {
+    if (/\b(up|down)\b/.test(head)) return { kind: 'drift', move: { from_scale: DRIFT_SCALE, to_scale: DRIFT_SCALE, x: 0, y: /\bup\b/.test(head) ? -DRIFT_PY : DRIFT_PY, ease: 'ease-in-out' } };
     const left = /\bleft\b/.test(head);
     return { kind: 'drift', move: { from_scale: DRIFT_SCALE, to_scale: DRIFT_SCALE, x: left ? -DRIFT_PX : DRIFT_PX, y: 0, ease: 'ease-in-out' } };
   }
@@ -62,13 +71,14 @@ export interface MoveRow {
 export function planMoves(shots: Shot[]): MoveRow[] {
   return shots.map((s) => {
     const parsed = parseMotionNote(s.motion_note);
+    const blank = (s.motion_note ?? '').trim() === '';
     return {
       shot: s.id,
       note: s.motion_note ?? '',
       kind: parsed.kind,
       move: parsed.move,
       has_move: s.move !== undefined,
-      ...(parsed.warning ? { warning: parsed.warning } : {}),
+      ...(parsed.warning ? { warning: parsed.warning } : blank ? { warning: 'a still-move shot with no motion note; no move recorded.' } : {}),
     };
   });
 }

@@ -29,7 +29,7 @@ import { jobRan } from '../keyframes/plan.ts';
 import { removedAt } from '../decisions/fold.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { motionPrompt } from './prompts.ts';
-import { wantsClip } from './treatment.ts';
+import { treatmentOf, wantsClip } from './treatment.ts';
 
 export const MOTION_STAGE = 'motion' as const;
 /** Tag every planned clip asset carries. */
@@ -115,6 +115,15 @@ const shotOf = (p: AkukoProject, a: Asset): Shot => {
   return s;
 };
 
+/**
+ * Clips that can be made now: live, and the shot is a video shot (`wantsClip`). A planned clip whose shot was
+ * moved to another treatment (or got a tier after the clip was planned) is kept in the project but is idle:
+ * it is never a candidate for a paid job and never holds the stage back (WP-27 review).
+ */
+export const activeClips = (p: AkukoProject): Asset[] => liveClips(p).filter((a) => wantsClip(shotOf(p, a)));
+/** A kept clip whose shot is not a video shot: idle. */
+export const isIdleClip = (p: AkukoProject, a: Asset): boolean => !wantsClip(shotOf(p, a));
+
 const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted');
 
 export function unitReadiness(p: AkukoProject, a: Asset): Readiness {
@@ -177,13 +186,17 @@ export interface StatusRow {
   waiting: string[];
   attempts: number;
   spent: number;
+  /** Set when the clip is kept but its shot is not a video shot: why it is idle. */
+  idle?: string;
 }
 
 export function motionStatus(p: AkukoProject): StatusRow[] {
   return liveClips(p).map((a) => {
     const r = unitReadiness(p, a);
     const t = paidAttempts(p, a.id);
-    return { shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, attempts: t.count, spent: t.spent };
+    const sh = shotOf(p, a);
+    const idle = wantsClip(sh) ? undefined : `kept, not a video shot (treatment ${treatmentOf(sh) ?? 'none'}); never made while the shot is not video`;
+    return { ...(idle ? { idle } : {}), shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, attempts: t.count, spent: t.spent };
   });
 }
 
@@ -272,14 +285,16 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   const config = o.config ?? loadProviderConfig();
   const max = o.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(max) || max < 1) throw new MotionError('--max-attempts must be a whole number of 1 or more.');
-  const all = liveClips(p);
-  const byId = new Map(all.map((a) => [a.id, a]));
+  const all = activeClips(p);
+  const byId = new Map(liveClips(p).map((a) => [a.id, a]));
 
   let candidates: Asset[];
   if (o.units) {
     candidates = o.units.map((id) => {
       const a = byId.get(id);
       if (!a) throw new MotionError(`"${id}" is not a planned clip; run plan first.`);
+      const sh = shotOf(p, a);
+      if (!wantsClip(sh)) throw new MotionError(`${sh.id}: the shot is \`${treatmentOf(sh) ?? 'none'}\`; treat it \`video\` first (only on the person's words), then plan. Nothing was priced.`);
       const r = unitReadiness(p, a);
       if (r.state !== 'ready') throw new MotionError(`${id} cannot be made now (${r.state}${r.waiting.length ? `; its key frame is not approved: ${r.waiting.join(', ')}` : ''}).`);
       return a;
@@ -288,7 +303,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     candidates = all.filter((a) => unitReadiness(p, a).state === 'ready' && (o.scene === undefined || shotOf(p, a).scene === o.scene));
   }
   if (candidates.length === 0) {
-    const stuck = motionStatus(p).filter((r) => r.state === 'blocked').map((r) => `${r.asset} (waiting for the approved key frame ${r.waiting.join(', ')})`);
+    const stuck = motionStatus(p).filter((r) => r.state === 'blocked' && !r.idle).map((r) => `${r.asset} (waiting for the approved key frame ${r.waiting.join(', ')})`);
     throw new MotionError(stuck.length ? `Nothing can be made yet: ${stuck.join('; ')}.` : 'Nothing is waiting to be made.');
   }
   if (new Set(candidates.map((a) => a.id)).size !== candidates.length) throw new MotionError('a unit was listed twice');
@@ -441,7 +456,7 @@ export function abandonUnits(current: AkukoProject, before: AkukoProject, ids: s
 export function repairFileless(project: AkukoProject, ts: string): { project: AkukoProject; repaired: string[] } {
   const p = structuredClone(project);
   const repaired: string[] = [];
-  for (const a of clipAssets(p)) {
+  for (const a of liveClips(p)) {
     if ((a.status === 'approved' || a.status === 'pending-review') && !hasFile(a)) {
       a.status = 'pending';
       a.by_stage = { ...(a.by_stage ?? {}), [MOTION_STAGE]: { status: 'pending' } };
@@ -457,7 +472,7 @@ export function repairFileless(project: AkukoProject, ts: string): { project: Ak
 export function refreshStageState(project: AkukoProject): AkukoProject {
   const rec = project.stages.motion;
   if (rec.state === 'locked') return project;
-  const units = liveClips(project);
+  const units = activeClips(project);
   if (units.length === 0) return project;
   if (rec.state === 'approved' && units.every(approvedWithFile)) return project;
   const todo = units.filter((a) => a.status === 'pending' || a.status === 'draft' || a.status === 'needs-rework');

@@ -404,9 +404,11 @@ It prints one line per breach with its shot id (`bible:<id>` for an entry, `line
 
 - **Default table** (`DEFAULT_TREATMENT`, `treatmentOf`): a shot's own `treatment`, else by `tier` (A `still-move`, B `still-move`, C `still`), else none (today's behaviour). Paid treatments (`video`, `lipsync`) are opt-in: only `treat`, on the person's words, sets them. `isHeroCandidate` (tier A) and `isLipsyncCandidate` (tier A with a spoken line) only flag.
 - **Planning.** `planMotion` makes `<shot>_clip` only for `wantsClip` shots (`video`, or no tier and no treatment). Status, jobs and stage state read `liveClips`, which leaves out clips of removed shots (`decisions/fold.ts#removedAt`); keyframes plan, status and readiness skip removed shots the same way.
-- **`treat`** writes `shot.treatment` only: free, no ledger. Off `video`, a clip that has a file, a status past `pending`/`draft`, or any ledger entry is kept and warned about; an empty plan is dropped.
-- **`moves`** parses `motion_note` (first clause) into `shot.move`; `--apply` writes only where `move` is absent. Scales stay at or above 1 so a drift never shows the frame edge.
-- **Negatives.** Key-frame and clip job items send `negative: shot.negative` when set, so `require … applies_to: negative` is checked against the shot's own negative.
+- **Imported shots with no tier** (`source.kind === 'sheet'`, no usable `tier`, no `treatment`) are `still` (`treatmentOf`, `isUntieredImport`): never a paid clip by accident. Only hand-made projects keep "no tier = a clip per shot". `plan` warns and lists them.
+- **Idle clips.** A planned clip whose shot is not a video shot (`activeClips` / `isIdleClip`) is kept but never a candidate (default, `--scene`, or explicit `--units`, which is refused), and never holds the stage back; `status` marks it idle.
+- **`treat`** writes `shot.treatment` only: free, no ledger. **Nothing is ever deleted**: off `video`, the shot's planned clip is kept in any state (file, ledger entry, pending spend, comment) and marked idle; back to `video`, `plan` reuses it.
+- **`moves`** parses `motion_note` (first clause) into `shot.move`; `--apply` writes only where `move` is absent. Scales stay at or above 1 so a drift never shows the frame edge. Sign: the schema's, negative x = the picture drifts left, negative y = up. A focus pull is not a move; a blank note on a `still-move` shot warns.
+- **Negatives.** Key-frame and clip job items send `negative: shot.negative` when set, so `require … applies_to: negative` is checked against the shot's own negative. No provider has a native `negative_prompt` field: the negative reaches the model as an "Avoid: …" line in the prompt text.
 
 ## Open questions
 

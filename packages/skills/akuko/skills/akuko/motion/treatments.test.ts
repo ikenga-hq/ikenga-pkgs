@@ -86,7 +86,7 @@ describe('planMotion by treatment', () => {
       a.file = { uri: `mem://${a.id}.mp4`, mime: 'video/mp4', hash: `h-${a.id}` };
     }
     p = refreshStageState(p);
-    assert.notEqual(p.stages.motion.state, 'in-progress', 'nothing is waiting: the still shots have no unit to wait on');
+    assert.equal(p.stages.motion.state, 'in-review', 'every clip that can exist is approved: the still shots have no unit to wait on');
     assert.equal(motionStatus(p).length, 5);
   });
 
@@ -202,25 +202,6 @@ describe('motion cli: treat and moves', () => {
     assert.equal(p.ledger.length, 0, 'nothing paid');
     assert.match((await run(['treat', '--project', dir, '--shot', 'sc1_sh4', '--as', 'video'], T)).out, /Already "video"/);
     assert.ok((await run(['plan', '--project', dir], T)).out.includes('sc1_sh4_clip'), 'plan now makes their clips');
-  });
-
-  it('moving a shot off video drops an empty plan but keeps a made or paid clip, with a warning', async () => {
-    const p = planMotion(tiered(), NOW).project;
-    // sc2_sh3 has an approved clip; sc2_sh4 has only a paid ledger entry; sc3_sh2 is an empty plan
-    const done = p.assets.find((a) => a.id === 'sc2_sh3_clip')!;
-    done.status = 'approved';
-    done.file = { uri: 'mem://c.mp4', mime: 'video/mp4', hash: 'h' };
-    p.ledger.push({ id: 'l1', ts: NOW, unit: 'sc2_sh4_clip', job: 'j', provider: 'fal-video', status: 'done', estimate: 0.35, actual: 0.35 } as never);
-    const { dir, host } = await folder(AkukoProjectSchema.parse(p));
-    const r = await run(['treat', '--project', dir, '--shot', 'sc2_sh3,sc2_sh4,sc3_sh2', '--as', 'still-move'], T);
-    assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /sc2_sh3: its clip sc2_sh3_clip \(approved, has a file\) is kept/);
-    assert.match(r.out, /sc2_sh4: its clip sc2_sh4_clip/);
-    assert.match(r.out, /Dropped the empty planned clip sc3_sh2_clip/);
-    const after = await host.readState();
-    assert.ok(after.assets.some((a) => a.id === 'sc2_sh3_clip' && a.status === 'approved'));
-    assert.ok(after.assets.some((a) => a.id === 'sc2_sh4_clip'));
-    assert.ok(!after.assets.some((a) => a.id === 'sc3_sh2_clip'));
   });
 
   it('lipsync on a shot with no spoken line warns', async () => {

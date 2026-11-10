@@ -46,7 +46,7 @@ import { ShotTreatmentSchema } from '../schema/akuko-project.ts';
 import { removedAt } from '../decisions/fold.ts';
 import { applyMoves, planMoves } from './moves.ts';
 import { treatShots } from './treat.ts';
-import { wantsMove } from './treatment.ts';
+import { candidateFlags, isUntieredImport, wantsClip, wantsMove } from './treatment.ts';
 import { collectClips, finalizeMotion, generateClips, ingestClip, type StepResult } from './run.ts';
 
 export interface CliResult { code: number; out: string }
@@ -106,20 +106,27 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
 
   try {
     if (cmd === 'status') {
-      const rows = motionStatus(await host.readState());
-      if (rows.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
+      const proj = await host.readState();
+      const rows = motionStatus(proj);
+      const flags = candidateFlags(proj, (x) => removedAt(proj, x) === undefined);
+      if (rows.length === 0) return { code: 0, out: ['Nothing planned yet. Run plan.', ...flags].join(NL) };
       return {
         code: 0,
-        out: rows.map((r) => `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for the approved key frame ${r.waiting.join(', ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`).join(NL),
+        out: [...rows.map((r) => r.idle ? `${r.asset}: ${r.status} (${r.idle})` : `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for the approved key frame ${r.waiting.join(', ')}` : ''}${r.attempts ? `; ${r.attempts} paid attempt${r.attempts === 1 ? '' : 's'}, ${Number(r.spent.toFixed(4))} spent` : ''})`), ...flags].join(NL),
       };
     }
     if (cmd === 'plan') {
       const before = await host.readState();
       const r = planMotion(before, clock());
       if (r.created.length > 0) await host.writeState(r.project);
-      const capped = motionStatus(r.project).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved');
+      const capped = motionStatus(r.project).filter((x) => x.attempts >= DEFAULT_MAX_ATTEMPTS && x.state !== 'approved' && !x.idle);
+      const live = r.project.shots.filter((x) => removedAt(r.project, x) === undefined);
+      const untiered = live.filter(isUntieredImport).map((x) => x.id);
+      const none = !live.some(wantsClip);
       const out = [
-        r.created.length ? `Planned ${r.created.length} clip${r.created.length === 1 ? '' : 's'}: ${r.created.join(', ')}.` : 'Everything is already planned.',
+        r.created.length ? `Planned ${r.created.length} clip${r.created.length === 1 ? '' : 's'}: ${r.created.join(', ')}.` : none ? 'No shot is a video shot; nothing to plan. Only the person makes a shot video: treat --shot <id> --as video.' : 'Everything is already planned.',
+        ...(untiered.length ? [`WARNING: ${untiered.length} imported shot${untiered.length === 1 ? ' has' : 's have'} no tier and ${untiered.length === 1 ? 'is' : 'are'} treated as still (never a paid clip): ${untiered.join(', ')}.`] : []),
+        ...candidateFlags(r.project, (x) => removedAt(r.project, x) === undefined),
         ...capped.map((x) => `${x.asset} is at the retry limit (${x.attempts} paid attempts, ${Number(x.spent.toFixed(4))} spent); step will refuse it until the person decides.`),
       ];
       return { code: 0, out: out.join(NL) };
@@ -139,7 +146,6 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const out = [
         r.changed.length ? `Set ${r.changed.join(', ')} to "${as.data}".` : 'Nothing changed.',
         ...(r.unchanged.length ? [`Already "${as.data}": ${r.unchanged.join(', ')}.`] : []),
-        ...(r.dropped.length ? [`Dropped the empty planned clip${r.dropped.length === 1 ? '' : 's'} ${r.dropped.join(', ')} (never started, never paid).`] : []),
         ...r.warnings,
         ...(as.data === 'video' ? ['A video shot gets a paid clip: run plan, then step (each shows its spend line first).'] : []),
       ];
