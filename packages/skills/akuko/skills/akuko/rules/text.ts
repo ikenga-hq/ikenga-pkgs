@@ -42,8 +42,11 @@ export function bannedMatches(text: string, term: string, except: string[] = [])
 
 /** A short window of `text` around a match, for messages: `…an Acme sign by…`. */
 export function snippet(text: string, s: Span, pad = 24): string {
-  const from = Math.max(0, s.start - pad);
-  const to = Math.min(text.length, s.end + pad);
+  let from = Math.max(0, s.start - pad);
+  let to = Math.min(text.length, s.end + pad);
+  // Don't cut a word in half at either end.
+  while (from > 0 && from < s.start && !/\s/.test(text[from - 1]!)) from++;
+  while (to < text.length && to > s.end && !/\s/.test(text[to]!)) to--;
   const flat = (x: string): string => x.replace(/\s+/g, ' ');
   return `${from > 0 ? '…' : ''}${flat(text.slice(from, to))}${to < text.length ? '…' : ''}`;
 }
