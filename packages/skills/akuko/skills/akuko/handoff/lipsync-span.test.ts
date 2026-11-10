@@ -149,6 +149,18 @@ describe('lip-sync at its span (master-clock handoff)', () => {
     assert.ok(plan.warnings.some((w) => /S01-010_lipsync: no film span is recorded on it and the shot has no spoken line/.test(w)));
   });
 
+  it('a span shorter than one frame is placed on the whole slot and says so (not "outside the shot")', async () => {
+    const { project, dir } = await build();
+    project.assets.find((a) => a.id === 'S01-010_lipsync')!.film = { in_s: 2.0, out_s: 2.01 };
+    const plan = await planFromFolder({ project, projectDir: dir });
+    assert.deepEqual(shotEvents(plan, 'S01-010'), [['clip', 'lipsync', 36, 60]]);
+    assert.ok(plan.warnings.some((w) => /S01-010_lipsync: its span \(2 to 2\.01 s\) is shorter than one frame at 24 fps, so it was placed on the whole slot/.test(w)), plan.warnings.join('\n'));
+    assert.ok(!plan.warnings.some((w) => /falls outside/.test(w)));
+    project.assets.find((a) => a.id === 'S01-010_lipsync')!.film = { in_s: 5, out_s: 6 };
+    const out = await planFromFolder({ project, projectDir: dir });
+    assert.ok(out.warnings.some((w) => /S01-010_lipsync: its span \(5 to 6 s\) falls outside the shot's film time/.test(w)));
+  });
+
   it('the recorded span wins over today\'s lines (the lines moved after the lip-sync was made)', async () => {
     const { project, dir } = await build({ lines: true });
     const plan = await planFromFolder({ project, projectDir: dir });

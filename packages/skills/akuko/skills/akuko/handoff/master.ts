@@ -215,7 +215,10 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
         lipIn = Math.min(Math.max(frameAt(span.in_s), inF), outF);
         lipOut = Math.min(Math.max(frameAt(span.out_s), lipIn), outF);
         if (lipOut - lipIn < 1) {
-          warnings.push(`${lip.id}: its span (${num(span.in_s)} to ${num(span.out_s)} s) falls outside the shot's film time (${num(shot.film.in_s)} to ${num(shot.film.out_s)} s), so it was placed at the shot's start. Check it in Resolve.`);
+          const outside = span.out_s <= shot.film.in_s || span.in_s >= shot.film.out_s;
+          warnings.push(outside
+            ? `${lip.id}: its span (${num(span.in_s)} to ${num(span.out_s)} s) falls outside the shot's film time (${num(shot.film.in_s)} to ${num(shot.film.out_s)} s), so it was placed on the whole slot from the shot's start. Check it in Resolve.`
+            : `${lip.id}: its span (${num(span.in_s)} to ${num(span.out_s)} s) is shorter than one frame at ${fps.label} fps, so it was placed on the whole slot from the shot's start. Check it in Resolve.`);
           lipIn = inF;
           lipOut = outF;
         }

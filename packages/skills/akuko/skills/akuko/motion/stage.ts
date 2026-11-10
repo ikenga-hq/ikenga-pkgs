@@ -179,7 +179,8 @@ const keyframeOf = (p: AkukoProject, shotId: string): Asset | undefined => p.ass
  *   - every stage before the bible (intake, breakdown, sketch) is approved project-wide;
  *   - every live shot in the part has an approved key frame (with its file);
  *   - every bible entry those shots name (`refs[]` and `lighting`) is approved, and so is every live bible image
- *     it owns.
+ *     it owns; a shot whose `refs[]` names no style is made against every style (the film's look, as key frames
+ *     are: `keyframes/plan.ts#entriesOf`), so then every live style entry and its images must be approved too.
  */
 export function partOpenness(p: AkukoProject, part: string): PartOpenness {
   const shots = p.shots
@@ -195,7 +196,14 @@ export function partOpenness(p: AkukoProject, part: string): PartOpenness {
   const keyframes = shots.filter((s) => { const k = keyframeOf(p, s.id); return k === undefined || !approvedWithFile(k); }).map((s) => s.id);
   const entries = new Map([...p.bible.characters, ...p.bible.locations, ...p.bible.styles].map((e) => [e.id, e]));
   const named: string[] = [];
-  for (const s of shots) for (const id of [...(s.refs ?? []), ...(s.lighting ? [s.lighting] : [])]) if (entries.has(id) && !named.includes(id)) named.push(id);
+  const styleIds = p.bible.styles.filter((e) => removedAt(p, e) === undefined).map((e) => e.id);
+  for (const s of shots) {
+    const ids = [...(s.refs ?? []), ...(s.lighting ? [s.lighting] : [])];
+    // A shot whose `refs[]` names no style is generated against the film's look: every style entry. This mirrors
+    // `keyframes/plan.ts#entriesOf` (not imported: keyframes/plan imports decisions/fold, which imports this module).
+    if (!(s.refs ?? []).some((id) => p.bible.styles.some((e) => e.id === id))) ids.push(...styleIds);
+    for (const id of ids) if (entries.has(id) && !named.includes(id)) named.push(id);
+  }
   const bible = named.filter((id) => {
     const e = entries.get(id)!;
     if (removedAt(p, e) !== undefined) return false;

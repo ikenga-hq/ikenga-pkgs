@@ -42,13 +42,15 @@ Gating rule: a stage is `locked` until every earlier stage is `approved`. An act
 
 **One exception, part by part (WP-32).** On a film whose shots carry a `part`, the motion stage (clips and lip-sync) may work on **one part** before the whole film's key frames are approved: `motion/cli.ts` and `lipsync/cli.ts` `plan | status | step --part P7`. A part is open when all of these hold, worked out from the approvals already recorded (`motion/stage.ts#partOpenness`):
 
-- the stages before the bible (intake, breakdown, sketch) are `approved` project-wide;
+- the stages before the bible (intake, breakdown, **sketch**) are `approved` project-wide. A part needs the sketch stage approved exactly as whole-project opening does; there is no path that skips sketch;
 - every live (not removed) shot in the part has an `approved` key frame with its file;
-- every bible entry those shots name (`refs[]`, `lighting`) is `approved`, and so is every live bible image it owns.
+- every bible entry those shots name (`refs[]`, `lighting`) is `approved`, and so is every live bible image it owns. A shot whose `refs[]` names no style is made against the film's look, every style entry (`keyframes/plan.ts#entriesOf`), so then every live style entry and its images must be approved too.
 
 Nothing stores that a part is open, and nothing is approved for the person: only their decisions open it. A part that is not open is refused with what is missing, as counts plus the first ids ("P7 is not open for motion: 3 key frames not approved (S07-030, S07-040, …), 1 bible entry not approved (LOC-x)"). A scoped run plans, cuts, prices and makes only that part's live shots; paid jobs still go through the rules guard and the spend gate. Without `--part`, nothing changes.
 
 **`stages.motion.state` while a part is piloted.** The global state machine is unchanged: the stage stays **`locked`** until the whole film's key frames are approved. Working a part never unlocks it, and folding never approves a `locked` stage, even when every unit at it (the part's) is approved (`decisions/fold.ts#rollStage`). When the film's key frames are approved and the stage unlocks, folding rolls it straight away: units already made and approved count, and a shot that asks for a clip or lip-sync not planned yet keeps it open, so a part done early never approves the stage for the rest. **Where the part's progress shows:** on its units (status, the board), in `motion/cli.ts status --part P7` and `lipsync/cli.ts status --part P7` (their first line says the part is open and the stage locked), and in `motion/cli.ts parts`, one line per part, which the `status` action runs while motion is locked.
+
+**Known dead end (a follow-up).** A motion stage with nothing to count (every shot a still, or every motion unit idle) is set `in-review` by its roll-up, but folding approves a stage only through approved units, and the decision format has no stage-level approval. Such a stage stays `in-review`. Nothing downstream waits on it (sound opens at key frames, export does not wait); a person's stage-level approval is a follow-up.
 
 | # | Stage | Action | Entry filled by |
 |---|---|---|---|
@@ -289,7 +291,7 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
   - **Handoff:** cards are treated like everything else: approved cards are placed at their film time, and the rest are listed as left out with their status.
   - Stored under `cut/cards/` when akuko stores one (`hosts/shared.ts`). Writes: WP-25. Read by: WP-23b, WP-29.
   - *Why a kind, not an origin flag on another kind:* code finds assets by kind or by stage + tag (key frames and clips by stage and tag, references sent to providers by `kind: "reference"`, music and SFX placement by kind). A flag on an existing kind would put finished material in those paths (a "finished" reference would be uploaded to a provider; a "finished" key frame used as a shot's still). A new kind is skipped by every existing path, and every exhaustive map over kinds has to place it explicitly (the compiler checks it).
-- **`lipsync`**: the `<shot>_lipsync` unit (stage `motion`, owner = the shot), the same shape as `<shot>_clip`. Writes: WP-28b. Read by: WP-23b (on the shot's slot), WP-29, WP-30.
+- **`lipsync`**: the `<shot>_lipsync` unit (stage `motion`, owner = the shot), the same shape as `<shot>_clip`. Writes: WP-28b. Read by: WP-23b (at its recorded `film` span inside the shot's slot, the key frame held around it: WP-32), WP-29, WP-30.
 - `film {in_s, out_s}` may be set on any asset; a card needs it. `source` may be set on any asset (a card's sheet row).
 
 **`rules`** (top level; absent = no rules, read through `rulesOf(p)`, which fills the empty defaults). Declarative data only; WP-26 checks every paid job against it **before** the spend gate and refuses a breach. Writes: the person (WP-25 may seed it from the house rules). Read by: WP-26 (guard, `rules/cli.ts check`, doctor); WP-28b (audio uploads).

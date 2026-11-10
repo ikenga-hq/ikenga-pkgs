@@ -104,6 +104,23 @@ describe('part-scoped opening (--part P7)', () => {
     assert.throws(() => assertOpen(pilot(), { part: 'P9' }), /No live shot is in part "P9". Parts in this project: P7, P8/);
   });
 
+  it('a shot naming no style needs the film\'s look approved: a pending implicit style refuses the part, approving it opens it', () => {
+    // Key frames of a shot that names no style are made against every style entry (keyframes/plan.ts#entriesOf).
+    const p = pilot();
+    p.bible.styles.push({ id: 'STY-LOOK', stage: 'breakdown', status: 'approved', name: 'The look (invented)', comments: [], notes: [], refs: [] } as never);
+    p.assets.push({ id: 'STY-LOOK_lookbook', kind: 'lookbook', stage: 'bible', status: 'pending-review', owner: 'STY-LOOK', tags: [], comments: [], file: file('STY-LOOK_lookbook') } as never);
+    const q = AkukoProjectSchema.parse(p);
+    assert.throws(() => assertOpen(q, { part: 'P7' }), /P7 is not open for motion: 1 bible entry not approved \(STY-LOOK\)/);
+    q.assets.find((a) => a.id === 'STY-LOOK_lookbook')!.status = 'approved';
+    assert.doesNotThrow(() => assertOpen(q, { part: 'P7' }));
+    // A shot that names a style itself needs only that one: another style waiting does not hold it.
+    const r = structuredClone(q);
+    r.bible.styles.push({ id: 'STY-OTHER', stage: 'breakdown', status: 'pending-review', name: 'Another look (invented)', comments: [], notes: [], refs: [] } as never);
+    assert.match(partRefusal(partOpenness(r, 'P7')), /1 bible entry not approved \(STY-OTHER\)/);
+    for (const s of r.shots) s.refs = [...s.refs, 'STY-LOOK'];
+    assert.equal(partOpenness(r, 'P7').open, true);
+  });
+
   it('a key frame without its file does not count as approved', () => {
     const p = pilot();
     delete p.assets.find((a) => a.id === 'S07-040_keyframe')!.file;
