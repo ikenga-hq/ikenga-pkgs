@@ -34,7 +34,7 @@ export interface ShotColumns {
   filmOut: Name;
   part: Name;
   lighting: Name;
-  /** The dialogue lines the shot covers, e.g. `Q55 Jared (spoken); Q56 Raven (thought)`. */
+  /** The dialogue lines the shot covers, e.g. `Q1 Ada (spoken); Q2 Ada (thought)`. */
   lines: Name;
   refMoment: Name;
 }
