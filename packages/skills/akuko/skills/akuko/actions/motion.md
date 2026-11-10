@@ -31,6 +31,23 @@ requires_capabilities:
 
 HTML scenes (titles, graphics) are not part of this action yet. This action makes image-to-video clips only.
 
+## Treatments: which shots get a paid clip
+
+A shot's `treatment` decides its motion (`../motion/treatment.ts`, defined once). **Paid treatments are opt-in.** A shot with no `treatment` gets the default for its tier:
+
+| Tier | Default treatment |
+|---|---|
+| A | `still-move` (a hero candidate: flagged, never made paid by default) |
+| B | `still-move` |
+| C | `still` |
+| none | a hand-made project: today's behaviour, a clip for every shot. A shot **imported from a sheet** with no (or an unreadable) tier is `still`: never a paid clip by accident (`plan` lists them) |
+
+`plan` makes a `<shot>_clip` unit only for `video` shots, and for shots with no tier and no treatment. `still`, `still-move` and `lipsync` shots get none, and the stage never waits on them. Shots removed from the shot list are skipped.
+
+**`treat` is the person's choice.** `node --experimental-strip-types ../motion/cli.ts treat --project <folder> --shot <id>[,<id>...] --as still|still-move|video|lipsync` records it. It is free, but **run it only on the person's own words** ("make S02-030 a video shot"): never promote a shot to `video` or `lipsync` because it is tier A, looks important, or has a spoken line. You may *say* a tier-A shot is a hero candidate or has a spoken line (a lip-sync candidate), and ask. **Nothing is ever deleted.** Moving a shot away from `video` keeps its planned clip whatever state it is in (a file, a paid attempt, a pending spend, a comment) and marks it idle ("planned clip kept, idle while the shot is `<as>`"). An idle clip is never a candidate for a paid job (an explicit `--units` on it is refused: "treat it `video` first"), never holds the stage back, and `status` shows it as "kept, not a video shot". If the shot goes back to `video`, `plan` reuses it. `plan` and `status` also print the candidate flags ("S02-030: tier A, spoken line, a lip-sync candidate; the person decides"); say them to the person and ask, never act on them. When no shot is a video shot, `plan` says so and plans nothing.
+
+**Moves are free.** For `still-move` shots, `moves --project <folder>` lists the camera move parsed from each `motion_note` ("Slow push-in" 1.00 to 1.08, "Slow pull-back" 1.08 to 1.00, "Lateral drift" 40 px at scale 1.06, "Hold" none; anything else is no move, with a warning). `moves --apply` writes them, only onto shots with no `move` yet, and never replaces one. No approval is needed: the person reviews the moves in the editor. Left, right, up and down in a note are the direction the picture drifts in the frame (the schema's sign: negative x is left, negative y is up); a focus pull is not a move; a `still-move` shot with no note gets a warning and no move. Tell the person about every warning.
+
 ## The technique
 
 One clip per shot, made one shot at a time. The start frame is the shot's **approved key frame**; the prompt is the shot's own written action, camera and camera move. Nothing is invented: a shot with no written action gets only small natural movement. A shot with no duration is refused (set one on the shot).
@@ -77,7 +94,7 @@ Folding turns it into `needs-rework` with their words. Run `step --units <clip i
 
 ## Rules check
 
-When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every job is checked against them before the spend gate: banned terms (not in the negative prompt) and required text in the clip prompt (it carries the shot's own `prompt`), and for a paid job the start frame by its content hash. An approved key frame that akuko generated passes; a key frame brought back by hand is an outside file and needs its sha256 in `rules.uploads.allow`. A `require` rule on the negative prompt refuses every clip for now, because this stage doesn't send `shot.negative` yet. A breach prints `Refused (rules-breach): …`, naming each rule and the offending text or file; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent, and a refused job is not a paid attempt. **Tell the person what it says and stop.** Don't reword a prompt, swap the start frame or edit `rules` to get past it: the person decides. Before a paid run, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, and show the person anything it lists.
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every job is checked against them before the spend gate: banned terms (not in the negative prompt) and required text in the clip prompt (it carries the shot's own `prompt`), and for a paid job the start frame by its content hash. An approved key frame that akuko generated passes; a key frame brought back by hand is an outside file and needs its sha256 in `rules.uploads.allow`. This stage sends the shot's `negative` (when it has one), so a `require` rule on the negative prompt is checked against it. A breach prints `Refused (rules-breach): …`, naming each rule and the offending text or file; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent, and a refused job is not a paid attempt. **Tell the person what it says and stop.** Don't reword a prompt, swap the start frame or edit `rules` to get past it: the person decides. Before a paid run, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, and show the person anything it lists.
 
 ## Limits to know
 
