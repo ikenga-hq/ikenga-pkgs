@@ -27,7 +27,7 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
   L.push('## How this timeline is laid out', '');
   L.push(
     `- **Audio track A1 is the master**, \`${m.media.dest.split('/').pop()}\`, whole, from its first sample at ${m.startTc}. It is never cut or moved: every picture is placed against it. ${m.linked ? `It is **referenced in place** (\`--link-media\`), not copied: it stays at \`${m.media.uri}\`, so keep it where it is, or relink it.` : 'It is **copied** into `audio/` (use `--link-media` to reference it in place instead, so a large file is not duplicated).'}`,
-    `- **Picture (V1)**: each shot sits at \`film.in_s\` and lasts until \`film.out_s\`, in whole frames (seconds x ${fps.nominal}, rounded to the nearest frame at both ends, so shots that touch in film time touch here). **Gaps are kept as gaps**: a pause between scenes is empty video, not closed up.`,
+    `- **Picture (V1)**: each shot sits at \`film.in_s\` and lasts until \`film.out_s\`, in whole frames (seconds x the real frame rate, ${fps.label} fps, rounded to the nearest frame at both ends, so shots that touch in film time touch here). **Gaps are kept as gaps**: a pause between scenes is empty video, not closed up.`,
     "- Picture for a shot, in order: its approved **lip-sync clip**, else its approved **clip**, else its approved **key frame** as a still held for the whole slot, else a **gap** (listed in LEFT-OUT.md).",
     "- A clip **longer** than its slot is cut at the slot's end. A clip **shorter** is followed by a **gap** for the rest of the slot (nothing is stretched or frozen) and named in the notes: decide in Resolve whether to hold its last frame.",
     '- **Picture files never bring their own sound.** The master is the only sound; any clip that carries audio is muted in the timeline (and listed below).',
@@ -59,7 +59,7 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
   L.push('## Timeline', '', '| Record in | Frames | Length | What |', '|---|---|---|---|');
   for (const v of plan.video) {
     const what = v.kind === 'gap' ? `gap${v.shot ? ` (${v.shot})` : ''}: ${v.note ?? ''}` : `${v.shot}: ${v.note ?? v.kind}`;
-    L.push(`| ${tc(v.recIn)} | ${v.frames} | ${(v.frames / fps.nominal).toFixed(3)} s | ${what} |`);
+    L.push(`| ${tc(v.recIn)} | ${v.frames} | ${(v.frames * fps.num / fps.den).toFixed(3)} s | ${what} |`);
   }
   L.push('', `The timeline is ${frames(plan.totalFrames)} long: the master's length (${m.durationS} s) rounded **up** to a whole frame, so none of its sound is cut. ${nShots} shot${nShots === 1 ? ' has' : 's have'} a film time.`, '');
   const gaps = plan.video.filter((v) => v.kind === 'gap');
@@ -81,7 +81,7 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
     for (const mv of plan.moves) L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')} |`);
     L.push('');
   }
-  const silent = plan.media.filter((x) => x.hasAudio && (x.role === 'clip' || x.role === 'card'));
+  const silent = plan.media.filter((x) => x.hasAudio && x.role === 'clip');
   if (silent.length > 0) {
     L.push('## Picture files that carry sound (muted)', '', 'These files have their own audio track. It is muted in the timeline: the master is the only sound.', '');
     for (const x of silent) L.push(`- ${x.dest}`);

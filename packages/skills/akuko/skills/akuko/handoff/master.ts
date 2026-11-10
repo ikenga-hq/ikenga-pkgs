@@ -26,8 +26,9 @@ import { shotUnitId } from '../schema/akuko-project.ts';
 import { isKeyframe } from '../keyframes/plan.ts';
 import { isClip } from '../motion/plan.ts';
 import { isVo } from '../sound/plan.ts';
-import { ext, pad, safe, started, usable, whyNot, ASPECT_SIZE, type AudioEvent, type CardRow, type ExportPlan, type LeftOut, type MasterFile, type MediaFile, type MoveRow, type PlanInput, type ShotRow, type VideoEvent } from './plan.ts';
-import { HandoffError, framesAvailable, parseFps, parseTimecode, type Fps } from './timecode.ts';
+import { ASPECT_SIZE, ext, pad, safe, started, usable, whyNot } from './plan-shared.ts';
+import type { AudioEvent, CardRow, ExportPlan, LeftOut, MasterFile, MediaFile, MoveRow, PlanInput, ShotRow, VideoEvent } from './plan.ts';
+import { HandoffError, parseFps, parseTimecode, type Fps } from './timecode.ts';
 
 /** The timeline's frame rate for a project with a master: `project.fps`, else `--fps`; a clash is an error. */
 export function fpsForMasterProject(project: AkukoProject, flag: string | undefined): Fps {
@@ -66,10 +67,12 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
     throw new HandoffError(`The project says it is ${p.project.fps} fps (project.fps) but the timeline was planned at ${fps.label}.`);
   }
   const startFrames = parseStartTc(master.start_tc, fps);
-  const nom = fps.nominal;
+  // Film times are REAL seconds on the master, so frames are counted at the real rate (24000/1001 at 23.976), not the
+  // nominal 24: counting nominal frames would make a 33-minute film about 2 s too long at 23.976 (29.97 likewise).
+  const rate = fps.den / fps.num;
   const exists = (uri: string): boolean => input.timelineOnly === true || input.exists(uri);
-  const frameAt = (s: number): number => Math.floor(s * nom + 0.5 + 1e-9);
-  const total = Math.max(1, Math.ceil(master.duration_s * nom - 1e-6));
+  const frameAt = (s: number): number => Math.floor(s * rate + 0.5 + 1e-9);
+  const total = Math.max(1, Math.ceil(master.duration_s * rate - 1e-6));
   const [dw, dh] = ASPECT_SIZE[p.project.aspect_ratio] ?? [1920, 1080];
   const width = p.project.resolution?.w ?? dw;
   const height = p.project.resolution?.h ?? dh;
@@ -98,7 +101,7 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
   if (!input.timelineOnly) {
     onDisk = (await input.resolveMaster?.(master.uri)) ?? { exists: false };
     if (!onDisk.exists) throw new HandoffError(`The master audio is missing: ${master.uri}. A master-clock export needs it (audio.master.uri is relative to the project folder, and may go up out of it).`);
-    if (onDisk.durationS !== undefined && Math.abs(onDisk.durationS - master.duration_s) * nom > 1) {
+    if (onDisk.durationS !== undefined && Math.abs(onDisk.durationS - master.duration_s) * rate > 1) {
       warnings.push(`The master file is ${onDisk.durationS.toFixed(3)} s long but audio.master.duration_s says ${master.duration_s} s. The timeline follows the project's number; if the file was replaced, update the project.`);
     }
     if (onDisk.sampleRate !== undefined && onDisk.sampleRate !== master.sample_rate) {
@@ -136,13 +139,13 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
 
   /** A picture file in a slot: cut if longer, a gap after it if shorter. Returns the frames the picture covers. */
   const placeMotion = (who: string, m: MediaFile, at: number, slot: number, base: Omit<VideoEvent, 'n' | 'recIn' | 'frames' | 'srcIn' | 'kind' | 'media'>): number => {
-    const avail = m.durationS !== undefined ? framesAvailable(m.durationS, fps) : undefined;
+    const avail = m.durationS !== undefined ? Math.max(0, Math.floor(m.durationS * rate + 1e-6)) : undefined;
     if (m.durationS === undefined && !input.timelineOnly) warnings.push(`${who}: the length of the file could not be read, so it was not checked against its slot (${slot} frames). If it is shorter, the end of the slot will be empty in Resolve.`);
     if (avail !== undefined && avail < slot) {
       const short = slot - avail;
       mk({ ...base, kind: 'clip', media: m, recIn: at, frames: avail, srcIn: 0, note: `${base.note ?? 'clip'} is ${short} frame${short === 1 ? '' : 's'} shorter than its slot; gap follows` });
       mk({ shot: base.shot, kind: 'gap', recIn: at + avail, frames: short, srcIn: 0, note: 'rest of the slot (the file ends early)' });
-      warnings.push(`${who}: the file is ${m.durationS!.toFixed(3)} s but its slot is ${(slot / nom).toFixed(3)} s (${slot} frames); the last ${short} frame${short === 1 ? '' : 's'} are a gap. Nothing was stretched or frozen.`);
+      warnings.push(`${who}: the file is ${m.durationS!.toFixed(3)} s but its slot is ${(slot / rate).toFixed(3)} s (${slot} frames); the last ${short} frame${short === 1 ? '' : 's'} are a gap. Nothing was stretched or frozen.`);
       return slot;
     }
     mk({ ...base, kind: 'clip', media: m, recIn: at, frames: slot, srcIn: 0, ...(avail !== undefined && avail > slot ? { note: `${base.note ?? 'clip'}; longer than its slot, cut at the slot's end (frame ${slot})` } : {}) });
@@ -212,8 +215,11 @@ export async function buildMasterPlan(input: PlanInput): Promise<ExportPlan> {
       leftOut.push({ unit: c.id, what: 'card', why: 'its film time is shorter than one frame' });
       continue;
     }
-    const m = await addMedia({ role: 'card', asset: c.id, uri: c.file.uri, dest: `media/card_${safe(c.id)}${ext(c.file.uri)}`, ...(c.file.mime ? { mime: c.file.mime } : {}) });
-    if (isStillFile(c)) {
+    // A card is picture like any other: a still card is declared and handled as a still, a video card (credits) as a clip.
+    // The event keeps a `card` marker. (`id` already starts with `card_`.)
+    const still = isStillFile(c);
+    const m = await addMedia({ role: still ? 'still' : 'clip', asset: c.id, uri: c.file.uri, dest: `media/${safe(c.id)}${ext(c.file.uri)}`, ...(c.file.mime ? { mime: c.file.mime } : {}) });
+    if (still) {
       mk({ shot: label, kind: 'still', media: m, recIn: inF, frames: slot, srcIn: 0, from: 'card', card: c.id, note: 'card (still), held for its slot' });
     } else {
       placeMotion(c.id, m, inF, slot, { shot: label, from: 'card', card: c.id, note: 'card (video)' });

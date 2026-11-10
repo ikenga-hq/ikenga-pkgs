@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AkukoProject } from '../schema/akuko-project.ts';
 import { writeFileAtomic } from '../hosts/local.ts';
 import { audioTracks, renderAudioEdl, renderVideoEdl } from './edl.ts';
@@ -86,6 +86,13 @@ export function localPath(projectDir: string, uri: string): string | undefined {
 
 /** Where `audio.master.uri` is: relative to the project folder (it may go up out of it) or absolute. */
 function masterPath(projectDir: string, uri: string): string | undefined {
+  if (/^file:/i.test(uri)) {
+    try {
+      return fileURLToPath(uri);
+    } catch {
+      return undefined;
+    }
+  }
   if (isAbsolute(uri)) return uri;
   if (/^[a-z][a-z0-9+.-]*:/i.test(uri)) return undefined;
   return resolve(projectDir, ...uri.split('/'));

@@ -24,13 +24,14 @@
 
 import type { AkukoProject, Asset, Shot, StillMove } from '../schema/akuko-project.ts';
 import { buildMasterPlan } from './master.ts';
+import { ASPECT_SIZE, ext, pad, safe, started, usable, whyNot } from './plan-shared.ts';
 import { isKeyframe } from '../keyframes/plan.ts';
 import { isClip } from '../motion/plan.ts';
 import { isVo } from '../sound/plan.ts';
 import type { Probe } from './probe.ts';
 import { HandoffError, START_FRAMES, framesAvailable, framesFor, type Fps } from './timecode.ts';
 
-export type MediaRole = 'clip' | 'still' | 'vo' | 'narration' | 'music' | 'sfx' | 'captions' | 'card' | 'master';
+export type MediaRole = 'clip' | 'still' | 'vo' | 'narration' | 'music' | 'sfx' | 'captions' | 'master';
 
 export interface MediaFile {
   /** Stable id inside the timeline files: `m1`, `m2` ... */
@@ -190,28 +191,6 @@ export interface PlanInput {
   resolveMaster?(uri: string): Promise<MasterFile>;
   /** `--link-media`: the master is referenced in place, not copied. */
   linkMaster?: boolean;
-}
-
-export const ASPECT_SIZE: Record<string, [number, number]> = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] };
-
-export const pad = (n: number, w: number): string => String(n).padStart(w, '0');
-export const safe = (s: string): string => s.replace(/[^A-Za-z0-9_-]/g, '_');
-export const ext = (uri: string): string => {
-  const base = uri.split('/').pop() ?? '';
-  const i = base.lastIndexOf('.');
-  return i > 0 ? base.slice(i).toLowerCase() : '';
-};
-
-/** Planned but never made (status pending, no file): nothing to say about it. */
-export const started = (a: Asset): boolean => a.status !== 'pending' || a.file !== undefined;
-
-export const usable = (a: Asset | undefined): a is Asset & { file: NonNullable<Asset['file']> } => a !== undefined && a.status === 'approved' && a.file !== undefined;
-
-export function whyNot(a: Asset, exists: (uri: string) => boolean): string {
-  if (a.status !== 'approved') return `status is ${a.status}, not approved`;
-  if (!a.file) return 'approved but has no file';
-  if (!exists(a.file.uri)) return `approved, but its file is missing (${a.file.uri})`;
-  return 'not usable';
 }
 
 /** `placement:film|scene:<id>|shot:<id>` from a music/SFX asset; undefined when it has none. */

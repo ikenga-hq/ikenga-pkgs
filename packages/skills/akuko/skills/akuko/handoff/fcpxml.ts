@@ -65,6 +65,10 @@ export interface FcpxmlOptions {
 /** FCPXML `interp` for the first and last keyframe of a move, from the move's `ease` (unverified in Resolve, see README). */
 export function easeInterps(ease: StillMove['ease']): [string, string] {
   switch (ease) {
+    // NOTE: this deviates from the literal wording in the schema docs ("ease-in -> ease in"). Here `ease-in` means the
+    // MOVE starts slowly and speeds up (GSAP `sine.in`), which in FCPXML is easing AWAY from the first keyframe, i.e.
+    // `easeOut` on keyframe 1 (FCP names an ease by the side of the keyframe it softens). Likewise `ease-out`, a slow
+    // finish, is `easeIn` on the last keyframe. Unverified in Resolve (README says so).
     case 'ease-in': return ['easeOut', 'linear']; // slow start: eases away from the first keyframe
     case 'ease-out': return ['linear', 'easeIn']; // slow finish: eases into the last keyframe
     case 'ease-in-out': return ['ease', 'ease'];
@@ -120,7 +124,9 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
   for (const e of plan.audio) used.set(e.media.id, Math.max(used.get(e.media.id) ?? 0, e.frames));
   const assets: MediaFile[] = plan.media.filter((m) => used.has(m.id));
   for (const m of assets) {
-    const dur = m.role === 'still' ? '0s' : m.durationS !== undefined ? seconds(m.durationS) : t(used.get(m.id)!);
+    // The master asset is declared as long as the audio clip on A1 (the master's length rounded up to a frame), so the
+    // clip never runs past its asset; the file itself is a few ms shorter at most.
+    const dur = m.role === 'still' ? '0s' : m.role === 'master' ? t(used.get(m.id)!) : m.durationS !== undefined ? seconds(m.durationS) : t(used.get(m.id)!);
     const a: string[] = [`id="${m.id}"`, `name="${esc(stem(m.dest))}"`, `src="${esc(m.href ?? o.fileUrl(m.dest))}"`, 'start="0s"', `duration="${dur}"`];
     if (m.role === 'clip' || m.role === 'still') {
       a.push('hasVideo="1"', 'format="r1"');
@@ -150,8 +156,10 @@ export function renderFcpxml(plan: ExportPlan, o: FcpxmlOptions): string {
     const name = v.media ? stem(v.media.dest) : `${v.shot} (gap)`;
     const common = `offset="${t(start + v.recIn)}" name="${esc(name)}" start="0s" duration="${t(v.frames)}"`;
     const kids = anchored.get(v) ?? [];
-    const open = v.kind === 'gap' ? `<gap ${common}` : v.kind === 'still' ? `<video ref="${v.media!.id}" ${common}` : `<asset-clip ref="${v.media!.id}" ${common} tcFormat="NDF"`;
+    const open = v.kind === 'gap' ? `<gap ${common}` : v.kind === 'still' ? `<video ref="${v.media!.id}" ${common}` : `<asset-clip ref="${v.media!.id}" ${common} tcFormat="NDF"${master ? ' srcEnable="video"' : ''}`;
     const close = v.kind === 'gap' ? '</gap>' : v.kind === 'still' ? '</video>' : '</asset-clip>';
+    // Master clock: picture only. `srcEnable="video"` (on every picture asset-clip, above) is the mute; the -96 dB
+    // volume is a backup for a file that is known to carry sound.
     const mute = master && v.kind === 'clip' && v.media?.hasAudio === true;
     const mv = v.kind === 'still' ? v.move : undefined;
     if (kids.length === 0 && !mute && !mv) push(6, `${open}/>`);

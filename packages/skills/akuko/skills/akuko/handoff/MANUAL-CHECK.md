@@ -67,7 +67,7 @@ Any "Fail" cell above. Send: the Resolve version and edition, the exact error te
 
 The checks above cover the end-to-end layout. A project with a locked master WAV (`audio.master`) is laid out differently: shots and cards at their film times, the WAV whole on A1. Check that too, with the same Resolve.
 
-**Make the export.** Run the `export` command on your project (a real one, or a small project with a short master) with `--fps` matching `project.fps`:
+**Make the export.** Run the `export` command on your project (a real one, or a small project with a short master). The frame rate is the project's `project.fps`; `--fps` is optional here, and if you pass it it must match:
 
 ```
 node --experimental-strip-types handoff/cli.ts export --project <your project folder> [--link-media]
