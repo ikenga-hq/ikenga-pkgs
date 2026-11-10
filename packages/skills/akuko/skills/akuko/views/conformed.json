@@ -16,8 +16,8 @@
     },
     {
       "view": "default-board@0.3",
-      "sha256": "6f1124175d16fe6242fc402b5be9ce6c8ad8ed3b19ff920a7929f70516bdb753",
-      "checked_at": "2026-11-10T14:31:47Z",
+      "sha256": "718cf7a7575a06988933764c41b5436dfc68dc68ddb9b5a3de30c82cb09b6d22",
+      "checked_at": "2026-11-10T15:17:48Z",
       "checker": "check-view@2"
     }
   ]
