@@ -56,12 +56,23 @@ One clip per shot, made one shot at a time. The start frame is the shot's **appr
 
 The unit is one planned asset per shot (`sc1_sh1_clip`, kind `clip`), owned by the shot. The shot and its key frame are never touched. A person approves a clip on the board (a decision, folded); folding is the only thing that writes `approved`. See `../lib/state.md` §5.
 
+The stage state is one roll-up shared with lip-sync (`../motion/stage.ts` `refreshMotionStage`): it counts the clips of video shots, the lip-syncs still asked for and their line cuts, and the units a shot asks for that are not planned yet. A clip whose shot is no longer a video shot is **idle**: kept, shown as idle, never counted, never made. When nothing is left to make (even when no shot is a video shot at all) the stage is `in-review`.
+
+## Piloting one part first (`--part`)
+
+On a film imported from a sheet (shots carry a `part`), one part can make its clips before the rest of the film's key frames are approved: `plan --part P7`, `status --part P7`, `step --part P7 …`. `parts` lists every part as open or not, and why.
+
+- **A part is open** when the stages before the bible are approved, every live shot in the part has an approved key frame, and every bible entry those shots use is approved. This is worked out from the approvals each time; nothing is stored, and nothing is approved for the person. Never suggest approving key frames in bulk to open a part: each is the person's decision.
+- **Not open:** the command refuses and names what is missing ("P7 is not open for motion: 3 key frames not approved (S07-030, S07-040, …), 1 bible entry not approved (LOC-x)"). Pass that on and stop.
+- **A scoped run touches only that part's live shots**: planning, pricing and making. Paid jobs still go through the rules guard and the spend gate exactly as without `--part`.
+- **The stage stays `locked`** until every key frame of the film is approved. The part's progress is on its units: `status --part P7` and `parts` show it, and so does the board. Tell the person the stage reads locked on purpose.
+
 ## Steps
 
 All commands: `node --experimental-strip-types ../motion/cli.ts <command> --project <folder>` (B and C: the command line uses the local folder host). On host A, Node may run in claude.ai's workspace but the project lives in the board artifact's database (`../lib/hosts.md`): import `plan.ts` and `run.ts` and pass them the `ClaudeArtifactHost` and a gate built with `guardedGate()` from `../rules/guard.ts` (never a bare `createSpendGate`, so the project rules are checked), not this command line. Paid providers are still refused on host A, so use the manual provider and the rules in `../lib/spend.md` §Host A.
 
-0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If the stage is locked, say which earlier stage is waiting and stop.
-1. **`plan`**: one planned clip per shot. Safe to repeat. It also lists any shot already at the retry limit.
+0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If the stage is locked, say which earlier stage is waiting and stop, unless the person asked to pilot one part (`--part`, above).
+1. **`plan`**: one planned clip per video shot. Safe to repeat. It also lists any shot already at the retry limit.
 2. **`status`**: one line per clip with what it waits for (a shot whose key frame is not approved is `blocked`), its paid attempts and the money spent on it.
 3. **Choose the provider** (config and the person decide, not you): `manual` (free; hosts A, B, C) or `fal-video` (paid direct API; hosts B and C only, refused on A; key `FAL_KEY`). A paid provider needs its key and a budget cap from `/akuko setup`. A missing key is reported as a setup problem before anything is estimated, sent or counted; a missing budget is refused with the setup pointer.
 4. **`step --provider <id>`** makes the next job, by default **one shot**:
@@ -103,6 +114,7 @@ When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every 
 - A clip a provider refuses or fails stays `draft`; say so, and nothing is recorded as made.
 - A key frame that changes after a clip was made from it is not flagged yet; if the person sends a key frame back, ask whether its clip should be redone.
 - Changing the model, length or sound is a new job and needs a new approval.
+- A clip records where it sits in film time (`film`, the shot's slot when it was made) as its job starts. The Resolve handoff places it at the shot's start and names it if the shot has moved since.
 
 ## Rules it inherits
 

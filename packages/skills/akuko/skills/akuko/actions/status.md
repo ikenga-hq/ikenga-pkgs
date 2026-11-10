@@ -35,7 +35,7 @@ Detect the host, read the project with `readState()` (on A: ArtifactData `get` `
    - units `needs-rework` (back with akuko).
 2. **Decisions waiting to be folded**: decisions in the store whose ids are not in `akuko.json.decisions[]`. Count them and say "run `/akuko review` to apply them".
 3. **Not applied**: comments starting `Not applied:` and approvals that didn't take (a job still `awaiting-approval` whose latest decision is an `approve-spend`). Say why, from the comment or the spend gate.
-4. **Stages**: each stage's state and the current stage.
+4. **Stages**: each stage's state and the current stage. When `motion` is `locked` and the shots carry parts, also run `node --experimental-strip-types ../motion/cli.ts parts --project <folder>` (free, read-only) and report which parts are open for motion and what each waits for: a part can pilot its clips and lip-syncs ahead of the film (`./motion.md` §Piloting one part first). Its progress is on its units, not on the stage.
 5. **Money**, exactly, never rounded:
    - the cap, spent, sunk and in flight (`ledgerSummary()`);
    - each waiting job's estimate;

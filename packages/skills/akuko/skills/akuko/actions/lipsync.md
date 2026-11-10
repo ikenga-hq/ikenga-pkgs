@@ -44,13 +44,18 @@ Clip mode (lip-syncing an approved video clip) is not used yet: fal would need t
 
 - `<shot>_lipsync` (kind `lipsync`, stage `motion`, owner = the shot): the video, reviewed on the board like a clip.
 - `<shot>_linecut` (kind `vo`, stage `motion`, provider `akuko-cut`): the cut line audio, in `lipsync/cuts/`. It is recorded `pending-review`. **The board has no audio player**: the person listens by opening the file itself, `lipsync/cuts/<shot>_linecut.wav` (give them the path), then approves or sends it back on the board. **Every line cut must be approved before the motion stage can be.** Its approval is not what lets the lip-sync run.
-- A lip-sync whose shot **no longer asks for one** (the person changed its treatment, or its spoken line went away) is kept, never deleted. `plan` and `status` list it as "no longer asked for (treatment …); kept", and nothing is cut, priced or made for it. It still sits at the motion stage, so if it was never made, tell the person it holds the stage open: they decide what to do with it.
+- A lip-sync whose shot **no longer asks for one** (the person changed its treatment, or its spoken line went away) is kept, never deleted. `plan` and `status` list it as "no longer asked for (treatment …); kept", and nothing is cut, priced or made for it. It is **idle**, like its line cut: shown, never counted, and it does not hold the motion stage open.
+- The stage state is motion's one roll-up (`../motion/stage.ts` `refreshMotionStage`), whichever step ran last.
+
+## Piloting one part first (`--part`)
+
+`plan --part P7`, `status --part P7` and `step --part P7 …` work on one part only, once its own key frames and the bible entries they use are approved (motion's rule: `../actions/motion.md` §Piloting one part first; `motion/cli.ts parts` lists every part). Planning, cutting, pricing and making touch only that part's live shots; paid jobs still go through the rules guard and the spend gate. A part that is not open is refused with what is missing: pass it on and stop. The motion stage stays `locked` until the whole film opens; the part's progress is on its units.
 
 ## Steps
 
 All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --project <folder>`. On host A, import `plan.ts`, `cut.ts` and `run.ts`, pass the `ClaudeArtifactHost` and a gate built with `guardedGate()` (`../rules/guard.ts`); paid providers are refused there, so use the manual provider.
 
-0. **Fold decisions first** (`../decisions/cli.ts fold`). If the stage is locked, say which earlier stage is waiting and stop.
+0. **Fold decisions first** (`../decisions/cli.ts fold`). If the stage is locked, say which earlier stage is waiting and stop, unless the person asked to pilot one part (`--part`, above).
 1. **`plan`**: plans a lip-sync for every shot that needs one and cuts the line audio each needs (free, local; the master is read once, never loaded whole). Safe to repeat. Pass on everything it prints:
    - which shots were passed over and why (a thought line, no spoken line);
    - which line audio was cut and which clips are used as they are. Give the person the path of each new cut (`lipsync/cuts/…`) to listen to: the board can't play it;
@@ -63,7 +68,7 @@ All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --pro
    - **Paid:** it prints the spend line: the arithmetic (`2 s x 0.08 USD/s = 0.16`) **and the files it would upload to fal** (the still and the audio, with where the audio came from). **Uploading the person's audio and picture is their call: show them the whole line and wait.** When the audio is a file outside the project, the line says so: "a file outside the project; check it holds only speech that may leave your machine (line clips can be cut from an unbleeped reference)". **Read that sentence to the person, word for word**, and let them choose: approve, or ask for the master cut instead (`step --from master`, after `plan --from master` has cut it). Nothing has been sent. They approve on the board (or reply in the line's exact words, `approve <amount> <CURRENCY>`); fold, then run `step` again. It then runs, records the video and marks it `pending-review`.
    - **Manual:** it prints the prompt package (the still and the audio to take to their tool). They bring the video back: `ingest --job <id> --unit <shot>_lipsync --file <path> [--actual <cost they report>]`.
    - Leave `--model` out: akuko picks the model that fits the measured line. Name one only if the person asked; a model that can't take the line is refused.
-5. **Say where the video belongs.** The lip-sync video starts with its audio, which usually starts a little after the shot does; `step` prints "belongs at <n> s on the master". The Resolve handoff places a lip-sync at the shot's start today, so tell the person to slide it to that time (or wait for the handoff to do it).
+5. **Say where the video belongs.** The lip-sync video starts with its audio, which usually starts a little after the shot does; `step` prints "belongs at <n> s on the master". akuko records that span on the lip-sync as the job starts, and the Resolve handoff places the video there, holding the shot's approved key frame (with its camera move) before and after it. A lip-sync whose audio was the line's own clip has no recorded span (the clip's lead-in is not known): the handoff places it by the lines and says so; tell the person to check its lips in Resolve.
 6. **Look at it** before telling the person it is ready: the face, framing and look match the key frame, the mouth follows the line, nothing morphs. If it fails, say what is wrong and offer another try (a new approval; it counts against the limit below). Do not hide a bad take.
 7. **Stop at the review gate.** The lip-sync is `pending-review`. The person reviews it on the board. Its own audio is never used: the edit keeps the master for sound.
 

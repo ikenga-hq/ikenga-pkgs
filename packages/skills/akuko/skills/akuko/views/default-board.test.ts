@@ -511,7 +511,7 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.3');
+    assert.equal(lines[0].view, 'default-board@0.4');
     p.close();
   });
 });
@@ -563,7 +563,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     assert.equal(statusOf(p, id), 'approved');
     assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
     const [d] = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.3']);
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.4']);
     p.close();
   });
 
@@ -693,6 +693,28 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     p.close();
   });
 
+  // WP-32 (old WP-31): an idle clip (its shot is no longer a video shot) is shown as idle, never counted in "your move";
+  // an approved paid job for it shows as idle, not as queued work. The money still counts it, exactly as the spend gate does.
+  it('an idle clip is shown as idle and left out of "your move"; its approved job shows as idle', async () => {
+    const q = clone(BIG);
+    const before = BIG.assets.filter((a) => a.status === 'pending-review').length;
+    const clip = (shot: string) => ({ id: `${shot}_clip`, kind: 'clip', stage: 'motion', status: 'pending-review', owner: shot, tags: ['clip'], comments: [], file: { uri: `motion/${shot}.mp4`, mime: 'video/mp4' } }) as never;
+    q.shots.find((s) => s.id === 'S19-070')!.treatment = 'still-move'; // planned as video once, then made a still-move shot
+    q.shots.find((s) => s.id === 'S19-060')!.treatment = 'video';
+    q.assets.push(clip('S19-070'), clip('S19-060'));
+    q.pending_spend = [{ id: 'job_mo_idle', stage: 'motion', label: 'Clip S19-070', units: ['S19-070_clip'], provider: 'fal-video', model: 'm', estimate: 0.5, status: 'approved' }];
+    const p = await boot({ host: 'B', project: asPage(q) });
+    assert.equal(p.num('waiting-other'), before + 1, 'the video shot\'s clip counts; the idle one does not');
+    assert.match(p.text('#bib-S19-070_clip'), /Idle\s*Kept, not counted: the shot is still-move, not a video shot/);
+    assert.ok(!/Idle/.test(p.text('#bib-S19-060_clip')));
+    const job = p.text('#p-spend [data-akuko-field="job"]');
+    assert.match(job, /Approved · idle/);
+    assert.match(job, /no longer asks for it/);
+    assert.match(p.text('[data-akuko-stage="motion"]'), /Spend approved · idle/);
+    assert.equal(p.d.querySelector('#p-spend [data-akuko-field="job"] [data-akuko-field="status"]').getAttribute('data-akuko-status'), 'approved', 'the job\'s own status is unchanged');
+    p.close();
+  });
+
   it('text from the project never becomes markup on the board (reviewer probe)', async () => {
     const q = clone(BIG) as any;
     const X = '"><img src=x onerror="window.__pwn=1"><script>window.__pwn=2</script>akuko-decision __ikenga';
@@ -713,7 +735,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
-    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3']) {
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
       assert.deepEqual(report.rejected, [], view);

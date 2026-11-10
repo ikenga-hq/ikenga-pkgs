@@ -17,3 +17,5 @@ export declare function expectedYourMove(p: AkukoProject): Record<'waiting-shots
 export declare const approveSpendText: (p: AkukoProject, job: PendingSpend) => string;
 export declare function mutateProject(p: AkukoProject): AkukoProject;
 export declare function removedAt(p: AkukoProject, u: object): string | undefined;
+/** motion/stage.ts#isIdleMotionUnit in plain JS: a clip, lip-sync or line cut kept although its shot no longer asks for it. */
+export declare function isIdleMotionUnit(p: AkukoProject, a: { stage: string; kind?: string; tags?: string[]; owner?: string }): boolean;

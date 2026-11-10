@@ -65,3 +65,25 @@ describe('check-view and removed units', () => {
     assert.ok(live.codes.includes('missing-control'), `a live pending asset with no control fails: ${live.codes.join(',')}`);
   });
 });
+
+// WP-32: an idle motion unit (a clip, lip-sync or line cut whose shot no longer asks for it) is left out of "your move"
+// like a removed row; the plain-JS rule here agrees with motion/stage.ts.
+describe('check-view and idle motion units', () => {
+  it('expectedYourMove leaves an idle pending clip out, and the JS rule matches motion/stage.ts', async () => {
+    const { expectedYourMove, isIdleMotionUnit: idleJs } = await import('./expected.mjs');
+    const { isIdleMotionUnit } = await import('../../motion/stage.ts');
+    const { AkukoProjectSchema } = await import('../../schema/akuko-project.ts');
+    const p = JSON.parse(readFileSync(join(SKILL, 'fixtures', 'the-beating', 'akuko.json'), 'utf8'));
+    const before = expectedYourMove(AkukoProjectSchema.parse(p))['waiting-other'];
+    const [s1, s2, s3] = p.shots;
+    s1.tier = 'B'; // still-move: its clip is idle
+    s2.treatment = 'video'; // its clip is active
+    s3.treatment = 'lipsync'; // no spoken line: its lip-sync is idle
+    const mk = (id: string, owner: string, kind: string, tags: string[]) => ({ id, kind, stage: 'motion', status: 'pending-review', owner, tags, comments: [], file: { uri: `motion/${id}.mp4` } });
+    p.assets.push(mk(`${s1.id}_clip`, s1.id, 'clip', ['clip']), mk(`${s2.id}_clip`, s2.id, 'clip', ['clip']), mk(`${s3.id}_lipsync`, s3.id, 'lipsync', ['lipsync']));
+    const q = AkukoProjectSchema.parse(p);
+    assert.equal(expectedYourMove(q)['waiting-other'], before + 1);
+    for (const a of q.assets) assert.equal(idleJs(q, a), isIdleMotionUnit(q, a), a.id);
+    assert.deepEqual(q.assets.filter((a) => isIdleMotionUnit(q, a)).map((a) => a.id), [`${s1.id}_clip`, `${s3.id}_lipsync`]);
+  });
+});

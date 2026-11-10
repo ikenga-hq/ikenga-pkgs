@@ -62,6 +62,7 @@ The numbers check-view expects (`scripts/check-view/expected.mjs`):
 - `waiting-shots` = shots with status `pending-review`.
 - `waiting-spend` = jobs `awaiting-approval`.
 - `waiting-other` = assets `pending-review`, plus bible entries `pending-review` whose refs include no asset.
+- None of the three counts a unit removed from the sheet (`source.removed_at`, its own or its owner's), or an **idle** motion unit: a clip, lip-sync or line cut whose shot no longer asks for it (`motion/stage.ts#isIdleMotionUnit`, WP-32). Both are kept and shown, never deleted.
 - `left-if-approved` = cap − spent − sunk − in flight − (bounds of approved jobs not yet run) − (estimates of jobs waiting). This is what is left if you approve everything waiting.
 - Every amount is shown **exactly**, to at most four decimals, as the spend gate prints it. Never round to cents: 0.4125 is `0.4125`, not `0.41`.
 
