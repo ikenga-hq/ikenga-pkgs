@@ -61,6 +61,10 @@ All commands: `node --experimental-strip-types ../bible/cli.ts <command> --proje
 
 Folding turns it into `needs-rework` with their words. Run `step --units <asset id>` for it: the old file is cleared (it stays stored; the "Revised: …" comment says where), their words are added to the prompt, the new take fills the same asset, and it goes to `pending-review` again. A paid regeneration is a new job and needs a new approval.
 
+## Rules check
+
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every job is checked against them before the spend gate: banned terms in the prompt (the entry's name, description and notes go into it), and for a paid job every reference file by its content hash. A picture the person supplied for an entry can be sent only if its sha256 is in `rules.uploads.allow` (for that entry, when the allowance has `for`). A `never_from_photo` entry can use only images akuko generated. A breach prints `Refused (rules-breach): …`, naming each rule and the offending text or file; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent. **Tell the person what it says and stop.** Don't reword a description, drop a reference or edit `rules` to get past it: the person decides. Before a paid wave, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, and show the person anything it lists.
+
 ## Limits to know
 
 - At most **14** reference images per image. The turnaround sends the portrait and the lookbook (and any pictures the person supplied for that entry as `reference` assets). The providers' per-role sublimits (for example 4 character references on a Gemini Flash model) are **not** enforced yet; with the default sends there are never more than a few.

@@ -64,6 +64,10 @@ Folding turns it into `needs-rework` with their words. `step --units <asset id>`
 
 A pure function of the word timings: a cue starts at its first word's start and ends at its last word's end. A cue holds at most 42 characters and 5 seconds, breaks at a pause of 1 second or more, and always ends at the end of a sentence (`.`, `!`, `?`, `…`).
 
+## Rules check
+
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every voice-over job is checked against them before the spend gate: the spoken text against the banned terms. Required text doesn't apply to voice-over, and the voice is a provider id, not a file, so there is no reference check. A breach prints `Refused (rules-breach): …`, naming the term and the line it is in; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent. **Tell the person what it says and stop.** Narration is never rewritten by you, and neither are the rules: the person decides. The free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, lists breaches in prompts and references; it does not read narration.
+
 ## Limits to know
 
 - **One track needs WAV.** `audio.narration` points at one narration file. akuko can join takes into it only when every approved take is a 16-bit PCM WAV of one sample rate (what ElevenLabs returns here). If the person brought an mp3 or m4a, there is no `audio.narration` block yet, the captions are still written from the timings, and assemble (WP-13) joins the files with its own tools.

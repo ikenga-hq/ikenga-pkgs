@@ -82,6 +82,7 @@ These hold on every host and in every action and view:
 3. **Never exceed the cap** or a job's `approved_max`; stop and ask instead.
 4. **Money is never hidden or rounded.** Every paid call is recorded in `ledger[]`, success or failure.
 5. **Keys stay in the environment** (or the host's secret store) — never in `akuko.json`, a view, or a transcript.
+6. **House rules come before money.** When the project has `rules`, every job is checked against them before the spend gate, and a breach is refused (`rules-breach`), naming the rule and the offending text or file. Report it and stop; never reword, drop a reference or edit the rules to get past it. Run `rules/cli.ts check` for a free preflight (`lib/state.md` §"Rules guard (WP-26)").
 
 ## Hosts in one line each
 

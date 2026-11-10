@@ -75,6 +75,10 @@ Video is priced per second, so a retry loop is where money goes. Each shot may h
 
 Folding turns it into `needs-rework` with their words. Run `step --units <clip id>` for it: the old file is cleared (it stays stored; the "Revised: ..." comment says where), their words are added to the prompt, the new take fills the same asset (job `..._r<n+1>`), and it goes to `pending-review` again. A paid regeneration needs a new approval and counts toward the limit.
 
+## Rules check
+
+When the project has `rules` (`../lib/state.md` §"Rules guard (WP-26)"), every job is checked against them before the spend gate: banned terms and required text in the clip prompt (it carries the shot's own `prompt`), and for a paid job the start frame by its content hash. An approved key frame that akuko generated passes; a key frame brought back by hand is an outside file and needs its sha256 in `rules.uploads.allow`. A `require` rule on the negative prompt refuses every clip for now, because this stage doesn't send `shot.negative` yet. A breach prints `Refused (rules-breach): …`, naming each rule and the offending text or file; `rules-missing` means `rules.required` is set but no rules are recorded. Nothing was priced, sent or spent, and a refused job is not a paid attempt. **Tell the person what it says and stop.** Don't reword a prompt, swap the start frame or edit `rules` to get past it: the person decides. Before a paid run, run the free preflight, `node --experimental-strip-types ../rules/cli.ts check --project <folder>`, and show the person anything it lists.
+
 ## Limits to know
 
 - `fal-video` makes clips of fixed lengths (5 or 10 s), takes the key frame as its only start frame and follows the key frame's own aspect ratio. A shot longer than 10 s gets a 10 s clip and needs another clip or a cutaway.
