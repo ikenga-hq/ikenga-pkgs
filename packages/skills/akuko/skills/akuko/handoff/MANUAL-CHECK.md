@@ -62,3 +62,31 @@ Any "Fail" cell above. Send: the Resolve version and edition, the exact error te
 | Date | Resolve version | Edition | FCPXML import | Checks 1-8 | Notes |
 |---|---|---|---|---|---|
 | | | | | | |
+
+## 5. Master clock (a project with `audio.master`)
+
+The checks above cover the end-to-end layout. A project with a locked master WAV (`audio.master`) is laid out differently: shots and cards at their film times, the WAV whole on A1. Check that too, with the same Resolve.
+
+**Make the export.** Run the `export` command on your project (a real one, or a small project with a short master) with `--fps` matching `project.fps`:
+
+```
+node --experimental-strip-types handoff/cli.ts export --project <your project folder> [--link-media]
+```
+
+`--link-media` leaves the master where it is instead of copying it (use it for a big file). Import `timeline.fcpxml` as in step 2. Then check, **at frame accuracy** (turn on timecode display on the Edit page and step with the arrow keys):
+
+| # | Check | Pass | Fail |
+|---|---|---|---|
+| M1 | **Start** | The timeline starts at the project's `start_tc` (usually 00:00:00:00) and ends exactly where the master ends | A different start, or a timeline shorter or longer than the master by a frame or more |
+| M2 | **WAV in sync** | A1 holds the master from its first frame, whole, one clip, not cut. Play a spoken line: the picture of its shot is on screen at the first frame of the line, to the frame | The WAV is cut into pieces, starts late or early, or a line lands on the wrong shot |
+| M3 | **A gap is a gap** | A pause between scenes (film time with no shot) is empty video of the right length, not closed up: the shot after it starts at its film time from the README table | A gap closed up, or a later shot drifting earlier than its table time |
+| M4 | **Card at its time** | An approved card (a title, a part card) starts at its film time and holds for its slot; the credits clip, if any, starts at its time | A card at the wrong time or the wrong length |
+| M5 | **Slot lengths** | Click three shots: the record in and the length match the README table to the frame. A clip longer than its slot is cut at the slot's end; a shorter one is followed by an empty gap | Off by a frame, or a clip that plays at a different speed |
+| M6 | **Only the master is heard** | Solo V1 clips: nothing plays from them (a clip made with its own sound is muted). No other audio track is on the timeline | Any sound from a clip, or voice-over / music laid beside the master |
+| M7 | **Camera move** | Open a still that has a move (the README lists them). Inspector > Transform: Zoom and Position have keyframes at the first and last frame, and the picture moves over the whole slot. **If the still does not move**, say so: Resolve does not import FCPXML transform keyframes for it. The shot's clip carries a marker with the numbers; do the move by hand from the README table | (Not a fail of the file, but report which it was: "keyframes imported" or "static, marker only") |
+
+Send back, for M7 especially, the Resolve version and whether the keyframes arrived: it decides whether akuko keeps writing them or only the markers. Also report whether the master's start timecode came through from the file or had to be set by hand (M1).
+
+| Date | Resolve version | Edition | M1-M6 | M7: keyframes imported? | Notes |
+|---|---|---|---|---|---|
+| | | | | | |
