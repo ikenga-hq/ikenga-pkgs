@@ -1,8 +1,7 @@
 {
   "name": "@ikenga/skill-akuko",
   "version": "0.0.0",
-  "private": true,
-  "description": "akuko — agent skill that takes a short story or film script through breakdown, bibles, storyboard, generation and assembly to an MP4. This package holds the akuko.json project format (Zod schema + exported JSON Schema) and converters.",
+  "description": "akuko: an agent skill that takes a short story, treatment or film script to a short film, one reviewed stage at a time (screenplay, breakdown, sketch board, bibles, key frames, motion, lip-sync, sound, DaVinci Resolve handoff). Holds the skill, the akuko.json project format (Zod + JSON Schema) and converters.",
   "keywords": [
     "claude",
     "claude-code",
@@ -24,17 +23,23 @@
   },
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.6"
   },
   "files": [
-    "skills"
+    "skills",
+    "README.md"
   ],
   "scripts": {
     "build": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/schema/export-json-schema.ts",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning \"skills/akuko/**/*.test.ts\"",
     "typecheck": "tsc -p skills/akuko/tsconfig.json",
-    "convert:fixture": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/fixtures/convert-fixture.ts"
+    "convert:fixture": "node --experimental-strip-types --disable-warning=ExperimentalWarning skills/akuko/fixtures/convert-fixture.ts",
+    "build:mirror": "node ./scripts/build-mirror.mjs",
+    "build:claudeai": "node ./scripts/build-mirror.mjs --claudeai"
   },
   "dependencies": {
     "@ikenga/studio-schema": "workspace:*",

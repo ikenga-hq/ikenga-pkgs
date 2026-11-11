@@ -317,7 +317,7 @@ describe('doctor.sh', { skip: bash === null ? 'no bash available' : false }, () 
     assert.match(r.out, /zod\s+MISSING \(required\)/);
     assert.match(r.out, /ajv\s+MISSING \(optional\)/);
     assert.match(r.out, /npm install --no-save --prefix ".*" zod@\^3\.23\.0 ajv@\^8\.20\.0/);
-    assert.match(r.out, /WP-20/);
+    assert.match(r.out, /published skill \(ikenga-hq\/akuko\) ships one/);
     assert.doesNotMatch(r.out, /Cannot find package/);
     assert.match(r.out, /provider and project checks skipped/);
   });
