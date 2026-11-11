@@ -511,7 +511,7 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.4');
+    assert.equal(lines[0].view, 'default-board@0.5');
     p.close();
   });
 });
@@ -563,7 +563,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     assert.equal(statusOf(p, id), 'approved');
     assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
     const [d] = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.4']);
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.5']);
     p.close();
   });
 
@@ -735,7 +735,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
-    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4']) {
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
       assert.deepEqual(report.rejected, [], view);
@@ -749,4 +749,268 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     console.log(`# board render timing with 211 shots (jsdom): ${JSON.stringify(timings)}`);
     for (const [k, ms] of Object.entries(timings)) if (!/open the board/.test(k)) assert.ok(ms < 30_000, `${k} took ${ms} ms`);
   });
+});
+
+// @0.5: what came out of the live claude.ai run of 2026-11-11 (pictures, stage lens, intake, next, per-stage status, done line)
+// ─────────────────────────────────────────────────────────────────────────
+
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const withFiles = (mutate?: (p: any) => void): Project => {
+  const p = clone(FIXTURE) as any;
+  const file = (id: string, uri: string, mime = 'image/png') => { const a = p.assets.find((x: any) => x.id === id); a.file = { uri, mime }; };
+  file('char_narrator_portrait', '/_blob/df0bf2286219479622863085fab2df4e');
+  file('char_oldman_turnaround', '/_blob/0a1b2c3d4e5f60718293a4b5c6d7e8f9');
+  file('loc_bedroom_plate', 'https://images.example.com/plate.png');
+  file('loc_hallway_plate', 'bible/locations/loc_hallway/refs/plate.png');
+  mutate?.(p);
+  return p as Project;
+};
+
+describe('default board @0.5: pictures', () => {
+  it('claude.ai: shows a bible picture stored as /_blob/<id>, with alt text, and never loads a remote URL', async () => {
+    const proj = withFiles();
+    const p = await boot({ host: 'A', db: newDb(proj), project: proj });
+    const img = p.d.querySelector('#bib-char_narrator [data-ak-img="/_blob/df0bf2286219479622863085fab2df4e"]');
+    assert.ok(img, 'the portrait is an <img>');
+    assert.equal(img.getAttribute('src'), '/_blob/df0bf2286219479622863085fab2df4e');
+    assert.match(img.getAttribute('alt'), /Portrait of The Narrator/);
+    assert.doesNotMatch(p.text('#p-bible'), /no image in this board/);
+    assert.equal(p.d.querySelectorAll('img[src^="http"], img[src^="//"]').length, 0, 'no remote picture');
+    assert.match(p.text('#bib-loc_bedroom'), /image not available here/);
+    // a project-relative path with no publisher link or served project can't load from here: a labelled frame instead
+    assert.match(p.text('#bib-loc_hallway'), /image not available here/);
+    p.close();
+  });
+
+  it('a picture opens larger in a dialog that Escape and Close shut, and focus goes back to the picture', async () => {
+    const proj = withFiles();
+    const p = await boot({ host: 'A', db: newDb(proj), project: proj });
+    p.d.querySelector('#bib-char_narrator button.zoom').focus();
+    click(p, '#bib-char_narrator button.zoom');
+    const lb = p.d.getElementById('lightbox');
+    assert.equal(lb.hidden, false);
+    assert.equal(lb.getAttribute('role'), 'dialog');
+    assert.equal(p.d.querySelector('#lb-media img').getAttribute('src'), '/_blob/df0bf2286219479622863085fab2df4e');
+    assert.equal(p.d.activeElement.id, 'lb-close');
+    p.d.activeElement.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    assert.equal(p.d.activeElement.id, 'lb-close', 'focus stays in the dialog');
+    p.d.activeElement.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    assert.equal(lb.hidden, true);
+    assert.equal(p.d.activeElement.getAttribute('data-act'), 'zoom', 'focus is back on the picture');
+    click(p, '#bib-char_narrator button.zoom');
+    click(p, '#lb-close');
+    assert.equal(lb.hidden, true);
+    assert.deepEqual(Array.from(p.w.akukoDecisions.all()), [], 'looking writes nothing');
+    p.close();
+  });
+
+  it('a local file shows the thumbnail the publisher embedded, and refuses anything that is not an image data URI or a safe relative link', async () => {
+    const proj = withFiles((x) => {
+      x._board = {
+        thumbs: { 'bible/locations/loc_hallway/refs/plate.png': PNG, '/_blob/0a1b2c3d4e5f60718293a4b5c6d7e8f9': 'data:text/html;base64,PHNjcmlwdD4=' },
+        links: { 'https://images.example.com/plate.png': 'javascript:alert(1)' },
+      };
+    });
+    const p = await boot({ host: 'B', project: proj, url: 'file:///C:/film/views/default-board.html' });
+    assert.equal(p.d.querySelector('#bib-loc_hallway img').getAttribute('src'), PNG);
+    assert.equal(p.d.querySelectorAll('img[src^="data:text"], img[src^="javascript"]').length, 0);
+    p.close();
+  });
+
+  it('a picture that fails to load becomes a labelled frame', async () => {
+    const proj = withFiles();
+    const p = await boot({ host: 'A', db: newDb(proj), project: proj });
+    p.d.querySelector('#bib-char_narrator img').dispatchEvent(new p.w.Event('error'));
+    await p.tick();
+    assert.equal(p.d.querySelector('#bib-char_narrator img'), null);
+    assert.match(p.text('#bib-char_narrator'), /image not available here/);
+    p.close();
+  });
+
+  it('a shot shows its key frame once there is one: in the shot list and large in its detail', async () => {
+    const proj = withFiles((x) => {
+      x.assets.push({ id: 'sc2_sh4_keyframe', stage: 'keyframes', status: 'pending-review', comments: [], kind: 'keyframe', owner: 'sc2_sh4', tags: ['keyframe'], file: { uri: '/_blob/aaaabbbbccccddddeeeeffff00001111', mime: 'image/png' } });
+    });
+    const p = await boot({ host: 'A', db: newDb(proj), project: proj });
+    assert.ok(p.d.querySelector('#shot-sc2_sh4 .shot-row .thumb img[src="/_blob/aaaabbbbccccddddeeeeffff00001111"]'), 'row thumbnail is the key frame');
+    assert.ok(p.d.querySelector('#shot-sc2_sh1 .shot-row .thumb svg'), 'a shot without one keeps its sketch panel');
+    assert.ok(p.d.querySelector('#det-sc2_sh4 button.zoom img[src="/_blob/aaaabbbbccccddddeeeeffff00001111"]'), 'and the detail shows it large');
+    assert.ok(p.d.querySelector('#det-sc2_sh4 [data-akuko-action="approve"][data-akuko-unit="sc2_sh4_keyframe"]'), 'with its own Approve');
+    click(p, '#det-sc2_sh4 button.zoom[data-id="z:panel:sc2_sh4"]');
+    assert.ok(p.d.querySelector('#lb-media svg'), 'the sketch panel opens larger too');
+    p.close();
+  });
+});
+
+describe('default board @0.5: stages, intake, next, per-stage status, done', () => {
+  const atIntake = () => {
+    const p = clone(FIXTURE) as any;
+    p.current_stage = 'intake';
+    for (const k of Object.keys(p.stages)) p.stages[k] = { state: 'locked' };
+    p.stages.intake = { state: 'in-review' };
+    p.shots = []; p.scenes = []; p.pending_spend = []; p.ledger = []; p.budget.spent = 0;
+    p.bible = { characters: [], locations: [], styles: [] };
+    p.assets = [
+      { id: 'script-source', stage: 'intake', status: 'pending-review', comments: [], kind: 'other', name: 'Source text', tags: ['source'], file: { uri: 'script/source.md', mime: 'text/markdown' } },
+      { id: 'script-screenplay', stage: 'intake', status: 'pending-review', comments: [], kind: 'other', name: 'Screenplay', tags: ['screenplay'], file: { uri: 'script/screenplay.fountain', mime: 'text/plain' } },
+    ];
+    p._board = { texts: { 'script/screenplay.fountain': 'INT. HALLWAY - NIGHT. A lantern.' } };
+    return p as Project;
+  };
+
+  it('intake documents are shown under Intake, not in the bible, and the header names the right place', async () => {
+    const p = await boot({ host: 'B', project: atIntake() });
+    assert.equal(p.num('waiting-other'), 2);
+    assert.equal(p.text('#next [data-act="next"]'), 'Open intake');
+    assert.match(p.text('#next .next-main'), /2 intake documents waiting/);
+    assert.match(p.text('#intake-box'), /Source text/);
+    assert.match(p.text('#intake-box'), /INT\. HALLWAY - NIGHT/, 'the screenplay can be read on the board');
+    assert.ok(p.d.querySelector('#intake-box [data-akuko-action="approve"][data-akuko-unit="script-screenplay"]'));
+    assert.doesNotMatch(p.text('#p-bible'), /Other items to review|script-source/);
+    assert.match(p.text('[data-akuko-stage="intake"] .st-s'), /2 to review/);
+    assert.doesNotMatch(p.text('[data-akuko-stage="bible"]'), /to review/);
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    assert.equal(p.d.activeElement.getAttribute('data-k'), 'unit-ok:doc:script-source', 'focus lands on the first waiting document');
+    click(p, '#intake-box [data-akuko-action="approve"][data-akuko-unit="script-source"]');
+    await p.tick();
+    assert.equal(p.num('waiting-other'), 1);
+    assert.equal(p.w.akukoDecisions.all()[0].stage, 'intake');
+    p.close();
+  });
+
+  it('every clickable stage opens a lens, marked pressed, and a second click closes it', async () => {
+    const p = await boot({ host: 'B', project: withFiles() });
+    click(p, '[data-akuko-stage="bible"] button.stage-in');
+    await p.tick();
+    assert.equal(p.d.querySelector('[data-akuko-stage="bible"] button.stage-in').getAttribute('aria-pressed'), 'true');
+    assert.equal(p.d.querySelector('[data-akuko-stage="bible"]').getAttribute('data-lens'), '1');
+    assert.match(p.text('#lens'), /Bibles/);
+    assert.ok(p.d.querySelectorAll('#lens .gal figure').length >= 6, 'every bible picture, large');
+    click(p, '[data-akuko-stage="breakdown"] button.stage-in');
+    await p.tick();
+    assert.equal(p.d.querySelector('[data-akuko-stage="bible"] button.stage-in').getAttribute('aria-pressed'), 'false');
+    assert.match(p.text('#lens'), /Breakdown/);
+    const flags = Array.from(p.d.querySelectorAll('#shotlist [data-lens-status]')) as any[];
+    assert.equal(flags.length, 12, 'each shot says how it stands at Breakdown');
+    assert.ok(flags.every((f) => f.getAttribute('data-lens-status') === 'approved'), 'every shot passed breakdown');
+    click(p, '[data-akuko-stage="breakdown"] button.stage-in');
+    await p.tick();
+    assert.equal(p.text('#lens'), '');
+    assert.equal(p.d.querySelectorAll('#shotlist [data-lens-status]').length, 0);
+    click(p, '[data-akuko-stage="keyframes"] button.stage-in');
+    await p.tick();
+    assert.ok(p.d.querySelector('#lens [data-act="stage-gate"]'), 'a stage with a paid job waiting points at the spend gate');
+    assert.deepEqual(Array.from(p.w.akukoDecisions.all()), []);
+    p.close();
+  });
+
+  it('"Review next shot" starts at the first waiting shot in film order', async () => {
+    const proj = clone(FIXTURE);
+    for (const id of ['sc1_sh1', 'sc1_sh2']) proj.shots.find((s) => s.id === id)!.status = 'pending-review';
+    const p = await boot({ host: 'B', project: proj });
+    assert.equal(p.d.querySelector('.shot.is-sel').getAttribute('data-akuko-unit'), 'sc1_sh1', 'the board opens on the first waiting shot');
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    assert.equal(p.d.querySelector('.shot.is-sel').getAttribute('data-akuko-unit'), 'sc1_sh1', 'and next does not skip it');
+    click(p, '#shot-sc4_sh2 .shot-row');
+    await p.tick();
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    assert.equal(p.d.querySelector('.shot.is-sel').getAttribute('data-akuko-unit'), 'sc1_sh1', 'from anywhere, back to the first waiting');
+    click(p, '[data-akuko-action="approve"][data-akuko-unit="sc1_sh1"]');
+    await p.tick();
+    click(p, '#next [data-act="next"]');
+    await p.tick();
+    assert.equal(p.d.querySelector('.shot.is-sel').getAttribute('data-akuko-unit'), 'sc1_sh2');
+    p.close();
+  });
+
+  it('a breakdown approval never shows as the sketch one: status and undo use the current stage only', async () => {
+    const proj = clone(FIXTURE) as any;
+    const shot = proj.shots.find((s: any) => s.id === 'sc2_sh4');
+    const did = uuid(71);
+    proj.decisions = [{ id: did, action: 'approve', unit: 'sc2_sh4', stage: 'breakdown', by: 'you', at: '2026-11-11T09:00:00Z', view: 'default-board@0.4' }];
+    shot.comments = [
+      { ts: '2026-11-11T09:00:00Z', stage: 'breakdown', author: 'agent', text: 'Status: pending-review → approved', decision: did },
+      { ts: '2026-11-11T09:00:00Z', stage: 'breakdown', author: 'you', text: '', decision: did },
+    ];
+    // and one breakdown-stage approval still in the page's outbox, never folded
+    const out = [{ id: uuid(72), action: 'approve', unit: 'sc4_sh2', stage: 'breakdown', by: 'you', at: '2026-11-11T09:01:00Z', view: 'default-board@0.4' }];
+    const p = await boot({ host: 'B', project: proj as Project, outbox: out });
+    assert.equal(statusOf(p, 'sc2_sh4'), 'pending-review');
+    assert.equal(statusOf(p, 'sc4_sh2'), 'pending-review', 'an unfolded decision from another stage changes nothing');
+    assert.equal(p.num('waiting-shots'), 2);
+    const det = p.text('#det-sc2_sh4');
+    assert.doesNotMatch(det, /approved this panel\./);
+    assert.equal(p.d.querySelector('#det-sc2_sh4 [data-akuko-action="undo"]'), null, 'no Undo for a decision of another stage');
+    assert.notEqual(p.d.querySelector('#det-sc2_sh4 [data-akuko-action="approve"]').getAttribute('aria-disabled'), 'true', 'Approve is live');
+    assert.match(det, /approved this shot.*Breakdown/, 'the thread says it was the breakdown approval');
+    click(p, '[data-akuko-action="approve"][data-akuko-unit="sc2_sh4"]');
+    await p.tick();
+    assert.equal(statusOf(p, 'sc2_sh4'), 'approved');
+    assert.match(p.text('#det-sc2_sh4'), /Approved\. akuko picks this up/);
+    p.close();
+  });
+
+  it('once the current stage has nothing waiting, "your move" offers words to paste into chat, copied on click', async () => {
+    const proj = clone(FIXTURE);
+    for (const s of proj.shots) if (s.status === 'pending-review') s.status = 'approved';
+    const got: string[] = [];
+    const p = await boot({ host: 'B', project: proj });
+    p.w.navigator.clipboard.writeText = async (t: string) => { got.push(t); };
+    assert.ok(p.d.querySelector('[data-done-line]'), 'the done line is there');
+    assert.match(p.text('#done-text'), /finished reviewing Sketch board/);
+    click(p, '[data-act="done-copy"]');
+    await p.tick();
+    assert.match(got[0] ?? '', /finished reviewing Sketch board/);
+    assert.equal(p.text('[data-act="done-copy"]'), 'Copied');
+    assert.match(p.text('#toast'), /Paste it into your chat/);
+    assert.deepEqual(Array.from(p.w.akukoDecisions.all()), [], 'copying writes no decision');
+    p.close();
+    const q = await boot({ host: 'B' });
+    assert.equal(q.d.querySelector('[data-done-line]'), null, 'not while shots of the current stage wait');
+    q.close();
+    const s = await boot({ host: 'B', sample: true });
+    assert.equal(s.d.querySelector('[data-done-line]'), null, 'never on the sample');
+    s.close();
+  });
+});
+
+describe('default board @0.5: undoing an approval akuko already folded', () => {
+  const folded = (trail: boolean) => {
+    const p = clone(FIXTURE) as any;
+    const did = 'e07bb128-0000-4000-8000-000000000001';
+    p.assets.push({ id: 'sc4_sh2_keyframe', stage: 'keyframes', status: 'approved', kind: 'keyframe', owner: 'sc4_sh2', tags: ['keyframe'], file: { uri: '/_blob/aaaabbbbccccddddeeeeffff00002222', mime: 'image/png' },
+      comments: trail ? [{ ts: '2026-11-11T10:00:00Z', stage: 'keyframes', author: 'agent', text: 'Status: pending-review → approved', decision: did }, { ts: '2026-11-11T10:00:00Z', stage: 'keyframes', author: 'you', text: '', decision: did }] : [] });
+    p.decisions = [{ id: did, action: 'approve', unit: 'sc4_sh2_keyframe', stage: 'keyframes', by: 'you', at: '2026-11-11T10:00:00Z', view: 'default-board@0.4' }];
+    return p as Project;
+  };
+  const kfAct = (p: Page, act: string) => p.d.querySelector(`#bib-sc4_sh2_keyframe [data-akuko-action="${act}"][data-akuko-unit="sc4_sh2_keyframe"]`);
+
+  for (const trail of [true, false]) {
+    it(`shows the unit waiting again with its Approve button, and the cycle repeats (${trail ? 'with' : 'without'} a status trail)`, async () => {
+      const p = await boot({ host: 'B', project: folded(trail) });
+      assert.equal(kfAct(p, 'approve'), null, 'approved: no Approve');
+      assert.ok(kfAct(p, 'undo'), 'and an Undo for the folded approval');
+      for (let round = 0; round < 2; round++) {
+        click(p, `#bib-sc4_sh2_keyframe [data-akuko-action="undo"]`);
+        await p.tick();
+        assert.ok(kfAct(p, 'approve'), `round ${round}: after Undo the key frame can be approved again`);
+        assert.match(p.text('#bib-sc4_sh2_keyframe'), /Pending review/);
+        if (!p.d.querySelector('#det-sc4_sh2')) { click(p, '#shot-sc4_sh2 .shot-row'); await p.tick(); }
+        assert.match(p.text('#det-sc4_sh2 .kf'), /Waiting for you/, 'the shot detail agrees');
+        assert.ok(p.d.querySelector('#det-sc4_sh2 [data-akuko-action="approve"][data-akuko-unit="sc4_sh2_keyframe"]'));
+        click(p, `#bib-sc4_sh2_keyframe [data-akuko-action="approve"]`);
+        await p.tick();
+        assert.equal(kfAct(p, 'approve'), null, `round ${round}: approved again`);
+        assert.match(p.text('#bib-sc4_sh2_keyframe'), /Approved/);
+      }
+      const all = p.w.akukoDecisions.all() as { action: string; undoes?: string; stage: string }[];
+      assert.deepEqual(Array.from(all.map((d) => d.action)), ['undo', 'approve', 'undo', 'approve']);
+      assert.equal(all[0]!.undoes, 'e07bb128-0000-4000-8000-000000000001');
+      assert.ok(all.every((d) => d.stage === 'keyframes'));
+      p.close();
+    });
+  }
 });
