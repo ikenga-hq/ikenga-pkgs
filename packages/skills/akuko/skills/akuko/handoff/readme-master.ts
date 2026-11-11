@@ -69,21 +69,38 @@ export function renderMasterReadme(plan: ExportPlan, o: { format: 'fcpxml' | 'ed
   }
   if (plan.moves && plan.moves.length > 0) {
     L.push('## Camera moves on stills', '');
+    const rendered = plan.moves.every((mv) => mv.rendered);
+    // Some rendered and some not (a key frame ffmpeg could not read): the table says which is which.
+    const mixed = !rendered && plan.moves.some((mv) => mv.rendered);
+    const n = plan.moves.length;
+    if (rendered) {
+      L.push(
+        `${n} still${n === 1 ? ' has' : 's have'} a camera move (scale and drift over the whole slot). **Each move is rendered into the picture**: the still is placed as a short clip (\`media/..._move.mp4\`) of exactly its slot, with the zoom and drift already in it, so Resolve only has to play it. Nothing to set up by hand.`,
+        '',
+        'Why: DaVinci Resolve 19 drops FCPXML transform keyframes and clip markers on import (checked 2026-11-11, Resolve Studio 19.1), so a move written as keyframes arrives static. To change a move, change it in akuko and export again; the original key frame is in the project, not in this folder.',
+        '',
+        "`x` and `y` are pixels of a 1920 x 1080 frame (negative = left / up). The key frame is fitted inside the frame first (letterboxed if its shape differs), and anything the move uncovers is black. A shot with a lip-sync has its key frame in two pieces, before and after the lip-sync; the move is **not** restarted per piece, so the two clips join up as if the move had run on under the lip-sync.",
+        '',
+      );
+    } else {
+      L.push(
+        `${n} still${n === 1 ? ' has' : 's have'} a camera move (scale and drift over the whole slot). They are written into the FCPXML as an animated transform (scale and position keyframes across the slot) **and a marker** on the clip with the same numbers in words, but **not rendered** (no ffmpeg, or \`--moves keyframes\`).`,
+        '',
+        "**DaVinci Resolve 19 imports neither** (checked 2026-11-11, Resolve Studio 19.1): the stills arrive static and the markers are missing. Set each move by hand from the table below: key Zoom at the first frame (From) and the last frame (To), and Position X/Y at the last frame, then ease if the table says so. Or install ffmpeg and export again, and akuko renders the moves into clips. The EDL cannot carry moves at all.",
+        '',
+        '`x` and `y` are pixels of a 1920 x 1080 frame (negative = left / up). In the FCPXML they are written as Apple documents them: percent of the frame height, y up.',
+        '',
+        "A shot with a lip-sync has its key frame in two pieces, before and after the lip-sync. The move is **not** restarted per piece: it runs across the shot's whole slot, so each piece starts and ends where the move is at that frame. If you set a move by hand, key the whole slot's From and To and cut it around the lip-sync.",
+        '',
+      );
+    }
     L.push(
-      `${plan.moves.length} still${plan.moves.length === 1 ? ' has' : 's have'} a camera move (scale and drift over the whole slot). Two things are in the FCPXML for each: an animated transform (scale and position keyframes across the slot), **and a marker** on the clip with the same numbers in words.`,
-      '',
-      "**Not verified:** whether Resolve imports FCPXML transform keyframes. Blackmagic's manual says an XML import can bring in position, scale and rotation (\"Use sizing information\" in the import dialog) but does not say that keyframed animation arrives; forum reports (read 2026-11-10) are mixed, and several say moves on stills came in static. **After import, open a clip with a move and look at Inspector > Transform:** if the Zoom and Position keyframes are there, nothing more to do. If the still sits unmoved, read its marker and set the move by hand from the table: key Zoom at the first frame (From) and the last frame (To), and Position X/Y at the last frame, then ease if the table says so. The EDL cannot carry moves at all.",
-      '',
-      '`x` and `y` are pixels of a 1920 x 1080 frame (negative = left / up). In the FCPXML they are written as Apple documents them: percent of the frame height, y up. Eases map to keyframe interpolation (`ease-in` eases away from the first keyframe, `ease-out` into the last, `ease-in-out` both, `none` is linear); this mapping is also unverified in Resolve.',
-      '',
-      "A shot with a lip-sync has its key frame in two pieces, before and after the lip-sync. The move is **not** restarted per piece: it runs across the shot's whole slot, so each piece starts and ends where the move is at that frame, and the two pieces join up as if the move had run on under the lip-sync. Each piece's keyframes are exact at its ends; inside a piece an eased move is followed with the piece's own easing, close to the whole curve but not exact. If you set a move by hand, key the whole slot's From and To and cut it around the lip-sync.",
-      '',
       '| Shot | Record in | Length | Move |',
       '|---|---|---|---|',
     );
     for (const mv of plan.moves) {
       const around = mv.around ? `; held around the lip-sync at ${tc(mv.around.recIn)} (${frames(mv.around.frames)})` : '';
-      L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')}${around} |`);
+      L.push(`| ${mv.shot} | ${tc(mv.recIn)} | ${frames(mv.frames)} | ${moveLabel(mv.shot, mv.move).replace(/^MOVE [^:]+: /, '')}${around}${mixed ? (mv.rendered ? ' (rendered into the clip)' : ' (keyframes only: set by hand)') : ''} |`);
     }
     L.push('');
   }

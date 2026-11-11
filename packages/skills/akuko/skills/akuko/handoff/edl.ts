@@ -61,7 +61,7 @@ export function renderVideoEdl(plan: ExportPlan): string {
       out.push(eventLine(v.n, reelName(plan, v), 'V', timecode(v.srcIn, fps), timecode(v.srcIn + v.frames, fps), rec[0], rec[1]));
       out.push(`* FROM CLIP NAME: ${fileName(v.media!.dest)}`);
       out.push(v.card !== undefined ? `* CARD ${v.card}` : `* SHOT ${v.shot}${v.kind === 'still' ? ' (still: a key frame held for the shot)' : ''}`);
-      if (v.move) out.push(`* ${moveLabel(v.shot, v.move)}${pieceLabel(v.moveSpan, v.frames)}`);
+      if (v.move) out.push(`* ${moveLabel(v.shot, v.move)}${pieceLabel(v.moveSpan, v.frames)}${v.rendered ? ' (rendered into the clip)' : ''}`);
     }
     out.push('');
   }

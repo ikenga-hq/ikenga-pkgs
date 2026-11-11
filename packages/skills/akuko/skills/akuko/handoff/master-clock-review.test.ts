@@ -77,7 +77,7 @@ describe('master clock: review fixes', () => {
     await mkdir(join(dir, 'cut', 'cards'), { recursive: true });
     await writeFile(join(dir, 'cut', 'cards', 'card_P2-CARD.mp4'), miniMp4(0.75));
     const out = join(await scratch(), 'resolve');
-    const r = await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    const r = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, format: 'both' });
     assert.ok(existsSync(join(out, 'media', 'card_S01-007.png')), 'no doubled card_ prefix');
     assert.ok(existsSync(join(out, 'media', 'card_P2-CARD.mp4')));
     assert.ok(!existsSync(join(out, 'media', 'card_card_S01-007.png')));
@@ -107,7 +107,7 @@ describe('master clock: review fixes', () => {
   it('srcEnable="video" is on every picture asset-clip even when the probe finds no sound', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const clips = spineOf(root).children.filter((c) => c.name === 'asset-clip');
     assert.equal(clips.length, 2); // S01-010 (lip-sync) and S02-010
@@ -118,7 +118,7 @@ describe('master clock: review fixes', () => {
     const { project, dir } = await build();
     project.audio.master!.duration_s = 10.01; // 240.24 frames: 241
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const a = find(find(root, 'resources')[0]!, 'asset').find((x) => x.attrs['name'] === 'master')!;
     assert.equal(parseFcpTime(a.attrs['duration']!, fps24), 241);
@@ -136,7 +136,7 @@ describe('master clock: review fixes', () => {
     const root = await scratch();
     const { project, dir, masterPath } = await buildMasterProject(join(root, 'my audio folder'), { masterOutside: true });
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, linkMedia: true });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, linkMedia: true });
     const a = find(find(parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8')), 'resources')[0]!, 'asset').find((x) => x.attrs['name'] === 'master')!;
     assert.match(a.attrs['src']!, /^file:\/\/\/.*my%20audio%20folder\/audio\/master\.wav$/);
     assert.equal(fileURLToPath(a.attrs['src']!), masterPath);
@@ -184,7 +184,7 @@ describe('master clock: review fixes', () => {
     const fps = parseFps('23.976');
     const { project, masterS } = bigProject(30, '23.976');
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: await scratch(), outDir: out, timelineOnly: true });
+    await writeExport({ moves: 'keyframes', project, projectDir: await scratch(), outDir: out, timelineOnly: true });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     assert.equal(parseFcpTime(sequenceOf(root).attrs['duration']!, fps), Math.ceil(masterS * 24000 / 1001 - 1e-6));
   });
@@ -221,7 +221,7 @@ describe('master clock: review fixes', () => {
     await mkdir(join(dir, 'cut', 'cards'), { recursive: true });
     await writeFile(join(dir, 'cut', 'cards', 'card_P2-CARD.mp4'), miniMp4(0.75));
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const dtd = parseDtd(readFileSync(process.env['AKUKO_FCPXML_DTD']!, 'utf8'));
     assert.deepEqual(validate(parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8')), dtd), []);
   });
@@ -235,7 +235,7 @@ describe('master clock: units removed from the sheet, shots with no film time', 
     const shot = project.shots.find((s) => s.id === 'S01-020')!; // approved key frame, film time kept
     shot.source = { ...shot.source!, removed_at: REMOVED };
     const out = join(await scratch(), 'resolve');
-    const r = await writeExport({ project, projectDir: dir, outDir: out });
+    const r = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     assert.ok(r.plan.video.every((v) => v.shot !== 'S01-020'), 'not on the timeline');
     assert.ok(!r.plan.media.some((m) => m.shot === 'S01-020'), 'its approved key frame is not exported');
     assert.deepEqual(r.plan.shots.find((s) => s.shot === 'S01-020')!.uses, 'removed');
@@ -262,7 +262,7 @@ describe('master clock: units removed from the sheet, shots with no film time', 
     const { project, dir } = await build();
     delete project.shots.find((s) => s.id === 'S02-010')!.film; // its clip is approved
     const out = join(await scratch(), 'resolve');
-    const r = await writeExport({ project, projectDir: dir, outDir: out });
+    const r = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     assert.ok(r.plan.video.every((v) => v.shot !== 'S02-010'));
     assert.match(r.plan.leftOut.find((x) => x.unit === 'S02-010')!.why, /no film time/);
     assert.equal(r.plan.shots.find((s) => s.shot === 'S02-010')!.uses, 'no-duration');
