@@ -3,14 +3,18 @@
 //
 //   node scripts/doctor/deps.mjs
 //
-// An installed skill (copied, or `npx skills add`) has no node_modules, so every
-// TypeScript action and scripts/check-view.mjs would crash with "Cannot find
-// package ...". This names what is missing and prints the exact install command.
-// Exit 0: all required packages resolve. Exit 1: a required one is missing.
-// Packaging them properly (bundling, or real runtime dependencies) is WP-20 (the v0.x release).
+// An installed skill (copied, or `npx skills add`) has no node_modules until someone
+// runs `npm install` in it, so every TypeScript action and scripts/check-view.mjs would
+// crash with "Cannot find package ...". This names what is missing and prints the exact
+// install command. Exit 0: all required packages resolve. Exit 1: a required one is missing.
+// The published skill (ikenga-hq/akuko, built by ../../../../scripts/build-mirror.mjs) ships
+// a package.json with pinned versions and a vendored @ikenga/studio-schema, so there the
+// fix is a plain `npm install` in the skill folder.
 //
 // Test hook (never set in real use): AKUKO_DOCTOR_HIDE_PKGS="zod,ajv" treats those as not installed.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PACKAGES = [
@@ -21,7 +25,7 @@ const PACKAGES = [
   { name: 'jsdom', range: '29.1.1', needed: 'scripts/check-view.mjs', required: false },
 ];
 
-// An installed copy has no package.json, so --prefix stops npm walking up to a stray one.
+// --prefix pins npm to the skill folder, so it never walks up to a stray package.json.
 const SKILL_DIR = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
 const hidden = new Set((process.env.AKUKO_DOCTOR_HIDE_PKGS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
 
@@ -43,8 +47,13 @@ for (const p of PACKAGES) {
 }
 
 if (missing.length > 0) {
-  console.log('fix: with the person\'s OK, run this for the skill folder (nothing else is changed):');
-  console.log(`  npm install --no-save --prefix "${SKILL_DIR}" ${missing.map((p) => `${p.name}@${JSON.stringify(p.range).slice(1, -1)}`).join(' ')}`);
-  console.log('note: this is a stop-gap for an installed skill. Bundling these packages with the skill is planned for the v0.x release (WP-20).');
+  console.log("fix: with the person's OK, run this for the skill folder (nothing else is changed):");
+  if (existsSync(join(SKILL_DIR, 'package.json'))) {
+    // The published skill: its package.json pins every package (and vendors @ikenga/studio-schema).
+    console.log(`  npm install --no-audit --no-fund --prefix "${SKILL_DIR}"`);
+  } else {
+    console.log(`  npm install --no-save --prefix "${SKILL_DIR}" ${missing.map((p) => `${p.name}@${JSON.stringify(p.range).slice(1, -1)}`).join(' ')}`);
+    console.log('note: this copy has no package.json. The published skill (ikenga-hq/akuko) ships one; there, run `npm install` in the skill folder instead.');
+  }
 }
 process.exit(missing.some((p) => p.required) ? 1 : 0);
