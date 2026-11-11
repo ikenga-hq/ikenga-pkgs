@@ -83,10 +83,10 @@ node --experimental-strip-types handoff/cli.ts export --project <your project fo
 | M4 | **Card at its time** | An approved card (a title, a part card) starts at its film time and holds for its slot; the credits clip, if any, starts at its time | A card at the wrong time or the wrong length |
 | M5 | **Slot lengths** | Click three shots: the record in and the length match the README table to the frame. A clip longer than its slot is cut at the slot's end; a shorter one is followed by an empty gap | Off by a frame, or a clip that plays at a different speed |
 | M6 | **Only the master is heard** | Solo V1 clips: nothing plays from them (a clip made with its own sound is muted). No other audio track is on the timeline | Any sound from a clip, or voice-over / music laid beside the master |
-| M7 | **Camera move** | Open a still that has a move (the README lists them). Inspector > Transform: Zoom and Position have keyframes at the first and last frame, and the picture moves over the whole slot. **If the still does not move**, say so: Resolve does not import FCPXML transform keyframes for it. The shot's clip carries a marker with the numbers; do the move by hand from the README table | (Not a fail of the file, but report which it was: "keyframes imported" or "static, marker only") |
+| M7 | **Camera move** | A shot with a move (the README lists them) is a clip named `NNN_<shot>_move.mp4`, and playing it shows the zoom and drift across the whole slot: the first frame at the move's start, the last at its end | The shot is a still, or the clip does not move. (An export with no ffmpeg, or `--moves keyframes`, writes keyframes and a marker instead. Resolve 19.1 imports neither: checked 2026-11-11) |
 
-Send back, for M7 especially, the Resolve version and whether the keyframes arrived: it decides whether akuko keeps writing them or only the markers. Also report whether the master's start timecode came through from the file or had to be set by hand (M1).
+Send back the Resolve version and, for M7, whether the move clip plays with its move. Also report whether the master's start timecode came through from the file or had to be set by hand (M1).
 
-| Date | Resolve version | Edition | M1-M6 | M7: keyframes imported? | Notes |
+| Date | Resolve version | Edition | M1-M6 | M7: move clip moves? | Notes |
 |---|---|---|---|---|---|
 | | | | | | |

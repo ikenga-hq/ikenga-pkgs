@@ -84,7 +84,7 @@ describe('lip-sync at its span (master-clock handoff)', () => {
   it('the move is split across the pieces, never restarted: each piece starts where the whole move is at that frame', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, format: 'both' });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const stills = find(spineOf(root), 'video').filter((v) => /S01-010_still/.test(v.attrs['name']!));
     assert.equal(stills.length, 2);

@@ -33,6 +33,7 @@ import { fpsForMasterProject } from './master.ts';
 import { renderMasterReadme } from './readme-master.ts';
 import { readWavHeader } from './masterfile.ts';
 import { probeFile } from './probe.ts';
+import { renderMoves } from './render-moves.ts';
 import { HandoffError, parseFps, timecode } from './timecode.ts';
 
 export const MANIFEST = 'export-manifest.json';
@@ -52,6 +53,14 @@ export interface ExportOptions {
   timelineOnly?: boolean;
   /** A project with `audio.master`: reference the master in place instead of copying it (it can be hundreds of MB). Default: copy. */
   linkMedia?: boolean;
+  /**
+   * Camera moves on stills: `render` (default) bakes each move into a short clip with ffmpeg, because Resolve 19 drops
+   * FCPXML transform keyframes and clip markers on import; `keyframes` writes them as keyframes plus a marker only.
+   * With no ffmpeg, `render` falls back to `keyframes` with a note.
+   */
+  moves?: 'render' | 'keyframes';
+  /** For tests: the ffmpeg command, whether it is available, and the render cache folder. */
+  ffmpeg?: { cmd?: string; available?: boolean; cacheDir?: string };
 }
 
 export interface ExportResult {
@@ -62,6 +71,8 @@ export interface ExportResult {
   removed: string[];
   /** Files of ours the person has changed since akuko wrote them (a stale file, or one the new export would replace): left exactly as they are. */
   keptModified: string[];
+  /** Camera moves rendered into clips: rendered now, and reused from the render cache. */
+  moves: { rendered: number; cached: number };
 }
 
 interface ManifestFile { path: string; sha256: string; role: string }
@@ -262,7 +273,18 @@ export async function writeExport(o: ExportOptions): Promise<ExportResult> {
   const format = o.format ?? 'fcpxml';
   const timelineOnly = o.timelineOnly === true;
   const outDir = resolve(o.outDir);
-  const plan = await planFromFolder(o);
+  let plan = await planFromFolder(o);
+  let moves = { rendered: 0, cached: 0 };
+  if (!timelineOnly && (o.moves ?? 'render') === 'render') {
+    const r = await renderMoves(plan, {
+      pathOf: (m) => m.src ?? localPath(o.projectDir, m.uri),
+      ...(o.ffmpeg?.cmd ? { ffmpeg: o.ffmpeg.cmd } : {}),
+      ...(o.ffmpeg?.available !== undefined ? { available: o.ffmpeg.available } : {}),
+      ...(o.ffmpeg?.cacheDir ? { cacheDir: o.ffmpeg.cacheDir } : {}),
+    });
+    plan = r.plan;
+    moves = { rendered: r.rendered, cached: r.cached };
+  }
   const srtPath = plan.captions.find((c) => c.dest.endsWith('.srt'));
   const srt = srtPath && !timelineOnly ? await readFile(localPath(o.projectDir, srtPath.uri)!, 'utf8') : undefined;
   const texts = renderTexts(plan, outDir, { format, timelineOnly, ...(srt !== undefined ? { srt } : {}) });
@@ -387,5 +409,5 @@ export async function writeExport(o: ExportOptions): Promise<ExportResult> {
   }
 
   await writeManifest(files.values());
-  return { outDir, plan, written, unchanged, removed, keptModified };
+  return { outDir, plan, written, unchanged, removed, keptModified, moves };
 }

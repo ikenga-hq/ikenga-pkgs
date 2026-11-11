@@ -81,6 +81,8 @@ export interface VideoEvent {
    * carries the part of it between `at` and `at + frames` (fcpxml.ts#movePiece). Absent: the still fills its slot.
    */
   moveSpan?: { at: number; of: number };
+  /** The move was rendered into this clip at export (render-moves.ts): the event is a `clip` now, and `move` / `moveSpan` only describe it. */
+  rendered?: boolean;
 }
 
 /** The audio roles the per-shot layout lays; a master-clock plan has one more, `master`. */
@@ -139,6 +141,8 @@ export interface MoveRow {
   move: StillMove;
   /** The lip-sync the still is held around (WP-32): its record in and length, in frames. The move runs on across it. */
   around?: { recIn: number; frames: number };
+  /** Rendered into a clip at export (render-moves.ts), not left as keyframes. */
+  rendered?: boolean;
 }
 
 export interface ExportPlan {

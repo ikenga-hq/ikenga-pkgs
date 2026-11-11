@@ -2,7 +2,7 @@
  * akuko — command line for the DaVinci Resolve handoff (hosts B and C). Free: no provider, no spend.
  *
  *   node --experimental-strip-types handoff/cli.ts export --project <folder>
- *        [--out <folder>] [--format fcpxml|edl|both] [--fps 24] [--timeline-only] [--link-media]
+ *        [--out <folder>] [--format fcpxml|edl|both] [--fps 24] [--timeline-only] [--link-media] [--moves render|keyframes]
  *
  *   export   writes the export folder (default `<project>/export/resolve`): approved media copied in
  *            shot order, `timeline.fcpxml` (and EDLs with --format edl|both), README.md, LEFT-OUT.md,
@@ -13,6 +13,9 @@
  *            files are not on this machine (claude.ai): clip lengths are not checked.
  *   --link-media   a project with `audio.master`: reference the master WAV in place instead of copying it
  *            (default: copy). The frame rate then comes from `project.fps`; --fps must agree with it.
+ *   --moves  camera moves on stills: `render` (default) bakes each move into a short mp4 with ffmpeg, because
+ *            Resolve 19 drops FCPXML transform keyframes and clip markers; `keyframes` writes them as keyframes
+ *            plus a marker only. Without ffmpeg, `render` falls back to `keyframes` and says so.
  *
  * A project with `audio.master` is exported on the master clock: every approved shot and card at its film
  * time, the master whole on A1 (see `master.ts`).
@@ -47,6 +50,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
   if (!dir) return { code: 2, out: 'akuko: --project <folder> is required.' };
   const format = (str(opt.get('format')) ?? 'fcpxml') as TimelineFormat;
   if (!['fcpxml', 'edl', 'both'].includes(format)) return { code: 2, out: 'akuko: --format must be fcpxml, edl or both.' };
+  const moves = str(opt.get('moves')) ?? 'render';
+  if (moves !== 'render' && moves !== 'keyframes') return { code: 2, out: 'akuko: --moves must be render or keyframes.' };
   try {
     const host = createLocalHost({ projectDir: dir, now });
     const project = await host.readState();
@@ -59,11 +64,12 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       format,
       ...(opt.has('timeline-only') ? { timelineOnly: true } : {}),
       ...(opt.has('link-media') ? { linkMedia: true } : {}),
+      moves,
     });
     const p = r.plan;
     const out = [
       `Exported ${p.shots.length} shot${p.shots.length === 1 ? '' : 's'}, ${timecode(p.totalFrames, p.fps)} (${p.totalFrames} frames at ${p.fps.label} fps), to ${r.outDir}`,
-      ...(p.master ? [`  master clock: starts at ${p.master.startTc}, ${p.cards?.length ?? 0} card(s), ${p.moves?.length ?? 0} camera move(s) on stills, the master ${p.master.linked ? 'referenced in place' : 'copied'}; ${p.covered?.length ?? 0} sound unit(s) covered by the master`] : []),
+      ...(p.master ? [`  master clock: starts at ${p.master.startTc}, ${p.cards?.length ?? 0} card(s), ${p.moves?.length ?? 0} camera move(s) on stills${r.moves.rendered + r.moves.cached > 0 ? ` (rendered into clips: ${r.moves.rendered} now, ${r.moves.cached} from the render cache)` : ''}, the master ${p.master.linked ? 'referenced in place' : 'copied'}; ${p.covered?.length ?? 0} sound unit(s) covered by the master`] : []),
       `  on the video track: ${p.shots.filter((s) => s.uses === 'clip' || s.uses === 'lipsync').length} clip(s), ${p.shots.filter((s) => s.uses === 'still').length} still(s), ${p.shots.filter((s) => s.uses === 'gap').length} gap(s)${p.shots.some((s) => s.uses === 'no-duration') ? `, ${p.shots.filter((s) => s.uses === 'no-duration').length} left off (no duration)` : ''}`,
       `  audio: ${p.audio.length} placed${p.notPlaced.length ? `, ${p.notPlaced.length} not placed` : ''}${p.captions.length ? ', captions copied' : ''}`,
       `  files: ${r.written.length} written, ${r.unchanged.length} already up to date${r.removed.length ? `, ${r.removed.length} removed (no longer in the export)` : ''}`,

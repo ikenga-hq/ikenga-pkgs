@@ -125,7 +125,7 @@ describe('master clock: placement', () => {
   it('never uses the sound of a picture file: a clip with its own sound is muted', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const assets = find(find(root, 'resources')[0]!, 'asset');
     const clipAsset = assets.find((a) => /S02-010/.test(a.attrs['name']!))!;
@@ -145,7 +145,7 @@ describe('master clock: the FCPXML', () => {
   it('starts at start_tc, is as long as the master, and tiles frame-exact', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, format: 'both' });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const seq = sequenceOf(root);
     assert.equal(seq.attrs['tcStart'], '0s');
@@ -161,7 +161,7 @@ describe('master clock: the FCPXML', () => {
   it('lays the master WAV uncut from frame 0 on its own track, copied byte for byte', async () => {
     const { project, dir, masterPath } = await build({ masterOutside: true });
     const out = join(await scratch(), 'resolve');
-    const r = await writeExport({ project, projectDir: dir, outDir: out });
+    const r = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     assert.ok(r.written.includes('audio/master.wav'));
     assert.equal(sha(join(out, 'audio', 'master.wav')), sha(masterPath), 'the copy is the file, untouched');
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
@@ -183,7 +183,7 @@ describe('master clock: the FCPXML', () => {
   it('--link-media references the master in place and copies nothing', async () => {
     const { project, dir, masterPath } = await build({ masterOutside: true });
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, linkMedia: true });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, linkMedia: true });
     assert.ok(!existsSync(join(out, 'audio', 'master.wav')));
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const a = find(find(root, 'resources')[0]!, 'asset').find((x) => x.attrs['name'] === 'master')!;
@@ -196,7 +196,7 @@ describe('master clock: the FCPXML', () => {
   it('a still with a move gets transform keyframes across its slot, and a marker', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const video = find(spineOf(root), 'video').find((v) => /S01-020/.test(v.attrs['name']!))!;
     assert.equal(parseFcpTime(video.attrs['duration']!, fps24), 54);
@@ -220,7 +220,7 @@ describe('master clock: the FCPXML', () => {
     assert.ok(video.children.indexOf(marker) > video.children.indexOf(tr));
     // Only that still moves.
     assert.equal(find(spineOf(root), 'video').filter((v) => find(v, 'adjust-transform').length > 0).length, 1);
-    assert.match(readFileSync(join(out, 'README.md'), 'utf8'), /Camera moves on stills[\s\S]*Not verified[\s\S]*S01-020/);
+    assert.match(readFileSync(join(out, 'README.md'), 'utf8'), /Camera moves on stills[\s\S]*Resolve 19 imports neither[\s\S]*S01-020/);
   });
 
   it('eases map to keyframe interpolation', () => {
@@ -234,7 +234,7 @@ describe('master clock: the FCPXML', () => {
   it('validates against Apple\'s FCPXMLv1_8.dtd (when AKUKO_FCPXML_DTD is set)', { skip: !process.env['AKUKO_FCPXML_DTD'] }, async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const dtd = parseDtd(readFileSync(process.env['AKUKO_FCPXML_DTD']!, 'utf8'));
     assert.deepEqual(validate(parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8')), dtd), []);
   });
@@ -242,7 +242,7 @@ describe('master clock: the FCPXML', () => {
   it('every ref resolves and every asset URL points at a real file', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     const assets = new Map(find(find(root, 'resources')[0]!, 'asset').map((a) => [a.attrs['id']!, a]));
     for (const a of assets.values()) assert.ok(existsSync(fileURLToPath(a.attrs['src']!)), a.attrs['src']);
@@ -256,7 +256,7 @@ describe('master clock: timecode and frame rate', () => {
   it('start_tc sets tcStart and every record timecode', async () => {
     const { project, dir } = await build({ startTc: '01:00:00:00' });
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const root = parseXml(readFileSync(join(out, 'timeline.fcpxml'), 'utf8'));
     assert.equal(parseFcpTime(sequenceOf(root).attrs['tcStart']!, fps24), 86400);
     assert.equal(parseFcpTime(spineOf(root).children[1]!.attrs['offset']!, fps24), 86400 + 24);
@@ -302,7 +302,7 @@ describe('master clock: the EDL', () => {
   it('video EDL: events at record time, a card reel, black for gaps, the move as a comment', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, format: 'both' });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, format: 'both' });
     const v = parseEdl(readFileSync(join(out, 'edl', 'video.edl'), 'utf8'));
     assert.equal(v.fcm, 'NON-DROP FRAME');
     assert.deepEqual(
@@ -332,7 +332,7 @@ describe('master clock: the EDL', () => {
   it('record timecodes follow start_tc', async () => {
     const { project, dir } = await build({ startTc: '10:00:00:00' });
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out, format: 'edl' });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, format: 'edl' });
     const v = parseEdl(readFileSync(join(out, 'edl', 'video.edl'), 'utf8'));
     assert.equal(v.events[0]!.recIn, '10:00:00:00');
     assert.equal(v.events[2]!.recIn, timecode(10 * 3600 * 24 + 36, fps24));
@@ -343,7 +343,7 @@ describe('master clock: the folder and the README', () => {
   it('the README says what was placed, what was left out and how to import', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     const readme = readFileSync(join(out, 'README.md'), 'utf8');
     assert.match(readme, /3 of 4 shots and 1 card are on the timeline/);
     assert.match(readme, /Audio track A1 is the master/);
@@ -358,8 +358,8 @@ describe('master clock: the folder and the README', () => {
   it('a re-run of an unchanged project writes nothing', async () => {
     const { project, dir } = await build();
     const out = join(await scratch(), 'resolve');
-    await writeExport({ project, projectDir: dir, outDir: out });
-    const again = await writeExport({ project, projectDir: dir, outDir: out });
+    await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
+    const again = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out });
     assert.deepEqual(again.written, []);
   });
 
@@ -367,7 +367,7 @@ describe('master clock: the folder and the README', () => {
     const { project, dir, masterPath } = await build();
     await rm(masterPath);
     const out = join(await scratch(), 'resolve');
-    const r = await writeExport({ project, projectDir: dir, outDir: out, timelineOnly: true });
+    const r = await writeExport({ moves: 'keyframes', project, projectDir: dir, outDir: out, timelineOnly: true });
     assert.ok(r.written.includes('timeline.fcpxml'));
     assert.ok(!existsSync(join(out, 'audio')));
     assert.match(readFileSync(join(out, 'DOWNLOAD-LIST.md'), 'utf8'), /audio\/master\.wav/);
