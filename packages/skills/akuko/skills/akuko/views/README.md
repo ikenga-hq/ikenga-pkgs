@@ -6,8 +6,9 @@ A view is a page that shows an akuko project and hands back the person's decisio
 |---|---|
 | `contract.md` | The view contract: required views and fields, the decision format, the five renderer rules, where decisions land per host. |
 | `views.schema.json` · `decision.schema.json` | Machine-readable parts of the contract. |
-| `default-board.html` | **The default board**: one self-contained page, `default-board@0.3`. |
-| `publish.ts` | `node --experimental-strip-types views/publish.ts --project <folder>`: embeds `<folder>/akuko.json` in the board's `akuko-project` block (escaped) and publishes it through `LocalHost.publishView()`; prints the path. With `--signoff <gate id>` it writes that gate's read-only sign-off page instead (below). |
+| `default-board.html` | **The default board**: one self-contained page, `default-board@0.5`. |
+| `publish.ts` | `node --experimental-strip-types views/publish.ts --project <folder>`: embeds `<folder>/akuko.json` in the board's `akuko-project` block (escaped), with thumbnails of its pictures and its intake texts (`media.ts`), and publishes it through `LocalHost.publishView()`; prints the path. With `--signoff <gate id>` it writes that gate's read-only sign-off page instead (below). |
+| `media.ts` | The board's pictures on hosts B and C (@0.5): thumbnails as `data:` URIs, links relative to the page, intake texts. |
 | `signoff.ts` | Builds the read-only sign-off page for one gate (WP-29). |
 | `conformed.json` | The list of views that passed `scripts/check-view.mjs`, with the sha256 of the exact HTML. Folding accepts approvals only from views on it. |
 | `default-board.test.ts` | Pins the board: its hash is the recorded one, it passes the check, the text is readable in both themes, it reads live data. |
@@ -23,7 +24,23 @@ The "script desk": the screenplay on the left with every shot lined to the line 
 - **Undo** reverses exactly the decision you just made.
 - **Without a store it still works.** On a plain local file decisions stay in the page's outbox; **Copy decisions for akuko** puts the ones the project does not have yet on the clipboard to paste into chat, and says so on screen ("Copied 3 decisions"). Decisions already in the project's `decisions` are left out of the copy (and counted as "already in your project"); nothing is ever deleted from the outbox.
 - **Reading decisions from code.** `window.akukoDecisions.jsonl()` returns every decision this page holds, one JSON object per line (`all()` returns the same as objects). On host B in the Claude desktop app the agent runs it through the built-in browser's JavaScript tool instead of asking for a paste, then appends the lines with `decisions/cli.ts append` (it skips ids already there). That pane has no storage and loads the file as a `data:` URL, so decisions live only until the page reloads: read them before republishing. They are still the person's clicks; the agent never clicks approve. The JavaScript tool (`mcp__Claude_Browser__javascript_tool`, or the linked-cloud variant `mcp__remote-devices__Claude_Browser__*`) is used for exactly one read-only call: `window.akukoDecisions.jsonl()` (or `.all()`). Never call `emit()`, never click or dispatch events on the page, and never change the page, its DOM or its storage through it: a click or `emit()` there would write a decision signed as the person that folding accepts as theirs. Write the returned string to the file as it is and append it with `decisions/cli.ts append`: never edit, add or drop a line.
-- **The pipeline strip** is a button only where the board has a section to open: Intake opens the script, Breakdown and Sketch the shots, Bibles the bible, and a stage with a paid job waiting opens the spend gate. A locked or not-started stage is plain text with a tooltip ("Locked: approve Breakdown first", "Not started") and no hover or pointer.
+- **The pipeline strip** (@0.5): every stage that has started, is current, holds units or has a paid job is a button that opens that stage's **lens** at the top of the middle pane and stays pressed (`aria-pressed`, an underline) until you close it or click it again. Breakdown and Sketch: a count of the stage, and each shot row says how it stands *at that stage*. Bibles: every bible picture large, with its Approve. Key frames, Motion, …: that stage's items (pictures large), and a link to the spend gate when it has a paid job. Intake: the intake documents, which sit with the script (above the screenplay), never in the bible. A locked or not-started stage is plain text with a tooltip ("Locked: approve Breakdown first", "Not started") and no hover or pointer.
+- **Your move names the right place**: "2 intake documents waiting · Open intake", "bible items · Open bible", "key frames · Open key frames". **Review next shot** opens the first waiting shot in film order (in the part shown, else anywhere); a waiting shot is never skipped because it was already selected. Each stage shows its own "N to review".
+- **Per-stage status.** A status decision counts only at the stage it was made (folding refuses it elsewhere, `stale-stage`): a shot approved at Breakdown and now waiting at Sketch shows waiting, with no "You approved this panel" and no Undo for the old approval; the thread labels each approval with its stage. **Undo of a folded approval** puts the unit back to what the fold trail says it was (else waiting for review), with its Approve button, and the approve / undo cycle repeats.
+- **Done reviewing?** Once the current stage has nothing waiting, "your move" shows a sentence for the chat ("I have finished reviewing Sketch board on the akuko board. Read my decisions and carry on.") with a **Copy** button that says "Copied". The chat only acts when the person writes to it; the page never sends anything itself.
+
+### Pictures (@0.5)
+
+Bible pictures, key frames, cards and image intake documents are shown as thumbnails (the shot list shows a shot's key frame once there is one, else its sketch panel) and open larger in a dialog (Escape, Close or a click outside closes it; focus stays in it and goes back to the picture; alt text names the kind, the owner and the id). The page loads a picture only from:
+
+| Source | Where | Notes |
+|---|---|---|
+| `/_blob/<id>` | host A: the artifact's asset store, served by the page itself | `storeAsset()` writes this as `file.uri` |
+| `project._board.thumbs[uri]` | hosts B/C: a `data:image/…;base64` thumbnail `publish.ts` embedded | at most 400 KB each and 8 MB in all; shrunk to 640 px (JPEG) with ffmpeg when it is on PATH (`--no-shrink` skips it); `--images link|none`, `--max-image-mb`, `--max-total-mb` change this |
+| `project._board.links[uri]` | hosts B/C, a page opened from disk or over http next to the project | a plain relative path (`../board/keyframes/sc1_sh1.png`) the publisher computed; the full file in the dialog |
+| a project path, resolved against the folder `akuko.json` was read from | a page served over http that reads `akuko.json` live | so pictures made after publishing show without republishing |
+
+Never a remote or absolute URL, a `javascript:` or non-image `data:` URI, or a path the publisher would refuse (outside the project folder and its parent, another drive). A picture that fails to load becomes a frame saying "image not available here". `_board` lives in the project block, so it is outside the conformance hash, and a live `akuko.json` (which has no `_board`) keeps what the publisher embedded. Intake text documents (≤ 256 KB) are embedded too and can be read on the board; on host A a `/_blob/` document is read (GET) when opened.
 
 ### Real projects: a long shot list, cards, rules and gates (@0.3, WP-29)
 
@@ -76,7 +93,7 @@ The file opens offline on a **sample project** (the project block carries `"_sam
 - **Host A (claude.ai):** publish `default-board.html` **unchanged**, so the hash on `conformed.json` names what was published, with
   `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`.
   Then write the project to the doc `akuko/project`; the board reads it and replaces the sample.
-- **Host B / C:** run `node --experimental-strip-types views/publish.ts --project <folder>`. It writes the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and saves the page as `<project>/views/default-board.html`. Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.3`; decisions written by `@0.1` and `@0.2` boards still fold, because every id stays on `conformed.json`).
+- **Host B / C:** run `node --experimental-strip-types views/publish.ts --project <folder>`. It writes the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and saves the page as `<project>/views/default-board.html`. Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.5`; decisions written by `@0.1` … `@0.4` boards still fold, because every id stays on `conformed.json`).
 
 ### Changing the board
 
@@ -92,4 +109,4 @@ The conformance hash covers the page but ignores the content of the `akuko-proje
 - Built from the locked design D-01, option B "script desk", on `@ikenga/tokens` theme A "Dusk Wood". Colours are defined under `--ak-*` names on purpose: a host that injects its own `--bg-base` or `--fg` (the Ikenga viewer does) must not be able to mix its palette into the page.
 - The page follows the host's theme in Ikenga until the person picks one with the Light / Dark button.
 - Body text is 14 px or larger, labels 12 px or larger. Every control is reachable by keyboard and shows focus. Motion respects `prefers-reduced-motion`.
-- Bible images and key frames do not exist at this stage, so their frames are labelled placeholders, never made-up art.
+- Pictures are real or labelled, never made up: a frame says "no image yet", "not a picture" or "image not available here" where there is nothing the page may show.

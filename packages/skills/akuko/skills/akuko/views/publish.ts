@@ -2,7 +2,7 @@
  * akuko — put the current project into the default board and publish it, or
  * publish a gate's read-only sign-off page.
  *
- *   node --experimental-strip-types views/publish.ts --project <folder>
+ *   node --experimental-strip-types views/publish.ts --project <folder> [--images embed|link|none] [--max-image-mb <n>] [--max-total-mb <n>] [--no-shrink]
  *   node --experimental-strip-types views/publish.ts --project <folder> --signoff <gate id>
  *        [--out <file>] [--images embed|link|none] [--max-image-mb <n>] [--max-total-mb <n>]
  *
@@ -13,7 +13,15 @@
  * the publishers and check-view use) and publishes the page through
  * `LocalHost.publishView()`, so the host's conformance gate still applies.
  * Embedding the project does not change the conformance hash. Prints the path
- * of `<folder>/views/default-board.html`.
+ * of `<folder>/views/default-board.html`, and on stderr how the pictures went in.
+ *
+ * Pictures (@0.5, `views/media.ts`): a local page can't load the project's
+ * image files, so the board's block also carries `_board`: a thumbnail of each
+ * picture as a `data:` URI (at most 400 KB each, 8 MB in all; shrunk to 640 px
+ * with ffmpeg when it is on PATH, `--no-shrink` to skip), a link relative to the
+ * page for the full file, and the intake text documents. `--images link` embeds
+ * no thumbnails, `--images none` no pictures; `--max-image-mb` / `--max-total-mb`
+ * change the caps.
  *
  * Run it again whenever you want the page to start from newer data; a page
  * served over http re-reads `akuko.json` by itself. Decisions held only in an
@@ -33,6 +41,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { escapeJsonForScript, findJsonBlock, PROJECT_BLOCK } from '../scripts/check-view/hash.mjs';
 import { decisionWriteSigns } from '../scripts/check-view/predicates.mjs';
 import { createLocalHost } from '../hosts/local.ts';
+import { buildBoardMedia, mediaSummary, type BoardMediaOptions, type BoardMediaResult } from './media.ts';
 import { buildSignoffPage, signoffFileName, type SignoffPageOptions } from './signoff.ts';
 
 const SKILL = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,12 +54,25 @@ export function embedProject(html: string, project: unknown): string {
   return html.slice(0, b.start) + escapeJsonForScript(JSON.stringify(project)) + html.slice(b.end);
 }
 
-export async function publishBoard(projectDir: string, boardFile: string = DEFAULT_BOARD): Promise<string> {
+export interface BoardPublishResult { path: string; media: BoardMediaResult }
+
+/**
+ * Embed the project with its pictures (`views/media.ts`: thumbnails, links and intake texts, as `project._board`)
+ * and publish the board through the local host. Returns the page's path and how each picture went in.
+ */
+export async function publishBoardWithMedia(projectDir: string, boardFile: string = DEFAULT_BOARD, opts: Omit<BoardMediaOptions, 'outDir'> = {}): Promise<BoardPublishResult> {
   const host = createLocalHost({ projectDir });
   const project = await host.readState();
-  const out = await host.publishView({ name: 'default-board', title: 'akuko default board', html: embedProject(readFileSync(boardFile, 'utf8'), project), writesDecisions: true });
+  const media = buildBoardMedia(project, projectDir, { ...opts, outDir: join(projectDir, 'views') });
+  const m = media.media;
+  const data = Object.keys(m.thumbs).length + Object.keys(m.links).length + Object.keys(m.texts).length ? { ...project, _board: m } : project;
+  const out = await host.publishView({ name: 'default-board', title: 'akuko default board', html: embedProject(readFileSync(boardFile, 'utf8'), data), writesDecisions: true });
   if (!out.path) throw new Error('the host returned no path');
-  return out.path;
+  return { path: out.path, media };
+}
+
+export async function publishBoard(projectDir: string, boardFile: string = DEFAULT_BOARD, opts: Omit<BoardMediaOptions, 'outDir'> = {}): Promise<string> {
+  return (await publishBoardWithMedia(projectDir, boardFile, opts)).path;
 }
 
 export interface SignoffPublishResult {
@@ -97,20 +119,27 @@ function opt(argv: string[], name: string): string | undefined {
 export async function main(argv: string[]): Promise<number> {
   const dir = opt(argv, 'project');
   if (!dir) {
-    process.stderr.write('usage: node --experimental-strip-types views/publish.ts --project <folder> [--signoff <gate id> [--out <file>] [--images embed|link|none] [--max-image-mb <n>] [--max-total-mb <n>]]\n');
+    process.stderr.write('usage: node --experimental-strip-types views/publish.ts --project <folder> [--images embed|link|none] [--max-image-mb <n>] [--max-total-mb <n>] [--no-shrink] [--signoff <gate id> [--out <file>]]\n');
     return 2;
   }
   try {
     const gate = opt(argv, 'signoff');
-    if (gate === undefined) {
-      process.stdout.write(`${await publishBoard(resolve(dir))}\n`);
-      return 0;
-    }
     const images = opt(argv, 'images');
     if (images !== undefined && !['embed', 'link', 'none'].includes(images)) throw new Error('--images is embed, link or none');
     const mib = (k: string, unit: number) => { const v = opt(argv, k); if (v === undefined) return undefined; const x = Number(v); if (!(x > 0)) throw new Error(`--${k} must be a positive number`); return Math.floor(x * unit); };
     const maxImageBytes = mib('max-image-mb', 1024 * 1024);
     const maxTotalBytes = mib('max-total-mb', 1000 * 1000);
+    if (gate === undefined) {
+      const r = await publishBoardWithMedia(resolve(dir), DEFAULT_BOARD, {
+        ...(images ? { images: images as 'embed' | 'link' | 'none' } : {}),
+        ...(maxImageBytes ? { maxThumbBytes: maxImageBytes } : {}),
+        ...(maxTotalBytes ? { maxTotalBytes } : {}),
+        ...(argv.includes('--no-shrink') ? { shrink: false } : {}),
+      });
+      process.stdout.write(`${r.path}\n`);
+      process.stderr.write(`board pictures: ${mediaSummary(r.media)}\n`);
+      return 0;
+    }
     const out = opt(argv, 'out');
     const r = await publishSignoff(resolve(dir), gate, {
       ...(images ? { images: images as 'embed' | 'link' | 'none' } : {}),
