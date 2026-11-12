@@ -204,6 +204,26 @@ describe('jobs: one shot, the start frame, the length the model can make', () =>
     assert.ok(b.notes.some((n) => /Sound is off/.test(n)));
   });
 
+  it('Seedance (B-12): a whole-second model covers the shot to the next second, from 4 s, and prices the billed seconds', () => {
+    const model = Object.keys(CFG.providers['fal-video']!.models).find((m) => m === 'bytedance/seedance-2.0/image-to-video#720p')!;
+    assert.ok(model, 'Seedance 2.0 720p is configured');
+    const p = funded();
+    const b = buildMotionJob(p, { provider: 'fal-video', model });
+    assert.equal(b.job.items[0]!.duration_s, 6, 'a 6 s shot needs no rounding');
+    assert.equal(b.notes.some((n) => /makes 4 to 15 s clips/.test(n)), false);
+    assert.match(b.job.label, /sc1_sh1 6 s x 0\.3034 USD\/s = 1\.8204/);
+    const short = funded();
+    short.shots[0]!.duration_s = 2.5;
+    const s = buildMotionJob(short, { provider: 'fal-video', model });
+    assert.equal(s.job.items[0]!.duration_s, 4, 'below the 4 s minimum the clip is 4 s');
+    assert.ok(s.notes.some((n) => /shot runs 2\.5 s but fal-video makes 4 to 15 s clips, so this clip is 4 s \(1\.5 s longer/.test(n)), s.notes.join('|'));
+    const odd = funded();
+    odd.shots[0]!.duration_s = 6.2;
+    assert.equal(buildMotionJob(odd, { provider: 'fal-video', model }).job.items[0]!.duration_s, 7, 'a part second is billed as a whole one');
+    const loud = buildMotionJob(funded(), { provider: 'fal-video', model, audio: true });
+    assert.equal(loud.job.model, `${model}#audio`);
+  });
+
   it('--units / --scene put several clips in one job', () => {
     const p = funded();
     const two = buildMotionJob(p, { provider: 'fal-video', units: [CLIP1, 'sc1_sh4_clip'] });

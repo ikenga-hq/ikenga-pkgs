@@ -11,9 +11,14 @@
  *   - hosts B and C only: a paid direct API is refused on host A (R-11)
  *   - `estimate()` is arithmetic on config (price per second x the clip's
  *     seconds); it never touches the network
- *   - the models offered make clips of fixed lengths (5 or 10 s). A job that
- *     asks for another length is REFUSED with the allowed lengths; the motion
- *     stage rounds to an allowed length first and says so (`motion/plan.ts`)
+ *   - each model makes clips of set lengths: Kling 5 or 10 s, Seedance 2.0 any
+ *     whole second from 4 to 15, Seedance 2.5 from 4 to 30. A job that asks for
+ *     another length is REFUSED with the allowed lengths; the motion stage rounds
+ *     up to an allowed length first and says so (`motion/plan.ts`), and every
+ *     billed second is priced (per second x the clip's seconds)
+ *   - a model id may carry a resolution variant (`#720p`): same endpoint, sent
+ *     as the request's resolution, with its own price in config. Seedance needs
+ *     one; akuko never sends "auto" for a length or a resolution
  *   - sound is OFF unless the model id carries the `#audio` variant, which has
  *     its own (higher) price in config. akuko strips the suffix before calling
  *     fal. A different model id is a different job hash, so asking for audio
@@ -39,6 +44,8 @@ export const FAL_VIDEO_PROVIDER_ID = 'fal-video';
 const QUEUE = 'https://queue.fal.run';
 /** Suffix on a model id in config.json meaning "same endpoint, native sound on". */
 export const AUDIO_SUFFIX = '#audio';
+/** A resolution variant on a model id in config.json: `<endpoint>#720p` (before any `#audio`). */
+const RESOLUTION_SUFFIX = /#(\d{3,4}p)$/;
 
 export class FalVideoError extends Error {
   override name = 'FalVideoError';
@@ -57,23 +64,42 @@ export interface VideoLimits {
   imageField: string;
   /** Name of the boolean field that turns native sound on or off; absent when the endpoint has none (it is silent). */
   audioField?: string;
+  /** Name of the field that carries the resolution; set when the endpoint needs one (the model id then names it, `#720p`). */
+  resolutionField?: string;
 }
+
+/** Every whole second from `min` to `max`. */
+const wholeSeconds = (min: number, max: number): number[] => Array.from({ length: max - min + 1 }, (_, i) => min + i);
 
 /** First match wins. Matched on a fragment of the endpoint id (see config.json for the ids). */
 const LIMITS: Array<{ match: RegExp; limits: VideoLimits }> = [
   { match: /kling-video\/v2\.5/, limits: { allowedSeconds: [5, 10], imageField: 'image_url' } },
   { match: /kling-video\/v2\.6/, limits: { allowedSeconds: [5, 10], imageField: 'start_image_url', audioField: 'generate_audio' } },
+  // Seedance on fal (read 2026-11-12, see config.json): duration "4".."15" (2.0, 2.0 fast) or "4".."30" (2.5), resolution required here.
+  { match: /seedance-2\.5\//, limits: { allowedSeconds: wholeSeconds(4, 30), imageField: 'image_url', audioField: 'generate_audio', resolutionField: 'resolution' } },
+  { match: /seedance-2\.0\//, limits: { allowedSeconds: wholeSeconds(4, 15), imageField: 'image_url', audioField: 'generate_audio', resolutionField: 'resolution' } },
 ];
 
-/** The endpoint id and whether sound is on, from a configured model id. */
-export const splitModel = (model: string): { endpoint: string; audio: boolean } =>
-  model.endsWith(AUDIO_SUFFIX) ? { endpoint: model.slice(0, -AUDIO_SUFFIX.length), audio: true } : { endpoint: model, audio: false };
+/** The endpoint id, whether sound is on, and the resolution variant if any, from a configured model id. */
+export function splitModel(model: string): { endpoint: string; audio: boolean; resolution?: string } {
+  const audio = model.endsWith(AUDIO_SUFFIX);
+  let endpoint = audio ? model.slice(0, -AUDIO_SUFFIX.length) : model;
+  const res = RESOLUTION_SUFFIX.exec(endpoint);
+  if (res) endpoint = endpoint.slice(0, res.index);
+  return { endpoint, audio, ...(res ? { resolution: res[1]! } : {}) };
+}
 
-/** What a configured fal video model can do; undefined when akuko has no rules for it (it is then refused, not guessed). */
-export function falVideoLimits(model: string): (VideoLimits & { audio: boolean; endpoint: string }) | undefined {
-  const { endpoint, audio } = splitModel(model);
+/**
+ * What a configured fal video model can do; undefined when akuko has no rules for it (it is then refused, not
+ * guessed). An endpoint that needs a resolution has none unless the id names one, and a resolution on an endpoint
+ * that takes none is not sent anywhere: both are refused the same way.
+ */
+export function falVideoLimits(model: string): (VideoLimits & { audio: boolean; endpoint: string; resolution?: string }) | undefined {
+  const { endpoint, audio, resolution } = splitModel(model);
   const hit = LIMITS.find((l) => l.match.test(endpoint));
-  return hit ? { ...hit.limits, audio, endpoint } : undefined;
+  if (!hit) return undefined;
+  if ((hit.limits.resolutionField !== undefined) !== (resolution !== undefined)) return undefined;
+  return { ...hit.limits, audio, endpoint, ...(resolution !== undefined ? { resolution } : {}) };
 }
 
 /**
@@ -84,6 +110,13 @@ export function snapSeconds(wanted: number, allowed: number[]): { seconds: numbe
   let best = allowed[0] as number;
   for (const s of allowed) if (Math.abs(s - wanted) < Math.abs(best - wanted)) best = s;
   return { seconds: best, changed: best !== wanted };
+}
+
+/** "5 or 10", or "4 to 15" for a run of whole seconds. */
+export function secondsText(allowed: number[]): string {
+  const sorted = [...allowed].sort((a, b) => a - b);
+  const run = sorted.length > 2 && sorted.every((s, i) => i === 0 || s === sorted[i - 1]! + 1);
+  return run ? `${sorted[0]} to ${sorted[sorted.length - 1]}` : sorted.join(' or ');
 }
 
 export type Fit = 'cover' | 'nearest';
@@ -177,7 +210,7 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
       if (startFrame(item).length !== 1) throw new FalVideoError(`unit "${item.unit}" needs exactly one start frame (a ref with role "start-frame" and a file)`);
       if (item.duration_s === undefined) throw new FalVideoError(`unit "${item.unit}" has no duration_s`);
       if (!limits.allowedSeconds.includes(item.duration_s)) {
-        throw new FalVideoError(`unit "${item.unit}": ${model} makes clips of ${limits.allowedSeconds.join(' or ')} seconds, not ${item.duration_s}.`);
+        throw new FalVideoError(`unit "${item.unit}": ${model} makes clips of ${secondsText(limits.allowedSeconds)} seconds, not ${item.duration_s}.`);
       }
     }
   }
@@ -219,6 +252,7 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
       [limits.imageField]: image,
       duration: String(item.duration_s),
       ...(limits.audioField ? { [limits.audioField]: limits.audio } : {}),
+      ...(limits.resolutionField && limits.resolution ? { [limits.resolutionField]: limits.resolution } : {}),
     };
     const res = await fetchOf(opts.fetch)(`${QUEUE}/${limits.endpoint}`, { method: 'POST', headers: headers(true), body: JSON.stringify(body) });
     const text = await res.text();
@@ -238,7 +272,7 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
       id: FAL_VIDEO_PROVIDER_ID,
       kinds: ['video'],
       hosts: ['B', 'C'],
-      capabilities: { i2v: true, maxSeconds: 10, nativeAudio: true, refImages: 1 },
+      capabilities: { i2v: true, maxSeconds: Math.max(...LIMITS.flatMap((l) => l.limits.allowedSeconds)), nativeAudio: true, refImages: 1 },
 
       async estimate(job: Job): Promise<Cost> {
         check(job);

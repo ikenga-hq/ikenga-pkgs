@@ -38,7 +38,7 @@ The unit is one planned asset per shot (`sc1_sh1_keyframe`), owned by the shot. 
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../keyframes/cli.ts <command> --project <folder>` (B and C). On host A the project lives in the board artifact's database, not in a folder, so there is no `--project` folder: follow the same steps with the manual provider and the rules in `../lib/spend.md` §Host A, reading and writing the project with the host adapter (`../lib/hosts.md`). The audit below has its own host A paragraph.
+All commands: `node --experimental-strip-types ../keyframes/cli.ts <command> --project <folder>` (B and C). On host A the project lives in the board artifact's database, not in a folder, so there is no `--project` folder: follow the same steps with the manual provider and the rules in `../lib/spend.md` §Host A, reading and writing the project with the host adapter (`../lib/hosts.md`). Making the frames with a connected tool that uses the person's plan allowance (Canva on claude.ai) is not free: before **each wave**, post the allowance line and wait for the exact OK, record every generation with zero money and a units count, and keep Canva's own confirmations for the person to answer (`../lib/spend.md` §Allowance). One frame per wave by default, so 12 key frames are 12 OKs unless the person asks for a scene at a time. The audit below has its own host A paragraph.
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If the stage is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: one planned key frame per shot. Safe to repeat.

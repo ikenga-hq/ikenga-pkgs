@@ -20,7 +20,7 @@ This is a **v0.x** release: the format and the actions can still change between 
 | Motion | `motion` | Image-to-video clips from approved key frames, one shot at a time. Per-shot treatments (`still`, `still-move`, `video`, `lipsync`) keep paid clips opt-in; camera moves on stills are free. You can pilot one part of the film before the rest. |
 | Lip-sync | `lipsync` | Makes a speaker say a shot's line on its approved key frame or clip. |
 | Sound | `sound` | Voice-over with real word timings (or none), captions, and music / SFX that you supply. akuko never writes narration text or picks a voice for you. |
-| Assemble | `assemble` | **Stub.** The animatic, rough cut and picture lock are not built; the action says so and stops. |
+| Assemble | `assemble` | **`assemble preview`** makes a free animatic preview: the approved key frames in film order, each held for its shot's length, with a gentle move only where the shot's camera note asks for one, as one silent MP4 (needs ffmpeg). It is never a review unit and is not saved to the project. The rough cut and picture lock are **not built**; the action says so and stops. |
 | Export | `export` | Hands what is approved to **DaVinci Resolve**: media in shot order plus an FCPXML 1.8 (or EDL) timeline. It does not render an MP4. |
 
 Across every stage:

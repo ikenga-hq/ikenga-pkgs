@@ -122,7 +122,7 @@ Stop. Never approve anything yourself, and do not run the next stage.
 
 ## Real projects: the board for a long shot list, and the sign-off page
 
-**The default board (`default-board@0.5`)** shows the project's pictures (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
+**The default board (`default-board@0.6`)** shows the project's pictures (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
 
 - A **Part** filter (P1…P10 and "All parts") shows one part at a time: its scenes, shots, cards and script. A link can open one part: `views/default-board.html#part=P7`. The "your move" counts stay for the whole film.
 - Shots on a master clock show their film time (`m:ss.ss`); the shot detail adds part, tier, framing, lighting, motion note, dialogue lines, the negative prompt and the sheet row (and "Left the sheet" for a removed row).

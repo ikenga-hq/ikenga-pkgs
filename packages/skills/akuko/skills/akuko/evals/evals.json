@@ -222,11 +222,12 @@
       "name": "stub-action-assemble-refusal",
       "action": "assemble",
       "prompt": "Assemble the animatic and the rough cut. Project state: sound and motion are approved.",
-      "expected_output": "Stub ask (assemble is not built yet). Routes to actions/assemble.md. Reads the action doc, sees that assemble is marked 'Stub (WP-02)', tells the user that assemble is not built yet, offers /akuko status, and stops without improvising an assembly.",
+      "expected_output": "Stub ask (the rough cut and picture lock are not built yet). Routes to actions/assemble.md. Reads the action doc, sees that the rough cut and picture lock are marked 'Stub (WP-02)', tells the user they are not built yet, offers the free assemble preview (an animatic from the approved key frames that is never a review unit and is not saved to the project) and /akuko status, and does not improvise a rough cut.",
       "assertions": [
         "Routes to actions/assemble.md",
-        "Identifies that assemble is a stub action that is not built yet",
-        "Stops without attempting to improvise or fabricate an animatic, rough cut or picture lock",
+        "Identifies that the rough cut and picture lock are a stub that is not built yet",
+        "Stops without attempting to improvise or fabricate a rough cut or picture lock",
+        "Offers the free assemble preview for the animatic, and says it is not a review unit and is not saved to the project",
         "Offers /akuko status as next step"
       ]
     }

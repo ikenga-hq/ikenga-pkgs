@@ -31,6 +31,12 @@
       "sha256": "55a2089d4916c4059389743d9551df1349391d1f98eb5aa3949485d5123e0430",
       "checked_at": "2026-11-11T23:24:21Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.6",
+      "sha256": "b4eb1b3bdcc94cc21b691d5c6b0e420b63ff4bbdbec30dbe68fd42e4f4af6fd4",
+      "checked_at": "2026-11-12T09:19:24Z",
+      "checker": "check-view@2"
     }
   ]
 }

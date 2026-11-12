@@ -59,7 +59,7 @@ export function esc(s: string): string {
 /** At most two decimals, no trailing zeros, never `-0`. */
 const num = (x: number): string => String(Math.round(x * 100) / 100 || 0);
 
-function clip(s: string, max: number): string {
+export function clip(s: string, max: number): string {
   const chars = [...xmlSafe(s).replace(/\s+/g, ' ').trim()];
   return chars.length <= max ? chars.join('') : `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
 }

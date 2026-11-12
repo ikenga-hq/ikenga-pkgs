@@ -556,10 +556,40 @@ function rollStage(p: AkukoProject, units: Unit[], s: StageId): void {
   else if (!all && rec.state === 'approved') rec.state = 'in-review';
 }
 
+const STAGE_INDEX: Record<StageId, number> = Object.fromEntries(STAGES.map(({ id }, i) => [id, i])) as Record<StageId, number>;
+
+/**
+ * Sound opens once every stage up to and including key frames is approved, not motion (lib/state.md §6). So a
+ * motion stage that reopens leaves sound as it is; key frames or anything earlier reopening locks it.
+ */
+const opensAfter = (s: StageId): StageId => (s === 'sound' ? 'keyframes' : STAGES[STAGE_INDEX[s] - 1]!.id);
+
+/**
+ * An earlier stage left `approved` (an undo, a send-back after approval): every later stage that had opened goes back
+ * to `locked`, because a stage is open only while the stages before it are approved (lib/state.md §Stages). Only the
+ * stage state changes. The later stages' units, files, comments and spend entries are kept as they are; when the
+ * earlier stage is approved again the unlock below reopens them and rolls them from those units, as it does for a
+ * part worked ahead (WP-32). Returns the stages it locked.
+ */
+export function relockLaterStages(p: AkukoProject, reopened: StageId): StageId[] {
+  const locked: StageId[] = [];
+  for (const { id } of STAGES.slice(STAGE_INDEX[reopened] + 1)) {
+    if (p.stages[id].state === 'locked') continue;
+    if (STAGE_INDEX[opensAfter(id)] < STAGE_INDEX[reopened]) continue; // what this stage waits on is still approved
+    p.stages[id] = { state: 'locked' };
+    locked.push(id);
+  }
+  return locked;
+}
+
 /** Stage gating after units changed (lib/state.md §Stages): approve / re-open, then unlock and move `current_stage`. */
 function recomputeStages(p: AkukoProject, touched: Set<StageId>): void {
   const units = listUnits(p).map((u) => u.unit).filter((u) => !outOfRollup(p, u));
+  const was = Object.fromEntries(STAGES.map(({ id }) => [id, p.stages[id].state])) as Record<StageId, string>;
   for (const s of touched) rollStage(p, units, s);
+  // An approved stage that reopened locks what opened after it (B-13: an undone key frame left motion in progress).
+  const reopened = STAGES.find(({ id }) => was[id] === 'approved' && p.stages[id].state !== 'approved');
+  if (reopened) relockLaterStages(p, reopened.id);
   let open = true;
   for (const { id } of STAGES) {
     const rec = p.stages[id];

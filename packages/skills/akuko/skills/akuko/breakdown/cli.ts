@@ -15,7 +15,8 @@
  *   apply   --proposal <file.json>
  *           write the breakdown from the agent's proposal; a project that already has shots is left alone
  *   tag     [--prose]
- *           add missing [[sc<N>_sh<M>]] notes to script/screenplay.fountain (or script/source.md with --prose)
+ *           add missing [[sc<N>_sh<M>]] notes to a tagged copy, script/screenplay.tagged.fountain (or
+ *           script/source.tagged.md with --prose); the approved script itself is never written
  *   lint
  *           check the shots (and the tags in the script); exit 1 on errors
  *
@@ -30,7 +31,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { detectHostRecord } from '../setup/host-record.ts';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
-import { applyBreakdown, planRetag, ProposalError } from './apply.ts';
+import { applyBreakdown, ProposalError, tagScriptCopy, taggedPathFor, withTaggedCopy } from './apply.ts';
 import { completeIntake, createProject, SCREENPLAY_PATH, SOURCE_PATH, type IntakeRoute } from './intake.ts';
 import { formatIssues, hasErrors, isImported, lintShots, lintSheetIdsInScript, lintTags } from './lint.ts';
 import { cardResolver, clipResolver, describeMaster, formatSummary, importSheet, ImportError, loadCsvTable, loadSheet, projectUri, resolveMapping, type MappingOverride } from './import/index.ts';
@@ -166,16 +167,27 @@ Wrote ${host.projectFile}. Every unit is waiting for review; nothing is approved
       const rel = prose ? (project.script.source ?? SOURCE_PATH) : (project.script.screenplay ?? SCREENPLAY_PATH);
       const file = path(rel);
       const text = existsSync(file) ? await readFile(file, 'utf8') : undefined;
+      // The approved script is never written: tags go into a derived copy (B-3, lib/state.md §1).
+      const taggedRel = project.script.tagged ?? taggedPathFor(rel);
+      const copyFile = path(taggedRel);
+      const copy = existsSync(copyFile) ? await readFile(copyFile, 'utf8') : undefined;
       if (cmd === 'tag') {
         if (text === undefined) return { code: 1, out: `akuko: ${rel} not found.` };
-        const r = planRetag(project, text, { prose });
-        if (r.text !== text) await writeFileAtomic(file, r.text);
+        const r = tagScriptCopy(project, text, copy, { prose });
+        if (r.text !== copy) {
+          await mkdir(dirname(copyFile), { recursive: true });
+          await writeFileAtomic(copyFile, r.text);
+        }
+        const next = withTaggedCopy(project, taggedRel);
+        if (next !== project) await host.writeState(next);
         out.push(`Tagged ${r.tagged.length}, already tagged ${r.alreadyTagged.length}, left untagged ${r.unplaced.length}, conflicts ${r.conflicts.length}.`);
+        out.push(`Tags are in ${taggedRel}; the approved ${rel} is unchanged.${r.rebuilt ? ' The earlier tagged copy no longer matched the approved script, so it was rebuilt from it.' : ''}`);
         for (const u of r.unplaced) out.push(`  untagged ${u.shotId}: ${u.reason}`);
         for (const c of r.conflicts) out.push(`  conflict ${c.shotId}: tagged at line ${c.line} but matches line ${c.matchedLine}; left as is`);
         return { code: 0, out: out.join('\n') };
       }
-      const issues = [...lintShots(project), ...(text !== undefined ? lintTags(project, text, { prose }) : [])];
+      const tagged = copy ?? text;
+      const issues = [...lintShots(project), ...(tagged !== undefined ? lintTags(project, tagged, { prose }) : [])];
       return { code: hasErrors(issues) ? 1 : 0, out: formatIssues(issues) };
     }
 

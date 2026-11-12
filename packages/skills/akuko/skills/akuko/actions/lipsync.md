@@ -53,7 +53,7 @@ Clip mode (lip-syncing an approved video clip) is not used yet: fal would need t
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --project <folder>`. On host A, import `plan.ts`, `cut.ts` and `run.ts`, pass the `ClaudeArtifactHost` and a gate built with `guardedGate()` (`../rules/guard.ts`); paid providers are refused there, so use the manual provider.
+All commands: `node --experimental-strip-types ../lipsync/cli.ts <command> --project <folder>`. On host A, import `plan.ts`, `cut.ts` and `run.ts`, pass the `ClaudeArtifactHost` and a gate built with `guardedGate()` (`../rules/guard.ts`); paid providers are refused there, so use the manual provider. Making lip-syncs with a connected tool that uses the person's plan allowance (Canva on claude.ai) is not free: before **each wave**, post the allowance line and wait for the exact OK, record every generation with zero money and a units count, and keep Canva's own confirmations for the person to answer (`../lib/spend.md` §Allowance).
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`). If the stage is locked, say which earlier stage is waiting and stop, unless the person asked to pilot one part (`--part`, above).
 1. **`plan`**: plans a lip-sync for every shot that needs one and cuts the line audio each needs (free, local; the master is read once, never loaded whole). Safe to repeat. Pass on everything it prints:

@@ -286,6 +286,20 @@ describe('beat boards', () => {
     assert.deepEqual([...sc2.html.matchAll(/data-shot="([^"]+)"/g)].map((m) => m[1]), sc2.shots);
     assert.doesNotMatch(sc2.html, /<script|https?:\/\/(?!www\.w3\.org)/);
   });
+  // B-6 (live claude.ai run, 2026-11-11): the artifact asset store refuses HTML, so the beat boards were lost on host A.
+  it('come as a standalone SVG too: same shots in order, well-formed, nine cells, nothing fetched, deterministic', () => {
+    const boards = buildBeatBoards(beating());
+    assert.deepEqual(boards.map((b) => b.svgFile), ['beatboard-sc1.svg', 'beatboard-sc2.svg', 'beatboard-sc3.svg', 'beatboard-sc4.svg']);
+    const sc2 = boards[1]!;
+    assert.ok(sc2.svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" '));
+    assertWellFormed(sc2.svg, sc2.svgFile);
+    assert.deepEqual([...sc2.svg.matchAll(/<g data-shot="([^"]+)"/g)].map((m) => m[1]), sc2.shots);
+    assert.equal((sc2.svg.match(/data-akuko-panel="/g) ?? []).length, sc2.shots.length, 'each shot carries its own panel');
+    assert.equal((sc2.svg.match(/>no shot</g) ?? []).length, PANELS_PER_BOARD - sc2.shots.length);
+    assert.doesNotMatch(sc2.svg, /<script|<foreignObject|href=|https?:\/\/(?!www\.w3\.org)/);
+    assert.match(sc2.svg, /prefers-color-scheme:dark/);
+    assert.deepEqual(buildBeatBoards(structuredClone(beating())).map((b) => b.svg), boards.map((b) => b.svg));
+  });
   it('spill a scene of more than nine shots onto a second board', () => {
     const p = beating();
     const s0 = p.shots[0]!;
@@ -416,6 +430,7 @@ describe('cli over a real folder', () => {
     assert.match(d1.out, /no-blocking/);
     assert.ok(existsSync(join(dir, 'board', 'panels', 'sc1_sh1-sketch.svg')));
     assert.ok(existsSync(join(dir, 'board', 'beatboards', 'beatboard-sc2.html')));
+    assert.ok(existsSync(join(dir, 'board', 'beatboards', 'beatboard-sc2.svg')), 'the SVG twin is written too');
     const state1 = readFileSync(join(dir, 'akuko.json'), 'utf8');
     const html1 = readFileSync(join(dir, 'board', 'beatboards', 'beatboard-sc1.html'), 'utf8');
 

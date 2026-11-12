@@ -176,7 +176,8 @@ export function inferImageProvider(p: AkukoProject, o: Pick<EstimateOptions, 'im
   const isImageUnit = (id: string): boolean => { const a = byId.get(id); return a ? a.stage === 'bible' || a.stage === 'keyframes' : id.endsWith('_keyframe'); };
   for (let i = p.ledger.length - 1; i >= 0; i--) {
     const e = p.ledger[i]!;
-    if (e.provider === MANUAL_PROVIDER_ID || !isImageUnit(e.unit)) continue;
+    // An allowance call (a connected service's plan allowance, lib/spend.md §Allowance) prices nothing in money: skip it.
+    if (e.provider === MANUAL_PROVIDER_ID || e.allowance !== undefined || !isImageUnit(e.unit)) continue;
     const model = o.imageModel ?? e.model;
     return { provider: e.provider, ...(model !== undefined ? { model } : {}), source: 'from the ledger (the most recent paid bible or key-frame call)' };
   }

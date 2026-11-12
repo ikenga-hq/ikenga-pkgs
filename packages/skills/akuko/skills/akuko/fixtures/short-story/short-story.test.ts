@@ -240,12 +240,15 @@ describe('short-story fixture: README commands via the breakdown CLI', () => {
     assert.equal(linted.code, 0, linted.out);
 
     const akuko1 = await readFile(f, 'utf8');
-    const script1 = await readFile(join(dir, 'script', 'screenplay.fountain'), 'utf8');
+    // B-3: the approved screenplay is not rewritten; tags are in the derived copy
+    assert.equal(await readFile(join(dir, 'script', 'screenplay.fountain'), 'utf8'), screenplay);
+    const script1 = await readFile(join(dir, 'script', 'screenplay.tagged.fountain'), 'utf8');
     assert.equal(readTags(script1).length, 12);
     const again = await run(['apply', '--project', dir, '--proposal', proposalFile], () => new Date('2030-01-01T00:00:00Z'));
     assert.match(again.out, /Nothing created/);
     assert.match((await run(['tag', '--project', dir], T0)).out, /Tagged 0,/);
     assert.equal(await readFile(f, 'utf8'), akuko1);
-    assert.equal(await readFile(join(dir, 'script', 'screenplay.fountain'), 'utf8'), script1);
+    assert.equal(await readFile(join(dir, 'script', 'screenplay.tagged.fountain'), 'utf8'), script1);
+    assert.equal(await readFile(join(dir, 'script', 'screenplay.fountain'), 'utf8'), screenplay);
   });
 });

@@ -73,6 +73,22 @@ models older than `stale_after_days` (`staleModels()`).
    direct-submit refusal, refusal without a cap, and a full run through the
    gate.
 
+## Allowance tools on a connected MCP (Canva and similar)
+
+On host A the person may make images or video with a tool on a connector they
+connected, such as Canva's `generate-image`. Such a tool is not a provider in
+`providers/config.json`: akuko does not call it from code, has no price for it,
+and cannot see the person's allowance. It is still not free. Every wave goes
+through the allowance gate in `lib/spend.md` §Allowance (the allowance line,
+the exact reply `approve <n> <service> generations`, an optional per-service cap
+in `budget.allowance_caps`) and every generation is recorded in the ledger with
+`estimate`/`actual` 0 and `allowance: { service, units }` (`spend/allowance.ts`).
+Keep the service's own confirmations (Canva asks before a video uses the
+monthly AI limit) for the person to answer. The files come back like a manual
+take: through `ingest()` (or the host's `storeAsset()`), to `pending-review`.
+Canva hands back only a small preview (199 x 112 seen on 2026-11-11); ask the
+person for the full-size file before review, and say so.
+
 ## The manual provider (`providers/manual/`)
 
 This is the no-key path. It is lifted in shape from Studio's

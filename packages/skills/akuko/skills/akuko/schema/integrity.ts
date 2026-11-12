@@ -85,6 +85,9 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
     }
     if (!unitIds.has(e.unit)) add(`ledger[${i}].unit`, `unknown unit "${e.unit}"`);
     if (e.job !== undefined && !jobIds.has(e.job)) add(`ledger[${i}].job`, `unknown job "${e.job}"`);
+    if (e.allowance !== undefined && ((e.estimate ?? 0) !== 0 || (e.actual ?? 0) !== 0)) {
+      add(`ledger[${i}].allowance`, 'an allowance entry costs no money: its estimate and actual must be 0');
+    }
   });
 
   const decisionIds = new Set<string>();
@@ -104,7 +107,8 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
     if (Math.abs(spent - p.budget.spent) > MONEY_EPSILON) {
       add('budget.spent', `budget.spent is ${p.budget.spent} but done ledger entries sum to ${spent}`);
     }
-  } else if (p.ledger.length > 0) {
+  } else if (p.ledger.some((e) => e.allowance === undefined)) {
+    // Allowance entries (a connected service's plan allowance, no money) need no budget (lib/spend.md §Allowance).
     add('budget', 'ledger has entries but no budget is set');
   }
 

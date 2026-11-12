@@ -42,7 +42,7 @@ The unit is one planned asset per shot with text (`sc1_sh1_vo`, kind `vo`, owner
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../sound/cli.ts <command> --project <folder>` (B and C). On host A there is no code: use the manual provider and the rules in `../lib/spend.md` §Host A.
+All commands: `node --experimental-strip-types ../sound/cli.ts <command> --project <folder>` (B and C). On host A there is no code: use the manual provider and the rules in `../lib/spend.md` §Host A. Making voice-over, music or effects with a connected tool that uses the person's plan allowance (Canva on claude.ai) is not free: before **each wave**, post the allowance line and wait for the exact OK, record every generation with zero money and a units count, and keep Canva's own confirmations for the person to answer (`../lib/spend.md` §Allowance).
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`). Tell the person what the report says, including every rejected decision. If it is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: plans a voice-over for every shot that has narration. It lists the shots that only have a script line. **Show those lines and ask.** If the person confirms, `plan --script-lines sc1_sh1,sc1_sh2` (or `all`). Safe to repeat.

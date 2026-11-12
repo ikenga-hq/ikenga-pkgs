@@ -23,9 +23,9 @@ Project folder (B and C; on A the same paths are asset names):
 <project>/
   akuko.json                 project, stages, units, ledger, budget
   decisions.jsonl            decisions from local / Ikenga views (WP-07a)
-  script/   source.md · screenplay.fountain
+  script/   source.md · screenplay.fountain · *.tagged.* (shot-tagged copies, derived)
   bible/    characters/<id>/refs/*  locations/<id>/refs/*  style/
-  board/    panels/<shot>-<stage>.{svg,png} · beatboards/*.html
+  board/    panels/<shot>-<stage>.{svg,png} · beatboards/*.{html,svg}
   motion/   <shot>/*.mp4 · scenes/<shot>/index.html
   audio/    vo/*.wav · words.json · music/ · sfx/
   cut/      timeline.json · exports/*.mp4
@@ -78,7 +78,7 @@ Nothing stores that a part is open, and nothing is approved for the person: only
 
 - Opens when intake is `approved`.
 - Produces `scenes[]` (`sc<N>`), `script.beats[]` (`sc<N>_b<K>`), `shots[]` (`sc<N>_sh<M>`, at most 10 s and 2 principals) and a bible checklist (`bible.characters|locations|styles[]`, ids `char_*` / `loc_*` / `style_*`). All are stage `breakdown`, status `pending-review`; the stage is `in-review`.
-- Writes `[[sc<N>_sh<M>]]` notes into `script/screenplay.fountain` (or `script/source.md` on the direct route).
+- Writes `[[sc<N>_sh<M>]]` notes into a **tagged copy** of the approved script, `script/screenplay.tagged.fountain` (`script/source.tagged.md` on the direct route), recorded as `script.tagged` (`breakdown/apply.ts#tagScriptCopy`, `withTaggedCopy`). **The approved file is never written** and the intake asset (`script-screenplay` / `script-source`) keeps pointing at the file the person approved: an approved unit's content never changes silently, and tags are annotations, so the copy is a derived working file, not a review unit (no asset, no approval). The copy is reused while it is the approved text plus tags (`stripTags`), and rebuilt from the approved text if that changed. Lint reads the copy. On host A, store the copy with `storeAsset()` under the same name, set `script.tagged` to its uri and add nothing to `assets[]`; never re-point the approved asset's `file`.
 - Ids are allocated by code, never by the agent; numbers are never reused; a shot inserted later takes a letter (`sc3_sh2A`).
 - Idempotent: if `scenes[]` or `shots[]` is not empty, nothing is created and only missing tags are added. Lint errors (over 10 s, over 2 principals, no duration, no action, no scene) stop the write; a shot under 5 s or a non-canonical id is only a warning.
 - Hand-off: the checklist entries are units of stage `breakdown`, so the breakdown is `approved` only when every shot **and** every checklist entry is approved. The bible stage then starts from the approved entries; the sketch board reads `shots[]`.
@@ -86,7 +86,7 @@ Nothing stores that a part is open, and nothing is approved for the person: only
 ### 2 sketch
 *Action: `actions/board.md`; code `../board/`. Free.*
 
-- Opens when breakdown is `approved`. Produces one framing-diagram panel per shot (plain SVG drawn from the shot's `blocking`, `shot_type`, `camera`, `camera_move`, `duration_s`; thirds grid, labelled boxes, move arrow; no figures or faces) and 9-panel beat boards (`board/beatboards/beatboard-<scene>[-<n>].html`).
+- Opens when breakdown is `approved`. Produces one framing-diagram panel per shot (plain SVG drawn from the shot's `blocking`, `shot_type`, `camera`, `camera_move`, `duration_s`; thirds grid, labelled boxes, move arrow; no figures or faces) and 9-panel beat boards (`board/beatboards/beatboard-<scene>[-<n>].html`, and the same board as `.svg`; host A stores the SVG, because the claude.ai asset store refuses HTML).
 - **The review unit is the shot at stage `sketch`**, not a panel asset. Each drawn shot becomes `stage: sketch`, `status: pending-review`, with `by_stage.sketch.output` pointing at the stored file (`board/panels/<shot>-sketch.svg`, via `storeAsset`, kind `panel`; the SVG is not a PNG). The panel is **not** added to `assets[]`: a second unit per panel would need its own approval, and the stage could never reach `approved` from the shot decisions the boards write. The stage is `in-review`; it is `approved` when a person approves every shot. Decisions fold unchanged.
 - Deterministic and free: the same shot gives the same bytes; no provider, no spend gate, no network. All text from the script is escaped.
 - Blocking is never invented. A shot with none still gets a panel (grid, camera note, "NO BLOCKING") and lint warns. Blocking enters the project only through `applyBlocking` (a proposal the agent writes from what the script says; rect `x`/`y` = top-left, ellipse `x`/`y` = centre, all 0-1 of the frame). It is refused for a panel under review or approved: a person sends it back first.
@@ -151,7 +151,9 @@ Nothing stores that a part is open, and nothing is approved for the person: only
 - Known edges: ingesting a second audio file for a unit that already has one files a separate asset (the manual provider's rule; use `words` to add timings later); on host A, where `storeAsset` may register every stored file as an asset, the words, narration and caption files would show up as units (follow-up).
 
 ### 7 assemble
-*Not built: `actions/assemble.md` is still a stub (WP-13). It tells the person so and stops.*
+*Action: `actions/assemble.md`. Only `assemble preview` is built (`../assemble/`, B-11); the rough cut and picture lock are still a stub (WP-13) that says so and stops.*
+
+- **`assemble preview` is a by-product, not a review unit.** It holds each live shot's approved key frame for the shot's `duration_s`, in film order, black where none is approved, with a gentle move only where the shot asks for one (`assemble/preview.ts#previewMove`), and writes one silent MP4 when ffmpeg is available (`<project>/cut/preview/animatic-preview.mp4`). It writes nothing to `akuko.json`: no unit, asset, decision or ledger entry, and no stage state (`stages.assemble` is left as it is). Free: no provider, no spend gate.
 
 ### 8 export
 *Action: `actions/export.md`; code `../handoff/` (WP-23). Free.*
@@ -201,7 +203,7 @@ Every action starts by folding: `readDecisions(since?)` through the host adapter
 - **Comments.** A person's comment is `{ts: at, stage, author: by, text, decision: id}`.
   - Every status change folding makes also leaves a trail comment, `{author: 'agent', text: 'Status: <was> → <now>', decision: id}`. The trail is how `undo` knows the status the unit had just before that decision, even if an action revised it in between. Don't edit or delete trail comments.
   - Actions add their own "Revised: …" comments without a `decision` id, as before.
-- **Stages.** When a stage's last unit is approved, the stage becomes `approved`. The next stage unlocks (`locked → not-started`) and `current_stage` moves on. If an undo un-approves a unit, its stage goes back to `in-review`.
+- **Stages.** When a stage's last unit is approved, the stage becomes `approved`. The next stage unlocks (`locked → not-started`) and `current_stage` moves on. If an undo un-approves a unit, its stage goes back to `in-review`. Every later stage that had opened then goes back to `locked` (`fold.ts#relockLaterStages`), because a stage is open only while the stages before it are approved: an undone key frame locks motion, assemble and export again, and sound too (sound waits on key frames, not on motion, so a reopened **motion** stage leaves sound as it is). Only the stage state changes: the later stages' units, files, comments and spend entries are kept, and their actions refuse to run while locked. When the earlier stage is approved again the later stage unlocks and rolls from the units it already has (as for a part worked ahead), so no work is lost.
 - **Time.** `updated_at` on a unit and the project follow the decisions' `at`, never the clock.
 
 **Properties**

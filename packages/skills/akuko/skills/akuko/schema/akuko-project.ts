@@ -560,6 +560,7 @@ export type Beat = z.infer<typeof BeatSchema>;
 export const ScriptSchemaAkuko = z.object({
   source: z.string().optional().describe('Path of the source story / treatment, relative to the project.'),
   screenplay: z.string().optional().describe('Path of the Fountain screenplay, relative to the project.'),
+  tagged: z.string().optional().describe('Path of the shot-tagged copy of the screenplay (of the source on the direct route), written by breakdown. A derived working file, not a review unit: the approved script asset keeps pointing at the file the person approved.'),
   beats: z.array(BeatSchema).default([]),
 }).strict();
 export type AkukoScript = z.infer<typeof ScriptSchemaAkuko>;
@@ -616,11 +617,16 @@ export type Audio = z.infer<typeof AudioSchema>;
 // Money: budget, pending spend, ledger
 // ─────────────────────────────────────────────────────────────────────────
 
+/** A connected service whose generations count against the person's own plan allowance (lib/spend.md §Allowance). */
+export const AllowanceServiceSchema = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'a service is a lower-case id, e.g. "canva"');
+
 /** The spend cap. `spent` is the sum of `actual` over done ledger entries. */
 export const BudgetSchema = z.object({
   cap: MoneySchema,
   currency: CurrencySchema,
   spent: MoneySchema,
+  allowance_caps: z.record(AllowanceServiceSchema, z.number().int().positive()).optional()
+    .describe('Most generations the person lets akuko make per connected service in this project, e.g. {"canva": 20} (lib/spend.md §Allowance). akuko cannot see what is left of the service allowance itself; this cap is the person\'s own, counted from the ledger.'),
 }).strict();
 export type Budget = z.infer<typeof BudgetSchema>;
 
@@ -658,6 +664,10 @@ export const LedgerEntrySchema = z.object({
   estimate: MoneySchema.optional(),
   actual: MoneySchema.optional(),
   status: z.enum(['submitted', 'done', 'failed', 'cancelled']),
+  allowance: z.object({
+    service: AllowanceServiceSchema,
+    units: z.number().int().positive().describe('Generations this call used from the service allowance.'),
+  }).strict().optional().describe('Set when the call used a connected service plan allowance (e.g. the Canva monthly AI limit) instead of money: estimate and actual are then 0 (lib/spend.md §Allowance).'),
 }).strict();
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 
