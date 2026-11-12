@@ -45,7 +45,7 @@ describe('views/publish.ts', () => {
     const embedded = JSON.parse(raw);
     assert.equal(embedded.project.title, 'A <b>bold</b> </script> film');
     assert.equal(embedded._sample, undefined, 'no longer a sample');
-    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.5', html), 'same hash as the recorded board');
+    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.6', html), 'same hash as the recorded board');
     assert.equal(viewHash(html), viewHash(readFileSync(DEFAULT_BOARD, 'utf8')));
   });
 
@@ -65,7 +65,7 @@ describe('views/publish.ts', () => {
     const project = AkukoProjectSchema.parse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
     const shot = project.shots.find((s) => s.status === 'pending-review')!;
     const mk = (view: string, id: string) => ({ id, action: 'approve', unit: shot.id, stage: 'sketch', by: 'you', at: '2026-11-09T10:00:00Z', view }) as Decision;
-    assert.ok(['0.1', '0.2', '0.3', '0.4', '0.5'].every((v) => conformedViewIds(CONFORMED).has('default-board@' + v)));
+    assert.ok(['0.1', '0.2', '0.3', '0.4', '0.5', '0.6'].every((v) => conformedViewIds(CONFORMED).has('default-board@' + v)));
     for (const [view, id] of [['default-board@0.1', '11111111-1111-4111-8111-111111111111'], ['default-board@0.2', '22222222-2222-4222-8222-222222222222']] as const) {
       const { report } = foldDecisions(structuredClone(project), [mk(view, id)], { conformed: CONFORMED });
       assert.equal(report.rejected.length, 0, `${view} rejected: ${JSON.stringify(report.rejected)}`);
@@ -115,7 +115,7 @@ describe('views/publish.ts: pictures for a local board (@0.5)', () => {
     assert.ok(!JSON.stringify(b).includes('images.example.com') && !JSON.stringify(b).includes('/_blob/'), 'remote and artifact paths are left to the page');
     const how = Object.fromEntries(r.media.items.map((i) => [i.unit, i.how]));
     assert.deepEqual([how.char_narrator_portrait, how.char_oldman_portrait, how.loc_hallway_plate, how.loc_bedroom_plate, how['script-screenplay']], ['embedded', 'remote', 'blob', 'linked', 'text']);
-    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.5', html), 'pictures live in the project block, outside the hash');
+    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.6', html), 'pictures live in the project block, outside the hash');
     assert.match(mediaSummary(r.media), /^1 picture embedded; 1 linked only/);
   });
 

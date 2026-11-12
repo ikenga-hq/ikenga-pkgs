@@ -27,7 +27,7 @@ import { STAGES, type AkukoProject, type Asset, type Shot } from '../schema/akuk
 import type { AkukoProviderConfig } from '../providers/config.ts';
 import { loadProviderConfig, priceFor, providerConfig } from '../providers/config.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
-import { AUDIO_SUFFIX, falVideoLimits, fitSeconds, type Fit } from '../providers/fal-video/index.ts';
+import { AUDIO_SUFFIX, falVideoLimits, fitSeconds, type Fit, secondsText } from '../providers/fal-video/index.ts';
 import { requestedChanges } from '../bible/plan.ts';
 import { jobRan } from '../keyframes/plan.ts';
 import { removedAt } from '../decisions/fold.ts';
@@ -357,7 +357,7 @@ export function buildMotionJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       const s = fitSeconds(want, limits.allowedSeconds, o.fit ?? 'cover');
       used = s.seconds;
       if (s.changed) {
-        const lens = limits.allowedSeconds.join(' or ');
+        const lens = secondsText(limits.allowedSeconds);
         notes.push(
           used > want
             ? `${a.id}: the shot runs ${fmt(want)} s but ${o.provider} makes ${lens} s clips, so this clip is ${used} s (${fmt(used - want)} s longer than the shot, billed; trim it in the editor, or pass --fit nearest to save money with a shorter clip).`

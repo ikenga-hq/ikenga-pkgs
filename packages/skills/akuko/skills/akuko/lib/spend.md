@@ -32,6 +32,10 @@ provider's own code:
 
 `direct-api` and `connected-mcp` are both paid and go through every check below.
 
+A connected tool that bills the person's **plan allowance** rather than money
+(Canva's monthly AI limit) is neither free nor priced: it goes through the
+allowance gate (§Allowance), which asks for an OK of every wave the same way.
+
 ## The gate, in order
 
 `gate.run(job)` is the only code that calls a provider's `submit()`. Every
@@ -192,6 +196,54 @@ Every output, paid or manual, lands the same way (`providers/outputs.ts`):
 Nothing akuko produces is ever `approved`. Recording the same file twice
 changes nothing, so a second `collect()` never undoes a person's approval.
 
+## Allowance: connected tools billed against the person's plan (B-10)
+
+Some connected tools cost no money per call but use up the person's own plan
+allowance: **Canva** on claude.ai (`generate-image`, video) draws on the
+person's monthly Canva AI limit. akuko cannot price that and cannot see how
+much of it is left, but it is still the person's to spend: on 2026-11-11 one
+run made 21 Canva images with no warning and used up a whole month's
+allowance. So allowance generations get their own gate, the same shape as the
+money gate. Code: `spend/allowance.ts` (the line, the exact reply, the cap, the
+ledger record); on host A you follow it by hand.
+
+1. **Before each wave** (one job: one shot by default, or the scene or units the
+   person named), post the allowance line and **wait for the person's reply**:
+
+   > Allowance check — Key frames for scene 1: 3 generations with Canva (generate-image). They use your Canva plan's AI allowance, not money; akuko can't see how much of it is left. Used through akuko in this project: 21. Reply "approve 3 canva generations" to run it; anything else stops it.
+
+   Count every generation the wave will make: one per image, and every retry
+   you plan (a "try again" is a new wave and a new line). The tally is what the
+   ledger records for that service in this project, never a guess at the
+   service's own balance.
+2. **Run the wave only on that exact reply** (`approve <n> <service>
+   generations`, first word any case) or a plain yes to this line. Silence, a
+   change of subject, or "go on" in reply to something else is not a yes. One
+   reply covers one wave; more generations, a new wave or a retry need a new
+   line. Never batch several waves under one OK.
+3. **The service's own confirmations stay.** When the tool itself asks (Canva's
+   "this may use your monthly AI limit" before a video), pass it to the person
+   and let them answer it; never answer it for them.
+4. **Record every generation** in the ledger, success or failure: one entry per
+   unit, `provider` = the service id (`canva`), `model` = the tool, `estimate`
+   and `actual` **0**, and `allowance: { service, units }` with how many
+   generations it used (`recordAllowance()`). A call that the service charged
+   but that made nothing is `failed` with the units it used; a call it refused
+   without charging is not recorded. Allowance entries need no money budget
+   (integrity allows them with `budget: null`) and never change `budget.spent`.
+5. **A cap, if the person wants one.** `budget.allowance_caps` holds the most
+   generations they allow per service in this project (`{"canva": 20}`; set it
+   on their words). A wave that would pass it is not run: say how many are used
+   and stop. With no cap the per-wave OK is the only limit, and the line shows
+   the running total.
+6. **Running out.** If the service says the allowance is used up, stop, tell the
+   person, and offer the manual prompt package instead. Do not switch to a paid
+   provider or another account on your own.
+
+This is not the money gate: no `pending_spend` entry is written, no `approve
+<amount> <CURRENCY>` is asked for, and the money rules (no cap, no spend) do not
+apply. But "nothing runs without an explicit OK" applies exactly as for money.
+
 ## Host A: the gate is prompt-only (R-11)
 
 On claude.ai there is no code execution, so `gate.ts` cannot run. You are the
@@ -199,7 +251,7 @@ gate. In v0.x:
 
 1. **Never call a paid direct API on host A.** Use the manual provider, or a
    connected MCP.
-2. **Before any generation call on a connected MCP**, check, in this order:
+2. **Before any generation call on a connected MCP that costs money**, check, in this order (a connected tool that uses the person's plan allowance instead, such as Canva, goes through §Allowance: its own line, an OK of every wave, and a ledger entry with zero money and a units count):
    - `budget` is set. If it isn't, stop and point to `/akuko setup`.
    - The estimate (from `providers/config.json` prices) fits in cap − spent.
    - Then post the confirmation line and **wait for the person's reply**.

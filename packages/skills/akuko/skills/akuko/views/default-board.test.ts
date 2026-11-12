@@ -511,7 +511,7 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.5');
+    assert.equal(lines[0].view, 'default-board@0.6');
     p.close();
   });
 });
@@ -563,7 +563,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     assert.equal(statusOf(p, id), 'approved');
     assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
     const [d] = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.5']);
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.6']);
     p.close();
   });
 
@@ -735,7 +735,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
-    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5']) {
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5', 'default-board@0.6']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
       assert.deepEqual(report.rejected, [], view);
@@ -950,6 +950,32 @@ describe('default board @0.5: stages, intake, next, per-stage status, done', () 
     await p.tick();
     assert.equal(statusOf(p, 'sc2_sh4'), 'approved');
     assert.match(p.text('#det-sc2_sh4'), /Approved\. akuko picks this up/);
+    p.close();
+  });
+
+  // @0.6 (live claude.ai run, 2026-11-12): a note written while the film was at motion read "Sketch board".
+  it('labels a note "Note on the shot", not with the stage the shot sits at; a request keeps its stage', async () => {
+    const proj = clone(FIXTURE) as any;
+    const shot = proj.shots.find((s: any) => s.id === 'sc4_sh2');
+    const nid = uuid(81);
+    const rid = uuid(82);
+    proj.decisions = [
+      { id: nid, action: 'note', unit: 'sc4_sh2', stage: 'sketch', by: 'you', at: '2026-11-12T09:00:00Z', view: 'default-board@0.5', text: '4b check' },
+      { id: rid, action: 'request-changes', unit: 'sc4_sh2', stage: 'sketch', by: 'you', at: '2026-11-12T09:01:00Z', view: 'default-board@0.5', text: 'Tighter, please.' },
+    ];
+    shot.comments = [
+      { ts: '2026-11-12T09:00:00Z', stage: 'sketch', author: 'you', text: '4b check', decision: nid },
+      { ts: '2026-11-12T09:01:00Z', stage: 'sketch', author: 'agent', text: 'Status: pending-review → needs-rework', decision: rid },
+      { ts: '2026-11-12T09:01:00Z', stage: 'sketch', author: 'you', text: 'Tighter, please.', decision: rid },
+    ];
+    shot.status = 'needs-rework';
+    const p = await boot({ host: 'B', project: proj as Project });
+    if (!p.d.querySelector('#det-sc4_sh2')) { click(p, '#shot-sc4_sh2 .shot-row'); await p.tick(); }
+    const items = [...p.d.querySelectorAll('#det-sc4_sh2 .thread li')].map((li: any) => li.textContent as string);
+    const note = items.find((t) => t.includes('4b check'))!;
+    assert.match(note, /Note on the shot/);
+    assert.doesNotMatch(note, /Sketch board/, 'a note does not claim when it was written');
+    assert.match(items.find((t) => t.includes('Tighter, please.'))!, /requested changes.*Sketch board/);
     p.close();
   });
 

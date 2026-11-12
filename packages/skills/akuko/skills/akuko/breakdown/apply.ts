@@ -24,7 +24,7 @@ import {
 } from '../schema/akuko-project.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
 import { lintShots, type LintIssue, type LintOptions } from './lint.ts';
-import { allocateShotId, insertTags, sceneIdFor, sceneNumberOf, type Placement, type TagResult } from './tags.ts';
+import { allocateShotId, insertTags, sceneIdFor, sceneNumberOf, stripTags, type Placement, type TagResult } from './tags.ts';
 
 // ── the proposal the agent writes ───────────────────────────────────────
 
@@ -341,4 +341,47 @@ export function placementsFor(project: AkukoProject): Placement[] {
  */
 export function planRetag(project: AkukoProject, scriptText: string, opts: { prose?: boolean } = {}): TagResult {
   return insertTags(scriptText, placementsFor(project), opts);
+}
+
+// ── the tagged copy (B-3) ───────────────────────────────────────────────
+
+/**
+ * Where the shot-tagged copy of an approved script lives: the same path with
+ * `.tagged` before the extension (`script/screenplay.fountain` ->
+ * `script/screenplay.tagged.fountain`, `script/source.md` ->
+ * `script/source.tagged.md`). On host A the same name is the stored file's name.
+ */
+export function taggedPathFor(scriptPath: string): string {
+  const slash = scriptPath.lastIndexOf('/');
+  const dot = scriptPath.lastIndexOf('.');
+  return dot > slash + 1 ? `${scriptPath.slice(0, dot)}.tagged${scriptPath.slice(dot)}` : `${scriptPath}.tagged`;
+}
+
+export interface TaggedCopy extends TagResult {
+  /** True when an earlier tagged copy no longer matched the approved script (it was edited, or the copy was), so the copy was rebuilt from the approved text. */
+  rebuilt: boolean;
+}
+
+/**
+ * Tag a project's script WITHOUT touching the approved file (B-3). A person
+ * approved the intake script (`script-screenplay`, or `script-source` on the
+ * direct route); an approved unit's content never changes silently. Shot tags
+ * are annotations, so they go into a derived copy that is not a review unit:
+ * `script.tagged` points at it, the approved asset keeps pointing at the file
+ * the person approved, and no asset is added for the copy.
+ *
+ * `approved` is the approved script's text, `copy` the current tagged copy (if
+ * any). The copy is reused while it is the approved text plus tags; otherwise it
+ * is rebuilt from the approved text. Pure; the caller stores `text` as the copy
+ * and records it with `withTaggedCopy`.
+ */
+export function tagScriptCopy(project: AkukoProject, approved: string, copy: string | undefined, opts: { prose?: boolean } = {}): TaggedCopy {
+  const reuse = copy !== undefined && stripTags(copy) === stripTags(approved);
+  return { ...planRetag(project, reuse ? copy : approved, opts), rebuilt: copy !== undefined && !reuse };
+}
+
+/** The project with `script.tagged` set to the stored copy. Touches nothing else: no asset, no status. */
+export function withTaggedCopy(project: AkukoProject, uri: string): AkukoProject {
+  if (project.script.tagged === uri) return project;
+  return { ...project, script: { ...project.script, tagged: uri } };
 }

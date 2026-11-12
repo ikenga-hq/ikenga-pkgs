@@ -19,7 +19,7 @@
       }
     },
     "fal-video": {
-      "label": "fal video (Kling image-to-video on fal) — your fal key",
+      "label": "fal video (Kling and Seedance image-to-video on fal) — your fal key",
       "billing": "direct-api",
       "example": false,
       "key_env": "FAL_KEY",
@@ -39,6 +39,66 @@
           "price": { "amount": 0.14, "per": "second" },
           "last_verified": "2026-11-09",
           "source": "Same endpoint as the entry without '#audio' (akuko strips the suffix and sends generate_audio true). https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video: 'Videos with native audio cost $0.14 per second' (voice control, $0.168, is not offered). Read 2026-11-09."
+        },
+        "bytedance/seedance-2.0/fast/image-to-video#720p": {
+          "price": { "amount": 0.2419, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/image-to-video/llms.txt, read 2026-11-12: \"$0.2419/second\" for 720p ($0.0112 per 1,000 tokens). fal bills Seedance by tokens; the per-second figure is the one fal states for 720p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"15\" (or \"auto\", which akuko never sends), resolution 480p or 720p, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#720p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists Seedance 2.0 Fast at $0.0112 per 1,000 tokens."
+        },
+        "bytedance/seedance-2.0/fast/image-to-video#720p#audio": {
+          "price": { "amount": 0.2419, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.0/fast/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
+        },
+        "bytedance/seedance-2.0/image-to-video#720p": {
+          "price": { "amount": 0.3034, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video/llms.txt, read 2026-11-12: \"For every second of 720p video you generated, you will be charged $0.3034/second\" ($0.014 per 1,000 tokens). fal bills Seedance by tokens; the per-second figure is the one fal states for 720p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"15\" (or \"auto\", which akuko never sends), resolution 480p, 720p, 1080p or 4k, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#720p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists no standard Seedance 2.0 entry (it points to the model page)."
+        },
+        "bytedance/seedance-2.0/image-to-video#720p#audio": {
+          "price": { "amount": 0.3034, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.0/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
+        },
+        "bytedance/seedance-2.0/image-to-video#1080p": {
+          "price": { "amount": 0.682, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video/llms.txt, read 2026-11-12: \"for 1080p you will be charged $0.682/second\". fal bills Seedance by tokens; the per-second figure is the one fal states for 1080p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"15\" (or \"auto\", which akuko never sends), resolution 480p, 720p, 1080p or 4k, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#1080p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists no standard Seedance 2.0 entry (it points to the model page)."
+        },
+        "bytedance/seedance-2.0/image-to-video#1080p#audio": {
+          "price": { "amount": 0.682, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.0/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
+        },
+        "bytedance/seedance-2.5/image-to-video#480p": {
+          "price": { "amount": 0.2205, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: \"roughly $0.2205 per second of generated video\" at 480p ($0.0214 per 1,000 tokens). fal bills Seedance by tokens; the per-second figure is the one fal states for 480p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"30\" (or \"auto\", which akuko never sends), resolution 480p, 720p or 1080p, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#480p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists no Seedance 2.5 entry (it points to the model page). fal's own word is \"roughly\": the bill is (height x width x (input + output seconds) x 24) / 1024 tokens, and an image start frame has no input seconds, so akuko prices output seconds at the stated rate."
+        },
+        "bytedance/seedance-2.5/image-to-video#480p#audio": {
+          "price": { "amount": 0.2205, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
+        },
+        "bytedance/seedance-2.5/image-to-video#720p": {
+          "price": { "amount": 0.473, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: \"roughly $0.4730 per second of generated video\" at 720p ($0.0214 per 1,000 tokens). fal bills Seedance by tokens; the per-second figure is the one fal states for 720p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"30\" (or \"auto\", which akuko never sends), resolution 480p, 720p or 1080p, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#720p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists no Seedance 2.5 entry (it points to the model page). fal's own word is \"roughly\": the bill is (height x width x (input + output seconds) x 24) / 1024 tokens, and an image start frame has no input seconds, so akuko prices output seconds at the stated rate."
+        },
+        "bytedance/seedance-2.5/image-to-video#720p#audio": {
+          "price": { "amount": 0.473, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
+        },
+        "bytedance/seedance-2.5/image-to-video#1080p": {
+          "price": { "amount": 1.164, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: \"roughly $1.164 per second of generated video\" at 1080p ($0.0234 per 1,000 tokens). fal bills Seedance by tokens; the per-second figure is the one fal states for 1080p, and \"the cost of video generation is the same regardless of whether audio is generated or not\". Schema (same page): image_url (start frame), duration a string \"4\" to \"30\" (or \"auto\", which akuko never sends), resolution 480p, 720p or 1080p, generate_audio (default true; akuko sends false unless the id ends in '#audio'), output video.url. akuko strips the '#1080p' suffix and sends it as resolution. fal's pricing page https://fal.ai/pricing lists no Seedance 2.5 entry (it points to the model page). fal's own word is \"roughly\": the bill is (height x width x (input + output seconds) x 24) / 1024 tokens, and an image start frame has no input seconds, so akuko prices output seconds at the stated rate."
+        },
+        "bytedance/seedance-2.5/image-to-video#1080p#audio": {
+          "price": { "amount": 1.164, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "Same endpoint, page and price as the entry without '#audio' (akuko strips both suffixes and sends generate_audio true). https://fal.ai/models/bytedance/seedance-2.5/image-to-video/llms.txt, read 2026-11-12: the cost is the same with or without audio, so sound on costs nothing extra here."
         }
       }
     },

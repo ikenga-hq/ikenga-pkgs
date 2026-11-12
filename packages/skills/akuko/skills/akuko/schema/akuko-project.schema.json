@@ -816,6 +816,17 @@
         },
         "spent": {
           "$ref": "#/definitions/Money"
+        },
+        "allowance_caps": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "description": "Most generations the person lets akuko make per connected service in this project, e.g. {\"canva\": 20} (lib/spend.md §Allowance). akuko cannot see what is left of the service allowance itself; this cap is the person's own, counted from the ledger."
         }
       },
       "required": [
@@ -934,6 +945,26 @@
             "failed",
             "cancelled"
           ]
+        },
+        "allowance": {
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "units": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Generations this call used from the service allowance."
+            }
+          },
+          "required": [
+            "service",
+            "units"
+          ],
+          "additionalProperties": false,
+          "description": "Set when the call used a connected service plan allowance (e.g. the Canva monthly AI limit) instead of money: estimate and actual are then 0 (lib/spend.md §Allowance)."
         }
       },
       "required": [
@@ -2262,6 +2293,10 @@
             "screenplay": {
               "type": "string",
               "description": "Path of the Fountain screenplay, relative to the project."
+            },
+            "tagged": {
+              "type": "string",
+              "description": "Path of the shot-tagged copy of the screenplay (of the source on the direct route), written by breakdown. A derived working file, not a review unit: the approved script asset keeps pointing at the file the person approved."
             },
             "beats": {
               "type": "array",

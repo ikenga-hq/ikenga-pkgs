@@ -359,6 +359,80 @@ describe('units and stages', () => {
     assert.equal(back.current_stage, 'sketch');
   });
 
+  // B-13 (live claude.ai run, 2026-11-12): an undo moved a key frame back to review, keyframes went back to
+  // in-review, and motion stayed in progress. A stage is open only while every stage before it is approved.
+  const asset = (id: string, stage: 'keyframes' | 'motion', kind: 'keyframe' | 'clip', owner: string) => ({
+    id, stage, status: 'pending-review' as const, comments: [], kind, owner, tags: [], file: { uri: `${stage}/${id}.png`, mime: 'image/png' },
+  });
+  /** Everything through sketch and bible approved, one key frame and one clip made. */
+  const downstream = (): AkukoProject => {
+    const p = fixture();
+    for (const id of ['intake', 'breakdown', 'sketch', 'bible'] as const) p.stages[id] = { state: 'approved' };
+    p.stages.keyframes = { state: 'in-review' };
+    p.assets.push(asset('sc4_sh2_keyframe', 'keyframes', 'keyframe', 'sc4_sh2'));
+    return p;
+  };
+  const dstage = (u: string) => (u.endsWith('_keyframe') ? 'keyframes' : 'motion');
+
+  it('B-13: undoing an approval in an earlier stage locks the stages after it, and keeps their work', () => {
+    const ok = dec('approve', 'sc4_sh2_keyframe', 1, { stage: dstage('sc4_sh2_keyframe') });
+    const opened = fold(downstream(), [ok]).project;
+    assert.equal(opened.stages.keyframes.state, 'approved');
+    assert.notEqual(opened.stages.motion.state, 'locked', 'approving key frames opens motion');
+    // motion work under way, and sound opened by its own plan (it waits only on key frames)
+    opened.stages.motion = { state: 'in-progress' };
+    opened.stages.sound = { state: 'in-progress' };
+    opened.assets.push(asset('sc4_sh2_clip', 'motion', 'clip', 'sc4_sh2'));
+    opened.assets.find((a) => a.id === 'sc4_sh2_clip')!.file = { uri: 'motion/sc4_sh2/clip.mp4', mime: 'video/mp4' };
+    const clipBefore = structuredClone(opened.assets.find((a) => a.id === 'sc4_sh2_clip'));
+
+    const undo = dec('undo', 'sc4_sh2_keyframe', 2, { stage: 'keyframes', undoes: ok.id });
+    const r = fold(opened, [undo]);
+    assert.deepEqual(r.report.rejected, []);
+    const back = r.project;
+    assert.equal(unit(back, 'sc4_sh2_keyframe').status, 'pending-review');
+    assert.equal(back.stages.keyframes.state, 'in-review');
+    assert.equal(back.stages.motion.state, 'locked', 'motion waits on key frames again');
+    assert.equal(back.stages.sound.state, 'locked', 'sound waits on key frames too');
+    assert.equal(back.stages.assemble.state, 'locked');
+    assert.equal(back.current_stage, 'keyframes');
+    assert.deepEqual(back.assets.find((a) => a.id === 'sc4_sh2_clip'), clipBefore, 'the clip, its file and status are untouched');
+    assert.deepEqual(checkIntegrity(back), []);
+    assert.equal(fold(back, [ok, undo]).report.changed, false, 'a re-fold changes nothing');
+
+    // approving the key frame again reopens motion from the work it already has
+    const again = fold(back, [dec('approve', 'sc4_sh2_keyframe', 3, { stage: 'keyframes' })]).project;
+    assert.equal(again.stages.keyframes.state, 'approved');
+    assert.notEqual(again.stages.motion.state, 'locked');
+    assert.notEqual(again.stages.motion.state, 'approved', 'the clip still waits for a person');
+    assert.equal(unit(again, 'sc4_sh2_clip').status, 'pending-review');
+  });
+
+  it('B-13: a reopened motion stage locks assemble but leaves sound open (sound waits only on key frames)', () => {
+    const p = fold(downstream(), [dec('approve', 'sc4_sh2_keyframe', 1, { stage: 'keyframes' })]).project;
+    p.assets.push(asset('sc4_sh2_clip', 'motion', 'clip', 'sc4_sh2'));
+    p.stages.motion = { state: 'in-review' };
+    const ok = dec('approve', 'sc4_sh2_clip', 2, { stage: 'motion' });
+    const approved = fold(p, [ok]).project;
+    assert.equal(unit(approved, 'sc4_sh2_clip').status, 'approved');
+    // as if the rest of the film's clips were approved too: motion approved, sound and assemble open
+    approved.stages.motion = { state: 'approved' };
+    approved.stages.sound = { state: 'in-review' };
+    approved.stages.assemble = { state: 'not-started' };
+    const back = fold(approved, [dec('undo', 'sc4_sh2_clip', 3, { stage: 'motion', undoes: ok.id })]).project;
+    assert.equal(back.stages.motion.state, 'in-review');
+    assert.equal(back.stages.sound.state, 'in-review', 'sound is left as it was');
+    assert.equal(back.stages.assemble.state, 'locked');
+    assert.equal(back.stages.keyframes.state, 'approved');
+  });
+
+  it('B-13: a fold that reopens no approved stage leaves later stages alone', () => {
+    const p = downstream();
+    p.stages.motion = { state: 'in-progress' };
+    const r = fold(p, [dec('note', 'sc4_sh2_keyframe', 1, { stage: 'keyframes', text: 'Looks right.' })]).project;
+    assert.equal(r.stages.motion.state, 'in-progress');
+  });
+
   it('updated_at follows the decisions, not the clock', () => {
     const ap = dec('approve', 'sc2_sh4', 7);
     const p = fold(fixture(), [ap]).project;

@@ -6,7 +6,7 @@ A view is a page that shows an akuko project and hands back the person's decisio
 |---|---|
 | `contract.md` | The view contract: required views and fields, the decision format, the five renderer rules, where decisions land per host. |
 | `views.schema.json` · `decision.schema.json` | Machine-readable parts of the contract. |
-| `default-board.html` | **The default board**: one self-contained page, `default-board@0.5`. |
+| `default-board.html` | **The default board**: one self-contained page, `default-board@0.6`. |
 | `publish.ts` | `node --experimental-strip-types views/publish.ts --project <folder>`: embeds `<folder>/akuko.json` in the board's `akuko-project` block (escaped), with thumbnails of its pictures and its intake texts (`media.ts`), and publishes it through `LocalHost.publishView()`; prints the path. With `--signoff <gate id>` it writes that gate's read-only sign-off page instead (below). |
 | `media.ts` | The board's pictures on hosts B and C (@0.5): thumbnails as `data:` URIs, links relative to the page, intake texts. |
 | `signoff.ts` | Builds the read-only sign-off page for one gate (WP-29). |
@@ -93,7 +93,7 @@ The file opens offline on a **sample project** (the project block carries `"_sam
 - **Host A (claude.ai):** publish `default-board.html` **unchanged**, so the hash on `conformed.json` names what was published, with
   `capabilities: {db: {rules: [{path: "", read: "view", write: "owner"}, {path: "decisions", read: "view", write: "interact"}]}, user: {}}`.
   Then write the project to the doc `akuko/project`; the board reads it and replaces the sample.
-- **Host B / C:** run `node --experimental-strip-types views/publish.ts --project <folder>`. It writes the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and saves the page as `<project>/views/default-board.html`. Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.5`; decisions written by `@0.1` … `@0.4` boards still fold, because every id stays on `conformed.json`).
+- **Host B / C:** run `node --experimental-strip-types views/publish.ts --project <folder>`. It writes the current project into the `<script id="akuko-project">` block (the schema's project, without `_sample`) and saves the page as `<project>/views/default-board.html`. Changing the block does not change the conformance hash, and folding accepts the board by its view id (`default-board@0.6`; decisions written by `@0.1` … `@0.5` boards still fold, because every id stays on `conformed.json`).
 
 ### Changing the board
 

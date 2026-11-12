@@ -7,12 +7,12 @@
  *            set shots' blocking from a proposal ({ "<shot id>": [ {who, shape, x, y, w, h} ] })
  *   draw     draw a panel for every shot that needs one (stored via the host adapter),
  *            move those shots to pending-review, and write the 9-panel beat boards
- *            to <project>/board/beatboards/
+ *            to <project>/board/beatboards/ (each as .html and .svg)
  *   lint     blocking warnings (never errors)
  *
  * Fold decisions first (`decisions/cli.ts fold <project>`). Free: no provider, no spend gate.
  * On host A, import the functions from `panels.ts` / `beatboard.ts` instead and pass the
- * project read from the artifact database.
+ * project read from the artifact database; store each board's `.svg` (the asset store refuses HTML).
  */
 
 import { readFile } from 'node:fs/promises';
@@ -53,11 +53,14 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const r = await drawSketchPanels(project, host, { now });
       if (r.changed) await host.writeState(r.project);
       const boards = buildBeatBoards(r.project);
-      for (const b of boards) await writeFileAtomic(join(dir, 'board', 'beatboards', b.file), b.html);
+      for (const b of boards) {
+        await writeFileAtomic(join(dir, 'board', 'beatboards', b.file), b.html);
+        await writeFileAtomic(join(dir, 'board', 'beatboards', b.svgFile), b.svg);
+      }
       const out = [
         `Drew ${r.drawn.length} panel(s), redrew ${r.redrawn.length}; ${r.unchanged.length} left as they were; ${r.waiting.length} waiting on the breakdown.`,
         ...r.stillSentBack.map((id) => `  ${id} was sent back but nothing changed since: change its blocking or camera, then draw again.`),
-        `Wrote ${boards.length} beat board(s) to board/beatboards/.`,
+        `Wrote ${boards.length} beat board(s) to board/beatboards/ (each as .html and .svg).`,
         formatIssues(r.lint),
       ];
       return { code: 0, out: out.join('\n') };

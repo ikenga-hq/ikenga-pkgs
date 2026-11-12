@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createFakeHost } from '../providers/__fixtures__/fake-host.ts';
 import { AkukoProjectSchema, type AkukoProject } from '../schema/akuko-project.ts';
 import { checkIntegrity } from '../schema/integrity.ts';
-import { alreadyBrokenDown, applyBreakdown, checkProposal, planRetag, ProposalError } from './apply.ts';
+import { alreadyBrokenDown, applyBreakdown, checkProposal, planRetag, ProposalError, tagScriptCopy, taggedPathFor, withTaggedCopy } from './apply.ts';
 import { run } from './cli.ts';
 import { parseFountain } from './fountain.ts';
 import { completeIntake, createProject, detectSourceKind, slugify } from './intake.ts';
@@ -267,6 +267,37 @@ describe('route: adapt (prose -> screenplay -> breakdown)', () => {
     assert.equal(stripTags(r.text), screenplay);
   });
 
+  // B-3 (live claude.ai run, 2026-11-11): tagging re-pointed the APPROVED screenplay asset at a tagged copy.
+  it('tags go into a derived copy: the approved script and its asset are never changed (B-3)', () => {
+    const p = applyBreakdown(readyProject('adapt'), adaptProposal, { now: T0 }).project;
+    const approvedBefore = structuredClone(p.assets.find((a) => a.id === 'script-screenplay'));
+    assert.equal(taggedPathFor('script/screenplay.fountain'), 'script/screenplay.tagged.fountain');
+    assert.equal(taggedPathFor('script/source.md'), 'script/source.tagged.md');
+    assert.equal(taggedPathFor('notes/script'), 'notes/script.tagged');
+
+    const first = tagScriptCopy(p, screenplay, undefined);
+    assert.equal(first.rebuilt, false);
+    assert.equal(first.tagged.length, 11);
+    assert.equal(stripTags(first.text), screenplay);
+    const recorded = withTaggedCopy(p, 'script/screenplay.tagged.fountain');
+    assert.equal(recorded.script.tagged, 'script/screenplay.tagged.fountain');
+    assert.equal(recorded.script.screenplay, p.script.screenplay, 'the approved script path is untouched');
+    assert.deepEqual(recorded.assets, p.assets, 'no asset is added or re-pointed, so nothing approved changes');
+    assert.deepEqual(recorded.assets.find((a) => a.id === 'script-screenplay'), approvedBefore);
+    assert.equal(withTaggedCopy(recorded, 'script/screenplay.tagged.fountain'), recorded, 'recording the same copy again is a no-op');
+    assert.doesNotThrow(() => AkukoProjectSchema.parse(recorded));
+
+    // the copy is reused while it is the approved text plus tags
+    const again = tagScriptCopy(recorded, screenplay, first.text);
+    assert.deepEqual([again.text === first.text, again.tagged.length, again.rebuilt], [true, 0, false]);
+    // an approved script that changed (a person revised and re-approved it) rebuilds the copy from it
+    const revised = screenplay.replace('the last crossing of the day', 'the final crossing of the day');
+    assert.notEqual(revised, screenplay);
+    const rebuilt = tagScriptCopy(recorded, revised, first.text);
+    assert.equal(rebuilt.rebuilt, true);
+    assert.equal(stripTags(rebuilt.text), revised);
+  });
+
   it('re-running breakdown creates nothing and leaves akuko.json untouched', async () => {
     const host = createFakeHost(readyProject('adapt'));
     const first = applyBreakdown(await host.readState(), adaptProposal, { now: T0 });
@@ -410,8 +441,19 @@ describe('command line (host B / C)', () => {
       assert.match(linted.out, /Lint passed/);
 
       const akuko1 = await readFile(join(dir, 'akuko.json'), 'utf8');
-      const script1 = await readFile(join(dir, 'script', route === 'adapt' ? 'screenplay.fountain' : 'source.md'), 'utf8');
+      // B-3: the approved script is never rewritten; the tags go into a derived copy that is not a review unit
+      const approvedName = route === 'adapt' ? 'screenplay.fountain' : 'source.md';
+      const taggedName = route === 'adapt' ? 'screenplay.tagged.fountain' : 'source.tagged.md';
+      assert.ok(tagged.out.includes(`Tags are in script/${taggedName}; the approved script/${approvedName} is unchanged.`), tagged.out);
+      assert.equal(await readFile(join(dir, 'script', approvedName), 'utf8'), route === 'adapt' ? screenplay : story, 'the approved file is byte-identical');
+      const script1 = await readFile(join(dir, 'script', taggedName), 'utf8');
       assert.ok(readTags(script1, { prose: route === 'direct' }).length >= 8);
+      assert.equal(stripTags(script1), stripTags(route === 'adapt' ? screenplay : story), 'the copy is the approved text plus tags');
+      const saved = JSON.parse(akuko1) as AkukoProject;
+      assert.equal(saved.script.tagged, `script/${taggedName}`);
+      const intakeAsset = saved.assets.find((a) => a.id === (route === 'adapt' ? 'script-screenplay' : 'script-source'))!;
+      assert.equal(intakeAsset.file?.uri, `script/${approvedName}`, 'the intake asset (and its approval) stays on the original file');
+      assert.equal(saved.assets.some((a) => a.file?.uri === `script/${taggedName}`), false, 'the tagged copy is not an asset to review');
 
       const again = await run(['apply', '--project', dir, '--proposal', proposalFile], () => new Date('2030-01-01T00:00:00Z'));
       assert.equal(again.code, 0);
@@ -419,7 +461,7 @@ describe('command line (host B / C)', () => {
       const retag = await run(['tag', '--project', dir], T0);
       assert.match(retag.out, /Tagged 0,/);
       assert.equal(await readFile(join(dir, 'akuko.json'), 'utf8'), akuko1);
-      assert.equal(await readFile(join(dir, 'script', route === 'adapt' ? 'screenplay.fountain' : 'source.md'), 'utf8'), script1);
+      assert.equal(await readFile(join(dir, 'script', taggedName), 'utf8'), script1);
       AkukoProjectSchema.parse(JSON.parse(akuko1));
     });
   }

@@ -13,7 +13,7 @@ import { spentFromLedger } from '../../spend/ledger.ts';
 import { createFakeHost, tinyProject } from '../__fixtures__/fake-host.ts';
 import { REF_URI } from '../gemini-image/__fixtures__/mock-net.ts';
 import { MP4_BYTES, mockFalVideo } from './__fixtures__/mock-net.ts';
-import { AUDIO_SUFFIX, FAL_VIDEO_PROVIDER_ID, createFalVideoProvider, falVideoLimits, fitSeconds, snapSeconds, splitModel } from './index.ts';
+import { AUDIO_SUFFIX, FAL_VIDEO_PROVIDER_ID, createFalVideoProvider, falVideoLimits, fitSeconds, secondsText, snapSeconds, splitModel } from './index.ts';
 
 const NOW = '2026-11-09T10:00:00Z';
 const config = loadProviderConfig();
@@ -58,7 +58,7 @@ describe('fal video provider: contract', () => {
     assert.deepEqual([...provider.hosts], ['B', 'C']);
     assert.deepEqual([...provider.kinds], ['video']);
     assert.equal(provider.capabilities.i2v, true);
-    assert.equal(provider.capabilities.maxSeconds, 10);
+    assert.equal(provider.capabilities.maxSeconds, 30, 'the longest any configured model makes (Seedance 2.5)');
     assert.equal(entry.example, false);
     assert.equal(entry.key_env, 'FAL_KEY');
   });
@@ -340,5 +340,83 @@ describe('fal video: limits and config', () => {
     assert.deepEqual(staleModels(config, '2026-11-09').filter((s) => s.provider === FAL_VIDEO_PROVIDER_ID), []);
     const order = Object.keys(JSON.parse(readFileSync(CONFIG_URL, 'utf8')).providers);
     assert.equal(order.indexOf('fal-video'), order.indexOf('manual') + 1);
+  });
+});
+
+// B-12 (live claude.ai run, 2026-11-11): Seedance was not on the price list, so akuko refused to price it.
+describe('fal video: Seedance image-to-video (prices read from fal 2026-11-12)', () => {
+  const seedance = models.filter((m) => m.includes('seedance'));
+  const pick = (version: '2.0' | '2.0/fast' | '2.5', res: string, audio = false) => {
+    const m = seedance.find((x) => x.includes(`seedance-${version}/image-to-video#${res}`) && x.endsWith(AUDIO_SUFFIX) === audio);
+    assert.ok(m, `Seedance ${version} ${res}${audio ? ' audio' : ''} is configured`);
+    return m;
+  };
+  const expected: Array<['2.0' | '2.0/fast' | '2.5', string, number]> = [
+    ['2.0/fast', '720p', 0.2419], ['2.0', '720p', 0.3034], ['2.0', '1080p', 0.682],
+    ['2.5', '480p', 0.2205], ['2.5', '720p', 0.473], ['2.5', '1080p', 1.164],
+  ];
+
+  it('every Seedance resolution is configured per second, verified, with its fal source, and sound costs the same', () => {
+    assert.equal(seedance.length, expected.length * 2);
+    for (const [v, res, price] of expected) {
+      for (const audio of [false, true]) {
+        const m = entry.models[pick(v, res, audio)]!;
+        assert.deepEqual(m.price, { amount: price, per: 'second' });
+        assert.equal(m.last_verified, '2026-11-12');
+        assert.match(m.source, /https:\/\/fal\.ai\/models\/bytedance\/seedance-2\.[05]\/(fast\/)?image-to-video\/llms\.txt, read 2026-11-12/);
+      }
+    }
+  });
+
+  it('lengths are any whole second from 4 s (to 15 s on 2.0, 30 s on 2.5); the resolution comes from the id', () => {
+    const l20 = falVideoLimits(pick('2.0', '720p'))!;
+    assert.deepEqual([l20.allowedSeconds[0], l20.allowedSeconds.at(-1), l20.allowedSeconds.length], [4, 15, 12]);
+    assert.equal(l20.resolution, '720p');
+    assert.equal(l20.endpoint, 'bytedance/seedance-2.0/image-to-video');
+    const fast = falVideoLimits(pick('2.0/fast', '720p'))!;
+    assert.equal(fast.endpoint, 'bytedance/seedance-2.0/fast/image-to-video');
+    assert.equal(fast.allowedSeconds.at(-1), 15);
+    const l25 = falVideoLimits(pick('2.5', '1080p', true))!;
+    assert.deepEqual([l25.allowedSeconds[0], l25.allowedSeconds.at(-1), l25.audio, l25.resolution], [4, 30, true, '1080p']);
+    assert.deepEqual(splitModel(pick('2.5', '1080p', true)), { endpoint: 'bytedance/seedance-2.5/image-to-video', audio: true, resolution: '1080p' });
+    assert.equal(secondsText(l20.allowedSeconds), '4 to 15');
+    assert.equal(secondsText([5, 10]), '5 or 10');
+    // Seedance needs a resolution in the id; Kling takes none
+    assert.equal(falVideoLimits('bytedance/seedance-2.0/image-to-video'), undefined);
+    assert.equal(falVideoLimits(`${entry.default_model}#720p`), undefined);
+  });
+
+  it('estimates per billed second, refuses lengths it cannot make, and sends the resolution with sound off', async () => {
+    const s = setup();
+    const model = pick('2.0', '720p');
+    const j = job({ model }, [4, 7]);
+    const c = await s.provider.estimate(j);
+    assert.deepEqual(costProblems(j, c), []);
+    assert.ok(Math.abs(c.amount - 0.3034 * 11) < 1e-9, `11 s at 0.3034 = ${c.amount}`);
+    assert.ok(Math.abs((c.per_unit.sc1_sh2 ?? 0) - 0.3034 * 7) < 1e-9);
+    assert.match(c.basis, /sound off/);
+    await assert.rejects(s.provider.estimate(job({ model }, [3, 7])), /4 to 15 seconds, not 3/);
+    await assert.rejects(s.provider.estimate(job({ model }, [4, 16])), /4 to 15 seconds, not 16/);
+    await assert.rejects(s.provider.estimate(job({ model }, [4, 6.5])), /not 6\.5/);
+    await s.provider.estimate(job({ model: pick('2.5', '480p') }, [4, 30]));
+
+    const r = await approveAndRun(s, j);
+    assert.equal(r.status, 'submitted');
+    const post = s.net.calls.find((x) => x.method === 'POST')!;
+    assert.equal(post.url, 'https://queue.fal.run/bytedance/seedance-2.0/image-to-video');
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(post.body as Record<string, unknown>).filter(([k]) => k !== 'prompt')),
+      { image_url: REF_URI, duration: '4', generate_audio: false, resolution: '720p' },
+    );
+  });
+
+  it('the spend gate prices a Seedance job at the billed seconds and binds the approval to that amount', async () => {
+    const s = setup();
+    const j = job({ model: pick('2.5', '720p') }, [5, 8]);
+    const r = await s.gate.run(j);
+    assert.equal(r.status, 'awaiting-approval');
+    const pending = s.host.peek().pending_spend.find((x) => x.id === j.id)!;
+    assert.ok(Math.abs(pending.estimate - 0.473 * 13) < 1e-9, `pending ${pending.estimate}`);
+    assert.equal(pending.model, j.model);
   });
 });

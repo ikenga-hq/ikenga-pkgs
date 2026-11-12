@@ -139,6 +139,7 @@ describe('short-story full run: manual provider (free)', () => {
   it('item 5: breakdown run again on the finished project creates nothing', async () => {
     const before = await readFile(join(manualDir, 'akuko.json'));
     const screenplayBefore = await readFile(join(manualDir, 'script', 'screenplay.fountain'));
+    const taggedBefore = await readFile(join(manualDir, 'script', 'screenplay.tagged.fountain'));
     const apply = await breakdownCli(['apply', '--project', manualDir, '--proposal', join(FIXTURE_DIR, 'proposal.json')]);
     assert.equal(apply.code, 0, apply.out);
     assert.match(apply.out, /^Nothing created: this project already has a breakdown/);
@@ -147,6 +148,8 @@ describe('short-story full run: manual provider (free)', () => {
     assert.equal((await breakdownCli(['lint', '--project', manualDir])).code, 0);
     assert.ok(before.equals(await readFile(join(manualDir, 'akuko.json'))), 'akuko.json is byte-identical');
     assert.ok(screenplayBefore.equals(await readFile(join(manualDir, 'script', 'screenplay.fountain'))), 'the screenplay is byte-identical');
+    assert.ok(taggedBefore.equals(await readFile(join(manualDir, 'script', 'screenplay.tagged.fountain'))), 'the tagged copy is byte-identical');
+    assert.ok(screenplayBefore.equals(await readFile(join(FIXTURE_DIR, 'screenplay.fountain'))), 'the approved screenplay was never tagged in place (B-3)');
 
     const again = applyBreakdown(manual.final, proposal, { now: () => new Date('2027-01-01T00:00:00Z') });
     assert.equal(again.skipped, true);

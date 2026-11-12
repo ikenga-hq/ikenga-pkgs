@@ -52,7 +52,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "animate", "make the clips", "motion", "treatment", "camera moves" | [`actions/motion.md`](actions/motion.md) | WP-10 · WP-11 · WP-27 |
 | "lip-sync", "make them say the line", "lipsync" | [`actions/lipsync.md`](actions/lipsync.md) | WP-28b |
 | "voice-over", "music", "sound effects", "sound" | [`actions/sound.md`](actions/sound.md) | WP-12 |
-| "animatic", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | WP-13 (stub) |
+| "animatic", "preview the film", "let me watch it", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | B-11 (`preview` built) · WP-13 (rough cut, picture lock: stub) |
 | "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
 | "I reviewed it", "apply my notes", "review" | [`actions/review.md`](actions/review.md) | WP-07a |
 | "show me …", "open the board", "view" | [`actions/view.md`](actions/view.md) | WP-07c |
@@ -60,7 +60,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 
 Export hands the approved film to DaVinci Resolve as a timeline plus media. MP4 masters, cutdowns and a Canva deck are parked (plan Round 7): if asked for an MP4, say so and offer the handoff.
 
-If nothing matches, run `status` and offer the next action it suggests. If an action file still says **Stub (WP-02)**, tell the person it is not built yet and stop — do not improvise it.
+If nothing matches, run `status` and offer the next action it suggests. If an action file (or the route asked for) still says **Stub (WP-02)**, tell the person it is not built yet and stop — do not improvise it. An animatic is not improvised either: `assemble preview` is the built, free route for one (approved key frames timed to the shots, never a review unit, never saved to the project).
 
 ## Stages
 
@@ -84,6 +84,7 @@ These hold on every host and in every action and view:
 4. **Money is never hidden or rounded.** Every paid call is recorded in `ledger[]`, success or failure.
 5. **Keys stay in the environment** (or the host's secret store) — never in `akuko.json`, a view, or a transcript.
 6. **House rules come before money.** When the project has `rules`, every job is checked against them before the spend gate, and a breach is refused (`rules-breach`), naming the rule and the offending text or file. Report it and stop; never reword, drop a reference or edit the rules to get past it. Run `rules/cli.ts check` for a free preflight (`lib/state.md` §"Rules guard (WP-26)").
+7. **A plan allowance is spend too.** A connected tool that uses the person's own plan allowance instead of money (Canva's monthly AI limit on claude.ai) gets an OK of every wave: the count, the service, that akuko can't see what is left, and the exact reply `approve <n> <service> generations`. Each generation goes in the ledger with zero money and a units count (`lib/spend.md` §Allowance).
 
 ## Hosts in one line each
 
