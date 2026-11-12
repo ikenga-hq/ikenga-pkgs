@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/skill-akuko",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "akuko: an agent skill that takes a short story, treatment or film script to a short film, one reviewed stage at a time (screenplay, breakdown, sketch board, bibles, key frames, motion, lip-sync, sound, DaVinci Resolve handoff). Holds the skill, the akuko.json project format (Zod + JSON Schema) and converters.",
   "keywords": [
     "claude",
