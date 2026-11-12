@@ -46,11 +46,11 @@ async function approveAndRun(s: ReturnType<typeof setup>, j: Job) {
 }
 
 describe('gemini-image provider', () => {
-  it('is sealed, paid direct API, hosts B and C only (R-11)', () => {
+  it('is sealed, paid direct API, hosts A, B and C (R-11 is enforced by the gate)', () => {
     const { provider } = setup();
     assert.ok(isSealed(provider));
     assert.equal(provider.billing, 'direct-api');
-    assert.deepEqual([...provider.hosts], ['B', 'C']);
+    assert.deepEqual([...provider.hosts], ['A', 'B', 'C']);
     assert.equal(provider.capabilities.refImages, GEMINI_MAX_REFS);
     assert.equal(entry.example, false);
   });
@@ -222,6 +222,6 @@ describe('gemini-image provider', () => {
     const gate = createSpendGate({ host, providers: [provider], level: 'A' });
     const r = await gate.run(job());
     assert.equal(r.status, 'refused');
-    assert.ok(r.status === 'refused' && r.refusal.code === 'host-not-supported');
+    assert.ok(r.status === 'refused' && r.refusal.code === 'paid-direct-on-host-a', 'R-11: not without the pasted key and the phases');
   });
 });

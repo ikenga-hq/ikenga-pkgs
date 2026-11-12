@@ -24,18 +24,48 @@ export const ModelConfigSchema = z.object({
 }).strict();
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
+/**
+ * A model akuko knows how to call but whose price the provider does not
+ * publish per unit (or that akuko could not verify). It is listed so people
+ * can see it exists, and it is never runnable: `priceFor()` refuses it with
+ * "price unverified", so the gate can never price, approve or send it.
+ */
+export const UnverifiedModelSchema = z.object({
+  last_checked: DateSchema,
+  source: z.string().min(1).describe('What was read, where, and why no price could be taken from it.'),
+}).strict();
+export type UnverifiedModel = z.infer<typeof UnverifiedModelSchema>;
+
+/** Where a provider's API lives, for the no-cost reachability probe (`scripts/probe.ts`) and for claude.ai's network settings. */
+export const NetworkSchema = z.object({
+  probe: z.string().url().startsWith('https://').describe('An https URL that costs nothing and needs no key (any HTTP answer, even 401, proves the host is reachable).'),
+  domains: z.array(z.string().regex(/^(\*\.)?[a-z0-9.-]+\.[a-z]{2,}$/i, 'a domain name, optionally starting with *.')).min(1)
+    .describe('Every domain akuko contacts for this provider: the API host, then download hosts. Allow these in claude.ai (Settings, code execution network access).'),
+  note: z.string().optional().describe('What is not verified about the domains (e.g. a download host the provider does not document).'),
+}).strict();
+export type ProviderNetwork = z.infer<typeof NetworkSchema>;
+
 export const ProviderConfigSchema = z.object({
   label: z.string().min(1),
   billing: z.enum(['free', 'direct-api', 'connected-mcp']),
   example: z.boolean().default(false),
   key_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'key_env must be an environment variable name').optional()
     .describe('Environment variable that holds the key for this provider. The one place the name lives: providers, setup and doctor all read it.'),
+  secret_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'secret_env must be an environment variable name').optional()
+    .describe('A second variable the provider needs with key_env (e.g. a secret key that signs a token). Both must be set.'),
+  network: NetworkSchema.optional(),
   default_model: z.string().min(1),
   models: z.record(ModelConfigSchema),
+  unverified_models: z.record(UnverifiedModelSchema).optional()
+    .describe('Models akuko can call but cannot price (no published per-unit price). Never runnable: priceFor() refuses them.'),
 }).strict().superRefine((p, ctx) => {
   if (!(p.default_model in p.models)) {
     ctx.addIssue({ code: 'custom', message: `default_model "${p.default_model}" is not in models` });
   }
+  for (const id of Object.keys(p.unverified_models ?? {})) {
+    if (id in p.models) ctx.addIssue({ code: 'custom', message: `model "${id}" is both priced and listed as price unverified` });
+  }
+  if (p.secret_env !== undefined && p.key_env === undefined) ctx.addIssue({ code: 'custom', message: 'secret_env needs key_env' });
 });
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
@@ -79,6 +109,22 @@ export function providerKeyEnv(config: AkukoProviderConfig, providerId: string):
   return config.providers[providerId]?.key_env;
 }
 
+/** Every env var a provider needs (key_env, then secret_env when set). Names only. */
+export function providerKeyEnvs(config: AkukoProviderConfig, providerId: string): string[] {
+  const p = config.providers[providerId];
+  return [p?.key_env, p?.secret_env].filter((x): x is string => typeof x === 'string');
+}
+
+/** The provider's network entry (probe url and domains), when config has one. */
+export function providerNetwork(config: AkukoProviderConfig, providerId: string): ProviderNetwork | undefined {
+  return config.providers[providerId]?.network;
+}
+
+/** Models listed as "price unverified" for a provider (never runnable). */
+export function unverifiedModels(config: AkukoProviderConfig, providerId: string): Record<string, UnverifiedModel> {
+  return config.providers[providerId]?.unverified_models ?? {};
+}
+
 export interface ResolvedPrice {
   provider: string;
   model: string;
@@ -103,6 +149,12 @@ export function priceFor(
     throw new ProviderConfigError(`provider "${providerId}" is an example entry with a placeholder price; it cannot be priced for real use`);
   }
   const model = modelId ?? entry.default_model;
+  const unverified = entry.unverified_models?.[model];
+  if (unverified) {
+    throw new ProviderConfigError(
+      `model "${model}" of "${providerId}" is listed as price unverified: the provider publishes no per-unit price akuko could check (checked ${unverified.last_checked}; see unverified_models in providers/config.json). It cannot be estimated, approved or run; pick a priced model.`,
+    );
+  }
   const m = entry.models[model];
   if (!m) throw new ProviderConfigError(`model "${model}" is not configured for provider "${providerId}"`);
   return { provider: providerId, model, amount: m.price.amount, per: m.price.per, currency: config.currency, last_verified: m.last_verified };

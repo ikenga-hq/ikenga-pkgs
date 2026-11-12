@@ -224,6 +224,27 @@ describe('jobs: one shot, the start frame, the length the model can make', () =>
     assert.equal(loud.job.model, `${model}#audio`);
   });
 
+  it('direct video providers: each fits the shot to the lengths it makes, sound comes from the #audio twin, unverified prices refuse', () => {
+    // Kling 2.6 on Kling's own API: 5 or 10 s, so a 6 s shot gets a 10 s clip.
+    const k = buildMotionJob(funded(), { provider: 'kling-video' });
+    assert.equal(k.job.items[0]!.duration_s, 10);
+    assert.ok(k.notes.some((n) => /kling-video makes 5 or 10 s clips/.test(n)), k.notes.join('|'));
+    // Kling 3.0 has a sound twin; 2.6 (the default) does not.
+    const v3 = Object.keys(CFG.providers['kling-video']!.models).find((m) => /^kling-v3#std$/.test(m))!;
+    assert.equal(buildMotionJob(funded(), { provider: 'kling-video', model: v3, audio: true }).job.model, `${v3}#audio`);
+    assert.throws(() => buildMotionJob(funded(), { provider: 'kling-video', audio: true }), /no sound option/);
+    // Gemini Omni Flash: whole seconds 3 to 15, always with sound.
+    const g = buildMotionJob(funded(), { provider: 'gemini-video' });
+    assert.equal(g.job.items[0]!.duration_s, 6);
+    assert.ok(!g.notes.some((n) => /Sound is off/.test(n)), 'the Gemini model always makes sound, so the note does not say it is off');
+    // Seedance on BytePlus: 4 to 15 s.
+    const short = funded();
+    short.shots[0]!.duration_s = 2.5;
+    assert.equal(buildMotionJob(short, { provider: 'byteplus-video' }).job.items[0]!.duration_s, 4);
+    const unverified = Object.keys(CFG.providers['byteplus-video']!.unverified_models ?? {})[0]!;
+    assert.throws(() => buildMotionJob(funded(), { provider: 'byteplus-video', model: unverified }), /price unverified/);
+  });
+
   it('--units / --scene put several clips in one job', () => {
     const p = funded();
     const two = buildMotionJob(p, { provider: 'fal-video', units: [CLIP1, 'sc1_sh4_clip'] });
@@ -279,7 +300,9 @@ describe('the spend gate: one clip, shown per second, approved for that amount',
   it('is refused on host A (a paid direct API)', async () => {
     const r = rig('fal-video', funded(), 'A');
     const step = await generateClips(deps(r), { provider: 'fal-video' });
-    assert.ok(step.status === 'refused' && /host-not-supported|paid-direct-on-host-a/.test(step.code), JSON.stringify(step));
+    // R-11: on host A a direct API quotes for free (the spend line) but never sends without the pasted key and the phases (spend/host-a.test.ts).
+    assert.ok((step.status === 'refused' && /paid-direct-on-host-a/.test(step.code)) || step.status === 'awaiting-approval', JSON.stringify(step));
+    assert.ok(r.host.peek().ledger.length === 0, 'nothing reserved or sent');
   });
 
   it('shows the per-second spend line, sends nothing until approved, then runs and records the clip for review', async () => {

@@ -20,8 +20,10 @@
  * claude.ai (--claudeai, --out default ./dist-claudeai) — `akuko.zip` holding one
  * top-level `akuko/` folder with only the files the skill needs at run time.
  * claude.ai rejects a skill zip with more than 200 files; the build fails if the
- * count goes over. Excluded: tests, `__fixtures__/`, `fixtures/`, `evals/`, and
- * `blocks/` (HyperFrames compositions, which cannot render on claude.ai). Three
+ * count goes over. Excluded: tests, `__fixtures__/`, `fixtures/`, `evals/`,
+ * `blocks/` (HyperFrames compositions, which cannot render on claude.ai), and
+ * the two JSON Schema generators (build-time tools that need the dev-only
+ * zod-to-json-schema; their output files ship). Three
  * fixture files are put back because a runtime path reads them (see CLAUDEAI_KEEP).
  *
  * --- Runtime dependencies ------------------------------------------------
@@ -84,6 +86,8 @@ const RESIDUE = new Set(['node_modules', '__pycache__', '.pytest_cache', '.DS_St
 // claude.ai: dropped directories (any depth for __fixtures__, top level for the rest).
 const CLAUDEAI_DROP_ANYWHERE = new Set(['__fixtures__']);
 const CLAUDEAI_DROP_TOP = new Set(['fixtures', 'evals', 'blocks']);
+// ...build-time generators (they import the dev dependency zod-to-json-schema; the .json they write ships):
+const CLAUDEAI_DROP_FILES = new Set(['schema/export-json-schema.ts', 'decisions/export-decision-schema.ts']);
 // ...and the fixture files a runtime path reads, put back:
 //  - scripts/check-view/check.mjs: DEFAULT_PROJECT is fixtures/the-beating/akuko.json
 //    (check-view without --project), and reservedViews() hashes the two fixture views
@@ -180,6 +184,7 @@ function claudeAiKeeps(rel) {
   if (parts.some((p) => RESIDUE.has(p))) return false;
   if (CLAUDEAI_KEEP.includes(rel)) return true;
   if (rel.endsWith('.test.ts')) return false;
+  if (CLAUDEAI_DROP_FILES.has(rel)) return false;
   if (CLAUDEAI_DROP_TOP.has(parts[0])) return false;
   if (parts.slice(0, -1).some((p) => CLAUDEAI_DROP_ANYWHERE.has(p))) return false;
   return true;

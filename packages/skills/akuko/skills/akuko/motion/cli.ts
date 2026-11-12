@@ -6,7 +6,8 @@
  *   plan    [--part P7]       create a planned clip for every shot (idempotent); says which shots are at the retry cap
  *   status  [--part P7]       one line per clip: its status, what it waits for, paid attempts and money spent
  *   parts                     one line per part: open for motion or not, and what it waits for (free, read-only)
- *   step    --provider <id>   the next clip (one shot) through the spend gate: manual | fal-video
+ *   step    --provider <id>   the next clip (one shot) through the spend gate:
+ *                             manual | fal-video | gemini-video | kling-video | byteplus-video
  *           [--model <id>] [--units a,b] [--scene sc1] [--part P7] [--audio] [--fit cover|nearest] [--max-attempts N]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
  *             manual: prints the prompt package and stops; bring files back with `ingest`
@@ -15,6 +16,9 @@
  *                           length the model makes (cheaper, may be shorter than the shot)
  *             --max-attempts  paid tries allowed per shot (default 3). Pass it ONLY when the person
  *                             asked for more tries in their own words.
+ *             --key-source pasted-this-chat --phase reserve|send|release
+ *                           host A only (lib/spend.md §Host A): a paid direct API runs with a key the
+ *                           person pasted into this chat, reserved first and sent second
  *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>]
  *           record a clip the person made for a manual job
  *   collect --job <id>        poll a paid job submitted earlier and record its clips
@@ -31,8 +35,8 @@
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
  * Everything goes through the local host adapter. On host A the same Node code runs in
- * the claude.ai workspace (lib/hosts.md); paid providers are still refused there, so use
- * the manual provider.
+ * the claude.ai workspace (lib/hosts.md) on a working copy of the board's project; a paid
+ * direct API runs there only through the pasted-key, two-phase flow (lib/spend.md §Host A).
  */
 
 import { mkdir, readFile } from 'node:fs/promises';
@@ -41,11 +45,14 @@ import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
-import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
+import { loadProviderConfig, providerKeyEnvs } from '../providers/config.ts';
 import { createFalVideoProvider } from '../providers/fal-video/index.ts';
+import { createGeminiVideoProvider } from '../providers/gemini-video/index.ts';
+import { createKlingVideoProvider } from '../providers/kling-video/index.ts';
+import { createByteplusVideoProvider } from '../providers/byteplus-video/index.ts';
 import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
-import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
+import { MANUAL_PROVIDER_ID, createSpendGate, isPhaseStop, phasedGateOptions } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { DEFAULT_MAX_ATTEMPTS, MotionError, motionStatus, planMotion, type Scope } from './plan.ts';
 import { motionRollup, partOpenness, partRefusal, partsOf } from './stage.ts';
@@ -88,6 +95,7 @@ function describeStatus(r: StepResult): CliResult {
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}${NL}Nothing has been sent. Put the amount in front of the person; once they have approved it, run this step again.` };
     case 'refused':
+      if (isPhaseStop(r.code)) return { code: 0, out: r.message };
       return { code: 1, out: `Refused (${r.code}): ${r.message}` };
     case 'failed':
       return { code: 1, out: `Failed: ${r.error}` };
@@ -208,11 +216,20 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
 
     // Commands below talk to providers, always through the gate.
     const level = (await host.detect()).level;
+    // Host A (R-11): --key-source pasted-this-chat and --phase reserve|send|release (lib/spend.md §Host A).
+    const phased = phasedGateOptions((n) => opt.get(n));
+    if ('error' in phased) return { code: 2, out: phased.error };
     const manual = createManualProvider(host, { now: clock });
     const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
-    const providers: Provider[] = [manual.provider, createFalVideoProvider(host, { now: clock, loadRef })];
+    const providers: Provider[] = [
+      manual.provider,
+      createFalVideoProvider(host, { now: clock, loadRef }),
+      createGeminiVideoProvider(host, { now: clock, loadRef }),
+      createKlingVideoProvider(host, { now: clock, loadRef }),
+      createByteplusVideoProvider(host, { now: clock, loadRef }),
+    ];
     // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
-    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock, ...phased }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     // The job file is written the moment a job is submitted, before collecting, so `collect` can always pick it up.
     const saveJob = async (job: Job, handle: JobHandle): Promise<void> => {
       await mkdir(join(dir, 'motion', 'jobs'), { recursive: true });
@@ -222,7 +239,7 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
 
     if (cmd === 'step') {
       const provider = str(opt.get('provider'));
-      if (!provider) return { code: 2, out: 'akuko: --provider manual|fal-video is required.' };
+      if (!provider) return { code: 2, out: 'akuko: --provider manual|fal-video|gemini-video|kling-video|byteplus-video is required.' };
       const model = str(opt.get('model'));
       const units = str(opt.get('units'))?.split(',').filter(Boolean);
       const scene = str(opt.get('scene'));
@@ -230,9 +247,12 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const fit = str(opt.get('fit'));
       if (fit !== undefined && fit !== 'cover' && fit !== 'nearest') return { code: 2, out: 'akuko: --fit takes cover or nearest.' };
       // A missing key is a setup problem, not an attempt: say so before the gate is touched.
-      if (provider !== MANUAL_PROVIDER_ID) {
-        const env = providerKeyEnv(loadProviderConfig(), provider);
-        if (env && !process.env[env]) return { code: 1, out: `Setup needed: ${env} is not set, so ${provider} cannot be used. Nothing was sent and nothing was counted. Set the key (see /akuko setup), or use --provider manual.` };
+      // Only a call that can send needs the key: on B and C every step but reserve / release; on host A only the
+      // send phase (the quote is free, and the person pastes a key only once a call is about to run: lib/spend.md R-11).
+      const sends = level === 'A' ? phased.phase === 'send' : phased.phase !== 'reserve' && phased.phase !== 'release';
+      if (provider !== MANUAL_PROVIDER_ID && sends) {
+        const missing = providerKeyEnvs(loadProviderConfig(), provider).filter((e) => !process.env[e]);
+        if (missing.length) return { code: 1, out: `Setup needed: ${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} not set, so ${provider} cannot be used. Nothing was sent and nothing was counted. Set the key (see /akuko setup), or use --provider manual.` };
       }
       if (max !== undefined && !/^[1-9][0-9]*$/.test(max)) return { code: 2, out: 'akuko: --max-attempts takes a whole number of 1 or more.' };
       const r = await generateClips(deps, {

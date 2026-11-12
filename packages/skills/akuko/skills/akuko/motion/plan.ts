@@ -27,7 +27,8 @@ import { STAGES, type AkukoProject, type Asset, type Shot } from '../schema/akuk
 import type { AkukoProviderConfig } from '../providers/config.ts';
 import { loadProviderConfig, priceFor, providerConfig } from '../providers/config.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
-import { AUDIO_SUFFIX, falVideoLimits, fitSeconds, type Fit, secondsText } from '../providers/fal-video/index.ts';
+import { AUDIO_SUFFIX, fitSeconds, type Fit, secondsText } from '../providers/fal-video/index.ts';
+import { videoLimitsFor } from '../providers/video-limits.ts';
 import { requestedChanges } from '../bible/plan.ts';
 import { jobRan } from '../keyframes/plan.ts';
 import { removedAt } from '../decisions/fold.ts';
@@ -146,7 +147,8 @@ export const activeClips = (p: AkukoProject): Asset[] => liveClips(p).filter((a)
 /** A kept clip whose shot is not a video shot: idle. */
 export const isIdleClip = (p: AkukoProject, a: Asset): boolean => !wantsClip(shotOf(p, a));
 
-const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted');
+// A host-A reservation not yet sent (`reserved`) is not in flight: the send phase must pick the same unit.
+const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted' && e.reserved !== true);
 
 export function unitReadiness(p: AkukoProject, a: Asset): Readiness {
   if (approvedWithFile(a)) return { state: 'approved', waiting: [] };
@@ -281,8 +283,7 @@ interface Limits { allowedSeconds: number[] }
 const fmt = (n: number): string => String(Number(n.toFixed(4)));
 /** What a video provider can make. Unknown providers (and the manual one) have no limit akuko knows about. */
 function limitsFor(provider: string, model: string): Limits | undefined {
-  if (provider === 'fal-video') return falVideoLimits(model);
-  return undefined;
+  return videoLimitsFor(provider, model);
 }
 
 /** Resolve the model, applying the sound choice. Sound is a separate model id in config (its own price). */
@@ -290,6 +291,9 @@ function resolveModel(config: AkukoProviderConfig, o: BuildOptions): { model: st
   const entry = providerConfig(config, o.provider);
   if (o.provider === MANUAL_PROVIDER_ID) return { model: o.model, audio: o.audio === true };
   const base = o.model ?? entry.default_model;
+  if (base in (entry.unverified_models ?? {})) {
+    throw new MotionError(`${o.provider} model "${base}" is listed as price unverified (the provider publishes no per-unit price akuko could check), so it cannot be priced or run. Pick a priced model; doctor lists them.`);
+  }
   if (!(base in entry.models)) throw new MotionError(`model "${base}" is not configured for ${o.provider}.`);
   if (o.audio && !base.endsWith(AUDIO_SUFFIX)) {
     const loud = `${base}${AUDIO_SUFFIX}`;

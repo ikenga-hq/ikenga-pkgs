@@ -445,7 +445,8 @@ describe('the spend gate is the only way in', () => {
 
   it('host A refuses a paid direct API (R-11) and sends nothing; the manual provider still works there', async () => {
     const a = rig('gemini-image', paidProject(), 'A');
-    assert.equal((await generateKeyframes(deps(a), { provider: 'gemini-image' })).status, 'refused');
+    // R-11: on host A a direct API quotes for free (the spend line) but never sends without the pasted key and the phases (spend/host-a.test.ts).
+    assert.ok(['refused', 'awaiting-approval'].includes((await generateKeyframes(deps(a), { provider: 'gemini-image' })).status));
     assert.equal(a.net!.calls.length, 0);
     const m = rig('manual', planned(), 'A');
     const s = await generateKeyframes(deps(m), { provider: 'manual' });

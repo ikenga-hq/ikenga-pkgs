@@ -1,9 +1,10 @@
 # Spend: the budget, the gate, the ledger
 
 akuko never spends money a person has not agreed to. This file is the rule
-book. The code that enforces it is `spend/gate.ts` and `spend/ledger.ts`; on
-host A, where no code runs, you enforce it by following this file to the
-letter.
+book. The code that enforces it is `spend/gate.ts` and `spend/ledger.ts`. On
+host A the same code runs in claude.ai's workspace on a working copy, and you
+move the project to and from the board's database in the order §Host A gives;
+where no code runs at all, you enforce this file by hand, to the letter.
 
 ## The three money fields in `akuko.json`
 
@@ -26,7 +27,8 @@ Each provider's `billing` comes from `providers/config.json`, never from the
 provider's own code:
 
 - **free**: costs akuko nothing. The manual provider is the only one.
-- **direct-api**: akuko calls a paid HTTP API with the person's key.
+- **direct-api**: akuko calls a paid HTTP API with the person's key (on host A,
+  a key pasted for that chat only: §Host A, R-11).
 - **connected-mcp**: a paid generation tool on an MCP server the person has
   connected (e.g. on claude.ai).
 
@@ -56,8 +58,12 @@ changes nothing. Then, for each job, it:
 
 1. Checks the job is well formed, the provider is registered, makes this
    kind, and runs on this host level.
-2. **Host A, R-11:** refuses any `direct-api` provider. In v0.x host A uses
-   only the manual provider and connected MCPs.
+2. **Host A, R-11:** refuses a `direct-api` provider unless the run carries
+   `keySource: 'pasted-this-chat'` (the person pasted the key into this chat
+   after the disclosure in §Host A) and a phase: `reserve` (open the
+   reservation, send nothing), `send` (send exactly that reservation, once,
+   within 15 minutes) or `release` (cancel a reservation never sent). Quotes
+   need neither: they are free.
 3. **Always calls `provider.estimate(job)`.** Estimates come from config
    prices and never call a paid endpoint.
 4. For paid jobs only:
@@ -244,13 +250,100 @@ This is not the money gate: no `pending_spend` entry is written, no `approve
 <amount> <CURRENCY>` is asked for, and the money rules (no cap, no spend) do not
 apply. But "nothing runs without an explicit OK" applies exactly as for money.
 
-## Host A: the gate is prompt-only (R-11)
+## Host A: claude.ai (R-11)
 
-On claude.ai there is no code execution, so `gate.ts` cannot run. You are the
-gate. In v0.x:
+claude.ai's chat runs code: Node and FFmpeg work in a per-chat cloud
+workspace (`lib/hosts.md`). That workspace cannot call the artifact tools,
+though, so the project lives in the board artifact's database and **you**
+move it between the database and the workspace with tool calls. The gate's
+code runs in the workspace on a working copy; the database is the record.
 
-1. **Never call a paid direct API on host A.** Use the manual provider, or a
-   connected MCP.
+### R-11: keys on claude.ai are pasted per chat
+
+A paid direct API (`billing: direct-api`: fal, Gemini, Kling, BytePlus,
+ElevenLabs) may run on host A only when **all** of these hold:
+
+1. **The network reaches it.** Before you ask for any key, run the free probe
+   in the workspace:
+   `node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/probe.ts <provider id>`.
+   It sends one GET with no key to a page that costs nothing. If it says
+   `BLOCKED`, tell the person which domains to allow (it prints them: claude.ai
+   settings, code execution and network access) and **stop**. Don't ask for a
+   key the workspace can't use.
+2. **The person was told, plainly, before pasting**, in words like:
+
+   > To call Kling directly I need your Kling access key and secret key pasted here. Before you do: the keys will be visible in this chat's history. I use them for this chat only, as an environment variable of the one command that makes the call. They are never written to the project, the board, its database, the ledger or any file the board can read, and I won't repeat them. A new chat will ask again. Reply "use my key for this chat" and paste the key(s) if that's OK.
+
+3. **They said yes to that** (`use my key for this chat`, or a plain yes to
+   this message) **and pasted the key** after it. A key pasted before the
+   disclosure: give the disclosure, then ask for the yes. Never ask the person
+   to type a key into a page, a view or a form.
+4. **You set the key only on the command that needs it**, as the variable
+   config names (`key_env`, plus `secret_env` for Kling):
+   `KLING_ACCESS_KEY='…' KLING_SECRET_KEY='…' node … --key-source pasted-this-chat …`.
+   Never `export` it, never write it to a file (not `.env`, not the working
+   folder), never echo it, never put it in `akuko.json`, a view, the artifact
+   DB or a commit. Commands print key *names* only. When the chat ends the key
+   is gone; a new chat asks again.
+
+`--key-source pasted-this-chat` is your statement that 1 to 4 hold. Without it
+the gate refuses every direct API on host A (`paid-direct-on-host-a`) with a
+message pointing here. Keys still never go in `akuko.json`, a view or the
+artifact DB, on any host.
+
+### The spend gate applies in full
+
+Budget cap, the per-job estimate line, the explicit `approve <amount> USD`,
+and a ledger entry for every attempt: all exactly as on B and C. What host A
+adds is the order of the saves, so the board's database always holds the
+reservation **before** anything is sent, and the result after:
+
+1. **Working copy.** ArtifactData `get` of `akuko/project` (note its version);
+   save the `data` as `<work>/akuko.json`. Fetch the files the step needs as
+   references (the key frame for a clip, the bible images for a key frame)
+   with Artifact `read`, `path` = the asset id, into `<work>/downloads/`, then
+   `node --experimental-strip-types hosts/workcopy.ts localize --project <work> --media <work>/downloads`.
+   Run every command with `AKUKO_HOST=A`.
+2. **Quote** (free, no key): run the stage's `step` as usual (`--provider <id>`).
+   It writes the `pending_spend` entry and prints the spend line.
+   `hosts/workcopy.ts restore --project <work>` writes `akuko.board.json`;
+   ArtifactData `set` it as `akuko/project` (with `if_version`). Post the spend
+   line and wait for `approve <amount> USD`; fold the reply as usual
+   (`actions/review.md`) and save the folded project to the board.
+3. **Probe, disclose, get the key** (R-11 points 1 to 3).
+4. **Reserve** (no request is sent): refresh the working copy (step 1), then
+   `step … --key-source pasted-this-chat --phase reserve` with the key
+   variables set on that command. The gate runs every check and opens one
+   `submitted` ledger entry per unit marked `reserved: true` (the money is
+   held). It prints `Reserved … Nothing was sent.` **Now save it:** `restore`,
+   then ArtifactData `set` `akuko/project` with `if_version`. If the set
+   fails (someone changed the board), stop: refresh and start again from 2.
+5. **Send**, in the same chat, within 15 minutes:
+   `step … --key-source pasted-this-chat --phase send` with the key
+   variables set. The gate checks the reservation is there, fresh, and still
+   marked unsent; clears the mark and saves that to the working copy **before**
+   the request; then calls the provider. A second send of the same
+   reservation is refused (`already-sent`).
+6. **Result.** The command collects (or prints `still running`: run `collect
+   --job <id>` with the key set until it finishes). Then
+   `hosts/workcopy.ts uploads --project <work>` lists the new files: upload
+   each with Artifact `publish` (`asset: true`), write the returned urls to a
+   map `{"<local uri>": "<url>"}`, run `restore --uploaded <map>`, and
+   ArtifactData `set` `akuko/project` with `if_version`. The ledger result
+   (done with the cost, or failed) is now on the board. Do this after a failed
+   send too: the failed entry must reach the board.
+
+If the chat ends between 4 and 6, the board holds a reservation that may or
+may not have been sent. The gate will not send a reservation older than 15
+minutes (`reservation-stale`); tell the person, and ask them to check the
+provider's own dashboard. If nothing was made there, and only on their words,
+run `--phase release` (it cancels the reservation at no cost), save, and start
+again from 4. If something was made, record what it cost with the person's
+figure.
+
+### Connected MCPs and the manual provider
+
+1. **The manual provider** needs no key and no budget; nothing above applies.
 2. **Before any generation call on a connected MCP that costs money**, check, in this order (a connected tool that uses the person's plan allowance instead, such as Canva, goes through §Allowance: its own line, an OK of every wave, and a ledger entry with zero money and a units count):
    - `budget` is set. If it isn't, stop and point to `/akuko setup`.
    - The estimate (from `providers/config.json` prices) fits in cap − spent.

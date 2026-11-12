@@ -3,7 +3,7 @@
   "version": 1,
   "currency": "USD",
   "stale_after_days": 30,
-  "notes": "The only place akuko keeps model ids and prices (plan R-2). Every model carries a last_verified date; `doctor` flags entries older than stale_after_days. billing: free = costs akuko nothing; direct-api = akuko calls a paid HTTP API with the user's key (never on host A in v0.x); connected-mcp = a paid generation tool on a connected MCP server (needs the confirmation line on host A). Entries with example: true are placeholders for tests and for WP-06 to replace: their prices are illustrative, not quotes, and the gate refuses them outside tests.",
+  "notes": "The only place akuko keeps model ids and prices (plan R-2). Every model carries a last_verified date; `doctor` flags entries older than stale_after_days. billing: free = costs akuko nothing; direct-api = akuko calls a paid HTTP API with the user's key (on host A only with a key pasted for that chat, lib/spend.md R-11); connected-mcp = a paid generation tool on a connected MCP server (needs the confirmation line on host A). unverified_models lists models akuko can call but cannot price: they are never runnable. network names the no-cost probe url and every domain akuko contacts (scripts/probe.ts; claude.ai's network settings). Entries with example: true are placeholders for tests and for WP-06 to replace: their prices are illustrative, not quotes, and the gate refuses them outside tests.",
   "providers": {
     "manual": {
       "label": "Manual — you run the generator",
@@ -23,6 +23,14 @@
       "billing": "direct-api",
       "example": false,
       "key_env": "FAL_KEY",
+      "network": {
+        "probe": "https://queue.fal.run/",
+        "domains": [
+          "queue.fal.run",
+          "*.fal.media"
+        ],
+        "note": "fal returns finished files on fal.media hosts (v3.fal.media in akuko's tests); fal does not list its download hosts."
+      },
       "default_model": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
       "models": {
         "fal-ai/kling-video/v2.5-turbo/pro/image-to-video": {
@@ -107,6 +115,12 @@
       "billing": "direct-api",
       "example": false,
       "key_env": "GEMINI_API_KEY",
+      "network": {
+        "probe": "https://generativelanguage.googleapis.com/v1beta/models",
+        "domains": [
+          "generativelanguage.googleapis.com"
+        ]
+      },
       "default_model": "gemini-nano-banana-2.1",
       "models": {
         "gemini-nano-banana-2.1": {
@@ -131,6 +145,14 @@
       "billing": "direct-api",
       "example": false,
       "key_env": "FAL_KEY",
+      "network": {
+        "probe": "https://queue.fal.run/",
+        "domains": [
+          "queue.fal.run",
+          "*.fal.media"
+        ],
+        "note": "fal returns finished files on fal.media hosts (v3.fal.media in akuko's tests); fal does not list its download hosts."
+      },
       "default_model": "fal-ai/nano-banana-2",
       "models": {
         "fal-ai/nano-banana-2": {
@@ -145,6 +167,12 @@
       "billing": "direct-api",
       "example": false,
       "key_env": "ELEVENLABS_API_KEY",
+      "network": {
+        "probe": "https://api.elevenlabs.io/v1/models",
+        "domains": [
+          "api.elevenlabs.io"
+        ]
+      },
       "default_model": "eleven_flash_v2_5",
       "models": {
         "eleven_flash_v2_5": {
@@ -159,50 +187,255 @@
         }
       }
     },
+    "gemini-video": {
+      "label": "Google video (Gemini Omni Flash, the Gemini API's replacement for Veo) — your Gemini API key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "GEMINI_API_KEY",
+      "network": {
+        "probe": "https://generativelanguage.googleapis.com/v1beta/models",
+        "domains": [
+          "generativelanguage.googleapis.com"
+        ],
+        "note": "The video download (files/<id>:download?alt=media) may redirect to another Google host; Google does not name it. akuko never sends the key to a redirect."
+      },
+      "default_model": "gemini-omni-1.2-flash#720p#audio",
+      "models": {
+        "gemini-omni-1.2-flash#360p#audio": {
+          "price": { "amount": 0.0232, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://aistudio.google.com/docs/pricing, Gemini Omni 1.2 Flash, Standard paid tier, read 2026-11-12: video output \"$12.00\" per 1M tokens, \"calculated at a rate of\" 1,931 tokens per second of 360p video; 1,931 x 12 / 1,000,000 = 0.023172, rounded up to 0.0232 USD/s. akuko strips '#360p#audio' and sends resolution \"360p\". Request: POST https://generativelanguage.googleapis.com/v1beta/interactions with x-goog-api-key; input = the start frame (type image, base64) then the prompt; response_format type video, duration \"3s\" to \"15s\" (whole seconds), resolution, aspect_ratio \"16:9\" or \"9:16\", delivery \"uri\"; generation_config.video_config.task image_to_video; the video comes back in steps[].content[] (type video) as a files/<id>:download uri, polled until ACTIVE (https://aistudio.google.com/docs/omni, read 2026-11-12). Sound: the model makes native audio and the docs give no switch, so every id carries '#audio'. Veo is gone from the Gemini API: veo-3.1-generate-preview, veo-3.1-fast-generate-preview and veo-3.1-lite-generate-preview were shut down on October 22, 2026, with gemini-omni-1.2-flash named as the replacement (https://aistudio.google.com/docs/deprecations, read 2026-11-12). Reference images are also billed as input tokens ($1.50 per 1M) and are not in this price."
+        },
+        "gemini-omni-1.2-flash#720p#audio": {
+          "price": { "amount": 0.0696, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://aistudio.google.com/docs/pricing, Gemini Omni 1.2 Flash, Standard paid tier, read 2026-11-12: video output \"$12.00\" per 1M tokens, \"calculated at a rate of\" 5,792 tokens per second of 720p video; 5,792 x 12 / 1,000,000 = 0.069504, rounded up to 0.0696 USD/s. akuko strips '#720p#audio' and sends resolution \"720p\". Request: POST https://generativelanguage.googleapis.com/v1beta/interactions with x-goog-api-key; input = the start frame (type image, base64) then the prompt; response_format type video, duration \"3s\" to \"15s\" (whole seconds), resolution, aspect_ratio \"16:9\" or \"9:16\", delivery \"uri\"; generation_config.video_config.task image_to_video; the video comes back in steps[].content[] (type video) as a files/<id>:download uri, polled until ACTIVE (https://aistudio.google.com/docs/omni, read 2026-11-12). Sound: the model makes native audio and the docs give no switch, so every id carries '#audio'. Veo is gone from the Gemini API: veo-3.1-generate-preview, veo-3.1-fast-generate-preview and veo-3.1-lite-generate-preview were shut down on October 22, 2026, with gemini-omni-1.2-flash named as the replacement (https://aistudio.google.com/docs/deprecations, read 2026-11-12). Reference images are also billed as input tokens ($1.50 per 1M) and are not in this price."
+        },
+        "gemini-omni-1.2-flash#1080p#audio": {
+          "price": { "amount": 0.1043, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://aistudio.google.com/docs/pricing, Gemini Omni 1.2 Flash, Standard paid tier, read 2026-11-12: video output \"$12.00\" per 1M tokens, \"calculated at a rate of\" 8,688 tokens per second of 1080p video; 8,688 x 12 / 1,000,000 = 0.104256, rounded up to 0.1043 USD/s. akuko strips '#1080p#audio' and sends resolution \"1080p\". Request: POST https://generativelanguage.googleapis.com/v1beta/interactions with x-goog-api-key; input = the start frame (type image, base64) then the prompt; response_format type video, duration \"3s\" to \"15s\" (whole seconds), resolution, aspect_ratio \"16:9\" or \"9:16\", delivery \"uri\"; generation_config.video_config.task image_to_video; the video comes back in steps[].content[] (type video) as a files/<id>:download uri, polled until ACTIVE (https://aistudio.google.com/docs/omni, read 2026-11-12). Sound: the model makes native audio and the docs give no switch, so every id carries '#audio'. Veo is gone from the Gemini API: veo-3.1-generate-preview, veo-3.1-fast-generate-preview and veo-3.1-lite-generate-preview were shut down on October 22, 2026, with gemini-omni-1.2-flash named as the replacement (https://aistudio.google.com/docs/deprecations, read 2026-11-12). Reference images are also billed as input tokens ($1.50 per 1M) and are not in this price."
+        },
+        "gemini-omni-1.2-flash#4k#audio": {
+          "price": { "amount": 0.2086, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://aistudio.google.com/docs/pricing, Gemini Omni 1.2 Flash, Standard paid tier, read 2026-11-12: video output \"$12.00\" per 1M tokens, \"calculated at a rate of\" 17,376 tokens per second of 4k video; 17,376 x 12 / 1,000,000 = 0.208512, rounded up to 0.2086 USD/s. akuko strips '#4k#audio' and sends resolution \"4k\". Request: POST https://generativelanguage.googleapis.com/v1beta/interactions with x-goog-api-key; input = the start frame (type image, base64) then the prompt; response_format type video, duration \"3s\" to \"15s\" (whole seconds), resolution, aspect_ratio \"16:9\" or \"9:16\", delivery \"uri\"; generation_config.video_config.task image_to_video; the video comes back in steps[].content[] (type video) as a files/<id>:download uri, polled until ACTIVE (https://aistudio.google.com/docs/omni, read 2026-11-12). Sound: the model makes native audio and the docs give no switch, so every id carries '#audio'. Veo is gone from the Gemini API: veo-3.1-generate-preview, veo-3.1-fast-generate-preview and veo-3.1-lite-generate-preview were shut down on October 22, 2026, with gemini-omni-1.2-flash named as the replacement (https://aistudio.google.com/docs/deprecations, read 2026-11-12). Reference images are also billed as input tokens ($1.50 per 1M) and are not in this price."
+        }
+      }
+    },
+    "kling-video": {
+      "label": "Kling video (Kling's own API) — your Kling access key and secret key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "KLING_ACCESS_KEY",
+      "secret_env": "KLING_SECRET_KEY",
+      "network": {
+        "probe": "https://api-singapore.klingai.com/",
+        "domains": [
+          "api-singapore.klingai.com",
+          "*.klingai.com"
+        ],
+        "note": "The host the finished video downloads from is not documented (Kling's own examples use p2-kling.klingai.com); if a download is blocked, the error names the host to allow."
+      },
+      "default_model": "kling-v2-6#pro",
+      "models": {
+        "kling-v2-5-turbo#std": {
+          "price": { "amount": 0.042, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 2.5 Turbo, no native audio, 720P: $0.042/s ('Total duration = Output duration'). Clip lengths 5 or 10 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"std\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v2-5-turbo#pro": {
+          "price": { "amount": 0.07, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 2.5 Turbo, no native audio, 1080P: $0.07/s ('Total duration = Output duration'). Clip lengths 5 or 10 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"pro\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v2-6#std": {
+          "price": { "amount": 0.042, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 2.6, no native audio, 720P: $0.042/s ('Total duration = Output duration'). Clip lengths 5 or 10 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"std\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v2-6#pro": {
+          "price": { "amount": 0.07, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 2.6, no native audio, 1080P: $0.07/s ('Total duration = Output duration'). Clip lengths 5 or 10 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"pro\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v3#std": {
+          "price": { "amount": 0.084, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 3.0, no native audio, 720P: $0.084/s ('Total duration = Output duration'). Clip lengths 3 to 15 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"std\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v3#pro": {
+          "price": { "amount": 0.112, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 3.0, no native audio, 1080P: $0.112/s ('Total duration = Output duration'). Clip lengths 3 to 15 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"pro\" and sound \"off\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v3#std#audio": {
+          "price": { "amount": 0.126, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 3.0, with native audio, 720P: $0.126/s ('Total duration = Output duration'). Clip lengths 3 to 15 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"std\" and sound \"on\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        },
+        "kling-v3#pro#audio": {
+          "price": { "amount": 0.168, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://kling.ai/document-api/pricing/base/video (Balance view), read 2026-11-12: Kling 3.0, with native audio, 1080P: $0.168/s ('Total duration = Output duration'). Clip lengths 3 to 15 s (https://kling.ai/document-api/guides/capability-map/video, read 2026-11-12). akuko strips the '#' suffixes and sends mode \"pro\" and sound \"on\". Request (https://kling.ai/document-api/api/video/2-6/image-to-video/legacy, read 2026-11-12): POST https://api-singapore.klingai.com/v1/videos/image2video with model_name, image (raw base64, no data: prefix; jpg/png, 10 MB or less, at least 300 px, aspect 1:2.5 to 2.5:1), prompt and negative_prompt (2,500 characters each), duration (a string), mode std (720P) or pro (1080P), sound on/off; poll GET /v1/videos/image2video/<task_id> until task_status is succeed or failed; the video is data.task_result.videos[0].url (kept 30 days). Auth: an access key and secret key signed into an HS256 JWT (iss = access key, exp = now + 1800 s, nbf = now - 5 s), sent as Authorization: Bearer (https://kling.ai/document-api/api/get-started/authentication, ak-sk tab, read 2026-11-12); the same page also offers a single API key, which akuko does not use. Kling's API draws on a prepaid resource package or balance: buy one in the Kling developer console first (error 1102 means it is used up). api-singapore.klingai.com is the host for users outside China."
+        }
+      }
+    },
+    "byteplus-video": {
+      "label": "BytePlus ModelArk video (Seedance, direct) — your ModelArk API key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "ARK_API_KEY",
+      "network": {
+        "probe": "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks/akuko-probe",
+        "domains": [
+          "ark.ap-southeast.bytepluses.com"
+        ],
+        "note": "Finished videos are served from a BytePlus storage URL whose host the docs do not name; if the download is blocked, the error names the host to allow. The probe is a GET of a task that does not exist (401 without a key), never a create call."
+      },
+      "default_model": "dreamina-seedance-2-0-fast-260128#720p",
+      "models": {
+        "dreamina-seedance-2-0-fast-260128#480p": {
+          "price": { "amount": 0.0563, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 Fast (dreamina-seedance-2-0-fast-260128), online inference, input without video, 480p: $5.6 per 1M tokens. Largest 480p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 992x432 or 864x496 (428,544 px) = 10,044.000 tokens/s at 24 fps, x 5.6 / 1,000,000 = 0.056246, rounded up to 0.0563 USD/s. Lengths 4 to 15 s. akuko strips the '#480p' suffix, sends resolution \"480p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-fast-260128#480p#audio": {
+          "price": { "amount": 0.0563, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 Fast (dreamina-seedance-2-0-fast-260128), online inference, input without video, 480p: $5.6 per 1M tokens. Largest 480p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 992x432 or 864x496 (428,544 px) = 10,044.000 tokens/s at 24 fps, x 5.6 / 1,000,000 = 0.056246, rounded up to 0.0563 USD/s. Lengths 4 to 15 s. akuko strips the '#480p#audio' suffix, sends resolution \"480p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-fast-260128#720p": {
+          "price": { "amount": 0.1218, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 Fast (dreamina-seedance-2-0-fast-260128), online inference, input without video, 720p: $5.6 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 5.6 / 1,000,000 = 0.121722, rounded up to 0.1218 USD/s. Lengths 4 to 15 s. akuko strips the '#720p' suffix, sends resolution \"720p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-fast-260128#720p#audio": {
+          "price": { "amount": 0.1218, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 Fast (dreamina-seedance-2-0-fast-260128), online inference, input without video, 720p: $5.6 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 5.6 / 1,000,000 = 0.121722, rounded up to 0.1218 USD/s. Lengths 4 to 15 s. akuko strips the '#720p#audio' suffix, sends resolution \"720p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-260128#720p": {
+          "price": { "amount": 0.1522, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 (dreamina-seedance-2-0-260128), online inference, input without video, 720p: $7.0 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 7.0 / 1,000,000 = 0.152153, rounded up to 0.1522 USD/s. Lengths 4 to 15 s. akuko strips the '#720p' suffix, sends resolution \"720p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-260128#720p#audio": {
+          "price": { "amount": 0.1522, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 (dreamina-seedance-2-0-260128), online inference, input without video, 720p: $7.0 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 7.0 / 1,000,000 = 0.152153, rounded up to 0.1522 USD/s. Lengths 4 to 15 s. akuko strips the '#720p#audio' suffix, sends resolution \"720p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-260128#1080p": {
+          "price": { "amount": 0.3767, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 (dreamina-seedance-2-0-260128), online inference, input without video, 1080p: $7.7 per 1M tokens. Largest 1080p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 2206x946 (2,086,876 px) = 48,911.156 tokens/s at 24 fps, x 7.7 / 1,000,000 = 0.376616, rounded up to 0.3767 USD/s. Lengths 4 to 15 s. akuko strips the '#1080p' suffix, sends resolution \"1080p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-0-260128#1080p#audio": {
+          "price": { "amount": 0.3767, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.0 (dreamina-seedance-2-0-260128), online inference, input without video, 1080p: $7.7 per 1M tokens. Largest 1080p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 2206x946 (2,086,876 px) = 48,911.156 tokens/s at 24 fps, x 7.7 / 1,000,000 = 0.376616, rounded up to 0.3767 USD/s. Lengths 4 to 15 s. akuko strips the '#1080p#audio' suffix, sends resolution \"1080p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-5-260628#720p": {
+          "price": { "amount": 0.2326, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.5 (dreamina-seedance-2-5-260628), online inference, input without video, 720p: $10.7 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 10.7 / 1,000,000 = 0.232577, rounded up to 0.2326 USD/s. Lengths 4 to 30 s. akuko strips the '#720p' suffix, sends resolution \"720p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-5-260628#720p#audio": {
+          "price": { "amount": 0.2326, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.5 (dreamina-seedance-2-5-260628), online inference, input without video, 720p: $10.7 per 1M tokens. Largest 720p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 1112x834 (927,408 px) = 21,736.125 tokens/s at 24 fps, x 10.7 / 1,000,000 = 0.232577, rounded up to 0.2326 USD/s. Lengths 4 to 30 s. akuko strips the '#720p#audio' suffix, sends resolution \"720p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-5-260628#1080p": {
+          "price": { "amount": 0.5723, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.5 (dreamina-seedance-2-5-260628), online inference, input without video, 1080p: $11.7 per 1M tokens. Largest 1080p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 2206x946 (2,086,876 px) = 48,911.156 tokens/s at 24 fps, x 11.7 / 1,000,000 = 0.572261, rounded up to 0.5723 USD/s. Lengths 4 to 30 s. akuko strips the '#1080p' suffix, sends resolution \"1080p\" and generate_audio false. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        },
+        "dreamina-seedance-2-5-260628#1080p#audio": {
+          "price": { "amount": 0.5723, "per": "second" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: Dreamina Seedance 2.5 (dreamina-seedance-2-5-260628), online inference, input without video, 1080p: $11.7 per 1M tokens. Largest 1080p frame (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md): 2206x946 (2,086,876 px) = 48,911.156 tokens/s at 24 fps, x 11.7 / 1,000,000 = 0.572261, rounded up to 0.5723 USD/s. Lengths 4 to 30 s. akuko strips the '#1080p#audio' suffix, sends resolution \"1080p\" and generate_audio true. Request (https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks with model, content [text, image_url (data:image/<fmt>;base64,...) role first_frame], resolution, ratio \"adaptive\", duration (whole seconds), generate_audio, watermark false; poll GET .../tasks/<id> (https://docs.byteplus.com/docs/en/modelark/get-video-generation-task-api.md, read 2026-11-12) until succeeded; the video is content.video_url (valid 24 hours). Auth: Authorization: Bearer <key> (https://docs.byteplus.com/docs/en/modelark/base-url-and-authentication.md, read 2026-11-12; the docs' examples name the variable ARK_API_KEY). Region ap-southeast-1 only; the model must be activated in the ModelArk console first (else 404 ModelNotOpen). Billing is by tokens: (input video + output seconds) x width x height x frame rate (24) / 1024. akuko prices output seconds at the largest frame BytePlus lists for that resolution (any ratio), so the real bill is the same or a little lower. The price is the same with or without generated audio (the formula has no audio term)."
+        }
+      },
+      "unverified_models": {
+        "seedance-1-5-pro-251215#720p": {
+          "last_checked": "2026-11-12",
+          "source": "Named in the request examples of https://docs.byteplus.com/docs/en/modelark/create-video-generation-task-api.md (read 2026-11-12) but absent from the model list (https://docs.byteplus.com/docs/en/modelark/model-list.md) and from the pricing table (https://docs.byteplus.com/docs/en/modelark/model-pricing.md), which has no Seedance 1.5 pro row. No per-unit price is published, so akuko does not run it."
+        }
+      }
+    },
+    "byteplus-image": {
+      "label": "BytePlus ModelArk image (Seedream, direct) — your ModelArk API key",
+      "billing": "direct-api",
+      "example": false,
+      "key_env": "ARK_API_KEY",
+      "network": {
+        "probe": "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks/akuko-probe",
+        "domains": [
+          "ark.ap-southeast.bytepluses.com"
+        ],
+        "note": "akuko asks for base64 images, so no download host is needed. The probe is a GET (401 without a key), never a generation call."
+      },
+      "default_model": "seedream-4-5-251128",
+      "models": {
+        "seedream-4-5-251128": {
+          "price": { "amount": 0.04, "per": "image" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: seedream-4-5-251128, output image $0.04 per image, input images free. Up to 14 reference images (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12). Request (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/images/generations with model, prompt, image (reference images as data:image/<fmt>;base64,... strings), size (\"2K\", or WxH for an aspect ratio, about 3.7 to 4.2 million pixels), sequential_image_generation \"disabled\", response_format \"b64_json\", watermark false; the image comes back in data[0].b64_json. Billed per generated image (usage.generated_images); images refused by moderation are not billed. Same key, region and console activation as Seedance."
+        },
+        "seedream-4-0-250828": {
+          "price": { "amount": 0.03, "per": "image" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: seedream-4-0-250828, output image $0.03 per image, input images free. Up to 14 reference images (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12). Request (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/images/generations with model, prompt, image (reference images as data:image/<fmt>;base64,... strings), size (\"2K\", or WxH for an aspect ratio, about 3.7 to 4.2 million pixels), sequential_image_generation \"disabled\", response_format \"b64_json\", watermark false; the image comes back in data[0].b64_json. Billed per generated image (usage.generated_images); images refused by moderation are not billed. Same key, region and console activation as Seedance."
+        },
+        "seedream-5-0-lite-260128": {
+          "price": { "amount": 0.035, "per": "image" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: seedream-5-0-lite-260128, output image $0.035 per image, input images free. Up to 14 reference images (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12). Request (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/images/generations with model, prompt, image (reference images as data:image/<fmt>;base64,... strings), size (\"2K\", or WxH for an aspect ratio, about 3.7 to 4.2 million pixels), sequential_image_generation \"disabled\", response_format \"b64_json\", watermark false; the image comes back in data[0].b64_json. Billed per generated image (usage.generated_images); images refused by moderation are not billed. Same key, region and console activation as Seedance."
+        },
+        "dola-seedream-5-0-flash-260915": {
+          "price": { "amount": 0.018, "per": "image" },
+          "last_verified": "2026-11-12",
+          "source": "https://docs.byteplus.com/docs/en/modelark/model-pricing.md, read 2026-11-12: dola-seedream-5-0-flash-260915, output image $0.018 per image, input images free. Up to 10 reference images (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12). Request (https://docs.byteplus.com/docs/en/modelark/image-generation-api.md, read 2026-11-12): POST https://ark.ap-southeast.bytepluses.com/api/v3/images/generations with model, prompt, image (reference images as data:image/<fmt>;base64,... strings), size (\"2K\", or WxH for an aspect ratio, about 3.7 to 4.2 million pixels), sequential_image_generation \"disabled\", response_format \"b64_json\", watermark false; the image comes back in data[0].b64_json. Billed per generated image (usage.generated_images); images refused by moderation are not billed. Same key, region and console activation as Seedance."
+        }
+      }
+    },
     "fal-lipsync": {
       "label": "fal lip-sync (still or clip + a spoken line) — your fal key",
       "billing": "direct-api",
       "example": false,
       "key_env": "FAL_KEY",
+      "network": {
+        "probe": "https://queue.fal.run/",
+        "domains": [
+          "queue.fal.run",
+          "*.fal.media"
+        ],
+        "note": "fal returns finished files on fal.media hosts (v3.fal.media in akuko's tests); fal does not list its download hosts."
+      },
       "default_model": "minimax/h3-max/lip-sync/image-to-video",
       "models": {
         "minimax/h3-max/lip-sync/image-to-video": {
-          "price": {
-            "amount": 0.08,
-            "per": "second"
-          },
+          "price": { "amount": 0.08, "per": "second" },
           "last_verified": "2026-11-10",
           "source": "IMAGE + AUDIO (default for a still with a spoken line). https://fal.ai/models/minimax/h3-max/lip-sync/image-to-video/llms.txt, read 2026-11-10: \"Billing is calculated per second of generated video\": 480p $0.05, 768p $0.08, 1080p $0.16, 2K $0.32 per second; videos over 15 s get a 1.2x multiplier. akuko always sends resolution \"768P\" and refuses a segment over 15 s (so the multiplier never applies). Request (https://fal.ai/models/minimax/h3-max/lip-sync/image-to-video/api): image_url (aspect ratio 0.4-2.5), audio_url (at least 5 s, up to 15 min), resolution, enable_transcription, seed; output video.url, duration (matches the audio). The pricing page https://fal.ai/pricing does not list it; the model page does."
         },
         "veed/fabric-1.0#480p": {
-          "price": {
-            "amount": 0.08,
-            "per": "second"
-          },
+          "price": { "amount": 0.08, "per": "second" },
           "last_verified": "2026-11-10",
           "source": "IMAGE + AUDIO (fallback). https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10: \"480p - $0.08 per second, 720p - $0.15 per second\" (fal's page does not say whether those are audio or output seconds, so akuko prices max(audio, 1 s) of the line). Request: image_url, audio_url, resolution (\"720p\" or \"480p\", required); the page states no audio length limit; output video.url. akuko strips the \"#480p\" suffix and sends it as resolution. It is the default for a line under 5 s (h3-max needs 5 s or more)."
         },
         "veed/fabric-1.0#720p": {
-          "price": {
-            "amount": 0.15,
-            "per": "second"
-          },
+          "price": { "amount": 0.15, "per": "second" },
           "last_verified": "2026-11-10",
           "source": "IMAGE + AUDIO (fallback, higher resolution). Same endpoint and page as the 480p entry (https://fal.ai/models/veed/fabric-1.0/llms.txt, read 2026-11-10): 720p $0.15 per second. akuko strips the \"#720p\" suffix and sends it as resolution. Same billing-basis gap as the 480p entry: fal does not say whether those are audio or output seconds; akuko prices max(audio, 1 s)."
         },
         "fal-ai/kling-video/lipsync/audio-to-video": {
-          "price": {
-            "amount": 0.014,
-            "per": "second"
-          },
+          "price": { "amount": 0.014, "per": "second" },
           "last_verified": "2026-11-10",
           "source": "VIDEO + AUDIO (default for an approved clip). https://fal.ai/models/fal-ai/kling-video/lipsync/audio-to-video (and its llms.txt), read 2026-11-10: \"$0.014 per input video seconds, rolling up to closest 5 second increment\". fal's docs page https://fal.ai/docs/model-api-reference/video-generation-api/kling-video-lipsync, read the same day, words it as \"$0.014 per 5-second increment\"; the two disagree, so akuko prices the dearer reading ($0.014 per second, rounded up to 5 s) and the real bill may be lower. Request: video_url (.mp4/.mov, up to 100 MB, 2-10 s, 720p or 1080p, sides 720-1920 px), audio_url (2-60 s, up to 5 MB), enable_safety_checker; output video.url."
         },
         "veed/lipsync/v2": {
-          "price": {
-            "amount": 0.07,
-            "per": "second"
-          },
+          "price": { "amount": 0.07, "per": "second" },
           "last_verified": "2026-11-10",
           "source": "VIDEO + AUDIO (fallback). https://fal.ai/models/veed/lipsync/v2/llms.txt, read 2026-11-10: \"$0.07 for every second of output video\". Request: video_url, audio_url (no limits stated on the page); output video.url."
         }

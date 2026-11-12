@@ -281,8 +281,11 @@ describe('setup: key names come from providers/config.json', () => {
   it('reports a key present when exactly that variable is set, and never returns its value', () => {
     for (const [id, p] of paid) {
       const name = p.key_env as string;
-      const r = keyPresence(real, { [name]: SECRET });
-      assert.deepEqual(r[id], { env: name, present: true });
+      // A provider with a second variable (Kling's secret key) is present only when both are set.
+      const both = p.secret_env ? { [name]: SECRET, [p.secret_env]: SECRET } : { [name]: SECRET };
+      const r = keyPresence(real, both);
+      assert.deepEqual(r[id], { env: p.secret_env ? `${name} + ${p.secret_env}` : name, present: true });
+      if (p.secret_env) assert.equal(keyPresence(real, { [name]: SECRET })[id]?.present, false, 'one of two is not enough');
       assert.equal(JSON.stringify(r).includes(SECRET), false);
       // a differently named guess is not what is read
       if (defaultKeyEnvName(id) !== name) assert.equal(keyPresence(real, { [defaultKeyEnvName(id)]: SECRET })[id]?.present, false);

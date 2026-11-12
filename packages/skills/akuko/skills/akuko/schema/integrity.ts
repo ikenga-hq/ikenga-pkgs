@@ -85,6 +85,7 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
     }
     if (!unitIds.has(e.unit)) add(`ledger[${i}].unit`, `unknown unit "${e.unit}"`);
     if (e.job !== undefined && !jobIds.has(e.job)) add(`ledger[${i}].job`, `unknown job "${e.job}"`);
+    if (e.reserved === true && e.status !== 'submitted') add(`ledger[${i}].reserved`, `only a submitted entry can be an unsent reservation, not a ${e.status} one`);
     if (e.allowance !== undefined && ((e.estimate ?? 0) !== 0 || (e.actual ?? 0) !== 0)) {
       add(`ledger[${i}].allowance`, 'an allowance entry costs no money: its estimate and actual must be 0');
     }

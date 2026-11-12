@@ -9,7 +9,8 @@
  *
  *   - sealed with `sealProvider()`: `submit()` only runs inside `gate.run()`
  *   - model ids and prices live only in providers/config.json
- *   - hosts B and C only: a paid direct API is refused on host A (R-11)
+ *   - hosts A, B and C; on host A only with a key pasted for that chat and the
+ *     phased run (lib/spend.md R-11), which the gate enforces
  *   - `estimate()` is arithmetic on config; it never touches the network
  *   - output size is fixed at 1K (the configured price is the 1K price) and a
  *     unit's references are capped at the documented 14 per image; more is
@@ -152,7 +153,7 @@ export function createGeminiImageProvider(host: WaveOneHost, opts: GeminiImageOp
     {
       id: GEMINI_PROVIDER_ID,
       kinds: ['image'],
-      hosts: ['B', 'C'],
+      hosts: ['A', 'B', 'C'],
       capabilities: { refImages: GEMINI_MAX_REFS },
 
       async estimate(job: Job): Promise<Cost> {

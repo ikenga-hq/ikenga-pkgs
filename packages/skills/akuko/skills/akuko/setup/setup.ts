@@ -18,7 +18,7 @@ import type { AkukoProject, Host } from '../schema/akuko-project.ts';
 import { createProject } from '../breakdown/intake.ts';
 import type { HostAdapter } from '../hosts/types.ts';
 import type { AkukoProviderConfig } from '../providers/config.ts';
-import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
+import { loadProviderConfig, providerKeyEnv, providerKeyEnvs } from '../providers/config.ts';
 import { committedFromLedger } from '../spend/ledger.ts';
 import {
   BrandSchema,
@@ -101,8 +101,10 @@ export function keyPresence(
 ): Record<string, { env: string; present: boolean }> {
   const out: Record<string, { env: string; present: boolean }> = {};
   for (const id of providersNeedingKeys(config)) {
-    const name = names[id] ?? providerKeyEnv(config, id) ?? defaultKeyEnvName(id);
-    out[id] = { env: name, present: (env[name] ?? '') !== '' };
+    // A provider that needs two variables (Kling: access key + secret key) is present only when both are set.
+    const listed = providerKeyEnvs(config, id);
+    const vars = names[id] !== undefined ? [names[id]] : listed.length ? listed : [providerKeyEnv(config, id) ?? defaultKeyEnvName(id)];
+    out[id] = { env: vars.join(' + '), present: vars.every((v) => (env[v] ?? '') !== '') };
   }
   return out;
 }

@@ -10,7 +10,8 @@
  *
  *   - sealed with `sealProvider()`: `submit()` only runs inside `gate.run()`
  *   - model ids and prices live only in providers/config.json
- *   - hosts B and C only: a paid direct API is refused on host A (R-11)
+ *   - hosts A, B and C; on host A only with a key pasted for that chat and the
+ *     phased run (lib/spend.md R-11), which the gate enforces
  *   - `estimate()` is arithmetic on config; it never touches the network
  *   - output size is fixed at the model's 1K default, so the flat per-image
  *     price applies; references per image are capped at 14 (fal's documented
@@ -145,7 +146,7 @@ export function createFalImageProvider(host: WaveOneHost, opts: FalImageOptions 
     {
       id: FAL_PROVIDER_ID,
       kinds: ['image'],
-      hosts: ['B', 'C'],
+      hosts: ['A', 'B', 'C'],
       capabilities: { refImages: FAL_MAX_REFS },
 
       async estimate(job: Job): Promise<Cost> {

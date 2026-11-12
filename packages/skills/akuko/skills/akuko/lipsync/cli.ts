@@ -44,7 +44,7 @@ import { loadProviderConfig, providerKeyEnv } from '../providers/config.ts';
 import type { FetchLike } from '../providers/gemini-image/image-common.ts';
 import { FAL_LIPSYNC_PROVIDER_ID, createFalLipsyncProvider } from '../providers/lipsync/fal/index.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
-import { MANUAL_PROVIDER_ID, createSpendGate } from '../spend/gate.ts';
+import { MANUAL_PROVIDER_ID, createSpendGate, isPhaseStop, phasedGateOptions } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { AkukoProjectSchema, type AkukoProject } from '../schema/akuko-project.ts';
 import { partOpenness, partRefusal, partsOf } from '../motion/stage.ts';
@@ -90,6 +90,7 @@ function describeStatus(r: StepResult): CliResult {
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}${NL}Nothing has been sent. Put the amount, and the files that would be uploaded, in front of the person; once they have approved it, run this step again.` };
     case 'refused':
+      if (isPhaseStop(r.code)) return { code: 0, out: r.message };
       return { code: 1, out: `Refused (${r.code}): ${r.message}` };
     case 'failed':
       return { code: 1, out: `Failed: ${r.error}` };
@@ -176,6 +177,9 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
 
     // Commands below talk to providers, always through the rules guard and the gate.
     const level = (await host.detect()).level;
+    // Host A (R-11): --key-source pasted-this-chat and --phase reserve|send|release (lib/spend.md §Host A).
+    const phased = phasedGateOptions((n) => opt.get(n));
+    if ('error' in phased) return { code: 2, out: phased.error };
     const manual = createManualProvider(host, { now: clock });
     const keyEnv = providerKeyEnv(loadProviderConfig(), FAL_LIPSYNC_PROVIDER_ID);
     const fal = createFalLipsyncProvider(host, {
@@ -187,7 +191,7 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
     });
     const providers: Provider[] = [manual.provider, fal];
     // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
-    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock, ...phased }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     // The job file is written the moment a job is submitted, before collecting, so `collect` can always pick it up.
     const saveJob = async (job: Job, handle: JobHandle): Promise<void> => {
       await mkdir(join(dir, 'lipsync', 'jobs'), { recursive: true });
@@ -202,7 +206,9 @@ export async function run(argv: string[], now: () => Date = () => new Date(), io
       const shot = str(opt.get('shot'));
       const max = str(opt.get('max-attempts'));
       // A missing key is a setup problem, not an attempt: say so before the gate is touched.
-      if (provider !== MANUAL_PROVIDER_ID && keyEnv && !env[keyEnv]) {
+      // On host A only the send phase needs the key (lib/spend.md R-11); elsewhere every step but reserve / release.
+      const sends = level === 'A' ? phased.phase === 'send' : phased.phase !== 'reserve' && phased.phase !== 'release';
+      if (provider !== MANUAL_PROVIDER_ID && sends && keyEnv && !env[keyEnv]) {
         return { code: 1, out: `Setup needed: ${keyEnv} is not set, so ${provider} cannot be used. Nothing was sent and nothing was counted. Set the key (see /akuko setup), or use --provider manual.` };
       }
       if (max !== undefined && !/^[1-9][0-9]*$/.test(max)) return { code: 2, out: 'akuko: --max-attempts takes a whole number of 1 or more.' };

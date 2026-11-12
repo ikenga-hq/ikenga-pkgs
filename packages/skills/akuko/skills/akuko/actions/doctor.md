@@ -36,7 +36,8 @@ requires_capabilities:
 | Node 22.6+ | **required** (exit 1) | akuko's scripts run TypeScript directly |
 | FFmpeg, HyperFrames, Chrome / Chromium | optional | needed only from the stage that renders; storyboards and prompt packages work without them |
 | `HYPERFRAMES_BROWSER_PATH` (Windows) | optional | must point at a working Chrome (R-9). Instructions only; doctor never sets it |
-| Provider keys | info | env var **names** and set / not set. Never a value |
+| Provider keys | info | env var **names** and set / not set (Kling needs both `KLING_ACCESS_KEY` and `KLING_SECRET_KEY`). Never a value. Also lists models marked **price unverified** (never runnable) |
+| Network (`--probe` only) | info | `scripts/doctor.sh --probe` (or `scripts/probe.ts --all`) sends one keyless GET to each paid provider's API host, nothing billed, and says reachable or BLOCKED with the domains to allow. Without `--probe` doctor makes no network call. On claude.ai run it before asking for any key |
 | Budget cap | warn | none recorded → paid jobs are refused, pointing to `setup`. Also warns when the budget currency differs from the provider config |
 | Orphan `submitted` reservations | warn | see below |
 | Provider config drift | warn | models whose `last_verified` is older than `stale_after_days`; example entries (info when merely listed, warn when a project uses one); pending-spend provider ids missing from `providers/config.json` |

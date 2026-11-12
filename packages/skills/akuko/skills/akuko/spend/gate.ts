@@ -23,7 +23,13 @@
  *   - the fresh estimate ≤ the approved bound (`approved_max`, else the
  *     approved estimate) and ≤ cap − spent − sunk − reserved;
  *   - no earlier attempt of the job still in flight or done;
- *   - on host A, no paid direct API (R-11).
+ *   - on host A, a paid direct API only with a key the person pasted into this
+ *     chat (`keySource: 'pasted-this-chat'`) and only in two phases, so the
+ *     board's database holds the reservation before anything is sent (R-11):
+ *     `phase: 'reserve'` opens the ledger reservation and sends nothing;
+ *     `phase: 'send'` submits exactly that reservation (fresh, within
+ *     `reservationTtlMs`), clearing its `reserved` mark and saving that
+ *     before the call, so it is sent once.
  * Free providers (the manual provider) skip the money checks but still go
  * through `estimate()` and the ticket.
  *
@@ -160,6 +166,11 @@ export type RefusalCode =
   | 'kind-not-supported'
   | 'host-not-supported'
   | 'paid-direct-on-host-a'
+  | 'reserved-not-sent'
+  | 'not-reserved'
+  | 'reservation-stale'
+  | 'reservation-released'
+  | 'already-sent'
   | 'invalid-estimate'
   | 'no-budget'
   | 'currency-mismatch'
@@ -177,6 +188,20 @@ export interface Refusal {
 }
 
 const refuse = (code: RefusalCode, message: string): Refusal => ({ code, message });
+
+/** The one acknowledgement that lifts the host-A refusal of a direct API (lib/spend.md R-11). */
+export const PASTED_KEY = 'pasted-this-chat';
+export type KeySource = typeof PASTED_KEY;
+
+/** `reserve`: check and open the reservation, send nothing. `send`: send a job reserved earlier. `release`: cancel a reservation that was never sent. */
+export type RunPhase = 'reserve' | 'send' | 'release';
+export const RUN_PHASES: readonly RunPhase[] = ['reserve', 'send', 'release'];
+
+/** How long a reservation waits for its send by default (a reservation older than this may have been sent from another chat). */
+export const RESERVATION_TTL_MS = 15 * 60 * 1000;
+
+export const HOST_A_KEY_POINTER =
+  `On host A (claude.ai) a paid direct API runs only with a key the person pasted into this chat, after akuko told them the key will be visible in this chat's history, is used for this chat only and is never written to the project, the board, its database, the ledger or any file the board can read, and they said "use my key for this chat". Probe the network first (scripts/probe.ts), then follow lib/spend.md §Host A: --key-source ${PASTED_KEY} with --phase reserve, save the project to the board, then --phase send. Or use the manual provider.`;
 
 /** Thrown by `quote()` for a job it cannot price (bad job, unknown provider, bad estimate). */
 export class SpendGateError extends Error {
@@ -247,8 +272,8 @@ export function canApprove(p: AkukoProject, jobId: string, approval?: { text?: s
   return null;
 }
 
-/** Money checks for a paid job against its pending entry. `null` = clear to submit. */
-function checkPaid(p: AkukoProject, job: Job, cost: Cost, budget: Budget, entry: PendingSpend): Refusal | null {
+/** Money checks for a paid job against its pending entry. `null` = clear to submit. `reserved`: the job's own open reservation is expected (phase send) and counts back into what is left. */
+function checkPaid(p: AkukoProject, job: Job, cost: Cost, budget: Budget, entry: PendingSpend, reserved = false): Refusal | null {
   const cur = budget.currency;
   if (entry.status === 'declined') return refuse('declined', `"${entry.label}" was declined; quote it again if you want to ask afresh.`);
   if (entry.status !== 'approved') {
@@ -257,13 +282,18 @@ function checkPaid(p: AkukoProject, job: Job, cost: Cost, budget: Budget, entry:
   if (entry.provider !== job.provider || entry.stage !== job.stage || !sameSet(entry.units, jobUnits(job))) {
     return refuse('approval-mismatch', `the approval for "${entry.id}" was for a different provider, stage or set of units; quote the job again.`);
   }
-  const live = entriesForJob(p, job.id).filter((e) => e.status === 'submitted' || e.status === 'done');
-  if (live.length > 0) return refuse('already-submitted', `"${entry.id}" has already been submitted (${live.length} ledger entr${live.length === 1 ? 'y' : 'ies'}).`);
+  const own = entriesForJob(p, job.id);
+  const live = own.filter((e) => e.status === 'done' || (!reserved && e.status === 'submitted'));
+  if (live.length > 0) {
+    const waiting = live.every((e) => e.status === 'submitted');
+    return refuse('already-submitted', `"${entry.id}" has already been ${waiting ? 'reserved or ' : ''}submitted (${live.length} ledger entr${live.length === 1 ? 'y' : 'ies'}).${waiting ? ' If it is a host-A reservation that was never sent, run the send phase in the same chat.' : ''}`);
+  }
   const bound = entry.approved_max ?? entry.estimate;
   if (cost.amount > bound + MONEY_EPSILON) {
     return refuse('over-approved', `the estimate is now ${money(cost.amount)} ${cur}, above the ${money(bound)} ${cur} you approved; it needs approving again.`);
   }
-  const left = remainingBudget(p) ?? 0;
+  const held = reserved ? own.filter((e) => e.status === 'submitted').reduce((sum, e) => sum + (e.estimate ?? 0), 0) : 0;
+  const left = (remainingBudget(p) ?? 0) + held;
   if (cost.amount > left + MONEY_EPSILON) {
     return refuse('over-cap', `the estimate ${money(cost.amount)} ${cur} is more than the ${money(left)} ${cur} left of the ${money(budget.cap)} ${cur} cap.`);
   }
@@ -296,6 +326,15 @@ export interface SpendGateOptions {
   level?: HostLevel;
   /** Clock, for tests. */
   now?: () => string;
+  /**
+   * Host A only: the person pasted the provider key into this chat after the disclosure in lib/spend.md R-11 and
+   * said "use my key for this chat". Without it a direct API is refused on host A. Ignored on B and C.
+   */
+  keySource?: KeySource;
+  /** Run in phases (required for a direct API on host A; allowed anywhere): see RunPhase. */
+  phase?: RunPhase;
+  /** How old a reservation may be when it is sent. Default RESERVATION_TTL_MS. */
+  reservationTtlMs?: number;
 }
 
 export interface QuoteResult {
@@ -364,6 +403,48 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     return result;
   }
 
+  const levelOf = (p: AkukoProject): HostLevel => opts.level ?? p.host?.level ?? 'A';
+
+  /** R-11: a direct API on host A needs the pasted-key acknowledgement and the phased run. Quotes are free and need neither. */
+  function hostARefusal(p: AkukoProject, provider: Provider): Refusal | null {
+    if (levelOf(p) !== 'A' || provider.billing !== 'direct-api') return null;
+    if (opts.keySource !== PASTED_KEY) return refuse('paid-direct-on-host-a', `${provider.id} is a paid direct API. ${HOST_A_KEY_POINTER}`);
+    if (opts.phase === undefined) {
+      return refuse('paid-direct-on-host-a', `${provider.id}: on host A a direct API runs in two phases, so the board holds the reservation before anything is sent: --phase reserve, save the project to the board, then --phase send (lib/spend.md §Host A).`);
+    }
+    return null;
+  }
+
+  /** The job's open reservation, checked for a send: one fresh `submitted` entry per unit, nothing done. */
+  function reservationFor(p: AkukoProject, job: Job, cost: Cost): { ids: string[] } | { refusal: Refusal } {
+    const own = entriesForJob(p, job.id).filter((e) => e.status === 'submitted');
+    const open = own.filter((e) => e.reserved === true);
+    const units = jobUnits(job);
+    if (open.length === 0) {
+      return own.length > 0
+        ? { refusal: refuse('already-sent', `"${job.id}" was already sent (its reservation is no longer marked unsent); nothing was sent again. Collect it instead.`) }
+        : { refusal: refuse('not-reserved', `"${job.id}" has no reservation to send: run the reserve phase first (and save the project to the board).`) };
+    }
+    if (open.length !== units.length || !sameSet(open.map((e) => e.unit), units)) {
+      return { refusal: refuse('not-reserved', `the reservation for "${job.id}" does not cover exactly its units; nothing was sent. Release it and reserve again.`) };
+    }
+    const ttl = opts.reservationTtlMs ?? RESERVATION_TTL_MS;
+    const at = Date.parse(now());
+    if (open.some((e) => !(at - Date.parse(e.ts) <= ttl))) {
+      return {
+        refusal: refuse(
+          'reservation-stale',
+          `the reservation for "${job.id}" is older than ${Math.round(ttl / 60000)} minutes, so it may already have been sent from another chat; nothing was sent. Check ${job.provider}'s own dashboard: if nothing was made there, release it (--phase release, on the person's words) and reserve again.`,
+        ),
+      };
+    }
+    const held = open.reduce((sum, e) => sum + (e.estimate ?? 0), 0);
+    if (cost.amount > held + MONEY_EPSILON) {
+      return { refusal: refuse('not-reserved', `the estimate is now ${money(cost.amount)}, above the ${money(held)} reserved for "${job.id}"; release the reservation and approve it again.`) };
+    }
+    return { ids: open.map((e) => e.id as string) };
+  }
+
   /** Checks that need no estimate. */
   function precheck(p: AkukoProject, job: Job): { provider: Provider } | { refusal: Refusal } {
     const problems = jobProblems(job);
@@ -376,14 +457,6 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     const level = opts.level ?? p.host?.level ?? 'A';
     if (!provider.hosts.includes(level)) {
       return { refusal: refuse('host-not-supported', `${provider.id} cannot run on host ${level}`) };
-    }
-    if (level === 'A' && provider.billing === 'direct-api') {
-      return {
-        refusal: refuse(
-          'paid-direct-on-host-a',
-          `${provider.id} is a paid direct API; in v0.x host A uses only the manual provider and connected MCPs. Use the manual provider, or run this stage locally.`,
-        ),
-      };
     }
     for (const unit of jobUnits(job)) {
       if (!findUnit(p, unit)) return { refusal: refuse('invalid-job', `unknown unit "${unit}"`) };
@@ -470,7 +543,7 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
       return { cost, billing: provider.billing, paid: true, confirmation, refusal: refuse('currency-mismatch', `estimate is in ${cost.currency}, the budget in ${p.budget.currency}`) };
     }
     const { project, pending } = await upsertPending(p, job, cost);
-    const refusal = checkPaid(project, job, cost, p.budget, pending) ?? undefined;
+    const refusal = checkPaid(project, job, cost, p.budget, pending, opts.phase === 'send' || opts.phase === 'release') ?? undefined;
     return { cost, billing: provider.billing, paid: true, pending, confirmation, ...(refusal ? { refusal } : {}) };
   }
 
@@ -484,12 +557,24 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     const pre = precheck(p, job);
     if ('refusal' in pre) return { go: false, result: { status: 'refused', refusal: pre.refusal } };
     const { provider } = pre;
+    const hostA = hostARefusal(p, provider);
+    if (hostA) return { go: false, result: { status: 'refused', refusal: hostA } };
 
     // 1. Always estimate first.
     const est = await estimate(provider, job);
     if ('refusal' in est) return { go: false, result: { status: 'refused', refusal: est.refusal } };
     const { cost } = est;
     if (!isPaid(provider.billing)) return { go: true, provider, cost, ledgerIds: [] };
+
+    // A reservation that was never sent: cancelled on the person's words (it cost nothing), so the job can be reserved again.
+    if (opts.phase === 'release') {
+      const open = entriesForJob(p, job.id).filter((e) => e.status === 'submitted' && e.reserved === true); // never a sent call
+      if (open.length === 0) return { go: false, result: { status: 'refused', refusal: refuse('not-reserved', `"${job.id}" has no unsent reservation to release (a call already sent is settled by collecting it, never released).`), cost } };
+      let q = p;
+      for (const e of open) q = settleEntry(q, e.id as string, { status: 'cancelled', ts: now() });
+      await host.writeState(assertValidProject(q));
+      return { go: false, result: { status: 'refused', refusal: refuse('reservation-released', `released the reservation for "${job.id}" (${open.length} entr${open.length === 1 ? 'y' : 'ies'}, cancelled at no cost). Save the project to the board; reserve again to retry.`), cost } };
+    }
 
     // 2. A recorded cap, in the estimate's currency.
     if (!p.budget) return { go: false, result: { status: 'refused', refusal: refuse('no-budget', SETUP_POINTER), cost } };
@@ -506,8 +591,19 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
     }
 
     // 4. Approval, bound and cap.
-    const refusal = checkPaid(p, job, cost, p.budget, entry);
+    const refusal = checkPaid(p, job, cost, p.budget, entry, opts.phase === 'send');
     if (refusal) return { go: false, result: { status: 'refused', refusal, cost } };
+
+    // Phase send: submit exactly the reservation already saved, once.
+    if (opts.phase === 'send') {
+      const r = reservationFor(p, job, cost);
+      if ('refusal' in r) return { go: false, result: { status: 'refused', refusal: r.refusal, cost } };
+      // Clear the unsent mark and save it before the call: a second send of this reservation is then refused.
+      const sent = new Set(r.ids);
+      const cleared = assertValidProject({ ...p, ledger: p.ledger.map((e) => (e.id !== undefined && sent.has(e.id) ? (({ reserved: _r, ...rest }) => rest)(e) : e)) });
+      await host.writeState(cleared);
+      return { go: true, provider, cost, ledgerIds: r.ids, confirmation };
+    }
 
     // 5. Reserve: open ledger entries before the provider is called.
     const opened = openEntries(p, {
@@ -516,9 +612,24 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
       ts: now(),
       units: jobUnits(job).map((unit) => ({ unit, estimate: cost.per_unit[unit] ?? 0 })),
       ...(cost.model !== undefined ? { model: cost.model } : {}),
+      ...(opts.phase === 'reserve' ? { reserved: true } : {}),
     });
     p = assertValidProject(opened.project);
     await host.writeState(p);
+    if (opts.phase === 'reserve') {
+      const ttl = Math.round((opts.reservationTtlMs ?? RESERVATION_TTL_MS) / 60000);
+      return {
+        go: false,
+        result: {
+          status: 'refused',
+          cost,
+          refusal: refuse(
+            'reserved-not-sent',
+            `Reserved ${money(cost.amount)} ${p.budget?.currency ?? cost.currency} for "${job.label}" (ledger ${opened.ids.join(', ')}). Nothing was sent. Save the project to the board's database now, then run the send phase in this chat within ${ttl} minutes.`,
+          ),
+        },
+      };
+    }
     return { go: true, provider, cost, ledgerIds: opened.ids, confirmation };
   }
 
@@ -593,3 +704,33 @@ export function createSpendGate(opts: SpendGateOptions): SpendGate {
 
   return { quote, run, collect };
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// The command-line half of R-11 (lib/spend.md §Host A)
+// ─────────────────────────────────────────────────────────────────────────
+//
+//   --key-source pasted-this-chat   the person pasted the key into this chat after the
+//                                   disclosure and said "use my key for this chat"
+//   --phase reserve|send|release    reserve: open the reservation, send nothing;
+//                                   send: send that reservation; release: cancel one never sent
+//
+// The key itself is never a flag: it reaches the process only as the environment variable config
+// names (`key_env`), set for that one command. The gate makes sure a reservation is sent once.
+
+export type PhasedOptions = Pick<SpendGateOptions, 'keySource' | 'phase'>;
+
+/** `--key-source` / `--phase` → gate options, or a usage error. `get` reads a flag (true when it has no value). */
+export function phasedGateOptions(get: (name: string) => string | true | undefined): PhasedOptions | { error: string } {
+  const ks = get('key-source');
+  const ph = get('phase');
+  if (ks !== undefined && ks !== PASTED_KEY) return { error: `akuko: --key-source takes only ${PASTED_KEY} (the person pasted the key into this chat after the disclosure in lib/spend.md R-11).` };
+  if (ph !== undefined && (typeof ph !== 'string' || !(RUN_PHASES as readonly string[]).includes(ph))) return { error: `akuko: --phase takes ${RUN_PHASES.join(', ')}.` };
+  const phase = ph as RunPhase | undefined;
+  return {
+    ...(ks !== undefined ? { keySource: ks as KeySource } : {}),
+    ...(phase !== undefined ? { phase } : {}),
+  };
+}
+
+/** A phase that stopped on purpose (reserved, released): not a failure, so the command exits 0 and prints the message. */
+export const isPhaseStop = (code: string): boolean => code === 'reserved-not-sent' || code === 'reservation-released';

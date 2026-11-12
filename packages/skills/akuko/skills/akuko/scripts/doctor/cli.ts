@@ -1,7 +1,11 @@
 /**
  * akuko — doctor, node half. Called by `scripts/doctor.sh`.
  *
- *   node --experimental-strip-types scripts/doctor/cli.ts [project-dir | akuko.json] [--now ISO]
+ *   node --experimental-strip-types scripts/doctor/cli.ts [project-dir | akuko.json] [--now ISO] [--probe]
+ *
+ * `--probe` also checks that each keyed provider's API host is reachable
+ * (`scripts/probe.ts`: one keyless GET each, nothing billed). Without it,
+ * doctor makes no network call.
  *
  * Prints which provider keys are set (names only, never values), the provider
  * config drift, and, when a project is found, its budget / ledger checks and
@@ -17,12 +21,26 @@ import { loadProviderConfig } from '../../providers/config.ts';
 import { keyPresence } from '../../setup/setup.ts';
 import { checkProject, configFindings, formatFinding, type Finding } from './project-checks.ts';
 import { rulesReport } from './rules-checks.ts';
+import { formatProbe, probeProvider, probeableProviders, readConfig } from '../probe.ts';
 
 /** Where to check that a key can actually buy images (no network call is made). */
 export const BILLING_HINT: Record<string, string> = {
   'gemini-image': 'Gemini image models need a paid tier: on the free tier they answer HTTP 429. Check billing / tier at https://ai.google.dev/gemini-api/docs/billing',
   fal: 'fal bills per image from your account balance. Check it at https://fal.ai/dashboard/usage-billing/billing',
+  'gemini-video': 'Gemini Omni Flash video needs a paid tier on the key\'s project (https://ai.google.dev/gemini-api/docs/billing). Veo is no longer on the Gemini API.',
+  'kling-video': 'Kling\'s API draws on a prepaid resource package or balance bought in the Kling developer console (error 1102 means it is used up).',
+  'byteplus-video': 'BytePlus ModelArk bills your BytePlus balance; each Seedance model must be activated in the ModelArk console (ap-southeast-1) first. Seedance 2.5 asks for a balance above USD 30.',
+  'byteplus-image': 'BytePlus ModelArk bills your BytePlus balance; each Seedream model must be activated in the ModelArk console (ap-southeast-1) first.',
 };
+
+/** `--probe`: is each keyed provider's API host reachable from here? One keyless GET each. */
+export async function probeAll(out: (line: string) => void = console.log, fetchFn?: typeof globalThis.fetch): Promise<void> {
+  const config = readConfig();
+  out('network (keyless probe, nothing billed):');
+  for (const id of probeableProviders(config)) {
+    for (const l of formatProbe(await probeProvider(id, { config, ...(fetchFn ? { fetch: fetchFn } : {}) }))) out(l);
+  }
+}
 
 function argValue(args: string[], flag: string): string | undefined {
   const i = args.indexOf(flag);
@@ -38,6 +56,7 @@ export function projectFile(target: string): string | null {
 export function run(args: string[], out: (line: string) => void = console.log): number {
   const now = argValue(args, '--now') ?? new Date().toISOString();
   const positional = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--now');
+  const config0 = loadProviderConfig();
   const target = positional[0] ?? process.cwd();
   const config = loadProviderConfig();
 
@@ -48,6 +67,10 @@ export function run(args: string[], out: (line: string) => void = console.log): 
   for (const id of ids) {
     const k = keys[id];
     if (k) out(`  ${id.padEnd(22)} ${k.env}: ${k.present ? 'set' : 'not set (optional until you use that provider)'}`);
+  }
+  for (const [id, p] of Object.entries(config0.providers)) {
+    const unpriced = Object.keys(p.unverified_models ?? {});
+    if (unpriced.length) out(`  ${id.padEnd(22)} price unverified, not runnable: ${unpriced.join(', ')}`);
   }
 
   if (Object.values(keys).some((k) => k.present)) {
@@ -88,5 +111,7 @@ export function run(args: string[], out: (line: string) => void = console.log): 
 }
 
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('scripts/doctor/cli.ts')) {
-  process.exitCode = run(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  process.exitCode = run(argv);
+  if (argv.includes('--probe')) await probeAll();
 }

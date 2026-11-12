@@ -3,7 +3,7 @@
  *
  *   node --experimental-strip-types setup/estimate.ts --project <dir>
  *        [--heroes N] [--lipsync-lines N] [--tries low,likely,high] [--part P7]
- *        [--image-provider <id>] [--image-model <id>] [--video-model <id>] [--json]
+ *        [--image-provider <id>] [--image-model <id>] [--video-provider <id>] [--video-model <id>] [--json]
  *
  * Free: it reads `akuko.json` and the provider config, and nothing else. No
  * provider is called, nothing is written, no key is read.
@@ -19,8 +19,10 @@
  *   - prices from `providers/config.json` through `estimateFromConfig`, using the
  *     provider and model the project would run: the image provider for bible and
  *     key frames (from `--image-provider`, else the ledger, else the assets; it
- *     refuses rather than guess a cheaper one), `fal-video` for
- *     clips with the same "cover the shot" length fit the motion stage uses,
+ *     refuses rather than guess a cheaper one), the video provider for clips
+ *     (`--video-provider`, else the most recent paid clip's provider, else
+ *     `fal-video`) with the same "cover the shot" length fit the motion stage
+ *     uses (`providers/video-limits.ts`),
  *     `fal-lipsync` through `chooseLipsyncModel` on the line lengths, and
  *     ElevenLabs text-to-speech, which is 0 when `audio.master` is set.
  *
@@ -38,7 +40,8 @@ import { paidAttempts, DEFAULT_MAX_ATTEMPTS } from '../motion/plan.ts';
 import { MANUAL_PROVIDER_ID } from '../spend/gate.ts';
 import { estimateFromConfig, loadProviderConfig, priceFor, type AkukoProviderConfig } from '../providers/config.ts';
 import type { Job, JobItem } from '../providers/contract.ts';
-import { falVideoLimits, fitSeconds, FAL_VIDEO_PROVIDER_ID } from '../providers/fal-video/index.ts';
+import { fitSeconds, FAL_VIDEO_PROVIDER_ID } from '../providers/fal-video/index.ts';
+import { VIDEO_PROVIDER_IDS, videoLimitsFor } from '../providers/video-limits.ts';
 import { FAL_LIPSYNC_PROVIDER_ID, billedSeconds, chooseLipsyncModel, falLipsyncLimits } from '../providers/lipsync/fal/index.ts';
 import type { AkukoProject, Asset, AudioLine, Shot, ShotTreatment } from '../schema/akuko-project.ts';
 import { DEFAULT_TREATMENT, treatmentOf } from '../motion/treatment.ts';
@@ -80,6 +83,8 @@ export interface EstimateOptions {
   tries?: [number, number, number];
   imageProvider?: string;
   imageModel?: string;
+  /** Video provider for clips (default: the most recent paid clip's provider, else fal-video). */
+  videoProvider?: string;
   videoModel?: string;
   /** Paid attempts allowed per clip / lip-sync shot. Default 3. */
   maxAttempts?: number;
@@ -193,19 +198,35 @@ export function inferImageProvider(p: AkukoProject, o: Pick<EstimateOptions, 'im
   throw new EstimateError('Cannot tell which image provider this project uses: nothing paid has run for the bible or key frames yet. Pass --image-provider <id> (for example gemini-image or fal) so the estimate prices the provider you will really use; akuko will not guess a cheaper one.');
 }
 
-/** The video model clips run on: --video-model, else the ledger or assets of a fal-video clip, else the config default (said so). */
-function inferVideoModel(p: AkukoProject, config: AkukoProviderConfig, flag: string | undefined): { model: string | undefined; source: string } {
-  if (flag !== undefined) return { model: flag, source: 'from --video-model' };
+/**
+ * The video provider and model clips run on: the flags; else the most recent paid clip (ledger, then assets) of any
+ * video provider; else fal-video's config default (said so). A --video-provider with no --video-model takes that
+ * provider's config default.
+ */
+function inferVideoModel(p: AkukoProject, config: AkukoProviderConfig, providerFlag: string | undefined, flag: string | undefined): { provider: string; model: string | undefined; source: string } {
+  if (providerFlag !== undefined) {
+    let model = flag;
+    if (model === undefined) { try { model = priceFor(config, providerFlag).model; } catch { /* reported when priced */ } }
+    return { provider: providerFlag, model, source: flag !== undefined ? 'from --video-provider and --video-model' : 'from --video-provider (its config default model)' };
+  }
+  if (flag !== undefined) return { provider: FAL_VIDEO_PROVIDER_ID, model: flag, source: 'from --video-model' };
   const isClip = (id: string): boolean => { const a = p.assets.find((x) => x.id === id); return a ? a.stage === 'motion' && a.kind === 'clip' : id.endsWith('_clip'); };
   for (let i = p.ledger.length - 1; i >= 0; i--) {
     const e = p.ledger[i]!;
-    if (e.provider === FAL_VIDEO_PROVIDER_ID && e.model !== undefined && isClip(e.unit)) return { model: e.model, source: 'from the ledger (the most recent paid clip)' };
+    if (VIDEO_PROVIDER_IDS.includes(e.provider) && e.model !== undefined && isClip(e.unit)) return { provider: e.provider, model: e.model, source: 'from the ledger (the most recent paid clip)' };
   }
-  const a = [...p.assets].reverse().find((x) => x.kind === 'clip' && x.provider === FAL_VIDEO_PROVIDER_ID && x.model !== undefined);
-  if (a?.model !== undefined) return { model: a.model, source: `from the assets (${a.id})` };
+  const a = [...p.assets].reverse().find((x) => x.kind === 'clip' && x.provider !== undefined && VIDEO_PROVIDER_IDS.includes(x.provider) && x.model !== undefined);
+  if (a?.model !== undefined && a.provider !== undefined) return { provider: a.provider, model: a.model, source: `from the assets (${a.id})` };
   let model: string | undefined;
   try { model = priceFor(config, FAL_VIDEO_PROVIDER_ID).model; } catch { /* reported when priced */ }
-  return { model, source: 'the config default (no clip has been made yet; pass --video-model to change it)' };
+  return { provider: FAL_VIDEO_PROVIDER_ID, model, source: 'the config default (no clip has been made yet; pass --video-provider / --video-model to change it)' };
+}
+
+/** A model listed as price unverified cannot be estimated: say so rather than price the film without it. */
+function refuseUnverified(config: AkukoProviderConfig, provider: string, model: string | undefined): void {
+  if (model !== undefined && model in (config.providers[provider]?.unverified_models ?? {})) {
+    throw new EstimateError(`${provider} model "${model}" is listed as price unverified (no per-unit price is published), so the film cannot be estimated with it. Pick a priced model.`);
+  }
 }
 
 const priceLine = (config: AkukoProviderConfig, provider: string, model?: string): string | undefined => {
@@ -252,6 +273,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
   const image = inferImageProvider(project, o);
   const imageProvider = image.provider;
   const imageModel = image.model;
+  refuseUnverified(config, imageProvider, imageModel);
   source.images = `${imageProvider}${imageModel ? ' ' + imageModel : ''} ${image.source}`;
   const imgLine = priceLine(config, imageProvider, imageModel);
   prices.push(imgLine ? `images: ${imgLine} [${image.source}]` : `images: ${source.images}`);
@@ -286,8 +308,9 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
   }
 
   // ── motion clips: shots that get video ──────────────────────────────
-  const videoProvider = FAL_VIDEO_PROVIDER_ID;
-  const video = inferVideoModel(project, config, o.videoModel);
+  const video = inferVideoModel(project, config, o.videoProvider, o.videoModel);
+  const videoProvider = video.provider;
+  refuseUnverified(config, videoProvider, video.model);
   const videoModel = video.model;
   source.video = `${videoProvider}${videoModel ? ' ' + videoModel : ''} ${video.source}`;
   const vLine = priceLine(config, videoProvider, videoModel);
@@ -308,7 +331,7 @@ export function estimateFilm(project: AkukoProject, o: EstimateOptions = {}): Es
   {
     const items: JobItem[] = [];
     const meta = new Map<string, { part: string; capped: boolean }>();
-    const limits = videoModel !== undefined ? falVideoLimits(videoModel) : undefined;
+    const limits = videoModel !== undefined ? videoLimitsFor(videoProvider, videoModel) : undefined;
     if (videoModel !== undefined && !limits && videoShots.length > 0) warnings.push(`motion: akuko has no request rules for ${videoProvider} model "${videoModel}"; clips are priced at the shot length.`);
     for (const s of videoShots) {
       const id = `${s.id}_clip`;
@@ -566,6 +589,7 @@ export async function run(argv: string[]): Promise<CliResult> {
     const imageProvider = str(opt.get('image-provider'));
     const imageModel = str(opt.get('image-model'));
     const videoModel = str(opt.get('video-model'));
+    const videoProvider = str(opt.get('video-provider'));
     const project = await createLocalHost({ projectDir: resolve(dir) }).readState();
     const e = estimateFilm(project, {
       ...(part !== undefined ? { part } : {}),
@@ -575,6 +599,7 @@ export async function run(argv: string[]): Promise<CliResult> {
       ...(imageProvider !== undefined ? { imageProvider } : {}),
       ...(imageModel !== undefined ? { imageModel } : {}),
       ...(videoModel !== undefined ? { videoModel } : {}),
+      ...(videoProvider !== undefined ? { videoProvider } : {}),
     });
     return { code: 0, out: opt.has('json') ? JSON.stringify(e, null, 2) : formatEstimate(e) };
   } catch (err) {

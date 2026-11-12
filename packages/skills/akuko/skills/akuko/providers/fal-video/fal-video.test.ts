@@ -51,11 +51,11 @@ async function approveAndRun(s: ReturnType<typeof setup>, j: Job) {
 }
 
 describe('fal video provider: contract', () => {
-  it('is sealed, paid direct API, hosts B and C only (R-11), video only, i2v with a stated length limit', () => {
+  it('is sealed, paid direct API, hosts A, B and C (R-11 is enforced by the gate), video only, i2v with a stated length limit', () => {
     const { provider } = setup();
     assert.ok(isSealed(provider));
     assert.equal(provider.billing, 'direct-api');
-    assert.deepEqual([...provider.hosts], ['B', 'C']);
+    assert.deepEqual([...provider.hosts], ['A', 'B', 'C']);
     assert.deepEqual([...provider.kinds], ['video']);
     assert.equal(provider.capabilities.i2v, true);
     assert.equal(provider.capabilities.maxSeconds, 30, 'the longest any configured model makes (Seedance 2.5)');
