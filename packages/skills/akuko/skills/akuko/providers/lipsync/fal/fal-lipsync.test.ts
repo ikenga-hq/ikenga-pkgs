@@ -91,11 +91,11 @@ async function firstPost(j: Job, o: Partial<FalLipsyncOptions> = {}) {
 }
 
 describe('fal lip-sync provider: contract', () => {
-  it('is sealed, paid direct API, hosts B and C only (R-11), video kind; projectDir is required', () => {
+  it('is sealed, paid direct API, hosts A, B and C (R-11 is enforced by the gate), video kind; projectDir is required', () => {
     const { provider } = setup();
     assert.ok(isSealed(provider));
     assert.equal(provider.billing, 'direct-api');
-    assert.deepEqual([...provider.hosts], ['B', 'C']);
+    assert.deepEqual([...provider.hosts], ['A', 'B', 'C']);
     assert.deepEqual([...provider.kinds], ['video']);
     assert.equal(entry.example, false);
     assert.equal(entry.key_env, 'FAL_KEY');

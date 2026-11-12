@@ -34,7 +34,7 @@ import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
 import { createElevenLabsProvider } from '../providers/tts/elevenlabs/index.ts';
-import { createSpendGate } from '../spend/gate.ts';
+import { createSpendGate, isPhaseStop, phasedGateOptions } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { rebuildNarration } from './narration.ts';
 import { SoundError, planSound, soundStatus } from './plan.ts';
@@ -67,6 +67,7 @@ function describe(r: StepResult): CliResult {
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}${NL}Nothing has been sent. Put the amount in front of the person; once they have approved it, run this step again.` };
     case 'refused':
+      if (isPhaseStop(r.code)) return { code: 0, out: r.message };
       return { code: 1, out: `Refused (${r.code}): ${r.message}` };
     case 'failed':
       return { code: 1, out: `Failed: ${r.error}` };
@@ -153,10 +154,13 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
 
     // Commands below talk to providers, always through the gate.
     const level = (await host.detect()).level;
+    // Host A (R-11): --key-source pasted-this-chat and --phase reserve|send|release (lib/spend.md §Host A).
+    const phased = phasedGateOptions((n) => opt.get(n));
+    if ('error' in phased) return { code: 2, out: phased.error };
     const manual = createManualProvider(host, { now: clock });
     const providers: Provider[] = [manual.provider, createElevenLabsProvider(host, { now: clock })];
     // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
-    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock, ...phased }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     const deps = { host, gate, now: clock };
 
     if (cmd === 'step') {

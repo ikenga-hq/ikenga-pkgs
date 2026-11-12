@@ -260,7 +260,8 @@ export type AudioLookup = { ok: true; audio: Audio } | { ok: false; why: string 
 export type ReadinessState = 'approved' | 'in-review' | 'in-flight' | 'ready' | 'blocked';
 export interface Readiness { state: ReadinessState; waiting: string[] }
 
-const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted');
+// A host-A reservation not yet sent (`reserved`) is not in flight: the send phase must pick the same unit.
+const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted' && e.reserved !== true);
 
 /** Ready when the shot's key frame is approved with a file and its audio is available (`audio`). */
 export function unitReadiness(p: AkukoProject, a: Asset, audio: AudioLookup | undefined): Readiness {

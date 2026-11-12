@@ -106,7 +106,7 @@ export interface OpenEntry {
  */
 export function openEntries(
   p: AkukoProject,
-  args: { job: string; provider: string; model?: string; ts: string; units: OpenEntry[] },
+  args: { job: string; provider: string; model?: string; ts: string; units: OpenEntry[]; /** Host A reserve phase: held, not sent. */ reserved?: boolean },
 ): { project: AkukoProject; ids: string[] } {
   let ledger = [...p.ledger];
   const ids: string[] = [];
@@ -122,6 +122,7 @@ export function openEntries(
       estimate: u.estimate,
       status: 'submitted',
       ...(args.model !== undefined ? { model: args.model } : {}),
+      ...(args.reserved ? { reserved: true as const } : {}),
     };
     ledger = [...ledger, entry];
   }
@@ -149,7 +150,8 @@ export function settleEntry(
   if (outcome.actual !== undefined && (!Number.isFinite(outcome.actual) || outcome.actual < 0)) {
     throw new LedgerError(`actual ${outcome.actual} is not a non-negative amount`);
   }
-  const settled: LedgerEntry = { ...entry, status: outcome.status, ...(outcome.ts ? { ts: outcome.ts } : {}) };
+  const { reserved: _unsent, ...open } = entry; // a settled entry is no longer an unsent reservation
+  const settled: LedgerEntry = { ...open, status: outcome.status, ...(outcome.ts ? { ts: outcome.ts } : {}) };
   if (outcome.status === 'done') settled.actual = outcome.actual ?? entry.estimate ?? 0;
   else if (outcome.actual !== undefined) settled.actual = outcome.actual;
   const ledger = p.ledger.map((e, k) => (k === i ? settled : e));

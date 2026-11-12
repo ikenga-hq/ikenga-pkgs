@@ -400,7 +400,9 @@ describe('paid path on the test story "The Last Ferry" (TTS mocked): one job per
   it('a paid provider is refused on host A and without a budget; nothing is sent', async () => {
     const a = rig('elevenlabs', ready({ budget: { cap: 5, currency: 'USD' }, scriptLines: 'all' }), { level: 'A' });
     const ra = await generateVoiceover(deps(a), { provider: 'elevenlabs', voice: VOICE });
-    assert.equal(ra.status, 'refused');
+    // R-11: on host A a direct API quotes for free but never sends without the pasted key and the phases (spend/host-a.test.ts).
+    assert.ok(ra.status === 'refused' || ra.status === 'awaiting-approval', JSON.stringify(ra));
+    assert.equal(a.host.peek().ledger.length, 0, 'nothing reserved or sent on host A');
     const b = rig('elevenlabs', ready({ scriptLines: 'all' }));
     const rb = await generateVoiceover(deps(b), { provider: 'elevenlabs', voice: VOICE });
     assert.ok(rb.status === 'refused' && rb.message.includes(SETUP_POINTER));

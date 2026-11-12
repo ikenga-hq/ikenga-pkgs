@@ -5,7 +5,7 @@
  *
  *   plan                      create a planned key frame for every shot (idempotent)
  *   status                    one line per key frame: its status and what it is waiting for
- *   step    --provider <id>   the next key frame (one shot) through the spend gate: manual | gemini-image | fal
+ *   step    --provider <id>   the next key frame (one shot) through the spend gate: manual | gemini-image | fal | byteplus-image
  *           [--model <id>] [--units a,b] [--scene sc1]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
  *             manual: prints the prompt package and stops; bring files back with `ingest`
@@ -27,10 +27,11 @@ import { ledgerCostLine } from '../setup/cost-line.ts';
 import { createLocalHost, writeFileAtomic } from '../hosts/local.ts';
 import type { Job, JobHandle, Provider } from '../providers/contract.ts';
 import { createFalImageProvider } from '../providers/fal/index.ts';
+import { createByteplusImageProvider } from '../providers/byteplus-image/index.ts';
 import { defaultRefLoader } from '../providers/gemini-image/image-common.ts';
 import { createGeminiImageProvider } from '../providers/gemini-image/index.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
-import { createSpendGate } from '../spend/gate.ts';
+import { createSpendGate, isPhaseStop, phasedGateOptions } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { KeyframeError, keyframeStatus, planKeyframes } from './plan.ts';
 import { collectKeyframes, finalizeKeyframes, generateKeyframes, ingestKeyframe, type StepResult } from './run.ts';
@@ -66,6 +67,7 @@ function describeStatus(r: StepResult, costLine?: string): { code: number; out: 
     case 'awaiting-approval':
       return { code: 0, out: `${r.confirmation}\nNothing has been sent. Put the amount in front of the person; once they have approved it, run this step again.` };
     case 'refused':
+      if (isPhaseStop(r.code)) return { code: 0, out: r.message };
       return { code: 1, out: `Refused (${r.code}): ${r.message}` };
     case 'failed':
       return { code: 1, out: `Failed: ${r.error}` };
@@ -103,16 +105,19 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
 
     // Commands below talk to providers, always through the gate.
     const level = (await host.detect()).level;
+    // Host A (R-11): --key-source pasted-this-chat and --phase reserve|send|release (lib/spend.md §Host A).
+    const phased = phasedGateOptions((n) => opt.get(n));
+    if ('error' in phased) return { code: 2, out: phased.error };
     const manual = createManualProvider(host, { now: clock });
     const loadRef = defaultRefLoader(undefined, dir); // project-relative uris read from the project folder, not the cwd
-    const providers: Provider[] = [manual.provider, createGeminiImageProvider(host, { now: clock, loadRef }), createFalImageProvider(host, { now: clock, loadRef })];
+    const providers: Provider[] = [manual.provider, createGeminiImageProvider(host, { now: clock, loadRef }), createFalImageProvider(host, { now: clock, loadRef }), createByteplusImageProvider(host, { now: clock, loadRef })];
     // Every job is checked against the project rules before the gate sees it (WP-26); the guard reads through its own host.
-    const gate = guardGate(createSpendGate({ host, providers, level, now: clock }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
+    const gate = guardGate(createSpendGate({ host, providers, level, now: clock, ...phased }), createLocalHost({ projectDir: dir, now }), { projectDir: dir, providers });
     const deps = { host, gate, now: clock };
 
     if (cmd === 'step') {
       const provider = str(opt.get('provider'));
-      if (!provider) return { code: 2, out: 'akuko: --provider manual|gemini-image|fal is required.' };
+      if (!provider) return { code: 2, out: 'akuko: --provider manual|gemini-image|fal|byteplus-image is required.' };
       const model = str(opt.get('model'));
       const units = str(opt.get('units'))?.split(',').filter(Boolean);
       const scene = str(opt.get('scene'));

@@ -44,7 +44,7 @@ The checklist entries stay **approved** at stage `breakdown`; they are never re-
 
 ## Steps
 
-All commands: `node --experimental-strip-types ../bible/cli.ts <command> --project <folder>` (B and C). On host A there is no code: follow the same steps with the manual provider and the functions' rules in `../lib/spend.md` §Host A.
+All commands: `node --experimental-strip-types ../bible/cli.ts <command> --project <folder>` (B and C). Paid image providers: `gemini-image`, `fal` and `byteplus-image` (Seedream on BytePlus ModelArk, `ARK_API_KEY`). On host A use the manual provider, or a paid direct image API under R-11 only, in the order of `../actions/motion.md` §Steps "On host A" with `../bible/cli.ts` in place of the motion command (`../lib/spend.md` §Host A).
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`, `../lib/state.md` §Decision folding). Tell the person what the report says, including every rejected decision. If the project is locked, say which earlier stage is waiting and stop.
 1. **`plan`**: creates the planned images for every approved checklist entry. Safe to repeat.

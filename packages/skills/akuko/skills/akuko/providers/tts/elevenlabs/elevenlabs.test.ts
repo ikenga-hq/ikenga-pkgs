@@ -45,12 +45,12 @@ const approveAll = (host: ReturnType<typeof createFakeHost>): void => {
 };
 
 describe('provider contract: elevenlabs (network mocked, with timings)', () => {
-  it('declares an id, kinds, hosts and capabilities of the right shape; paid direct API on B and C only', () => {
+  it('declares an id, kinds, hosts and capabilities of the right shape; paid direct API on A, B and C (R-11 is enforced by the gate)', () => {
     const { provider } = make(createFakeHost(tinyProject()));
     assert.match(provider.id, /^[a-z0-9][a-z0-9-]*$/);
     for (const k of provider.kinds) assert.ok(PROVIDER_KINDS.includes(k));
     for (const h of provider.hosts) assert.ok(HOST_LEVELS.includes(h));
-    assert.deepEqual(provider.hosts, ['B', 'C']);
+    assert.deepEqual(provider.hosts, ['A', 'B', 'C']);
     assert.deepEqual(provider.kinds, ['audio']);
   });
 

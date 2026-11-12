@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # akuko doctor: toolchain preflight, then provider-key / config / project checks.
 #
-# Usage: scripts/doctor.sh [project-dir]
+# Usage: scripts/doctor.sh [project-dir] [--probe]
+#
+# --probe also checks that each keyed provider's API host is reachable (one
+# keyless GET each, nothing billed; scripts/probe.ts). Without it doctor makes
+# no network call.
 #
 # Lifted from studio-doctor/check.sh. Required deps fail (exit 1); optional deps
 # warn (exit 0). What is required: Node 22.6+ (akuko's scripts run TypeScript
@@ -21,7 +25,14 @@ HIDE=",${AKUKO_DOCTOR_HIDE:-},"
 MIN_NODE="${AKUKO_DOCTOR_MIN_NODE:-22.6}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJECT_DIR="${1:-$PWD}"
+PROJECT_DIR="$PWD"
+PROBE=""
+for arg in "$@"; do
+  case "$arg" in
+    --probe) PROBE="--probe" ;;
+    *) PROJECT_DIR="$arg" ;;
+  esac
+done
 
 hidden() { case "$HIDE" in *",$1,"*) return 0 ;; esac; return 1; }
 have() { hidden "$1" && return 1; command -v "$1" >/dev/null 2>&1; }
@@ -131,7 +142,7 @@ if node_ok && [ "$deps_ok" -ne 0 ]; then
   echo "provider and project checks skipped: install the runtime packages above, then run doctor again."
 elif node_ok; then
   node --experimental-strip-types --disable-warning=ExperimentalWarning \
-    "$SKILL_DIR/scripts/doctor/cli.ts" "$PROJECT_DIR"
+    "$SKILL_DIR/scripts/doctor/cli.ts" "$PROJECT_DIR" $PROBE
   cli_status=$?
   if [ "$cli_status" -ne 0 ]; then req_missing=1; fi
 else

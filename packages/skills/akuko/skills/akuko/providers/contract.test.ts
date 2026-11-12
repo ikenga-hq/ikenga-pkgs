@@ -43,6 +43,11 @@ import { silentWav } from './lipsync/fal/__fixtures__/media.ts';
 import { tmpdir } from 'node:os';
 import { createElevenLabsProvider } from './tts/elevenlabs/index.ts';
 import { mockElevenLabs } from '../sound/__fixtures__/audio.ts';
+import { createGeminiVideoProvider } from './gemini-video/index.ts';
+import { createKlingVideoProvider } from './kling-video/index.ts';
+import { createByteplusVideoProvider } from './byteplus-video/index.ts';
+import { createByteplusImageProvider } from './byteplus-image/index.ts';
+import { mockArk, mockGeminiVideo, mockKling } from './__fixtures__/direct-net.ts';
 
 interface ProviderSpec {
   name: string;
@@ -153,6 +158,30 @@ const PROVIDERS: ProviderSpec[] = [
     job: () => voiceJob('elevenlabs'),
   },
   {
+    name: 'gemini-video (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createGeminiVideoProvider(host, { fetch: mockGeminiVideo().fetch, apiKey: 'test-key', now: () => '2026-11-12T10:00:00Z' }) }),
+    job: () => clipJob('gemini-video'),
+  },
+  {
+    name: 'kling-video (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createKlingVideoProvider(host, { fetch: mockKling().fetch, accessKey: 'ak', secretKey: 'sk', now: () => '2026-11-12T10:00:00Z' }) }),
+    job: () => clipJob('kling-video'),
+  },
+  {
+    name: 'byteplus-video (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createByteplusVideoProvider(host, { fetch: mockArk().fetch, apiKey: 'test-key', now: () => '2026-11-12T10:00:00Z' }) }),
+    job: () => clipJob('byteplus-video'),
+  },
+  {
+    name: 'byteplus-image (network mocked)',
+    config: loadProviderConfig(),
+    make: (host) => ({ provider: createByteplusImageProvider(host, { fetch: mockArk().fetch, apiKey: 'test-key' }) }),
+    job: () => keyframeJob('byteplus-image'),
+  },
+  {
     // Not a real provider: proves the suite's paid branch works before WP-06 adds real ones.
     name: 'fixture: fake paid direct API',
     config: testConfig('direct-api'),
@@ -192,8 +221,8 @@ for (const spec of PROVIDERS) {
       for (const [model, m] of Object.entries(entry.models)) {
         assert.match(m.last_verified, /^\d{4}-\d{2}-\d{2}$/, `${model} last_verified`);
       }
-      if (provider.hosts.includes('A')) {
-        assert.notEqual(entry.billing, 'direct-api', 'R-11: a paid direct API may not declare host A in v0.x');
+      if (provider.hosts.includes('A') && entry.billing === 'direct-api' && !spec.fixture) {
+        assert.ok(entry.network?.probe && entry.network.domains.length > 0, 'R-11: a direct API on host A has a network probe and its domains');
       }
     });
 
@@ -337,6 +366,17 @@ describe('providers/config.json', () => {
       if (id.startsWith('example-')) assert.equal(p.example, true, `${id} is a placeholder`);
       else assert.equal(p.example, false, `${id} is a real entry`);
     }
+  });
+
+  it('a model listed as price unverified is never priced, and is not also under models', () => {
+    for (const [id, p] of Object.entries(config.providers)) {
+      for (const [model, u] of Object.entries(p.unverified_models ?? {})) {
+        assert.ok(!(model in p.models), `${id} ${model}`);
+        assert.match(u.source, /read 2026-11-12|https:\/\//);
+        assert.throws(() => priceFor(config, id, model), /price unverified/);
+      }
+    }
+    assert.throws(() => parseProviderConfig({ ...raw, providers: { ...raw.providers, x: { label: 'x', billing: 'direct-api', default_model: 'm', models: { m: { price: { amount: 1, per: 'image' }, last_verified: '2026-11-12', source: 's' } }, unverified_models: { m: { last_checked: '2026-11-12', source: 's' } } } } }), /both priced and listed/);
   });
 
   it('example prices cannot be used for real estimates', () => {

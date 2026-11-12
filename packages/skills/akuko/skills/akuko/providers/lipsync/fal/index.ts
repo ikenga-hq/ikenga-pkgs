@@ -20,7 +20,8 @@
  *
  *   - sealed with `sealProvider()`: `submit()` only runs inside `gate.run()`
  *   - model ids and prices live only in providers/config.json
- *   - hosts B and C only: a paid direct API is refused on host A (R-11)
+ *   - hosts A, B and C; on host A only with a key pasted for that chat and the
+ *     phased run (lib/spend.md R-11), which the gate enforces
  *   - `estimate()` is arithmetic on config; it reads local files (to measure
  *     them) and makes no network call
  *   - EVERYTHING is checked before the first request: paths, sizes, lengths,
@@ -471,7 +472,7 @@ export function createFalLipsyncProvider(host: WaveOneHost, opts: FalLipsyncOpti
     {
       id: FAL_LIPSYNC_PROVIDER_ID,
       kinds: ['video'],
-      hosts: ['B', 'C'],
+      hosts: ['A', 'B', 'C'],
       capabilities: { i2v: true, maxSeconds: 60, refImages: 1 },
 
       async estimate(job: Job): Promise<Cost> {

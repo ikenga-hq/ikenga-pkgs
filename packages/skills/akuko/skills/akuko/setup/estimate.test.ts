@@ -371,6 +371,26 @@ describe('the image provider is inferred, never defaulted', () => {
     assert.match(e.prices.source.video, /^fal-video fal-ai\/kling-video\/v2\.6\/pro\/image-to-video from the ledger/);
     assert.match(estimateFilm(parse(build()), { config: CONFIG, imageProvider: 'gemini-image', videoModel: 'fal-ai/kling-video/v2.5-turbo/pro/image-to-video' }).prices.source.video, /from --video-model/);
   });
+
+  it('prices clips on a direct video provider (--video-provider, or the provider of the last paid clip), with its lengths', () => {
+    const real = loadProviderConfig();
+    for (const provider of ['gemini-video', 'kling-video', 'byteplus-video']) {
+      const e = estimateFilm(parse(build()), { config: real, imageProvider: 'gemini-image', videoProvider: provider });
+      assert.match(e.prices.source.video, new RegExp(`^${provider} .*from --video-provider`));
+      assert.ok(e.stages.motion.likely > 0, `${provider} priced the clips`);
+      assert.ok(!e.warnings.some((w) => /no request rules|not priced/.test(w)), e.warnings.join(' | '));
+    }
+    const clip = `${build().tierA[0]}_clip`;
+    const kling = real.providers['kling-video']!.default_model;
+    const p = AkukoProjectSchema.parse({ ...build().project, ledger: [paid('kling-video', clip, kling)] });
+    assert.match(estimateFilm(p, { config: real, imageProvider: 'gemini-image' }).prices.source.video, /^kling-video .*from the ledger/);
+  });
+
+  it('refuses to estimate with a model listed as price unverified', () => {
+    const real = loadProviderConfig();
+    const model = Object.keys(real.providers['byteplus-video']!.unverified_models ?? {})[0]!;
+    assert.throws(() => estimateFilm(parse(build()), { config: real, imageProvider: 'gemini-image', videoProvider: 'byteplus-video', videoModel: model }), (e: unknown) => e instanceof EstimateError && /price unverified/.test(e.message));
+  });
 });
 
 describe('long shots, short lines, part view', () => {

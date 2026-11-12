@@ -82,13 +82,13 @@ These hold on every host and in every action and view:
 2. **No cap, no spend.** If `akuko.json.budget` is null, refuse paid jobs and point to `setup`.
 3. **Never exceed the cap** or a job's `approved_max`; stop and ask instead.
 4. **Money is never hidden or rounded.** Every paid call is recorded in `ledger[]`, success or failure.
-5. **Keys stay in the environment** (or the host's secret store) — never in `akuko.json`, a view, or a transcript.
+5. **Keys stay in the environment** (or the host's secret store) — never in `akuko.json`, a view, the artifact database, the ledger or a file the board can read, and never repeated back. On claude.ai (host A) a key is **pasted per chat**, and only when a paid direct call is about to run: probe the network first (`scripts/probe.ts`), tell the person the key will be visible in this chat's history, is used for this chat only and is never written anywhere, get "use my key for this chat", then set it only on that command's environment, reserve, save to the board, send (`lib/spend.md` §Host A, R-11).
 6. **House rules come before money.** When the project has `rules`, every job is checked against them before the spend gate, and a breach is refused (`rules-breach`), naming the rule and the offending text or file. Report it and stop; never reword, drop a reference or edit the rules to get past it. Run `rules/cli.ts check` for a free preflight (`lib/state.md` §"Rules guard (WP-26)").
 7. **A plan allowance is spend too.** A connected tool that uses the person's own plan allowance instead of money (Canva's monthly AI limit on claude.ai) gets an OK of every wave: the count, the service, that akuko can't see what is left, and the exact reply `approve <n> <service> generations`. Each generation goes in the ledger with zero money and a units count (`lib/spend.md` §Allowance).
 
 ## Hosts in one line each
 
-- **A — claude-artifact (claude.ai):** Bash and files only in a remote workspace that lasts one chat, so no durable project folder. The project lives in the board artifact's database; the agent reads and writes it with tool calls. Generation through connected MCPs (e.g. Canva) and manual prompt packages; MP4 renders locally.
+- **A — claude-artifact (claude.ai):** Node and files only in a remote workspace that lasts one chat, so no durable project folder. The project lives in the board artifact's database; the agent reads and writes it with tool calls and runs the stage commands on a working copy. Generation through connected MCPs (e.g. Canva), manual prompt packages, and paid direct APIs with a key pasted for that chat (R-11, after a network probe); MP4 renders locally.
 - **B — local (Claude Code):** `akuko.json` on disk, files in the project folder, all providers via env keys, HyperFrames + FFmpeg.
 - **C — ikenga:** B plus the Ikenga bridge (and Studio when its MCP is connected); Studio owns render state.
 

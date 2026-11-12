@@ -179,8 +179,9 @@ describe('structural guarantee: submit() is reachable only through gate.run()', 
     const at = (s: string, i = prepare.indexOf(s)) => (assert.ok(i >= 0, `prepare() contains ${s}`), i);
     const estimateAt = at('await estimate(provider, job)');
     assert.ok(estimateAt < at("refuse('no-budget'"), 'estimate before the budget check');
-    assert.ok(at("refuse('no-budget'") < at('checkPaid(p, job, cost, p.budget, entry)'), 'budget before approval + cap');
-    assert.ok(at('checkPaid(p, job, cost, p.budget, entry)') < at('openEntries('), 'approval + cap before the reservation');
+    // checkPaid may take the phase flag (host A send, lib/spend.md R-11) after `entry`.
+    assert.ok(at("refuse('no-budget'") < at('checkPaid(p, job, cost, p.budget, entry'), 'budget before approval + cap');
+    assert.ok(at('checkPaid(p, job, cost, p.budget, entry') < at('openEntries('), 'approval + cap before the reservation');
     assert.ok(at('openEntries(') < at('await host.writeState(p)'), 'the reservation is written');
 
     const run = slice('async function run(', 'async function collect(');

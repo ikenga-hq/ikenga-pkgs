@@ -946,6 +946,11 @@
             "cancelled"
           ]
         },
+        "reserved": {
+          "type": "boolean",
+          "const": true,
+          "description": "A host-A reservation that has not been sent yet (status submitted): the money is held, nothing was sent. The send phase clears it, and saves that, before the call (lib/spend.md §Host A)."
+        },
         "allowance": {
           "type": "object",
           "properties": {

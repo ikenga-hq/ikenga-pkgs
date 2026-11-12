@@ -44,11 +44,11 @@ async function approveAndRun(s: ReturnType<typeof setup>, j: Job) {
 }
 
 describe('fal image provider', () => {
-  it('is sealed, paid direct API, hosts B and C only (R-11), image only', () => {
+  it('is sealed, paid direct API, hosts A, B and C (R-11 is enforced by the gate), image only', () => {
     const { provider } = setup();
     assert.ok(isSealed(provider));
     assert.equal(provider.billing, 'direct-api');
-    assert.deepEqual([...provider.hosts], ['B', 'C']);
+    assert.deepEqual([...provider.hosts], ['A', 'B', 'C']);
     assert.deepEqual([...provider.kinds], ['image']);
     assert.equal(provider.capabilities.refImages, FAL_MAX_REFS);
     assert.equal(entry.example, false);

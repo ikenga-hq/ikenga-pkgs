@@ -45,7 +45,7 @@ akuko detects where it is running at the start of every action (`hosts/detect.ts
 
 | Host | Where the project lives | Notes |
 |---|---|---|
-| **claude.ai** (Claude artifacts) | In the review board artifact's database; claude.ai's workspace lasts one chat, so no project folder is kept there | Generation through connected MCP servers and the manual provider. Export and HyperFrames renders are routed to Claude Code. |
+| **claude.ai** (Claude artifacts) | In the review board artifact's database; claude.ai's workspace lasts one chat, so no project folder is kept there | Generation through connected MCP servers, the manual provider, and the paid providers below with a key you paste into that chat (see below). Export and HyperFrames renders are routed to Claude Code. |
 | **Claude Code** | `akuko.json` plus files in a project folder on disk | All providers, through keys in your environment. |
 | **Ikenga** desktop app | As Claude Code | Adds the Ikenga bridge, and the Studio app when its MCP server is connected. |
 
@@ -55,10 +55,25 @@ akuko detects where it is running at the start of every action (`hosts/detect.ts
 |---|---|---|
 | `manual` | every paid stage, free: prompt packages you run yourself | none |
 | Google Gemini image | bible and key frames | `GEMINI_API_KEY` |
-| fal.ai | images, image-to-video clips, lip-sync | `FAL_KEY` |
+| Google Gemini video (Gemini Omni Flash; Veo is no longer on the Gemini API) | image-to-video clips (with sound) | `GEMINI_API_KEY` |
+| fal.ai | images, image-to-video clips (Kling, Seedance), lip-sync | `FAL_KEY` |
+| Kling (Kling's own API) | image-to-video clips | `KLING_ACCESS_KEY` and `KLING_SECRET_KEY` |
+| BytePlus ModelArk | Seedance image-to-video clips, Seedream images (bible and key frames) | `ARK_API_KEY` |
 | ElevenLabs | voice-over with character timings | `ELEVENLABS_API_KEY` |
 
-Keys are yours. They stay in your environment (or your host's secret store) and are never written to `akuko.json`, a view or a transcript. Model ids and prices live in `skills/akuko/providers/config.json`; check them against the provider's own pricing before you set a budget.
+OpenAI Sora is not included: OpenAI shut the Sora 2 models and its Videos API down on 2026-09-24.
+
+Keys are yours. In Claude Code and Ikenga they stay in your environment (or your host's secret store). They are never written to `akuko.json`, a view, the board's database or the ledger. Model ids and prices live in `skills/akuko/providers/config.json`, each with the provider page it was read from and the date; a model whose price the provider does not publish is listed as "price unverified" and never runs. Check prices against the provider's own pricing before you set a budget.
+
+### Keys on claude.ai
+
+claude.ai keeps nothing between chats, so a key is **pasted into the chat, per chat**, and only when a paid call is about to run:
+
+1. akuko first checks that claude.ai's code workspace can reach the provider (one free request with no key). If your settings block it, akuko tells you which domains to allow (claude.ai settings, code execution network access) and stops.
+2. It then tells you that the key will be visible in that chat's history, is used for that chat only, and is never written to the project, the board, its database, the ledger or any file the board can read. Reply "use my key for this chat" and paste it.
+3. The budget cap, the estimate and your "approve <amount> USD" apply exactly as everywhere else. akuko saves the reservation to the board before it sends anything, and the result after. A new chat asks for the key again.
+
+If you would rather not paste a key, use the manual provider or run the stage in Claude Code.
 
 ## Install
 
@@ -96,8 +111,10 @@ Upload `akuko.zip` from the release (a runtime-only build, under claude.ai's 200
 Check the setup:
 
 ```bash
-bash ~/.claude/skills/akuko/scripts/doctor.sh [project-folder]
+bash ~/.claude/skills/akuko/scripts/doctor.sh [project-folder] [--probe]
 ```
+
+`--probe` also checks that each provider's API host is reachable (one keyless request each, nothing billed).
 
 ## Usage
 

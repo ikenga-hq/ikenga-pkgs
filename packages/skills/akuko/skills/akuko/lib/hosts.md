@@ -4,7 +4,7 @@ akuko runs on three hosts. Every action detects the host first, then reads and w
 
 | Level | Host | Adapter | Executable? |
 |---|---|---|---|
-| **A** | claude-artifact (claude.ai chat + published artifacts) | `hosts/claude-artifact.ts` | Code runs (Bash + Node in a remote cloud workspace), but that workspace lasts one chat and can't call the artifact tools — so every state / asset method is a **tool call** by the agent (manual check A2, 2026-11-07) |
+| **A** | claude-artifact (claude.ai chat + published artifacts) | `hosts/claude-artifact.ts` | Code runs (Bash + Node in a remote cloud workspace), but that workspace lasts one chat and can't call the artifact tools — so every state / asset method is a **tool call** by the agent (manual check A2, 2026-11-07). Stage commands run on a working copy (`hosts/workcopy.ts`); a paid direct API runs only with a key pasted for that chat, after a network probe (`scripts/probe.ts`) and in the reserve → save → send → save order of `lib/spend.md` §Host A (R-11). The workspace reaches the internet only as far as the person's claude.ai settings allow |
 | **B** | local (Claude Code) | `hosts/local.ts` | Yes (Node ≥ 22.6) |
 | **C** | ikenga (Ikenga shell, optionally Studio) | `hosts/ikenga.ts` (extends local) | Yes (Ikenga's engine is Claude Code) |
 
@@ -106,7 +106,8 @@ What each host can actually do for the artifact database and files, recorded 202
   - A page's `db.collection("decisions").add(...)` assigns its own row id (e.g. `dg54snl36ulb16eig8hp`). ArtifactData `list` returns rows as `{id, data, version, updatedAt}`.
   - Asset upload needed the **`assets`** capability on the page. Result: `/_blob/<32 hex>`.
   - Connectors seen: Canva and Google Calendar (connected); Gmail, Google Drive and Supabase (installed, not connected). Viewer id: `user.id()` → `u_…`.
-- **The workspace is not the project.** claude.ai's Bash/Node workspace is useful for running `detect.ts`, converters and checks, but it is remote, ephemeral and invisible to the board artifact. Never treat it as the project folder.
+- **The workspace is not the project.** claude.ai's Bash/Node workspace is useful for running `detect.ts`, converters, checks and the stage commands on a working copy (`hosts/workcopy.ts`), but it is remote, ephemeral and invisible to the board artifact. Never treat it as the project folder: save every change back to the board (ArtifactData `set`, `if_version`) in the order `lib/spend.md` §Host A gives.
+- **Network.** Code in the workspace reaches only the domains the person's claude.ai settings allow (code execution network access). `scripts/probe.ts <provider>` checks a provider's API host with one keyless GET and names the domains to allow when it is blocked. Unverified: the exact label of that setting, and whether a proxy refusal always looks like a network error (the probe also treats a 403 / 407 proxy page as blocked).
 - **Unverified:** a size limit for one DB document (the whole `AkukoProject` in `akuko/project` may not fit for large projects — WP-07a may split shots/assets into collections); stability of the claude.ai tool names used for detection.
 
 ### B — local: details

@@ -8,7 +8,8 @@
  *
  *   - sealed with `sealProvider()`: `submit()` only runs inside `gate.run()`
  *   - model ids and prices live only in providers/config.json
- *   - hosts B and C only: a paid direct API is refused on host A (R-11)
+ *   - hosts A, B and C; on host A only with a key pasted for that chat and the
+ *     phased run (lib/spend.md R-11), which the gate enforces
  *   - `estimate()` is arithmetic on config (price per second x the clip's
  *     seconds); it never touches the network
  *   - each model makes clips of set lengths: Kling 5 or 10 s, Seedance 2.0 any
@@ -271,7 +272,7 @@ export function createFalVideoProvider(host: WaveOneHost, opts: FalVideoOptions 
     {
       id: FAL_VIDEO_PROVIDER_ID,
       kinds: ['video'],
-      hosts: ['B', 'C'],
+      hosts: ['A', 'B', 'C'],
       capabilities: { i2v: true, maxSeconds: Math.max(...LIMITS.flatMap((l) => l.limits.allowedSeconds)), nativeAudio: true, refImages: 1 },
 
       async estimate(job: Job): Promise<Cost> {

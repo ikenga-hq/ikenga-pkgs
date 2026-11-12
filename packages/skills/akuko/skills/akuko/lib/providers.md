@@ -39,8 +39,9 @@ Providers use only the wave-1 host subset: `readState`, `writeState`,
 
 ## Model ids and prices live only in `providers/config.json`
 
-Each provider has an entry there: `label`, `billing`, `default_model`, and
-`models`. Each model has a `price` (`{ amount, per: job | image | second |
+Each provider has an entry there: `label`, `billing`, `key_env` (and
+`secret_env` when it needs two), `network`, `default_model`, `models`, and
+optionally `unverified_models`. Each model has a `price` (`{ amount, per: job | image | second |
 call | character }`), a `source`, and a `last_verified` date. `doctor` reports
 models older than `stale_after_days` (`staleModels()`).
 
@@ -67,11 +68,55 @@ models older than `stale_after_days` (`staleModels()`).
 4. `fetch()` writes files through `host.storeAsset()`. Give each file an
    `owner` (its unit). The gate records the outputs: the asset goes into
    `assets[]`, and the unit moves to `pending-review`.
-5. A `direct-api` provider must not list host `A` (R-11).
+5. A `direct-api` provider lists hosts `A`, `B` and `C`: the gate, not the
+   provider, enforces R-11 on host A (the pasted-key acknowledgement and the
+   reserve / send phases). Give it a `network` entry (probe url and domains).
 6. Add a spec to `PROVIDERS` in `providers/contract.test.ts`. The contract
    suite checks the shape, the seal, the config entry, estimate purity,
    direct-submit refusal, refusal without a cap, and a full run through the
    gate.
+
+## Direct providers (added in v0.3)
+
+All are `direct-api`, sealed, priced from `providers/config.json` with a
+source URL and the date it was read, and tested against mocked HTTP only.
+Each runs on hosts B and C, and on host A only under R-11. The video ones
+share `providers/video-common.ts` (one remote task per clip, the handle keeps
+each task id, 5xx / network errors leave a clip running, a partly failed batch
+records what was made and settles the rest at 0) and register their clip
+lengths in `providers/video-limits.ts`, which motion and the whole-film
+estimate both read.
+
+| Provider id | What | Key | Notes |
+|---|---|---|---|
+| `gemini-video` | Google's Gemini Omni Flash image-to-video, through the Gemini API's Interactions endpoint | `GEMINI_API_KEY` | **Veo is gone from the Gemini API**: Google shut its last Veo ids down on 2026-10-22 and names Gemini Omni Flash as the replacement (config cites the deprecations page). 3 to 15 s, 16:9 or 9:16, 360p / 720p / 1080p / 4k. Always makes sound (no switch), so every id carries `#audio`. The clip comes back as a Files API uri, polled until ACTIVE; a download redirect is followed without the key. |
+| `kling-video` | Kling's own API, image-to-video (`/v1/videos/image2video`, the "legacy" API that takes `model_name`) | `KLING_ACCESS_KEY` + `KLING_SECRET_KEY` (an HS256 JWT per request) | ids `<model_name>#std|#pro[#audio]`; 2.5 Turbo and 2.6 make 5 or 10 s, 3.0 makes 3 to 15 s (Kling's capability map). Billed from a prepaid package or balance. PNG / JPEG frames only. |
+| `byteplus-video` | Seedance on BytePlus ModelArk (ap-southeast-1) | `ARK_API_KEY` | ids `<model id>#480p|#720p|#1080p[#audio]`; Seedance 2.5 makes 4 to 30 s, 2.0 and 2.0 Fast 4 to 15 s. Billed by tokens; the per-second price is worked out from BytePlus's token price at the largest frame it lists for the resolution (an upper bound). The model must be activated in the ModelArk console. |
+| `byteplus-image` | Seedream stills on BytePlus ModelArk | `ARK_API_KEY` | bible and key frames, like `gemini-image`; up to 14 references (10 on 5.0 flash); flat price per image, reference images free. |
+
+**Not added:** OpenAI Sora. OpenAI shut the Sora 2 models and the whole Videos
+API (`/v1/videos`) down on 2026-09-24 and names no replacement
+(developers.openai.com, read 2026-11-12), so there is nothing to call.
+**Kling lip-sync** is a public two-step API (identify-face, then
+advanced-lip-sync) but takes the video only as a public URL or a Kling-made
+video id, so it does not fit the lip-sync step's local clips and stills; it is
+not wired.
+
+### Price unverified
+
+A model akuko knows how to call but whose price the provider does not publish
+per unit goes under the provider's `unverified_models` in config, never under
+`models`. `priceFor()` refuses it with "price unverified", so `estimate()`,
+the gate, motion and the whole-film estimate all refuse it, and doctor lists
+it. Today: `byteplus-video` `seedance-1-5-pro-251215#720p` (in BytePlus's
+request examples, absent from its model list and price table).
+
+### Network
+
+Each paid provider's config entry has `network: { probe, domains, note? }`:
+a keyless URL that costs nothing (a models list, or a GET of a task that does
+not exist) and every domain akuko contacts. `scripts/probe.ts` uses it, and
+`doctor --probe` runs it for all of them.
 
 ## Allowance tools on a connected MCP (Canva and similar)
 
@@ -121,7 +166,7 @@ it on the board.
 
 ## The fal lip-sync provider (`providers/lipsync/fal/`)
 
-Id `fal-lipsync`; paid direct API (key `FAL_KEY`); hosts B and C only (R-11); kind `video`.
+Id `fal-lipsync`; paid direct API (key `FAL_KEY`); hosts B and C, and A under R-11; kind `video`.
 It turns a picture plus a spoken line into a lip-synced video. One request per
 unit (`<shot>_lipsync`); the output is a `lipsync` asset, `pending-review`.
 

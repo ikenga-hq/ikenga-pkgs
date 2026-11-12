@@ -159,7 +159,8 @@ const shotOf = (p: AkukoProject, a: Asset): Shot => {
   return s;
 };
 
-const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted');
+// A host-A reservation not yet sent (`reserved`) is not in flight: the send phase must pick the same unit.
+const inFlight = (p: AkukoProject, a: Asset): boolean => p.ledger.some((e) => e.unit === a.id && e.status === 'submitted' && e.reserved !== true);
 
 export function unitReadiness(p: AkukoProject, a: Asset): Readiness {
   if (approvedWithFile(a)) return { state: 'approved', waiting: [] };
@@ -215,7 +216,8 @@ export function keyframeStatus(p: AkukoProject): StatusRow[] {
 
 /** A job has run once any output carries its tag or any ledger entry is in flight or done. */
 export function jobRan(p: AkukoProject, id: string): boolean {
-  return p.ledger.some((e) => e.job === id && (e.status === 'submitted' || e.status === 'done')) || p.assets.some((a) => a.tags.includes(jobTag(id)));
+  // A host-A reservation not yet sent (`reserved`) has not run: the send phase must build the same job id.
+  return p.ledger.some((e) => e.job === id && ((e.status === 'submitted' && e.reserved !== true) || e.status === 'done')) || p.assets.some((a) => a.tags.includes(jobTag(id)));
 }
 
 /** Deterministic id: `job_kf_<hash of units + provider + model>_r<n>`. A regeneration after a send-back is the next `r<n>` with its own approval. */

@@ -664,6 +664,7 @@ export const LedgerEntrySchema = z.object({
   estimate: MoneySchema.optional(),
   actual: MoneySchema.optional(),
   status: z.enum(['submitted', 'done', 'failed', 'cancelled']),
+  reserved: z.literal(true).optional().describe('A host-A reservation that has not been sent yet (status submitted): the money is held, nothing was sent. The send phase clears it, and saves that, before the call (lib/spend.md §Host A).'),
   allowance: z.object({
     service: AllowanceServiceSchema,
     units: z.number().int().positive().describe('Generations this call used from the service allowance.'),
