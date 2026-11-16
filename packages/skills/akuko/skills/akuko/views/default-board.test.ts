@@ -19,6 +19,7 @@ import { foldDecisions } from '../decisions/fold.ts';
 import { gateStatuses, signGate } from '../decisions/gates.ts';
 import type { AkukoProject, Decision } from '../schema/akuko-project.ts';
 import { bigProject, PART_SIZES } from './__fixtures__/big-project.ts';
+import { flagProject } from '../scripts/check-view/expected.mjs';
 
 const SKILL = fileURLToPath(new URL('..', import.meta.url));
 const HTML = readFileSync(join(SKILL, 'views', 'default-board.html'), 'utf8');
@@ -41,14 +42,12 @@ describe('default board: provenance', () => {
     assert.ok(isConformedHtml(CONFORMED, view, HTML));
   });
 
-  it('inlines the canonical decision writer (v2) verbatim', () => {
+  it('inlines the canonical decision writer (v3: writes `flag`) verbatim', () => {
     const canonical = readFileSync(join(SKILL, 'scripts', 'check-view', 'decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\s+$/, '');
-    const v2 = canonical
-      .replace('/* akuko-decision-writer v1 —', '/* akuko-decision-writer v2 —')
-      .replace('  toIkenga();\n})();', '  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)\n})();');
-    assert.ok(v2.startsWith('/* akuko-decision-writer v2 —'));
-    assert.ok(v2.includes('if (outbox.length) toIkenga();'));
-    assert.ok(HTML.includes(`<script>\n${v2}\n</script>`), 'the page does not contain the canonical decision writer block');
+    assert.ok(canonical.startsWith('/* akuko-decision-writer v3 —'));
+    assert.ok(canonical.includes('if (outbox.length) toIkenga();'));
+    assert.ok(canonical.includes('d.flag = f.flag;'));
+    assert.ok(HTML.includes(`<script>\n${canonical}\n</script>`), 'the page does not contain the canonical decision writer block');
   });
 
   it('passes check-view', { timeout: 540_000 }, async () => {
@@ -58,12 +57,13 @@ describe('default board: provenance', () => {
         resolve(stdout);
       });
     });
-    const [r] = JSON.parse(out) as { ok: boolean; failures: { rule: string; code: string; message: string }[]; decisions_checked: number; batches_checked: number }[];
+    const [r] = JSON.parse(out) as { ok: boolean; failures: { rule: string; code: string; message: string }[]; decisions_checked: number; batches_checked: number; flags_checked: number }[];
     assert.ok(r);
     assert.deepEqual(r.failures, []);
     assert.ok(r.ok);
     assert.ok(r.decisions_checked >= 8);
     assert.ok(r.batches_checked >= 2, 'check-view confirmed, then undid, a bible batch and a part batch on the board');
+    assert.ok(r.flags_checked >= 2, 'check-view dismissed, and sent back with, flags on shots and on bible images');
   });
 });
 
@@ -512,7 +512,7 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.8');
+    assert.equal(lines[0].view, 'default-board@0.10');
     p.close();
   });
 });
@@ -564,7 +564,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     assert.equal(statusOf(p, id), 'approved');
     assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
     const [d] = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.8']);
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.10']);
     p.close();
   });
 
@@ -736,7 +736,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
-    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5', 'default-board@0.6', 'default-board@0.7', 'default-board@0.8']) {
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5', 'default-board@0.6', 'default-board@0.7', 'default-board@0.8', 'default-board@0.9', 'default-board@0.10']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
       assert.deepEqual(report.rejected, [], view);
@@ -1099,7 +1099,7 @@ describe('default board: confirmed batch approval (@0.7)', { timeout: 600_000 },
     click(p, '[data-akuko-batch-confirm="part:P7"]');
     await p.tick();
     const ds = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual(JSON.parse(JSON.stringify(ds.map((d) => [d.action, d.unit, d.stage, d.by, d.view]))), waiting.map((id) => ['approve', id, 'sketch', 'you', 'default-board@0.8']));
+    assert.deepEqual(JSON.parse(JSON.stringify(ds.map((d) => [d.action, d.unit, d.stage, d.by, d.view]))), waiting.map((id) => ['approve', id, 'sketch', 'you', 'default-board@0.10']));
     const ids = new Set(ds.map((d) => BATCH.exec(d.text ?? '')?.[1]));
     assert.equal(ids.size, 1);
     const bid = [...ids][0]!;
@@ -1221,7 +1221,7 @@ describe('default board: sending a bible image back (@0.8)', { timeout: 600_000 
     fire(p, p.d.querySelector('#p-bible form[data-form="compose"] [data-akuko-submit]'));
     await p.tick();
     const ds = JSON.parse(JSON.stringify(p.w.akukoDecisions.all())) as Decision[];
-    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.view]), [['request-changes', 'loc_bedroom_plate', 'bible', 'The window should be on the left, and the bed smaller.', 'default-board@0.8']]);
+    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.view]), [['request-changes', 'loc_bedroom_plate', 'bible', 'The window should be on the left, and the bed smaller.', 'default-board@0.10']]);
     assert.equal(p.d.querySelectorAll('#compose-text').length, 0, 'the composer closed');
     assert.match(p.text('#p-bible'), /Location plate is sent back to akuko\./);
     assert.equal(p.num('waiting-other'), other - 1);
@@ -1279,5 +1279,227 @@ describe('default board: sending a bible image back (@0.8)', { timeout: 600_000 
     const a = project.assets.find((x) => x.id === 'loc_bedroom_plate')!;
     assert.equal(a.status, 'needs-rework');
     assert.ok(a.comments.some((c) => c.text === 'Darker, please.'));
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// @0.9: AI quality flags (lib/state.md §Quality flags)
+// ────────────────────────────────────────────────────────────────────────
+
+describe('default board: AI quality flags (@0.9)', { timeout: 600_000 }, () => {
+  // sc2_sh4 "Long slender neck" (flag_c0ffee00), sc4_sh2 "Near-photographic" (…01), char_oldman_turnaround
+  // "Patch on cap" (…02), loc_bedroom_plate "Tom looks short" (…03): the E01 findings, from check-view's flagProject.
+  const proj = (block = false) => {
+    const q = flagProject(clone(FIXTURE) as unknown as AkukoProject) as any;
+    if (block) q.assets.find((a: any) => a.id === 'char_oldman_turnaround').by_stage.bible.flags[0].severity = 'block';
+    return q as Project;
+  };
+  const fire = (p: Page, el: any) => el.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, view: p.w }));
+  const ctl = (act: string, unit: string, flag: string) => `[data-akuko-action="${act}"][data-akuko-unit="${unit}"][data-akuko-flag="${flag}"]`;
+  const all = (p: Page) => JSON.parse(JSON.stringify(p.w.akukoDecisions.all())) as (Decision & { flag?: string; undoes?: string })[];
+
+  it('shows each open flag (badge, what is wrong, the file, the suggested change) and writes nothing on its own', async () => {
+    const p = await boot({ host: 'B', project: proj() });
+    const shotsWaiting = p.num('waiting-shots'), other = p.num('waiting-other');
+    assert.equal(p.text('[data-akuko-field="shot"][data-akuko-unit="sc2_sh4"] .qf-badge'), '⚑ 1 open AI flag');
+    assert.match(p.text('#bib-char_oldman .bib-h .qf-badge'), /⚑ 1/);
+    const sec = p.d.querySelector('#p-bible [data-akuko-field="flags"][data-akuko-unit="char_oldman_turnaround"]');
+    assert.ok(sec, 'the flag list sits with the image');
+    const t = sec.textContent.replace(/\s+/g, ' ');
+    assert.match(t, /Patch on cap; bible says plain cap/);
+    assert.match(t, /Wardrobe \/ logo/);
+    assert.match(t, /Looked at bible\/char_oldman_turnaround\.png/);
+    assert.match(t, /Plain cap with no patch, logo or lettering\./);
+    assert.match(t, /flagged by agent:check-view/);
+    for (const a of ['request-changes', 'dismiss-flag', 'note']) assert.ok(p.d.querySelector('#p-bible ' + ctl(a, 'char_oldman_turnaround', 'flag_c0ffee02')), a);
+    assert.equal(p.text('#p-bible ' + ctl('request-changes', 'char_oldman_turnaround', 'flag_c0ffee02')), 'Send back with this');
+    assert.ok(p.d.querySelector('#det-sc2_sh4 ' + ctl('dismiss-flag', 'sc2_sh4', 'flag_c0ffee00')), 'the open shot lists its flag in the detail');
+    // flags change no status and no count; nothing is written, nothing ticked
+    await p.fire();
+    assert.equal(p.w.akukoDecisions.all().length, 0);
+    assert.equal(p.num('waiting-shots'), shotsWaiting);
+    assert.equal(p.num('waiting-other'), other);
+    assert.equal(p.d.querySelectorAll('input:checked').length, 0);
+    p.close();
+  });
+
+  it('"Send back with this" opens the composer with the suggested change; only the submit writes one request-changes carrying the flag', async () => {
+    const p = await boot({ host: 'B', project: proj() });
+    click(p, '#p-bible ' + ctl('request-changes', 'char_oldman_turnaround', 'flag_c0ffee02'));
+    await p.tick();
+    assert.equal(p.w.akukoDecisions.all().length, 0, 'opening the composer writes nothing');
+    assert.equal(p.d.querySelectorAll('#compose-text').length, 1);
+    const ta = p.d.querySelector('#compose-text');
+    assert.equal(ta.value, 'Plain cap with no patch, logo or lettering.');
+    ta.value = 'Plain cap, no patch. Keep the brim worn.';
+    ta.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    fire(p, p.d.querySelector('[data-akuko-field="flags"] form[data-form="compose"] [data-akuko-submit]'));
+    await p.tick();
+    const ds = all(p);
+    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.flag, d.by, d.view]), [['request-changes', 'char_oldman_turnaround', 'bible', 'Plain cap, no patch. Keep the brim worn.', 'flag_c0ffee02', 'you', 'default-board@0.10']]);
+    assert.match(p.text('#p-bible'), /Turnaround sheet is sent back to akuko\./);
+    assert.ok(!p.d.querySelector(ctl('dismiss-flag', 'char_oldman_turnaround', 'flag_c0ffee02')), 'the flag is taken up: no longer open');
+    p.close();
+  });
+
+  it('Dismiss writes one dismiss-flag (status unchanged); Undo writes one undo of it; Note writes a note and keeps the flag open', async () => {
+    const p = await boot({ host: 'B', project: proj() });
+    const other = p.num('waiting-other');
+    click(p, '#p-bible ' + ctl('dismiss-flag', 'loc_bedroom_plate', 'flag_c0ffee03'));
+    await p.tick();
+    let ds = all(p);
+    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.flag]), [['dismiss-flag', 'loc_bedroom_plate', 'bible', 'flag_c0ffee03']]);
+    assert.equal(p.num('waiting-other'), other, 'a dismissal decides nothing about the image');
+    assert.match(p.text('#p-bible'), /Dismissed: Tom looks short/);
+    click(p, '#p-bible [data-act="flag-undo"][data-akuko-flag="flag_c0ffee03"]');
+    await p.tick();
+    ds = all(p);
+    assert.deepEqual([ds[1]!.action, ds[1]!.unit, ds[1]!.undoes], ['undo', 'loc_bedroom_plate', ds[0]!.id]);
+    assert.ok(p.d.querySelector('#p-bible ' + ctl('dismiss-flag', 'loc_bedroom_plate', 'flag_c0ffee03')), 'open again');
+    click(p, '#p-bible ' + ctl('note', 'loc_bedroom_plate', 'flag_c0ffee03'));
+    await p.tick();
+    const ta = p.d.querySelector('#compose-text');
+    assert.equal(ta.value, '', 'a note starts empty');
+    ta.value = 'He is crouching here; fine.';
+    fire(p, p.d.querySelector('[data-akuko-field="flags"] form[data-form="compose"] [data-akuko-submit]'));
+    await p.tick();
+    ds = all(p);
+    assert.deepEqual([ds[2]!.action, ds[2]!.text, ds[2]!.flag], ['note', 'He is crouching here; fine.', 'flag_c0ffee03']);
+    assert.ok(p.d.querySelector(ctl('dismiss-flag', 'loc_bedroom_plate', 'flag_c0ffee03')), 'a note leaves the flag open');
+    p.close();
+  });
+
+  it('a unit with an open block flag is left out of the batch, and says why; once dismissed it is back in', async () => {
+    const p = await boot({ host: 'B', project: proj(true) });
+    click(p, '#p-bible [data-akuko-batch="bible"]');
+    await p.tick();
+    let listed = Array.from(p.d.querySelectorAll('#bp-box [data-akuko-batch-unit]')).map((e: any) => e.getAttribute('data-akuko-batch-unit'));
+    assert.ok(!listed.includes('char_oldman_turnaround'));
+    assert.match(p.text('#bp-box .bp-skip'), /1 with an open block flag/);
+    click(p, '[data-act="batch-cancel"]');
+    await p.tick();
+    click(p, '#p-bible ' + ctl('dismiss-flag', 'char_oldman_turnaround', 'flag_c0ffee02'));
+    await p.tick();
+    click(p, '#p-bible [data-akuko-batch="bible"]');
+    await p.tick();
+    listed = Array.from(p.d.querySelectorAll('#bp-box [data-akuko-batch-unit]')).map((e: any) => e.getAttribute('data-akuko-batch-unit'));
+    assert.ok(listed.includes('char_oldman_turnaround'));
+    p.close();
+  });
+
+  it('what the board writes folds: the send-back takes its flag up, the dismissal dismisses its flag; only the send-back moves a status', async () => {
+    const p = await boot({ host: 'B', project: proj() });
+    click(p, '#p-bible ' + ctl('request-changes', 'char_oldman_turnaround', 'flag_c0ffee02'));
+    await p.tick();
+    fire(p, p.d.querySelector('[data-akuko-field="flags"] form[data-form="compose"] [data-akuko-submit]'));
+    await p.tick();
+    click(p, '#p-bible ' + ctl('dismiss-flag', 'loc_bedroom_plate', 'flag_c0ffee03'));
+    await p.tick();
+    const ds = all(p);
+    p.close();
+    assert.equal(ds.length, 2);
+    const { project, report } = foldDecisions(proj() as unknown as AkukoProject, ds as Decision[], { conformed: CONFORMED });
+    assert.deepEqual(report.rejected, []);
+    const ta = project.assets.find((a) => a.id === 'char_oldman_turnaround')!;
+    const bp = project.assets.find((a) => a.id === 'loc_bedroom_plate')!;
+    assert.equal(ta.status, 'needs-rework');
+    assert.deepEqual([ta.by_stage!.bible!.flags![0]!.status, ta.by_stage!.bible!.flags![0]!.decision], ['accepted', ds[0]!.id]);
+    assert.equal(bp.status, 'pending-review');
+    assert.deepEqual([bp.by_stage!.bible!.flags![0]!.status, bp.by_stage!.bible!.flags![0]!.decision], ['dismissed', ds[1]!.id]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// @0.10: room for the shot list (resizable columns, compact header) and what the counts say
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('default board @0.10: overtaken decisions, stage counts, columns, compact header', () => {
+  const ui = (p: Page) => JSON.parse(p.w.localStorage.getItem('akuko-board:the-beating:ui') ?? '{}');
+  const key = (p: Page, sel: string, k: string, shiftKey = false) => { p.d.querySelector(sel).dispatchEvent(new p.w.KeyboardEvent('keydown', { key: k, shiftKey, bubbles: true, cancelable: true })); };
+
+  it('an old decision akuko never folded, made before one it has folded on the same unit, no longer shows and is not copied again (E01: a character portrait)', async () => {
+    const q = clone(FIXTURE);
+    (q.shots.find((s) => s.id === 'sc2_sh4') as Shot).status = 'approved';
+    const old = { id: uuid(30), action: 'request-changes', unit: 'sc2_sh4', stage: 'sketch', text: 'a', by: 'you', at: '2026-11-08T10:05:00Z', view: 'default-board@0.8' };
+    const later = { id: uuid(31), action: 'approve', unit: 'sc2_sh4', stage: 'sketch', by: 'you', at: '2026-11-08T10:09:00Z', view: 'default-board@0.8' };
+    const note = { id: uuid(32), action: 'note', unit: 'sc4_sh2', stage: 'sketch', text: 'closer', by: 'you', at: '2026-11-08T10:01:00Z', view: 'default-board@0.8' };
+    q.decisions = [later];
+    const p = await boot({ host: 'B', project: q, outbox: [old, later, note] });
+    assert.equal(statusOf(p, 'sc2_sh4'), 'approved', 'the folded approval shows, not the older send-back');
+    assert.match(p.text('[data-akuko-export]'), /\(1\)/, 'only the note is still to copy');
+    const got: string[] = []; p.w.navigator.clipboard.writeText = async (t: string) => { got.push(t); };
+    click(p, '[data-akuko-export]');
+    await p.tick();
+    assert.deepEqual((got[0] ?? '').trim().split('\n').map((l) => JSON.parse(l).id), [note.id]);
+    assert.match(p.text('#toast'), /1 already in your project.*1 overtaken by a later decision, left out/);
+    assert.equal(p.w.akukoDecisions.all().length, 3, 'nothing is deleted from the browser');
+    p.close();
+  });
+
+  it('a decision made after the folded one still shows and is still copied', async () => {
+    const q = clone(FIXTURE);
+    (q.shots.find((s) => s.id === 'sc2_sh4') as Shot).status = 'approved';
+    const later = { id: uuid(31), action: 'approve', unit: 'sc2_sh4', stage: 'sketch', by: 'you', at: '2026-11-08T10:09:00Z', view: 'default-board@0.8' };
+    const after = { id: uuid(33), action: 'request-changes', unit: 'sc2_sh4', stage: 'sketch', text: 'darker', by: 'you', at: '2026-11-08T10:12:00Z', view: 'default-board@0.8' };
+    q.decisions = [later];
+    const p = await boot({ host: 'B', project: q, outbox: [later, after] });
+    assert.equal(statusOf(p, 'sc2_sh4'), 'needs-rework');
+    assert.match(p.text('[data-akuko-export]'), /\(1\)/);
+    p.close();
+  });
+
+  it('the current stage counts its own units: 2 of 12 key frames approved reads 2/12, not the shots\' 12/12', async () => {
+    const q = clone(FIXTURE) as any;
+    for (const s of q.shots) s.status = 'approved';
+    q.current_stage = 'keyframes';
+    q.stages.keyframes = { state: 'in-progress' };
+    q.pending_spend = [];
+    q.assets.push(...q.shots.map((s: Shot, i: number) => ({ id: `${s.id}_keyframe`, stage: 'keyframes', status: i < 2 ? 'approved' : 'pending', comments: [], kind: 'keyframe', owner: s.id, tags: [] })));
+    const p = await boot({ project: q });
+    assert.match(p.text('[data-akuko-stage="keyframes"] .st-s'), /In progress · 2\/12 approved/);
+    p.close();
+    const r = await boot();
+    assert.match(r.text('[data-akuko-stage="sketch"] .st-s'), /\d+\/12 approved/, 'a stage whose units are the shots still counts shots');
+    r.close();
+  });
+
+  it('the column separators are focusable separators; the arrows resize, Enter resets, and the width is kept in the view settings', async () => {
+    const p = await boot();
+    for (const [id, ctl] of [['#split-a', 'script'], ['#split-b', 'rail']]) {
+      const el = p.d.querySelector(id);
+      assert.equal(el.getAttribute('role'), 'separator');
+      assert.equal(el.getAttribute('aria-orientation'), 'vertical');
+      assert.equal(el.getAttribute('tabindex'), '0');
+      assert.equal(el.getAttribute('aria-controls'), ctl);
+      assert.ok(!el.hasAttribute('data-akuko-action'), 'resizing decides nothing');
+    }
+    key(p, '#split-a', 'ArrowRight');
+    await p.tick();
+    assert.equal(typeof ui(p).cols.script, 'number', 'the script width is saved');
+    assert.match(p.d.querySelector('#desk').getAttribute('style') ?? '', /--ak-w-script: \d+px/);
+    key(p, '#split-b', 'ArrowLeft', true);
+    await p.tick();
+    assert.equal(typeof ui(p).cols.rail, 'number', 'the side panel width is saved');
+    key(p, '#split-a', 'Enter');
+    await p.tick();
+    assert.equal(ui(p).cols.script, null, 'Enter resets to the default');
+    assert.doesNotMatch(p.d.querySelector('#desk').getAttribute('style') ?? '', /--ak-w-script/);
+    assert.equal(p.w.akukoDecisions.all().length, 0);
+    p.close();
+  });
+
+  it('the header is compact on a short window; the toggle overrides it and is remembered', async () => {
+    const p = await boot();
+    assert.ok(p.w.innerHeight < 900);
+    assert.equal(p.d.body.getAttribute('data-compact'), '1', 'a short window gets the compact header');
+    const btn = p.d.querySelector('#head-btn');
+    assert.equal(btn.getAttribute('aria-pressed'), 'true');
+    click(p, '#head-btn');
+    await p.tick();
+    assert.equal(p.d.body.hasAttribute('data-compact'), false);
+    assert.equal(p.d.querySelector('#head-btn').getAttribute('aria-pressed'), 'false');
+    assert.equal(ui(p).head, 'full');
+    assert.equal(p.w.akukoDecisions.all().length, 0);
+    p.close();
   });
 });

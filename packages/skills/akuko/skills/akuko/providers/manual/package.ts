@@ -52,6 +52,15 @@ export interface PromptPackageRef extends JobRef {
   attach: string;            // what to do with it in the target tool
 }
 
+/** One step of a unit made in several generations, in order (`JobItem.steps`). */
+export interface PromptPackageStep {
+  name: string;
+  prompt: string;
+  negative?: string;
+  refs: PromptPackageRef[];
+  seed?: number;
+}
+
 export interface PromptPackageItem {
   unit: string;
   prompt: string;            // shaped for the platform
@@ -63,6 +72,8 @@ export interface PromptPackageItem {
   seed?: number;
   expected_file: string;     // save the result under this name
   accept: string[];          // mime types ingest takes for this job kind
+  /** Made in several generations, in order: the last one's result is the file to bring back (`expected_file`). */
+  steps?: PromptPackageStep[];
 }
 
 export interface PromptPackage {
@@ -118,6 +129,7 @@ const SHAPERS: Record<ManualPlatform, (i: JobItem, refs: PromptPackageRef[]) => 
 };
 
 function attachNote(ref: JobRef): string {
+  if (!ref.uri && ref.role === 'previous-step') return `Attach ${ref.note ? ref.note.split(':')[0] : 'the result of the step before'} as the first image.`;
   if (!ref.uri) return `Reference "${ref.id}" has no file yet — describe it in words or skip it.`;
   if (/^https?:/.test(ref.uri)) return `Attach ${ref.uri} as a ${ref.role ?? 'reference'} image.`;
   return `Upload the file ${ref.uri} as a ${ref.role ?? 'reference'} image.`;
@@ -139,9 +151,19 @@ export function buildPromptPackage(job: Job, platform: ManualPlatform = 'generic
       ...(i.aspect_ratio !== undefined ? { aspect_ratio: i.aspect_ratio } : {}),
       ...(i.duration_s !== undefined ? { duration_s: i.duration_s } : {}),
       ...(i.seed !== undefined ? { seed: i.seed } : {}),
+      ...(i.steps?.length ? {
+        steps: i.steps.map((s) => ({
+          name: s.name,
+          prompt: SHAPERS[platform]({ ...i, prompt: s.prompt }, []),
+          refs: (s.refs ?? []).map((r) => ({ ...r, attach: attachNote(r) })),
+          ...(s.negative !== undefined ? { negative: s.negative } : {}),
+          ...(s.seed !== undefined ? { seed: s.seed } : {}),
+        })),
+      } : {}),
     };
   });
   const where = platform === 'generic' ? `the ${job.kind} tool you use` : platform;
+  const stepped = items.filter((i) => i.steps);
   return {
     format: 'akuko-prompt-package',
     version: 1,
@@ -155,6 +177,7 @@ export function buildPromptPackage(job: Job, platform: ManualPlatform = 'generic
     steps: [
       `For each item below, open ${where} and paste the prompt.`,
       'Attach the listed references, if the tool takes them.',
+      ...(stepped.length ? [`An item marked "in N steps" is made in N generations, one after the other: run step 1, then give its result to step 2 as the first picture, and so on. Only the last step's result is the item's file; keep the earlier results too (ingest takes them with --step-files).`] : []),
       `Save each result under its expected file name (any of: ${accept.join(', ')}).`,
       'Bring the files back — attach them in chat, or drop them in the project folder — and akuko files each against its unit for your review. Nothing is marked approved until you approve it.',
     ],
@@ -166,6 +189,18 @@ export function renderPromptPackage(pkg: PromptPackage): string {
   const out: string[] = [`# ${pkg.label}`, `Job ${pkg.job} · ${pkg.stage} · ${pkg.kind} · ${pkg.platform}`, ''];
   pkg.steps.forEach((s, k) => out.push(`${k + 1}. ${s}`));
   for (const item of pkg.items) {
+    if (item.steps) {
+      const n = item.steps.length;
+      out.push('', `## ${item.unit} in ${n} steps (${n} generations) → save the last step's result as \`${item.expected_file}\``);
+      item.steps.forEach((s, k) => {
+        out.push('', `### Step ${k + 1} of ${n}: ${s.name}${k > 0 ? ` (needs step ${k}'s result)` : ''}`, '', '```', s.prompt, '```');
+        if (s.negative) out.push(`Avoid: ${s.negative}`);
+        for (const r of s.refs) out.push(`- ${r.attach}`);
+        if (s.seed !== undefined) out.push(`Seed: ${s.seed}`);
+      });
+      if (item.aspect_ratio) out.push('', `Format: ${item.aspect_ratio}`);
+      continue;
+    }
     out.push('', `## ${item.unit} → save as \`${item.expected_file}\`${item.count > 1 ? ` (${item.count} takes)` : ''}`, '', '```', item.prompt, '```');
     if (item.negative) out.push(`Avoid: ${item.negative}`);
     for (const r of item.refs) out.push(`- ${r.attach}`);

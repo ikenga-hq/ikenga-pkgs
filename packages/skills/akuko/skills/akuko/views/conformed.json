@@ -49,6 +49,18 @@
       "sha256": "3bf276c76c46fda173bf51be2e12de734a09113b4d1ea79556e7d4b9be136440",
       "checked_at": "2026-11-13T11:08:46Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.9",
+      "sha256": "baaca0ff944da23f0eb50a20eb841002923b870f5c934b2b5fa6cc284a6f9353",
+      "checked_at": "2026-11-14T08:07:51Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.10",
+      "sha256": "19611ce2ce55d85dcc843c61bbf96f04386d39eccea646d5376d17ea750afa5d",
+      "checked_at": "2026-11-16T01:33:27Z",
+      "checker": "check-view@2"
     }
   ]
 }

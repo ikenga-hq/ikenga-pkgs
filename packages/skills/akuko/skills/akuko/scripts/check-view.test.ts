@@ -197,9 +197,10 @@ describe('check-view fails each bad fixture for its reason', { timeout: TIMEOUT 
 
 describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
   const writer = readFileSync(join(SKILL, 'scripts', 'check-view', 'decision-writer.js'), 'utf8').trim();
+  const writerV2 = readFileSync(join(SKILL, 'scripts', 'check-view', 'decision-writer-v2.js'), 'utf8').trim();
 
-  it('the conforming fixtures inline the decision writer verbatim', () => {
-    for (const f of GOOD) assert.ok(readFileSync(join(FX, f), 'utf8').includes(writer), f);
+  it('the conforming fixtures inline a canonical decision writer verbatim (v3, or the frozen v2 check-view still accepts)', () => {
+    for (const f of GOOD) { const h = readFileSync(join(FX, f), 'utf8'); assert.ok(h.includes(writer) || h.includes(writerV2), f); }
   });
 
   it('every fixture inlining the writer carries the current one (no stale-writer outside the signed-by-agent fixture, which edits it)', async () => {

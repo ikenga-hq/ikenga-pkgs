@@ -29,9 +29,9 @@ export function projectBlock(): string {
   return escapeJsonForScript(JSON.stringify(p));
 }
 
-/** The canonical decision writer (scripts/check-view/decision-writer.js), exactly as it is on disk (v2). */
+/** The v2 decision writer (scripts/check-view/decision-writer-v2.js, kept frozen; the example views inline it), exactly as it is on disk. */
 export function decisionWriterV2(): string {
-  const w = readFileSync(resolve(AKUKO, 'scripts/check-view/decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '');
+  const w = readFileSync(resolve(AKUKO, 'scripts/check-view/decision-writer-v2.js'), 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '');
   if (!w.startsWith('/* akuko-decision-writer v2 ')) throw new Error('build: decision-writer.js is not v2; rebuild the example views against the current writer');
   return w;
 }

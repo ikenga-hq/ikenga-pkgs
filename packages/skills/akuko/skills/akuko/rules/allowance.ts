@@ -26,13 +26,16 @@ const JOB_TAG = jobTag('');
 /**
  * The refs of a job item that are not files akuko generated (as the project
  * stands now): anything `classifyRef` does not call `generated`, except a ref
- * with no file at all. An allowed external file still counts: it is external.
+ * with no file at all and a shot's layout that still matches its sha256. An allowed external file still counts: it is external.
  */
 export async function externalRefs(p: AkukoProject, refs: readonly Pick<JobRef, 'id' | 'uri'>[], ctx: RefContext): Promise<string[]> {
   const out: string[] = [];
   for (const ref of refs) {
     const o = await classifyRef(p, ref, ctx);
-    if (o.kind !== 'generated' && o.kind !== 'no-file') out.push(ref.id);
+    // A shot's layout whose bytes still match its recorded sha256 is trusted as a generated file is (refs.ts §A shot's layout).
+    const layoutOk = (o.kind === 'layout' && o.actual === o.expected)
+      || (o.kind === 'layout-step' && o.generated && o.actual !== undefined && (o.expected === undefined || o.actual === o.expected));
+    if (o.kind !== 'generated' && o.kind !== 'no-file' && !layoutOk) out.push(ref.id);
   }
   return out;
 }

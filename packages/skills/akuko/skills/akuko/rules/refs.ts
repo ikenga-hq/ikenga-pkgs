@@ -2,10 +2,35 @@
  * akuko — project rules: where a reference file came from (WP-26).
  *
  * Every reference a job would send is either **generated** (akuko made it
- * through a paid provider and the ledger shows it) or **external** (anything
- * else: a photo the person supplied, a file brought back by hand for a manual
- * job, a file on a web server). An external file may be uploaded only when
- * its content hash is in `rules.uploads.allow` (`check.ts`).
+ * through a paid provider and the ledger shows it), a shot's **layout** (see
+ * below), or **external** (anything else: a photo the person supplied, a file
+ * brought back by hand for a manual job, a file on a web server). An external
+ * file may be uploaded only when its content hash is in `rules.uploads.allow`
+ * (`check.ts`).
+ *
+ * ## A shot's layout
+ *
+ * `shot.layout` is a plain 3D-blockout render the agent made from a script in
+ * the project and recorded with `keyframes/cli.ts layout`, which stores it and
+ * writes its sha256 into the shot. A ref is that layout when its id is
+ * `<shot>_layout` (`layoutRefId`), no asset has that id, a shot has that
+ * layout, and the ref's uri (when it carries one) is the layout's uri. It is
+ * not in `rules.uploads.allow` and does not need to be: the record in the
+ * project is its provenance, as the ledger is a generated file's. It is sent
+ * only while the bytes still hash to the recorded sha256: a changed file is
+ * `layout-changed` and a missing or unreadable one `uploads`, both hard
+ * (`check.ts`). It may be sent only for its own shot.
+ *
+ * ## An earlier step of a key frame made from its layout
+ *
+ * A key frame made from its layout by a paid provider runs in steps; each step
+ * after the first edits the one before, whose file is recorded on the key frame
+ * (`layout_steps`), not as an asset. A ref is such a step when its id is
+ * `<key frame>_step<n>` (`layoutStepRefId`), no asset has that id, and the key
+ * frame's n-th recorded step has the ref's uri. It counts as generated when the
+ * ledger has a done entry of a paid provider for its job and that key frame (or
+ * a done allowance entry linked to its job), and is then held to the same
+ * sha256 check as any generated file. It may be sent only for its own shot.
  *
  * ## "Generated", precisely
  *
@@ -303,6 +328,10 @@ export type RefOrigin =
   /** `verified`: the asset has a sha256 `file.hash` and the bytes on disk match it. */
   | { kind: 'generated'; asset: Asset; job: string; verified: boolean }
   | { kind: 'generated-changed'; asset: Asset; job: string; uri: string; expected: string; actual: string }
+  /** A shot's recorded layout; `actual` is the bytes' sha256 (equal to `expected` when unchanged), undefined when they can't be read. */
+  | { kind: 'layout'; shot: string; uri: string; expected: string; actual?: string; reason?: 'missing' | 'remote' | 'unreadable' }
+  /** An earlier step of a key frame made from its layout (see the header); `expected` is its recorded sha256, when there is one. */
+  | { kind: 'layout-step'; asset: Asset; n: number; uri: string; job: string; generated: boolean; expected?: string; actual?: string; reason?: 'missing' | 'remote' | 'unreadable' }
   /** `slice`: the asset is a slice akuko's cutter recorded; `sliceProblem` says why it can't count as one. */
   | { kind: 'external'; uri: string; sha256: string; asset?: Asset; slice?: SliceOf; sliceProblem?: string }
   | { kind: 'unverifiable'; uri: string; reason: 'missing' | 'remote' | 'unreadable'; asset?: Asset; detail?: string }
@@ -337,7 +366,42 @@ async function sliceProblem(p: AkukoProject, asset: Asset, slice: SliceOf, uri: 
   return undefined;
 }
 
+/** The shot whose recorded layout a ref is, when it is one (see the header). */
+export function layoutShotOf(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>): { shot: string; uri: string; sha256: string } | undefined {
+  if (!ref.id.endsWith('_layout') || p.assets.some((a) => a.id === ref.id)) return undefined;
+  const shot = p.shots.find((s) => `${s.id}_layout` === ref.id);
+  if (!shot?.layout || (ref.uri !== undefined && ref.uri !== shot.layout.uri)) return undefined;
+  return { shot: shot.id, uri: shot.layout.uri, sha256: shot.layout.sha256 };
+}
+
+/** The recorded earlier step of a key frame made from its layout that a ref is, when it is one (see the header). */
+export function layoutStepOf(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>): { asset: Asset; n: number; uri: string; job: string; hash?: string } | undefined {
+  const m = /^(.+)_step(\d+)$/.exec(ref.id);
+  if (!m || p.assets.some((a) => a.id === ref.id)) return undefined;
+  const asset = p.assets.find((a) => a.id === m[1]);
+  const n = Number(m[2]);
+  const step = asset?.layout_steps?.[n - 1];
+  if (!asset || !step || (ref.uri !== undefined && ref.uri !== step.uri)) return undefined;
+  return { asset, n, uri: step.uri, job: step.job, ...(step.hash !== undefined && SHA256.test(step.hash) ? { hash: step.hash } : {}) };
+}
+
 export async function classifyRef(p: AkukoProject, ref: Pick<JobRef, 'id' | 'uri'>, ctx: RefContext): Promise<RefOrigin> {
+  const st = layoutStepOf(p, ref);
+  if (st) {
+    const forUnit = (u: string): boolean => u === st.asset.id || u === st.asset.owner;
+    const generated = p.ledger.some((e) => e.status === 'done' && forUnit(e.unit) && (
+      (e.job === st.job && e.provider !== MANUAL_PROVIDER && e.allowance === undefined) || e.allowance?.job === st.job));
+    const h = await hashUri(st.uri, ctx.projectDir, ctx.cache);
+    const base = { kind: 'layout-step' as const, asset: st.asset, n: st.n, uri: st.uri, job: st.job, generated, ...(st.hash ? { expected: st.hash } : {}) };
+    return h.ok ? { ...base, actual: h.sha256 } : { ...base, reason: h.reason };
+  }
+  const lay = layoutShotOf(p, ref);
+  if (lay) {
+    const h = await hashUri(lay.uri, ctx.projectDir, ctx.cache);
+    return h.ok
+      ? { kind: 'layout', shot: lay.shot, uri: lay.uri, expected: lay.sha256, actual: h.sha256 }
+      : { kind: 'layout', shot: lay.shot, uri: lay.uri, expected: lay.sha256, reason: h.reason };
+  }
   const asset = refAsset(p, ref);
   const uri = ref.uri ?? asset?.file?.uri;
   if (uri === undefined) return { kind: 'no-file' };

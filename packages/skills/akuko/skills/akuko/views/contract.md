@@ -78,11 +78,12 @@ A control that writes a decision is marked `data-akuko-action="<action>"` with `
 | `approve-spend` | a job `awaiting-approval` | `{action: "approve-spend", text: "approve <amount> <CUR>"}` | **The text is the amount the person was shown**: see §7 |
 | `decline-spend` | same | `{action: "decline-spend"}` | |
 | `undo` | the unit or job of an earlier decision | `{action: "undo", undoes: <that decision's id>}` | Reverses exactly that decision |
+| `dismiss-flag` | an open quality flag on a unit | `{action: "dismiss-flag", flag: <flag id>}` | One click, one flag; see "Quality flags" below. `request-changes` and `note` may also carry `flag` |
 
 Every record validates against `views/decision.schema.json`:
 
 ```ts
-{ id: uuid, action, unit, stage /* the unit's or job's stage */, text?, undoes?,
+{ id: uuid, action, unit, stage /* the unit's or job's stage */, text?, undoes?, flag? /* a quality flag id */,
   by: /* viewer id when the host knows it, else "you" — never an agent name */,
   at: /* ISO timestamp with seconds and zone */, view: "<manifest id>@<version>" }
 ```
@@ -100,13 +101,27 @@ A view may let the person approve many units in one confirmed action: a whole pa
 5. **Undo.** After a batch, a control marked `data-akuko-batch-undo="<batch uuid>"` undoes the whole batch in one click: it writes one ordinary `undo` per approval of that batch still standing (each `undoes` that approval), with the same ending in `text`.
 6. **No automation.** No timer, page event, hover, focus, key press or load opens the confirm step or confirms it. A view that writes a batch any other way (an opener that approves at once, a confirm with no list, a list that is not what is written, a batch including a unit it may not) fails check-view (§6 R1).
 
-Folding accepts these records like any `approve` from a conformed view (§8), and refuses (`batch-ineligible`, with a notice on the unit) a batch-tagged `approve` on a unit that was sent back, or on an asset with no file. A chat reply never makes a batch: `chat@1` approvals stay one unit per reply.
+Folding accepts these records like any `approve` from a conformed view (§8), and refuses (`batch-ineligible`, with a notice on the unit) a batch-tagged `approve` on a unit that was sent back, or on an asset with no file. A chat reply makes a batch only through `review/chat.ts batch` (`../actions/review.md` §1b): the same list, shown in full, confirmed by the one exact reply `approve all <N> <scope words>`, written as N ordinary `chat@1` approvals sharing ` · batch <uuid>`. Folding refuses such a batch whole (`chat-batch-mismatch`) unless exactly N records with that text arrive, one per unit, and refuses each record as `batch-ineligible` on the same terms as a board batch.
+
+### Quality flags
+
+A unit may carry **quality flags**: problems an agent spotted in what its current stage produced (`by_stage[<stage>].flags`, `lib/state.md` §Quality flags). Showing them is optional; a view that shows one is held to this:
+
+1. **Shown, never acted on.** Each open flag shows what is wrong (`text`), its kind and severity, the file looked at (`evidence`), who flagged it (`source`) and, when there is one, the suggested change. A badge with the count of open flags on the unit's card is recommended. Nothing about a flag is written, sent, ticked or pre-selected while the page opens or idles.
+2. **Controls.** Each control names the unit (`data-akuko-unit`) and the flag (`data-akuko-flag="<flag id>"`):
+   - **Send back with this**: `data-akuko-action="request-changes"`. Its click writes nothing: it opens the composer (`textarea[data-akuko-text]` + `[data-akuko-submit]`) **with the flag's `suggested_change` in it** (else its `text`), for the person to edit. Only their submit writes one `request-changes` with their text and `flag: <id>`.
+   - **Dismiss**: `data-akuko-action="dismiss-flag"`. One click writes one `{action: "dismiss-flag", flag: <id>}`. Offer an Undo for it (an ordinary `undo` naming it).
+   - **Note**: `data-akuko-action="note"`, the note composer; its submit writes one `note` with `flag: <id>` (the flag stays open).
+3. **What the person sees after.** A flag a decision on the page closed is shown as closed (or not at all) until akuko folds it; folding sets its `status` (`accepted` / `dismissed`) from the decisions.
+4. **Batches.** A unit with an open `block` flag is left out of every confirmed batch and the confirm step says so (folding refuses one anyway: `batch-ineligible`).
+
+check-view runs these on a copy of the fixture with flags on every unit waiting for review (`expected.mjs#flagProject`, the five E01 findings): Dismiss writes exactly one `dismiss-flag` naming its flag (`wrong-flag`); "Send back with this" writes nothing on click (`flag-auto-send`), opens a composer that starts from the suggested change (`flag-not-prefilled`), and its submit writes one `request-changes` carrying the flag. A view that shows no flag controls skips this.
 
 ### The decision writer
 
-Inline `scripts/check-view/decision-writer.js` verbatim, then call `akukoDecisions.emit({action, unit, stage, text?, undoes?})` from a person's click, submit or key press, **once per unit**. It fills `id`, `by`, `at` and `view`. It keeps every decision in a localStorage outbox (`akuko-outbox:<slug>`) and sends each one to the host's store. It also offers `all()`, `jsonl()`, `store()` and `onChange(fn)`. A view may write the stores itself instead, as long as what lands in each store is the same.
+Inline `scripts/check-view/decision-writer.js` verbatim, then call `akukoDecisions.emit({action, unit, stage, text?, undoes?, flag?})` from a person's click, submit or key press, **once per unit**. It fills `id`, `by`, `at` and `view`. It keeps every decision in a localStorage outbox (`akuko-outbox:<slug>`) and sends each one to the host's store. It also offers `all()`, `jsonl()`, `store()` and `onChange(fn)`. A view may write the stores itself instead, as long as what lands in each store is the same.
 
-**The current writer is v2** (its first line says `akuko-decision-writer v2`). v2 changes one thing from v1: on load it re-posts the outbox to the Ikenga bridge **only when the outbox holds something** (`if (outbox.length) toIkenga();`). v1 posted on every load, so after a pane remount it posted an empty list over the shell's stored one (§5 Host C). A page that inlines the writer must inline the **current canonical block byte for byte** (line endings aside): check-view fails a stale or edited copy with `stale-writer`, naming the version it found. When the writer changes, every board re-inlines it, bumps its `version` and is checked again. The writer is inlined **once**; `stale-writer` also fails a page that inlines it twice, defines a second writer beside it, or defines `window.akukoDecisions` without the canonical block (a view that writes the stores itself must not use that name).
+**The current writer is v3** (its first line says `akuko-decision-writer v3`). v3 adds one line to v2: it copies `flag` into the record when the control passes one (quality flags). check-view still accepts the frozen v2 block byte for byte (`scripts/check-view/decision-writer-v2.js`), so pages built on v2 keep conforming; they just cannot write a flag decision. v2 changed one thing from v1: on load it re-posts the outbox to the Ikenga bridge **only when the outbox holds something** (`if (outbox.length) toIkenga();`). v1 posted on every load, so after a pane remount it posted an empty list over the shell's stored one (§5 Host C). A page that inlines the writer must inline the **current canonical block byte for byte** (line endings aside): check-view fails a stale or edited copy with `stale-writer`, naming the version it found. When the writer changes, every board re-inlines it, bumps its `version` and is checked again. The writer is inlined **once**; `stale-writer` also fails a page that inlines it twice, defines a second writer beside it, or defines `window.akukoDecisions` without the canonical block (a view that writes the stores itself must not use that name).
 
 ## 5. Where decisions land, per host
 

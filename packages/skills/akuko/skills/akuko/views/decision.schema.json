@@ -104,6 +104,11 @@
             "text": {
               "type": "string",
               "minLength": 1
+            },
+            "flag": {
+              "type": "string",
+              "pattern": "^flag_[0-9a-f]{8,}$",
+              "description": "The quality flag this send-back takes up; folding marks it accepted."
             }
           },
           "required": [
@@ -146,6 +151,10 @@
             "text": {
               "type": "string",
               "minLength": 1
+            },
+            "flag": {
+              "$ref": "#/definitions/Decision/anyOf/1/properties/flag",
+              "description": "The quality flag this note is about; the flag stays open."
             }
           },
           "required": [
@@ -282,6 +291,52 @@
             "view",
             "action",
             "undoes"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "dismiss-flag"
+            },
+            "flag": {
+              "type": "string",
+              "pattern": "^flag_[0-9a-f]{8,}$",
+              "description": "The quality flag the person dismissed."
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "flag"
           ],
           "additionalProperties": false
         }

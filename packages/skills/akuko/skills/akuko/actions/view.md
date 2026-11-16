@@ -122,12 +122,14 @@ Stop. Never approve anything yourself, and do not run the next stage.
 
 ## Real projects: the board for a long shot list, and the sign-off page
 
-**The default board (`default-board@0.8`)** shows the project's pictures (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
+**The default board (`default-board@0.10`)** shows the project's pictures, the AI quality flags an agent raised (each with Send back with this / Dismiss / Note: `lib/state.md` §Quality flags), (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
 
 - A **Part** filter (P1…P10 and "All parts") shows one part at a time: its scenes, shots, cards and script. A link can open one part: `views/default-board.html#part=P7`. The "your move" counts stay for the whole film.
 - Shots on a master clock show their film time (`m:ss.ss`); the shot detail adds part, tier, framing, lighting, motion note, dialogue lines, the negative prompt and the sheet row (and "Left the sheet" for a removed row).
 - **Cards** (title, part cards, credits) appear in the shot list at their film time; a person approves each once.
 - **Rules** (read-only) and **Gates** panels sit beside Bible and Ledger: each gate's scope, how much of it is approved, and who signed it and how. The board can't sign a gate.
+- **Room for the shot list** (`@0.10`): the columns are resizable (drag the line between Script, Shots and the side panel, or focus it and use the arrow keys; Enter or a double-click resets), and the widths are kept per project in the browser. On a window under 900px tall the header is one slim row; the **Compact** button switches it either way and is remembered. The stage strip counts the current stage's own units (key frames, not shots).
+- **Old decisions in a browser.** A decision kept in the browser that akuko never folded, made before one akuko has folded on the same unit, is overtaken: the board shows the project's answer, and "Copy decisions for akuko" leaves it out. Nothing is deleted from the browser.
 
 When the person asks "show me P7", publish the default board and give them the `#part=P7` link; don't design a new page.
 

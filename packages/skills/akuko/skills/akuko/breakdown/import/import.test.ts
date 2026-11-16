@@ -552,6 +552,58 @@ describe('the command line', () => {
     assert.equal(existsSync(join(project, 'akuko.json')), false);
   });
 
+  it('problems already in the project do not block a re-import: they are reported, the import is written, the ledger is kept as it was', async () => {
+    const { project, args } = await setup();
+    assert.equal((await run(args, T0)).code, 0);
+    const file = join(project, 'akuko.json');
+    const p = JSON.parse(await readFile(file, 'utf8')) as AkukoProject;
+    // E01's shape: zero-money allowance records for style frames that were never project units (accepted by integrity) ...
+    const outside = { id: 'allow_canva.SF-A.1', ts: '2026-11-12T16:34:26.119Z', provider: 'canva', model: 'generate-image', unit: 'SF-A', estimate: 0, actual: 0, status: 'done', allowance: { service: 'canva', units: 1 } };
+    // ... and one real problem that was there before the import (an allowance entry that claims money, for no unit)
+    const bad = { ...outside, id: 'allow_canva.ghost.1', unit: 'ghost', estimate: 1 };
+    p.ledger = [outside, bad] as AkukoProject['ledger'];
+    await writeFile(file, JSON.stringify(p, null, 2));
+    const problems = checkIntegrity(AkukoProjectSchema.parse(p)).map((x) => x.message);
+    assert.ok(!problems.some((m) => m.includes('SF-A')), 'a zero-money allowance record outside the project is not a problem');
+    assert.ok(problems.some((m) => m.includes('"ghost"')), 'an entry that costs money must name a unit');
+
+    const r = await run([...args.filter((x) => x !== '--title' && x !== 'Synthetic')], T1);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /Integrity: this import introduces no problems\./);
+    assert.match(r.out, /Already in the project before this import \(not a reason to refuse; fix them separately\): 2:/);
+    assert.match(r.out, /Wrote /);
+    const after = JSON.parse(await readFile(file, 'utf8')) as AkukoProject;
+    assert.deepEqual(after.ledger, p.ledger, 'spend history is kept exactly');
+
+    // a problem the import itself introduces is still refused, with the old ones beside it
+    const short = join(project, '..', 'short.wav');
+    await writeWav(short, 10);
+    const before = await readFile(file, 'utf8');
+    const refused = await run([...args.slice(0, args.indexOf('--master')), '--master', short, ...args.slice(args.indexOf('--master') + 2)], T1);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /problems this import would introduce:\n.*past the end of the master/);
+    assert.match(refused.out, /Nothing written\./);
+    assert.equal(await readFile(file, 'utf8'), before);
+  });
+
+  it('a re-import keeps the layout and source frame of a shot, which are set by hand, not by the sheet', async () => {
+    const { project, args } = await setup();
+    assert.equal((await run(args, T0)).code, 0);
+    const file = join(project, 'akuko.json');
+    const p = JSON.parse(await readFile(file, 'utf8')) as AkukoProject;
+    const layout = { uri: 'refs/S01-010_layout.png', sha256: 'a'.repeat(64), mime: 'image/png', from: 'Blender/build_room.py', set_at: '2026-11-10T09:00:00Z' };
+    const shot = p.shots.find((s) => s.id === 'S01-010')!;
+    shot.layout = layout;
+    shot.source_frame = 'S01-020';
+    await writeFile(file, JSON.stringify(p, null, 2));
+    const r = await run([...args.filter((x) => x !== '--title' && x !== 'Synthetic')], T1);
+    assert.equal(r.code, 0, r.out);
+    const after = JSON.parse(await readFile(file, 'utf8')) as AkukoProject;
+    const kept = after.shots.find((s) => s.id === 'S01-010')!;
+    assert.deepEqual(kept.layout, layout);
+    assert.equal(kept.source_frame, 'S01-020');
+  });
+
   it('the import route completes intake without script/source.md', async () => {
     const dir = await tmp();
     const project = join(dir, 'p');

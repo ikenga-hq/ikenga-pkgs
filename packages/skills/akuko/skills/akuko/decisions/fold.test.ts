@@ -16,6 +16,7 @@ import { CHAT_VIEW, loadConformedFile } from './conformed.ts';
 import { batchOf, compareDecisions, foldDecisions, isAgentAuthor, type FoldOptions } from './fold.ts';
 import { readIkengaStore } from './ikenga.ts';
 import { parseJsonl } from './jsonl.ts';
+import { addFlag } from '../review/flags.ts';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const FX = here('./__fixtures__/');
@@ -606,9 +607,152 @@ describe('confirmed batch approval', () => {
     assert.equal(bytes(fold(fixture(), [...ap, ...undos]).project), bytes(r.project));
   });
 
-  it('a batch is never accepted from chat, nor from an agent or an unchecked view', () => {
-    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: text() })]).report.rejected[0]?.code, 'chat-without-words');
+  it('a batch from chat counts only whole (review/chat.ts batch); never from an agent or an unchecked view', () => {
+    // "Approve all 2 shots in P1" with one record: not the batch the reply names
+    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: text() })]).report.rejected[0]?.code, 'chat-batch-mismatch');
+    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: text('yes all of them') })]).report.rejected[0]?.code, 'chat-without-words');
+    const whole = fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: text() }), dec('approve', 'sc4_sh2', 2, { view: CHAT_VIEW, text: text() })]);
+    assert.deepEqual(whole.report.rejected, []);
     assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { by: 'claude', text: text() })]).report.rejected[0]?.code, 'not-a-person');
     assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: 'freehand:x@1', text: text() })]).report.rejected[0]?.code, 'view-not-conformed');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// AI quality flags (lib/state.md §Quality flags): folding closes a flag only on a person's decision
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('quality flags', () => {
+  const FLAG = 'flag_0000e01a';
+  /** The fixture with one open flag on the old man's turnaround (bible, pending-review). */
+  const flagged = (severity: 'info' | 'warn' | 'block' = 'warn'): AkukoProject => addFlag(fixture(), {
+    unit: 'char_oldman_turnaround', kind: 'wardrobe-logo', severity, text: 'Patch on cap; bible says plain cap',
+    suggested_change: 'Plain cap with no patch, logo or lettering.', source: 'agent:test', evidence: { uri: 'bible/characters/char_oldman/refs/char_oldman_turnaround.png' },
+  }, { id: FLAG, now: '2026-11-07T11:00:00Z' }).project;
+  const flagOn = (p: AkukoProject) => unit(p, 'char_oldman_turnaround').by_stage!.bible!.flags![0]!;
+  const T = 'char_oldman_turnaround';
+
+  it('raising a flag changes no status, comment, stage or spend', () => {
+    const before = fixture();
+    const after = flagged();
+    const u0 = unit(before, T), u1 = unit(after, T);
+    assert.equal(u1.status, u0.status);
+    assert.deepEqual(u1.comments, u0.comments);
+    assert.equal(u1.stage, u0.stage);
+    assert.deepEqual(after.stages, before.stages);
+    assert.deepEqual(after.pending_spend, before.pending_spend);
+    assert.deepEqual(after.decisions, before.decisions);
+    assert.deepEqual(checkIntegrity(after), []);
+    // and folding nothing leaves it open
+    assert.equal(fold(after, []).report.changed, false);
+    assert.equal(flagOn(fold(after, []).project).status, 'open');
+  });
+
+  it('"send back with this": a person\'s request-changes carrying the flag sends the unit back and marks the flag accepted', () => {
+    const rc = dec('request-changes', T, 1, { text: 'Plain cap, no patch.', flag: FLAG });
+    const r = fold(flagged(), [rc]);
+    assert.deepEqual(r.report.applied, [rc.id]);
+    assert.equal(unit(r.project, T).status, 'needs-rework');
+    assert.deepEqual([flagOn(r.project).status, flagOn(r.project).decision], ['accepted', rc.id]);
+    assert.deepEqual(checkIntegrity(r.project), []);
+    const again = fold(r.project, [rc]);
+    assert.equal(again.report.changed, false, 'idempotent');
+    // undo: the unit goes back and the flag reopens
+    const u = dec('undo', T, 2, { undoes: rc.id });
+    const back = fold(r.project, [u]);
+    assert.equal(unit(back.project, T).status, 'pending-review');
+    assert.equal(flagOn(back.project).status, 'open');
+    assert.equal(flagOn(back.project).decision, undefined);
+    assert.deepEqual(checkIntegrity(back.project), []);
+  });
+
+  it('Dismiss: one dismiss-flag closes the flag and nothing else; undo reopens it', () => {
+    const p = flagged();
+    const d = dec('dismiss-flag', T, 1, { flag: FLAG });
+    const r = fold(p, [d]);
+    assert.deepEqual(r.report.applied, [d.id]);
+    assert.deepEqual([flagOn(r.project).status, flagOn(r.project).decision], ['dismissed', d.id]);
+    assert.equal(unit(r.project, T).status, unit(p, T).status);
+    assert.deepEqual(unit(r.project, T).comments, unit(p, T).comments, 'a dismissal without words leaves no comment');
+    assert.deepEqual(checkIntegrity(r.project), []);
+    const u = dec('undo', T, 2, { undoes: d.id });
+    const back = fold(r.project, [u]);
+    assert.deepEqual(back.report.applied, [u.id]);
+    assert.equal(flagOn(back.project).status, 'open');
+    // with words, the person's words are a comment carrying the decision
+    const w = dec('dismiss-flag', T, 3, { flag: FLAG, text: 'The patch is fine for this scene.' });
+    const worded = fold(back.project, [w]).project;
+    assert.ok(unit(worded, T).comments.some((c) => c.decision === w.id && c.text === 'The patch is fine for this scene.'));
+  });
+
+  it('only a person dismisses, from a checked view or in the exact chat words', () => {
+    const agent = dec('dismiss-flag', T, 1, { flag: FLAG, by: 'agent' });
+    let r = fold(flagged(), [agent]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['not-a-person']);
+    assert.equal(flagOn(r.project).status, 'open');
+    assert.ok(unit(r.project, T).comments.some((c) => c.author === 'agent' && c.decision === agent.id && c.text.startsWith('Not applied: ')));
+    r = fold(flagged(), [dec('dismiss-flag', T, 1, { flag: FLAG, view: 'freehand:x@1' })]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['view-not-conformed']);
+    r = fold(flagged(), [dec('dismiss-flag', T, 1, { flag: FLAG, view: CHAT_VIEW, text: 'yes drop it' })]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['chat-without-words']);
+    const chat = dec('dismiss-flag', T, 2, { flag: FLAG, view: CHAT_VIEW, text: `dismiss ${FLAG}` });
+    r = fold(flagged(), [chat]);
+    assert.deepEqual(r.report.rejected, []);
+    assert.equal(flagOn(r.project).status, 'dismissed');
+  });
+
+  it('in chat, "approve <unit>" also dismisses a flag on that unit (approve as is), but not a flag on another unit', () => {
+    let r = fold(flagged(), [dec('dismiss-flag', T, 1, { flag: FLAG, view: CHAT_VIEW, text: `Approve ${T}` })]);
+    assert.deepEqual(r.report.rejected, []);
+    assert.equal(flagOn(r.project).status, 'dismissed');
+    r = fold(flagged(), [dec('dismiss-flag', T, 1, { flag: FLAG, view: CHAT_VIEW, text: 'approve sc4_sh2' })]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['chat-without-words']);
+    assert.equal(flagOn(r.project).status, 'open');
+  });
+
+  it('an unknown flag is reported; a second closer finds the flag closed; the first in the total order wins, whatever the arrival order', () => {
+    let r = fold(flagged(), [dec('dismiss-flag', T, 1, { flag: 'flag_99999999' })]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['unknown-flag']);
+    assert.equal(flagOn(r.project).status, 'open');
+    const first = dec('request-changes', T, 1, { text: 'No patch.', flag: FLAG });
+    const second = dec('dismiss-flag', T, 2, { flag: FLAG });
+    const a = fold(flagged(), [first, second]);
+    const b = fold(flagged(), [second, first]);
+    assert.equal(bytes(a.project), bytes(b.project));
+    assert.deepEqual([flagOn(a.project).status, flagOn(a.project).decision], ['accepted', first.id]);
+    assert.deepEqual(a.report.rejected.map((x) => [x.id, x.code]), [[second.id, 'flag-closed']]);
+    // one at a time, the late one slots in the same way
+    const c = fold(fold(flagged(), [second]).project, [first]);
+    assert.equal(bytes(c.project), bytes(a.project));
+  });
+
+  it('a note on a flag keeps it open; a send-back without the flag leaves it open', () => {
+    const r = fold(flagged(), [dec('note', T, 1, { text: 'Looks fine to me.', flag: FLAG }), dec('request-changes', T, 2, { text: 'Darker coat.' })]);
+    assert.equal(flagOn(r.project).status, 'open');
+    assert.equal(unit(r.project, T).status, 'needs-rework');
+  });
+
+  it('a confirmed batch leaves out a unit with an open block flag; one dismissed before the batch does not', () => {
+    const bid = '11111111-2222-4333-8444-555555555555';
+    const ap = dec('approve', T, 2, { text: `Approve all bible entries (3) · batch ${bid}` });
+    const withFile = (p: AkukoProject) => { const a = p.assets.find((x) => x.id === T)!; a.file = { uri: 'bible/t.png' }; return p; };
+    let r = fold(withFile(flagged('block')), [ap]);
+    assert.deepEqual(r.report.rejected.map((x) => x.code), ['batch-ineligible']);
+    assert.equal(unit(r.project, T).status, 'pending-review');
+    assert.ok(unit(r.project, T).comments.some((c) => c.decision === ap.id && /open block flag/.test(c.text)));
+    // a warn flag never blocks a batch
+    const ap2 = dec('approve', T, 3, { text: `Approve all bible entries (3) · batch ${bid}` });
+    r = fold(withFile(flagged('warn')), [ap2]);
+    assert.deepEqual(r.report.rejected, []);
+    assert.equal(unit(r.project, T).status, 'approved');
+    const dis = dec('dismiss-flag', T, 1, { flag: FLAG });
+    const ap3 = dec('approve', T, 4, { text: `Approve all bible entries (3) · batch ${bid}` });
+    r = fold(withFile(flagged('block')), [dis, ap3]);
+    assert.deepEqual(r.report.rejected, []);
+    assert.equal(unit(r.project, T).status, 'approved');
+    // and a plain (non-batch) approval is the person's own call on that one unit, block flag or not
+    r = fold(flagged('block'), [dec('approve', T, 5)]);
+    assert.equal(unit(r.project, T).status, 'approved');
+    assert.equal(flagOn(r.project).status, 'open', 'approving does not close the flag');
   });
 });

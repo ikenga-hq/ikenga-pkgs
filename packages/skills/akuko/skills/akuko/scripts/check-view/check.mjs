@@ -16,7 +16,7 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 import { blankComments, conformanceHash, escapeJsonForScript, findJsonBlock, PROJECT_BLOCK } from './hash.mjs';
 import { decisionWriteSigns } from './predicates.mjs';
 import { hiddenReason, smallText } from './hidden.mjs';
-import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, removedAt, unitsById, batchOf, batchProject, batchUnits, isBatchScope, partsOf } from './expected.mjs';
+import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, removedAt, unitsById, batchOf, batchProject, batchUnits, isBatchScope, partsOf, flagProject, openFlags } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
@@ -26,6 +26,11 @@ export const DEFAULT_PROJECT = join(SKILL, 'fixtures', 'the-beating', 'akuko.jso
 /** The canonical decision writer: a page that inlines one carries it byte for byte (views/contract.md §Decision writer). */
 export const WRITER = readFileSync(join(HERE, 'decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').trim();
 export const WRITER_VERSION = /akuko-decision-writer (v\d+)/.exec(WRITER)?.[1] ?? 'v?';
+/**
+ * Earlier canonical writers a page may still inline, byte for byte. v2 is v3 without `flag` (quality flags,
+ * lib/state.md §Quality flags): a page with v2 works exactly as before, but cannot write a flag decision.
+ */
+export const LEGACY_WRITERS = { v2: readFileSync(join(HERE, 'decision-writer-v2.js'), 'utf8').replace(/\r\n/g, '\n').trim() };
 const VIEWS_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'views.schema.json'), 'utf8'));
 const DECISION_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'decision.schema.json'), 'utf8'));
 
@@ -45,6 +50,7 @@ const WIDTH = 1440;
 const EPS = 1e-9;
 let decisionsChecked = 0;
 let batchesChecked = 0;
+let flagsChecked = 0;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Static checks
@@ -111,11 +117,13 @@ export function staleWriter(html) {
   const fix = `inline the current canonical ${WRITER_VERSION} block (scripts/check-view/decision-writer.js) verbatim, once`;
   // a writer is anything that defines the global the decision API lives on (07a2 review C6)
   const defines = (c) => /(?<![\w$.])(?:window\s*\.\s*|window\s*\[\s*["'`])?akukoDecisions(?:["'`]\s*\])?\s*=(?!=)/.test(c) || /akuko-decision-writer/.test(c);
-  const copies = code.split(WRITER).length - 1;
-  if (copies > 1) return `the page inlines the decision writer ${copies} times; ${fix}`;
-  if (copies === 1) {
-    if (defines(code.replace(WRITER, ''))) return `the page defines another decision writer beside the canonical ${WRITER_VERSION} block; ${fix}`;
-    return null;
+  for (const [v, block] of [[WRITER_VERSION, WRITER], ...Object.entries(LEGACY_WRITERS)]) {
+    const copies = code.split(block).length - 1;
+    if (copies > 1) return `the page inlines the decision writer ${copies} times; ${fix}`;
+    if (copies === 1) {
+      if (defines(code.replace(block, ''))) return `the page defines another decision writer beside the canonical ${v} block; ${fix}`;
+      return null;
+    }
   }
   if (!defines(code)) return null;
   const found = /akuko-decision-writer (v\d+)/.exec(code)?.[1];
@@ -824,6 +832,12 @@ async function clickTests(html, p, manifest, fail) {
   //    the batch's Undo writes one undo per approval. Batches are optional: a view with no opener skips this.
   await batchTests(html, p, manifest, fail);
 
+  // 7. quality flags (lib/state.md §Quality flags), on a copy of the project with open flags: Dismiss writes one
+  //    dismiss-flag naming the flag; "Send back with this" writes nothing until the person submits its composer,
+  //    which starts from the flag's suggested change and writes one request-changes carrying the flag. Optional:
+  //    a view that shows no flag controls skips this.
+  await flagTests(html, p, manifest, fail);
+
   // 4. host C: the decision is posted to the Ikenga bridge, cumulatively
   // 5. no host store (a local file): the decision stays in the outbox, with a way to copy it out
   for (const host of ['C', 'local']) {
@@ -838,6 +852,57 @@ async function clickTests(html, p, manifest, fail) {
         if (![...page.d.querySelectorAll('[data-akuko-export]')].some((e) => !hiddenReason(page.w, e))) fail('contract', 'no-export', 'without a host store there is no visible "copy decisions for akuko" control (data-akuko-export)');
       }
     }
+    page.close();
+  }
+}
+
+async function flagTests(html, p0, manifest, fail) {
+  const p = flagProject(p0);
+  const units = unitsById(p);
+  const visible = (page, q) => [...page.d.querySelectorAll(q)].find((e) => !hiddenReason(page.w, e));
+  const ctlOf = (u, f) => (a) => `${sel('data-akuko-action', a)}${sel('data-akuko-unit', u.id)}${sel('data-akuko-flag', f.id)}`;
+  const all = [...units.values()].flatMap((u) => openFlags(u).map((f) => ({ u, f })));
+  const probe = await load(html, p, 'A');
+  const shown = all.filter(({ u, f }) => visible(probe, ctlOf(u, f)('dismiss-flag')));
+  probe.close();
+  // one flag on a shot and one on anything else are enough to check the controls (each check reloads the page)
+  const isShot = (u) => p.shots.some((s) => s.id === u.id);
+  const flags = [shown.find((x) => isShot(x.u)), shown.find((x) => !isShot(x.u))].filter(Boolean);
+  for (const { u, f } of flags) {
+    const ctl = ctlOf(u, f);
+    let page = await load(html, p, 'A');
+    const dismiss = visible(page, ctl('dismiss-flag'));
+    if (!dismiss) { page.close(); continue; }
+    flagsChecked++;
+    let r = await act(page, dismiss);
+    if (r.fresh.length !== 1) fail('R1', r.fresh.length ? 'batch-approve' : 'writes-nothing', `Dismiss on flag ${f.id} of ${u.id} wrote ${r.fresh.length} decisions`);
+    for (const dec of r.fresh) {
+      checkDecision(dec, page, p, { action: 'dismiss-flag', unit: u.id }, fail, manifest);
+      if (dec.flag !== f.id) fail('decision', 'wrong-flag', `Dismiss on flag ${f.id} of ${u.id} wrote flag ${JSON.stringify(dec.flag ?? null)}`);
+    }
+    page.close();
+
+    page = await load(html, p, 'A');
+    const send = visible(page, ctl('request-changes'));
+    if (!send) { fail('contract', 'missing-control', `flag ${f.id} of ${u.id} has a Dismiss but no "request-changes" control naming it (data-akuko-flag)`); page.close(); continue; }
+    r = await act(page, send);
+    if (r.fresh.length) { fail('R1', 'flag-auto-send', `"Send back with this" on flag ${f.id} of ${u.id} wrote ${r.fresh.map((x) => x.action).join(', ')} before the person submitted anything`); page.close(); continue; }
+    const ta = visible(page, 'textarea[data-akuko-text], input[data-akuko-text]');
+    const submit = visible(page, '[data-akuko-submit]');
+    if (!ta || !submit) { fail('contract', 'no-composer', `"Send back with this" on flag ${f.id} of ${u.id} opened no composer`); page.close(); continue; }
+    const start = f.suggested_change ?? f.text;
+    if (!String(ta.value).includes(start)) fail('contract', 'flag-not-prefilled', `the composer for flag ${f.id} starts with ${JSON.stringify(ta.value)}, not the flag's suggested change`);
+    const before = new Set(decisions(page).keys());
+    page.rec.epoch++;
+    click(page.w, submit);
+    await settle(page.w);
+    const fresh = [...decisions(page).entries()].filter(([id]) => !before.has(id)).map(([, v]) => v.d);
+    if (fresh.length !== 1) fail('decision', fresh.length ? 'batch-approve' : 'writes-nothing', `submitting the send-back for flag ${f.id} of ${u.id} wrote ${fresh.length} decisions`);
+    for (const dec of fresh) {
+      checkDecision(dec, page, p, { action: 'request-changes', unit: u.id, text: String(ta.value).trim() }, fail, manifest);
+      if (dec.flag !== f.id) fail('decision', 'wrong-flag', `the send-back for flag ${f.id} of ${u.id} wrote flag ${JSON.stringify(dec.flag ?? null)}`);
+    }
+    for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after a flag control: ${v}; views write decisions only`);
     page.close();
   }
 }
@@ -1088,6 +1153,7 @@ export async function checkView(html, opts = {}) {
   const sha256 = conformanceHash(html);
   decisionsChecked = 0;
   batchesChecked = 0;
+  flagsChecked = 0;
   let manifest = null;
   const raw = jsonBlock(html, 'akuko-view');
   if (raw === undefined) fail('contract', 'no-manifest', 'no <script type="application/json" id="akuko-view"> manifest');
@@ -1165,6 +1231,7 @@ export async function checkView(html, opts = {}) {
     failures,
     decisions_checked: decisionsChecked,
     batches_checked: batchesChecked,
+    flags_checked: flagsChecked,
     manual: ['R5 contrast ≥ 4.5:1 and body text ≥ 14px are checked by eye (designs/_spec.md)'],
   };
 }

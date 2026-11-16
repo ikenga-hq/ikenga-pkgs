@@ -116,13 +116,13 @@ export const isBatchScope = (p, scope) => scope === 'bible' || (/^part:/.test(sc
 
 /**
  * What a confirmed batch over one scope may approve, by the project's data: live units
- * `pending-review` (never `needs-rework`), and of assets only those with a file.
+ * `pending-review` (never `needs-rework`, never with an open `block` quality flag), and of assets only those with a file.
  * - `part:<id>`: the part's shots.
  * - `bible`: bible entries with no asset of their own, and assets of the bible (stage `bible`, or owned by a bible entry); cards and intake documents are not bible.
  */
 export function batchUnits(p, scope) {
   const live = (u) => removedAt(p, u) === undefined && !isIdleMotionUnit(p, u);
-  const waiting = (u) => live(u) && u.status === 'pending-review';
+  const waiting = (u) => live(u) && u.status === 'pending-review' && !hasBlockFlag(u);
   if (scope === 'bible') {
     const assetIds = new Set(p.assets.map((a) => a.id));
     const entries = bibleEntries(p);
@@ -156,5 +156,43 @@ export function batchProject(p) {
   if (loneEntry) loneEntry.status = 'pending-review';
   const fileless = q.assets.filter((a) => a.status === 'pending-review' && !a.file && a.kind !== 'card' && a.stage !== 'intake');
   if (fileless.length > 1) { const a = fileless[fileless.length - 1]; a.file = { uri: `bible/${a.id}.png`, mime: 'image/png' }; }
+  return q;
+}
+
+/** Open quality flags on a unit's current stage (lib/state.md §Quality flags). */
+export const openFlags = (u) => (u.by_stage?.[u.stage]?.flags ?? []).filter((f) => f.status === 'open');
+/** An open `block` flag keeps a unit out of every batch (decisions/fold.ts, batch-ineligible). */
+export const hasBlockFlag = (u) => openFlags(u).some((f) => f.severity === 'block');
+
+/** The E01 findings that made quality flags (default-board@0.9), as fixture flags. */
+export const FLAG_EXAMPLES = [
+  { kind: 'anatomy', severity: 'warn', text: 'Long slender neck', suggested_change: 'Shorter, thicker neck in proportion to the head and shoulders, as in the bible portrait.' },
+  { kind: 'style-drift', severity: 'warn', text: 'Near-photographic, not clay style', suggested_change: 'Make it read as hand-made clay: soft matte surfaces, visible sculpting, no photographic skin or lens detail.' },
+  { kind: 'wardrobe-logo', severity: 'warn', text: 'Patch on cap; bible says plain cap', suggested_change: 'Plain cap with no patch, logo or lettering.' },
+  { kind: 'anatomy', severity: 'warn', text: 'Tom looks short; should be ~6\'5"', suggested_change: 'Tom is about 6\'5": tall, a head above the people beside him.' },
+  { kind: 'text-in-image', severity: 'info', text: 'Name label dropped from turnaround', suggested_change: 'Keep the name label under the turnaround, as on the other sheets.' },
+];
+
+/**
+ * The project check-view runs the flag checks on: the fixture with open quality flags on every unit
+ * waiting for review (a file given to each such asset), drawn from FLAG_EXAMPLES. Ids are fixed so
+ * the check is repeatable.
+ */
+export function flagProject(p) {
+  const q = structuredClone(p);
+  let n = 0;
+  const add = (u, file) => {
+    const ex = FLAG_EXAMPLES[n % FLAG_EXAMPLES.length];
+    const id = `flag_${(0xc0ffee00 + n).toString(16)}`;
+    n++;
+    const rec = ((u.by_stage ??= {})[u.stage] ??= { status: u.status });
+    (rec.flags ??= []).push({ id, ts: '2026-11-14T09:00:00Z', stage: u.stage, ...ex, evidence: { uri: file ?? `board/panels/${u.id}-${u.stage}.svg` }, source: 'agent:check-view', status: 'open' });
+  };
+  for (const s of q.shots) if (s.status === 'pending-review' && removedAt(q, s) === undefined) add(s);
+  for (const a of q.assets) {
+    if (a.status !== 'pending-review' || removedAt(q, a) !== undefined || a.kind === 'card' || a.stage === 'intake') continue;
+    a.file ??= { uri: `bible/${a.id}.png`, mime: 'image/png' };
+    add(a, a.file.uri);
+  }
   return q;
 }

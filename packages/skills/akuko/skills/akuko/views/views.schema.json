@@ -145,7 +145,8 @@
         "note",
         "approve-spend",
         "decline-spend",
-        "undo"
+        "undo",
+        "dismiss-flag"
       ],
       "type": "string"
     },

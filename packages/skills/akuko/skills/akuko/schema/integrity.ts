@@ -83,7 +83,11 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
       if (ledgerIds.has(e.id)) add(`ledger[${i}].id`, `ledger id "${e.id}" is used twice`);
       ledgerIds.add(e.id);
     }
-    if (!unitIds.has(e.unit)) add(`ledger[${i}].unit`, `unknown unit "${e.unit}"`);
+    // A zero-money allowance record may name something that was never a project unit (E01's pre-bible style
+    // frames, recorded before `spend/cli.ts allowance` checked units): it is spend history, kept as it is.
+    // An entry that costs money must name a unit.
+    const outsideAllowance = e.allowance !== undefined && (e.estimate ?? 0) === 0 && (e.actual ?? 0) === 0;
+    if (!unitIds.has(e.unit) && !outsideAllowance) add(`ledger[${i}].unit`, `unknown unit "${e.unit}"`);
     if (e.job !== undefined && !jobIds.has(e.job)) add(`ledger[${i}].job`, `unknown job "${e.job}"`);
     if (e.reserved === true && e.status !== 'submitted') add(`ledger[${i}].reserved`, `only a submitted entry can be an unsent reservation, not a ${e.status} one`);
     if (e.allowance !== undefined && ((e.estimate ?? 0) !== 0 || (e.actual ?? 0) !== 0)) {
@@ -100,6 +104,28 @@ export function checkIntegrity(p: AkukoProject): IntegrityIssue[] {
       add(`decisions[${i}].undoes`, `unknown decision "${d.undoes}"`);
     }
   });
+
+  // Quality flags (lib/state.md §Quality flags): unique ids, filed under their own stage, closed only by a decision that names them.
+  const flagIds = new Set<string>();
+  const decisionById = new Map(p.decisions.map((d) => [d.id, d]));
+  for (const { unit } of listUnits(p)) {
+    for (const [stage, rec] of Object.entries(unit.by_stage ?? {})) {
+      (rec?.flags ?? []).forEach((f, k) => {
+        const at = `${unit.id}.by_stage.${stage}.flags[${k}]`;
+        if (flagIds.has(f.id)) add(at, `flag id "${f.id}" is used twice`);
+        flagIds.add(f.id);
+        if (f.stage !== stage) add(`${at}.stage`, `a flag filed under ${stage} says stage "${f.stage}"`);
+        if (f.status === 'open' && f.decision !== undefined) add(`${at}.decision`, 'an open flag names no decision');
+        if (f.status !== 'open') {
+          const d = f.decision === undefined ? undefined : decisionById.get(f.decision);
+          if (!d) add(`${at}.decision`, `a ${f.status} flag must name the decision that closed it`);
+          else if (d.unit !== unit.id || !('flag' in d) || d.flag !== f.id || d.action !== (f.status === 'accepted' ? 'request-changes' : 'dismiss-flag')) {
+            add(`${at}.decision`, `decision "${d.id}" is not a ${f.status === 'accepted' ? 'request-changes' : 'dismiss-flag'} of this flag on ${unit.id}`);
+          }
+        }
+      });
+    }
+  }
 
   checkRealProject(p, add, claim, sceneIds, bibleIds);
 
@@ -158,6 +184,8 @@ function checkRealProject(
     }
     // A lighting code is a style entry whose description holds the phrase.
     if (s.lighting !== undefined && !styleIds.has(s.lighting)) add(`shots[${i}].lighting`, `lighting "${s.lighting}" is not a bible.styles id`);
+    // A source frame is another shot's key frame.
+    if (s.source_frame !== undefined && (s.source_frame === s.id || !p.shots.some((x) => x.id === s.source_frame))) add(`shots[${i}].source_frame`, s.source_frame === s.id ? `${s.id} cannot be its own source frame` : `source frame "${s.source_frame}" is not a shot id`);
   });
 
   // Film times must not overlap within a scene (gaps are fine; touching is fine).

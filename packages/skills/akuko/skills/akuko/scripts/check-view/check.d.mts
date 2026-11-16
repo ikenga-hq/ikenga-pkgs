@@ -5,6 +5,7 @@ export declare const CHECKER: string;
 export declare const WRITER: string;
 /** Its version, e.g. "v2". */
 export declare const WRITER_VERSION: string;
+export declare const LEGACY_WRITERS: Record<string, string>;
 /** What is wrong with the decision writer a page inlines, or null (rule `stale-writer`). */
 export declare function staleWriter(html: string): string | null;
 /** The page with the project block replaced by `project` (every "<" written as <); undefined when it has no good block. */

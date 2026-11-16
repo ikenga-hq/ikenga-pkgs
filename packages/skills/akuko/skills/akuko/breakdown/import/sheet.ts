@@ -109,8 +109,26 @@ export interface ImportResult {
   summary: ImportSummary;
   warnings: string[];
   lint: LintIssue[];
-  /** Empty when the project is consistent. A non-empty list means "do not write". */
+  /** Problems this import introduces (not in the project before it). A non-empty list means "do not write". */
   integrity: IntegrityIssue[];
+  /** Problems the project already had before the import and still has: reported, not a reason to refuse. */
+  preexisting: IntegrityIssue[];
+}
+
+/**
+ * Split the problems after an import into the ones it introduced and the ones already there. Matched by
+ * message, counted (paths carry array indexes that an import can shift), so a second copy of an old problem is new.
+ */
+export function splitIntegrity(before: IntegrityIssue[], after: IntegrityIssue[]): { introduced: IntegrityIssue[]; preexisting: IntegrityIssue[] } {
+  const left = new Map<string, number>();
+  for (const x of before) left.set(x.message, (left.get(x.message) ?? 0) + 1);
+  const introduced: IntegrityIssue[] = [];
+  const preexisting: IntegrityIssue[] = [];
+  for (const x of after) {
+    const n = left.get(x.message) ?? 0;
+    if (n > 0) { left.set(x.message, n - 1); preexisting.push(x); } else introduced.push(x);
+  }
+  return { introduced, preexisting };
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
@@ -644,7 +662,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
   if (anyChange) out.project.updated_at = nowIso;
 
   const valid = AkukoProjectSchema.parse(out);
-  const integrity = checkIntegrity(valid);
+  const { introduced: integrity, preexisting } = splitIntegrity(checkIntegrity(project), checkIntegrity(valid));
 
   // what the project holds from the sheet now
   const live = <T extends { source?: SheetSource | undefined }>(xs: T[]) => xs.filter((x) => x.source?.kind === 'sheet' && x.source.removed_at === undefined);
@@ -669,7 +687,7 @@ export function importSheet(project: AkukoProject, input: ImportInput, opts: Imp
     ...lintShots(valid),
     ...(input.filmScript?.text !== undefined ? lintSheetIdsInScript(valid, input.filmScript.text) : []),
   ];
-  return { project: valid, summary, warnings, lint, integrity };
+  return { project: valid, summary, warnings, lint, integrity, preexisting };
 }
 
 // ── printing ─────────────────────────────────────────────────────────────
@@ -704,9 +722,13 @@ export function formatSummary(r: ImportResult, opts: { dryRun?: boolean; maxWarn
     if (r.warnings.length > max) out.push(`  ... and ${r.warnings.length - max} more`);
   }
   if (r.integrity.length > 0) {
-    out.push(`Integrity: ${r.integrity.length} problems:`);
+    out.push(`Integrity: ${r.integrity.length} problems this import would introduce:`);
     r.integrity.slice(0, 20).forEach((x) => out.push(`  ${x.path}: ${x.message}`));
-  } else out.push('Integrity: clean.');
+  } else out.push(r.preexisting.length > 0 ? 'Integrity: this import introduces no problems.' : 'Integrity: clean.');
+  if (r.preexisting.length > 0) {
+    out.push(`Already in the project before this import (not a reason to refuse; fix them separately): ${r.preexisting.length}:`);
+    r.preexisting.slice(0, 20).forEach((x) => out.push(`  ${x.path}: ${x.message}`));
+  }
   const errs = r.lint.filter((i) => i.severity === 'error').length;
   out.push(`Lint: ${errs} errors, ${r.lint.length - errs} warnings.`);
   return out.join('\n');

@@ -23,7 +23,7 @@
 import { createHash } from 'node:crypto';
 import { removedAt, type AkukoProject, type Asset, type BibleEntry, type Shot } from '../schema/akuko-project.ts';
 import { bibleAssets, roleOf } from '../bible/plan.ts';
-import { keyframeAssets, neededRefs, supersededRefs } from '../keyframes/plan.ts';
+import { keyframeAssets, layoutRefId, layoutState, madeInSteps, neededRefs, supersededRefs } from '../keyframes/plan.ts';
 
 export type Severity = 'low' | 'medium' | 'high';
 export const SEVERITIES: Severity[] = ['low', 'medium', 'high'];
@@ -42,6 +42,7 @@ export type CheckId =
   | 'too-many-principals'
   | 'mixed-model'
   | 'lookbook-mismatch'
+  | 'layout'
   | 'visual';
 
 export interface Finding {
@@ -105,11 +106,24 @@ const isPrincipal = (e: BibleEntry): boolean => e.role === undefined || /princip
 
 /** "Officers (x3)" matches as "Officers"; case-insensitive whole phrase. */
 const cleanName = (n: string): string => n.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
-const mentions = (text: string | undefined, name: string): boolean => {
-  const n = cleanName(name);
-  if (!text || n.length < 2) return false;
-  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}([^\\p{L}\\p{N}]|$)`, 'iu').test(text);
+/** `word` as a whole token: a letter, digit, hyphen or underscore next to it makes it part of a longer token. */
+const token = (text: string, word: string, flags: string): boolean => {
+  const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}_-])${esc}(?![\\p{L}\\p{N}_-])`, flags).test(text);
+};
+/**
+ * Whether a text names a bible entry: its id in the sheet's `[ID]` form, its id
+ * as a whole token, or its name as a whole token. A hyphen belongs to the token,
+ * so BLUE is not named by "cornflower-blue" nor TOM by "TOM-NOW" or
+ * "TOM-HOME". A single-word name must match its case (so "blue" in prose is
+ * not BLUE); a name of several words need not.
+ */
+const mentions = (text: string | undefined, e: Pick<BibleEntry, 'id' | 'name'>): boolean => {
+  if (!text) return false;
+  if (text.includes(`[${e.id}]`) || token(text, e.id, 'u')) return true;
+  const n = cleanName(e.name);
+  if (n.length < 2 || n === e.id) return false;
+  return token(text, n, n.includes(' ') ? 'iu' : 'u');
 };
 
 /** Bible asset ids a frame's `from:<id>@<fingerprint>` tags say it was made from. */
@@ -122,7 +136,8 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
   const out: Finding[] = [];
   const add = (check: CheckId, severity: Severity, text: string): void => { out.push({ source: 'structural', check, severity, text }); };
   const used = new Set(fromIds(a));
-  const needed = neededRefs(p, shot);
+  // A take made from its layout in two steps had only its characters' images; any other take, what attach or no layout needs.
+  const needed = neededRefs(p, shot, madeInSteps(a) ? 'two-step' : 'attach');
 
   // 1. Made with every principal's approved turnaround (portrait if none), the plate and the lookbook.
   for (const n of needed) {
@@ -134,6 +149,7 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
   // 2. The references are still the approved, current takes. Reuses the key-frame stage's own check.
   const characterImage = new Set(needed.filter((n) => n.kind === 'character').map((n) => n.asset.id));
   for (const id of supersededRefs(p, a)) {
+    if (id === layoutRefId(shot.id)) continue; // reported by check 7
     const dep = p.assets.find((x) => x.id === id);
     const why = !dep ? 'no longer exists' : dep.status !== 'approved' || !hasFile(dep) ? `is now ${dep.status}` : 'was replaced after this frame was made';
     add('superseded-reference', characterImage.has(id) ? 'high' : 'medium', `Made from ${id}, which ${why}; the frame may no longer match the approved look`);
@@ -145,9 +161,9 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
     // A single-word name ("Mara", "Hood") cannot be told from ordinary prose by a text match, so it is capped at low;
     // a multi-word name found in the action or blocking is medium.
     const single = cleanName(c.name).split(' ').length === 1;
-    if (mentions(shot.action, c.name) || shot.blocking.some((b) => mentions(b.who, c.name))) {
+    if (mentions(shot.action, c) || shot.blocking.some((b) => mentions(b.who, c))) {
       add('character-not-in-prompt', single ? 'low' : 'medium', `${c.name} is named in the shot's action or blocking but is not in its refs, so the prompt leaves them out`);
-    } else if (mentions(shot.script_line, c.name)) {
+    } else if (mentions(shot.script_line, c)) {
       add('character-not-in-prompt', 'low', `${c.name} is named in the shot's script line but is not in its refs`);
     }
   }
@@ -165,6 +181,11 @@ function structuralChecks(p: AkukoProject, a: Asset, shot: Shot): Finding[] {
   for (const id of used) {
     if (lookbooks.has(id) && !wantStyle.has(id)) add('lookbook-mismatch', 'medium', `Made with the lookbook ${id}, which is not the style this shot names`);
   }
+
+  // 7. The layout (a 3D-blockout render, role `layout`): the frame was made from the shot's current one.
+  const lay = layoutState(p, a);
+  if (lay === 'not-used') add('layout', 'medium', `Made without the layout ${shot.id} now has (${shot.layout?.uri}), so objects and figures may not sit where the blockout puts them`);
+  if (lay === 'changed') add('layout', 'medium', shot.layout ? `Made from an earlier layout; ${shot.id}'s layout is now ${shot.layout.uri}, so positions may differ from the current blockout` : `Made from a layout ${shot.id} no longer has`);
   return out;
 }
 

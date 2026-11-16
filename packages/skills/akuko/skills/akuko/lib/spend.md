@@ -171,6 +171,7 @@ The schema doc calls the ledger "append-only". The real rule is narrower:
   place, matched by `id`**, to `done` (with `actual`), `failed` or
   `cancelled`. It is not appended twice: the integrity check rejects
   repeated ids.
+- An entry names a project unit, with one exception. A **zero-money allowance record** (`allowance` set, estimate and actual 0) may name something that was never a project unit: integrity accepts it as spend history. E01's pre-bible style frames were recorded this way before `spend/cli.ts allowance` began refusing unknown units. An entry that costs money must name a unit.
 - Entries are never deleted, and ids are never reused. A retry opens new
   entries with the next attempt number.
 - `budget.spent` always equals the sum of `actual` over `done` entries,

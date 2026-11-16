@@ -15,6 +15,6 @@ export declare function loadWriter(opts: {
   ikenga?: boolean;
 }): {
   onLoad: BridgePost[];
-  emit(f: { action: string; unit: string; stage: string; text?: string; undoes?: string }): { decision: { id: string }; posts: BridgePost[] };
+  emit(f: { action: string; unit: string; stage: string; text?: string; undoes?: string; flag?: string }): { decision: { id: string }; posts: BridgePost[] };
   close(): void;
 };

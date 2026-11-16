@@ -58,6 +58,10 @@ All commands: `node --experimental-strip-types ../bible/cli.ts <command> --proje
 6. **Stop at the review gate.** Everything made is `pending-review` and the stage is `in-review`. The person reviews each image one at a time on the board. The next wave stays blocked until they approve the references it needs. Don't start it, and don't call anything approved.
 7. **After the person's answers**: fold, then `sync` (sets each entry's `refs[]` to its approved images and the stage state), then `step` again for the next wave. When the last image is approved the stage is `approved` and keyframes opens.
 
+## When you see a problem in an image
+
+After each ingest, look at the file against the entry and the style bible (proportions and height, wardrobe notes such as a plain cap, the house style and its negatives, a turnaround's name label). For each clear problem raise a quality flag with `review/flags.ts add` (`actions/review.md` §3b): it shows on the image's card with **Send back with this** / **Dismiss** / **Note** for the person. A flag changes nothing by itself, so keep presenting the image for review as usual. Then put each new flag to the person in chat at once, one at a time (`review/flags.ts next` / `decide`, `actions/review.md` §3b "In chat"): approve as is, send back with the suggestion, or dismiss.
+
 ## When a person sends an image back
 
 The person sends an image back with **Request changes** on its card in the Bible column or the bible lens (`default-board@0.8`, the same composer and decision as a shot), or in chat in their own words naming the image (`actions/review.md`). Folding turns it into `needs-rework` with their words. Run `step --units <asset id>` for it: the old file is cleared (it stays stored; the "Revised: …" comment says where), their words are added to the prompt, the new take fills the same asset, and it goes to `pending-review` again. A paid regeneration is a new job and needs a new approval. Never `ingest` a new file into an image that already has one and was not sent back: ingest refuses it (only `--new-take`, on the person's word, stores a separate take beside it). A unit sent back is never part of a batch approval.

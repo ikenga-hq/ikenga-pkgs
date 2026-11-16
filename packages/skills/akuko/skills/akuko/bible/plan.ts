@@ -208,12 +208,55 @@ const fileUri = (a: Asset): string => {
   return a.file.uri;
 };
 
-/** Text of the styles, used as the written part of "the film's look" in every prompt. */
-function lookText(p: AkukoProject): string {
-  return p.bible.styles
-    .map((s) => [s.name + (s.description ? `: ${s.description}` : ''), ...s.notes].join('. ').replace(/\.\.+/g, '.'))
-    .join(' | ');
+/** The style entry an imported sheet's STYLE BLOCK becomes (`breakdown/import/sheet.ts`). */
+export const HOUSE_STYLE_ID = 'house-style';
+/** A style note that holds the film's negative prompt; it is sent as the negative, never as look text. */
+const NEGATIVE_NOTE = /^\s*negative prompt:\s*/i;
+/** A style note that says where a look is used ("Use for: S07, S08"); scheduling, not part of the picture. */
+const USE_FOR_NOTE = /^\s*use for:/i;
+/** An entry's notes as prompt text: without the negative-prompt note (sent apart as the negative). */
+export const promptNotes = (e: BibleEntry): string[] => e.notes.filter((n) => !NEGATIVE_NOTE.test(n));
+/** Notes that describe a look: without the negative and without "Use for:". */
+export const lookNotes = (e: BibleEntry): string[] => promptNotes(e).filter((n) => !USE_FOR_NOTE.test(n));
+
+/** One style entry as look text: "Name: description. notes". */
+export function styleText(s: BibleEntry): string {
+  return [s.name + (s.description ? `: ${s.description}` : ''), ...lookNotes(s)].join('. ').replace(/\.\.+/g, '.');
 }
+
+/**
+ * The film's overall look, for bible prompts: the house style alone when the
+ * project has one (a sheet's STYLE BLOCK; its lighting looks are per shot and
+ * belong to key frames), otherwise every style entry.
+ */
+export function filmLook(p: AkukoProject): string {
+  const house = p.bible.styles.filter((s) => s.id === HOUSE_STYLE_ID);
+  return (house.length > 0 ? house : p.bible.styles).map(styleText).join(' | ');
+}
+
+/** Split a comma list of things to avoid, drop blanks and repeats (case-insensitive), keep the first spelling and order. */
+export function mergeNegative(...parts: (string | undefined)[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of parts) {
+    for (const raw of (part ?? '').split(',')) {
+      const t = raw.trim().replace(/\.$/, '').trim();
+      const k = t.toLowerCase().replace(/\s+/g, ' ');
+      if (t === '' || seen.has(k)) continue;
+      seen.add(k);
+      out.push(t);
+    }
+  }
+  return out.join(', ');
+}
+
+/** The film-wide negative: every style entry's "Negative prompt:" note (the house style's, on an imported sheet). */
+export function projectNegative(p: AkukoProject): string {
+  return mergeNegative(...p.bible.styles.flatMap((s) => s.notes.filter((n) => NEGATIVE_NOTE.test(n)).map((n) => n.replace(NEGATIVE_NOTE, ''))));
+}
+
+/** How a lookbook is labelled wherever it is attached: it carries light and colour, never its content. */
+export const LOOKBOOK_NOTE = 'the approved lookbook: for light, palette and grain only; do not copy its room, objects or people';
 
 const entryOf = (p: AkukoProject, id: string): EntryRef => {
   const e = bibleEntries(p).find((x) => x.entry.id === id);
@@ -238,7 +281,7 @@ function refsFor(p: AkukoProject, a: Asset): JobRef[] {
     refs.push({ id: portrait.id, uri: fileUri(portrait), role: 'character', note: 'the approved portrait: same face, hair, age and build' });
   }
   for (const l of role === 'lookbook' ? [] : lookbooksOf(p)) {
-    refs.push({ id: l.id, uri: fileUri(l), role: 'style', note: 'the approved lookbook: match its light, palette and grain' });
+    refs.push({ id: l.id, uri: fileUri(l), role: 'style', note: LOOKBOOK_NOTE });
   }
   // Pictures the person supplied for this entry (kind `reference`).
   for (const x of p.assets) {
@@ -313,7 +356,8 @@ export function buildBibleJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   }
   if (new Set(chosen.map((a) => a.id)).size !== chosen.length) throw new BibleError('a unit was listed twice');
 
-  const look = lookText(p);
+  const look = filmLook(p);
+  const negative = projectNegative(p);
   const items: JobItem[] = chosen.map((a) => {
     const role = roleOf(a);
     const { entry } = entryOf(p, a.owner ?? '');
@@ -321,7 +365,7 @@ export function buildBibleJob(p: AkukoProject, o: BuildOptions): BuiltJob {
       name: entry.name,
       role: entry.role ?? '',
       description: entry.description ?? '',
-      notes: entry.notes.join('; '),
+      notes: promptNotes(entry).join('; '),
       look,
     };
     const changes = requestedChanges(a);
@@ -331,7 +375,7 @@ export function buildBibleJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     if (refs.length > MAX_REFS) {
       throw new BibleError(`${a.id} would send ${refs.length} reference images; the image providers accept at most ${MAX_REFS}. Remove some supplied references.`);
     }
-    return { unit: a.id, prompt, output: ROLE_KIND[role], aspect_ratio: ASPECT[role], count: 1, ...(refs.length ? { refs } : {}) };
+    return { unit: a.id, prompt, output: ROLE_KIND[role], aspect_ratio: ASPECT[role], count: 1, ...(negative ? { negative } : {}), ...(refs.length ? { refs } : {}) };
   });
 
   const wave = Math.max(...chosen.map((a) => WAVE[roleOf(a)]));

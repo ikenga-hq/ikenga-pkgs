@@ -1,4 +1,4 @@
-/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */
+/* akuko-decision-writer v3 — views/contract.md §Decision writer. Inline this block verbatim. */
 (function () {
   'use strict';
   var STATE_KEY = 'akuko.decisions';
@@ -41,11 +41,12 @@
 
   /**
    * Write one decision. Call ONLY from a person's click / submit / key press,
-   * once per unit. f = {action, unit, stage, text?, undoes?}. Returns the record.
+   * once per unit. f = {action, unit, stage, text?, undoes?, flag?}. Returns the record.
    */
   function emit(f) {
     var d = { id: uuid(), action: f.action, unit: f.unit, stage: f.stage };
     if (f.action === 'undo') d.undoes = f.undoes;
+    if (typeof f.flag === 'string' && f.flag !== '') d.flag = f.flag;
     if (typeof f.text === 'string' && (f.text !== '' || f.action === 'note' || f.action === 'request-changes')) d.text = f.text;
     d.by = who;
     d.at = new Date().toISOString();
