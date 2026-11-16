@@ -130,7 +130,27 @@ in `budget.allowance_caps`) and every generation is recorded in the ledger with
 `estimate`/`actual` 0 and `allowance: { service, units }` (`spend/allowance.ts`).
 Keep the service's own confirmations (Canva asks before a video uses the
 monthly AI limit) for the person to answer. The files come back like a manual
-take: through `ingest()` (or the host's `storeAsset()`), to `pending-review`.
+take, to `pending-review`, but **through `ingest --via <service>`**
+(`bible/cli.ts`, `keyframes/cli.ts`, `motion/cli.ts`; `ingest({ via })` in
+code). A wave therefore ends in two steps, in this order:
+
+1. **Record the generations** as soon as the tool has run, one entry per unit,
+   with the manual job they are for: `spend/cli.ts allowance --project <dir>
+   --service canva --tool generate-image --job <manual job> --units <unit>,…`
+   (or `recordAllowance({ job })`).
+2. **Ingest each file with `--via canva`.** Ingest refuses a file whose unit has
+   no done allowance entry of that service free for the job; it links the entry
+   to the job (`allowance.job`), records the asset with `provider: "canva"` and
+   the tag `allowance:canva`, and records the file's sha256.
+
+The rules then count the file as **generated** (`rules/refs.ts` §3b), like a
+paid provider's output: no `rules.uploads.allow` entry is needed, and a swapped
+file is refused. For a `never_from_photo` entry the file is trusted only if the
+job gave the tool no reference that akuko did not generate (otherwise ingest
+tags it `refs:external` and the check refuses it there). A file ingested without
+`--via` stays external. Files ingested before `--via` existed are brought over
+once with `rules/cli.ts adopt-allowance --project <dir> --service canva`
+(a dry run; `--apply` writes).
 Canva hands back only a small preview (199 x 112 seen on 2026-11-11); ask the
 person for the full-size file before review, and say so.
 

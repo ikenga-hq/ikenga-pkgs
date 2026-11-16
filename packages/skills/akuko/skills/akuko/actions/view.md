@@ -64,7 +64,7 @@ Prefer read-only. A page that answers a question and sends the person to the boa
 
 - **Start from `views/__fixtures__/tiny-board.html`** (the smallest conforming page). Rename its id, set a version, restyle, add what the question needs. Keep every required view, mark and control. `evals/views/build.ts` is a worked example: the spend-breakdown page is that starter, restyled, with a read-only breakdown added above the spend gate.
 - **Inline the current block from `scripts/check-view/decision-writer.js` verbatim** and call `akukoDecisions.emit(…)` only from a person's click, submit or key press, once per unit. Copy the file as it is now, not from memory or from an older page.
-- **One decision per explicit action, per unit.** No batch approve, no pre-ticked box, no approval from a timer, a hover, a focus or a page event. Specifically avoid:
+- **One decision per explicit action, per unit**, or one **confirmed batch** in exactly the shape of `views/contract.md` §4 "Batch approval": an opener that writes nothing, a confirm step listing every unit and the count, a Confirm click that writes one ordinary `approve` per listed unit with one shared ` · batch <uuid>` text, and a one-click batch undo. A batch never includes a unit sent back or an asset with no file. No pre-ticked box, no approval from a timer, a hover, a focus or a page event. Specifically avoid:
   - a `<select>`, radio, range or checkbox that writes when it changes (unless it is a marked per-unit control);
   - writing a decision from `pointerdown`, `mousedown` or `touchstart` (use `click`);
   - writing anything on `beforeunload`, `pagehide`, `visibilitychange` or any timer.
@@ -122,7 +122,7 @@ Stop. Never approve anything yourself, and do not run the next stage.
 
 ## Real projects: the board for a long shot list, and the sign-off page
 
-**The default board (`default-board@0.6`)** shows the project's pictures (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
+**The default board (`default-board@0.8`)** shows the project's pictures (bible images, key frames, cards; thumbnails that open larger), gives every started stage a lens in the middle pane, lists intake documents with the script, and, once the current stage has nothing waiting, offers the person a sentence to paste into chat to say they are done (`views/README.md`). It also handles an imported shot list (hundreds of shots, parts, a master clock):
 
 - A **Part** filter (P1…P10 and "All parts") shows one part at a time: its scenes, shots, cards and script. A link can open one part: `views/default-board.html#part=P7`. The "your move" counts stay for the whole film.
 - Shots on a master clock show their film time (`m:ss.ss`); the shot detail adds part, tier, framing, lighting, motion note, dialogue lines, the negative prompt and the sheet row (and "Left the sheet" for a removed row).

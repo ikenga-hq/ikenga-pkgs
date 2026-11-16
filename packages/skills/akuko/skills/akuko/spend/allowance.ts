@@ -79,13 +79,38 @@ export function allowanceLine(p: Pick<AkukoProject, 'budget' | 'ledger'>, w: All
 }
 
 /**
+ * The done allowance entry that a file brought back for `units` (the unit, or the planned asset id) was made by: one
+ * of `service`, status `done`, already linked to `job`, else the latest one not linked to any job. Its index in the
+ * ledger, or -1. Used by `ingest --via <service>` and `rules/cli.ts adopt-allowance`.
+ */
+export function allowanceEntryFor(p: Pick<AkukoProject, 'ledger'>, service: string, units: string[], job: string): number {
+  const fits = (e: LedgerEntry): boolean => e.status === 'done' && e.allowance?.service === service && units.includes(e.unit);
+  const linked = p.ledger.findIndex((e) => fits(e) && e.allowance?.job === job);
+  if (linked !== -1) return linked;
+  for (let i = p.ledger.length - 1; i >= 0; i--) {
+    const e = p.ledger[i]!;
+    if (fits(e) && e.allowance?.job === undefined) return i;
+  }
+  return -1;
+}
+
+/** The project with ledger entry `index` linked to `job` (its `allowance.job`). Returns a new project. */
+export function linkAllowance(p: AkukoProject, index: number, job: string): AkukoProject {
+  const e = p.ledger[index];
+  if (!e?.allowance) throw new Error(`ledger entry ${index} is not an allowance entry`);
+  if (e.allowance.job === job) return p;
+  const ledger = p.ledger.map((x, i) => (i === index ? { ...x, allowance: { ...x.allowance!, job } } : x));
+  return { ...p, ledger };
+}
+
+/**
  * Record what a wave used: one ledger entry per unit, zero money, `allowance.units` generations. `status: 'failed'`
  * records a call that made nothing (it still counts as used when the service charged for it: pass the units it used).
  * Returns a new project; the input is not changed.
  */
 export function recordAllowance(
   p: AkukoProject,
-  r: { service: string; tool?: string; ts: string; units: { unit: string; count?: number; status?: 'done' | 'failed' }[] },
+  r: { service: string; tool?: string; ts: string; job?: string; units: { unit: string; count?: number; status?: 'done' | 'failed' }[] },
 ): AkukoProject {
   let ledger = [...p.ledger];
   for (const u of r.units) {
@@ -99,7 +124,7 @@ export function recordAllowance(
       estimate: 0,
       actual: 0,
       status: u.status ?? 'done',
-      allowance: { service: r.service, units: n },
+      allowance: { service: r.service, units: n, ...(r.job !== undefined ? { job: r.job } : {}) },
     };
     ledger = [...ledger, entry];
   }

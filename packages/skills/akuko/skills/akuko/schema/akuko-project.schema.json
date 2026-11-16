@@ -962,6 +962,10 @@
               "type": "integer",
               "exclusiveMinimum": 0,
               "description": "Generations this call used from the service allowance."
+            },
+            "job": {
+              "$ref": "#/definitions/Id",
+              "description": "The (manual) job the generation was made for. Set by `recordAllowance({job})` or when the file comes back through `ingest --via <service>`; it is what lets rules/refs.ts count that file as generated."
             }
           },
           "required": [

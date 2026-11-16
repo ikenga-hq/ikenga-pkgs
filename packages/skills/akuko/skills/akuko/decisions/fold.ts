@@ -88,7 +88,22 @@ export type RejectCode =
   | 'spend-refused'       // canApprove() refused (budget, amount shown, cap)
   | 'already-ran'         // the job already ran or is running; spend decisions can't change it
   | 'conflict'            // same id as a stored decision with different content (ignored)
-  | 'removed-from-sheet'; // the unit left the imported shot list (source.removed_at): kept for the record, takes no decisions (WP-29)
+  | 'removed-from-sheet'  // the unit left the imported shot list (source.removed_at): kept for the record, takes no decisions (WP-29)
+  | 'batch-ineligible';   // a confirmed-batch approve on a unit a batch may not include: sent back (needs-rework), or no file where one is required
+
+/**
+ * A confirmed batch (views/contract.md §4 "Batch approval"): the person
+ * confirmed one list, and the view wrote one ordinary `approve` per unit,
+ * each with the same text, ending ` · batch <uuid>`. A batch's one-click
+ * undo writes one ordinary `undo` per decision, with the same ending.
+ */
+export const BATCH_TEXT = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** The batch id a decision carries, else undefined. */
+export const batchOf = (d: Pick<Decision, 'text'>): string | undefined => BATCH_TEXT.exec(d.text ?? '')?.[1];
+
+/** A unit that must have a file before a batch may approve it: any asset (an image, a clip, a sound, a card, a document). Shots and bible entries need none. */
+export const needsFile = (kind: string): boolean => kind === 'asset';
 
 /** When a unit left the imported shot list (WP-25 sets `source.removed_at`), else undefined. Such a unit takes no decisions and doesn't hold its stage back. */
 export const removedFromSheet = (u: object): string | undefined => (u as { source?: { removed_at?: string } }).source?.removed_at;
@@ -425,6 +440,17 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
         continue;
       }
       const pos = chain.findIndex((x) => compareDecisions(keyOf(x), d) > 0);
+      // A confirmed batch never includes a unit sent back, or one with no file where a file is required (contract §4).
+      if (d.action === 'approve' && batchOf(d) !== undefined) {
+        const before = pos < 0 ? status : chain[pos]!.was;
+        const fileless = needsFile(ref.kind) && !(unit as { file?: unknown }).file;
+        if (before === 'needs-rework' || fileless) {
+          notice(d, 'batch-ineligible', before === 'needs-rework'
+            ? `"${unitId}" was sent back (needs rework); a batch approval never includes it. Approve it on its own.`
+            : `"${unitId}" has no file yet; a batch approval never includes it.`);
+          continue;
+        }
+      }
       const entry: ChainEntry = { id: d.id, stage: d.stage, was: status, now, at: d.at };
       if (pos < 0) {
         entry.was = status;
@@ -441,7 +467,7 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
 
     // 2b. People's words.
     const wantWords = new Map<string, Decision>();
-    for (const d of ds) if (carriesWords(d) && rNew.eligible.get(d.id)?.ok && !rNew.undone.has(d.id)) wantWords.set(d.id, d);
+    for (const d of ds) if (carriesWords(d) && rNew.eligible.get(d.id)?.ok && !rNew.undone.has(d.id) && !(batchOf(d) !== undefined && noticed.has(d.id))) wantWords.set(d.id, d);
     const known = new Set(all.map((d) => d.id));
     let comments = unit.comments.filter((c) => {
       if (isTrail(c) || isNotice(c) || c.decision === undefined || !known.has(c.decision)) return true;

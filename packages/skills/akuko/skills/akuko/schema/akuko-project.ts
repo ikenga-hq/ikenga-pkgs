@@ -668,6 +668,7 @@ export const LedgerEntrySchema = z.object({
   allowance: z.object({
     service: AllowanceServiceSchema,
     units: z.number().int().positive().describe('Generations this call used from the service allowance.'),
+    job: IdSchema.optional().describe('The (manual) job the generation was made for. Set by `recordAllowance({job})` or when the file comes back through `ingest --via <service>`; it is what lets rules/refs.ts count that file as generated.'),
   }).strict().optional().describe('Set when the call used a connected service plan allowance (e.g. the Canva monthly AI limit) instead of money: estimate and actual are then 0 (lib/spend.md §Allowance).'),
 }).strict();
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;

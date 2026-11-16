@@ -6,7 +6,12 @@
  *   submit    builds a prompt package and returns it as the handle's `handoff`
  *   ingest    takes the file the person brings back, stores it via
  *             host.storeAsset() and records it in akuko.json (asset added,
- *             unit → pending-review, any spend they report → ledger)
+ *             unit → pending-review, any spend they report → ledger).
+ *             With `via: <service>` the file was made by a connected
+ *             allowance tool (Canva): it is accepted only when the ledger has
+ *             a done allowance entry of that service for the unit, which is
+ *             linked to the job, and the asset is recorded as the service's
+ *             (rules/refs.ts §3b)
  *   poll      done once every unit of the job has an ingested file
  *   fetch     the ingested assets
  *
@@ -24,6 +29,10 @@ import { estimateFromConfig, loadProviderConfig } from '../config.ts';
 import { assertValidProject, jobTag, planAssetId, recordOutput } from '../outputs.ts';
 import { MANUAL_PROVIDER_ID, MANUAL_SEAL, SETUP_POINTER, sealProvider } from '../../spend/gate.ts';
 import { recordDone } from '../../spend/ledger.ts';
+import { allowanceEntryFor, linkAllowance } from '../../spend/allowance.ts';
+import { AllowanceServiceSchema } from '../../schema/akuko-project.ts';
+import { externalRefs } from '../../rules/allowance.ts';
+import { REFS_EXTERNAL_TAG, allowanceTag, sha256Bytes } from '../../rules/refs.ts';
 import type { ManualPlatform, PromptPackage } from './package.ts';
 import { ACCEPT, EXT_BY_MIME, buildPromptPackage, expectedFilename, renderPromptPackage } from './package.ts';
 
@@ -47,6 +56,19 @@ export interface IngestInput {
   actual?: number;
   /** Model the person used, if they say. */
   model?: string;
+  /**
+   * The connected allowance tool that made the file (`canva`). The ledger must already hold a done allowance entry of
+   * that service for the unit (recorded after the person approved the wave); it is linked to this job, and the asset
+   * is recorded with the service as its provider, so the rules count it as generated.
+   */
+  via?: string;
+  /** Folder relative ref uris are read from, to check the job's refs (with `via`). */
+  projectDir?: string;
+  /**
+   * Store the file as a new take beside an asset unit that already has a file (`<unit>-<stage>`, `-2`…). Without it,
+   * an ingest for an asset that already has a file and was not sent back is refused (`planAssetId` `filled: 'refuse'`).
+   */
+  newTake?: boolean;
 }
 
 export interface IngestResult {
@@ -139,7 +161,26 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
     const before = await host.readState();
     const ref = findUnit(before, unit);
     if (!ref) throw new ManualIngestError(`unknown unit "${unit}"`);
-    const planned = planAssetId(before, unit, job.stage);
+    let planned: { id: string; inPlace: boolean };
+    try {
+      planned = planAssetId(before, unit, job.stage, { filled: input.newTake ? 'sibling' : 'refuse' });
+    } catch (err) {
+      throw new ManualIngestError(err instanceof Error ? err.message : String(err));
+    }
+
+    // --via <service>: the generation must already be in the ledger (lib/spend.md §Allowance).
+    const via = input.via;
+    let viaEntry = -1;
+    let viaTags: string[] = [];
+    if (via !== undefined) {
+      if (!AllowanceServiceSchema.safeParse(via).success || via === MANUAL_PROVIDER_ID) throw new ManualIngestError(`--via takes a connected service id such as "canva", not "${via}"`);
+      viaEntry = allowanceEntryFor(before, via, [unit, planned.id], job.id);
+      if (viaEntry === -1) {
+        throw new ManualIngestError(`no done ${via} allowance entry for ${unit} in the ledger that is free for job ${job.id}: record the generation first (spend/cli.ts allowance --service ${via} --units ${unit} --job ${job.id}), or ingest without --via (the file then counts as external)`);
+      }
+      const ext = await externalRefs(before, item.refs ?? [], { ...(input.projectDir !== undefined ? { projectDir: input.projectDir } : {}) });
+      viaTags = [allowanceTag(via), ...(ext.length ? [REFS_EXTERNAL_TAG] : [])];
+    }
     const kind = planned.inPlace && ref.kind === 'asset' ? ref.unit.kind : item.output;
     const ext = EXT_BY_MIME[file.mime] ?? file.filename.split('.').pop() ?? 'bin';
 
@@ -149,22 +190,27 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
       mime: file.mime,
       data: file.data,
       id: planned.id,
-      provider: MANUAL_PROVIDER_ID,
-      tags: [jobTag(job.id), 'manual'],
+      provider: via ?? MANUAL_PROVIDER_ID,
+      tags: [jobTag(job.id), 'manual', ...viaTags],
       ...(planned.inPlace ? {} : { owner: unit }),
       ...(input.model !== undefined ? { model: input.model } : {}),
     });
+    // The rules check a generated file's bytes against a sha256 (rules/refs.ts §4): record one when the host did not.
+    const sha = sha256Bytes(file.data);
+    const withHash = via !== undefined && stored.file && stored.file.hash !== sha ? { ...stored, file: { ...stored.file, hash: sha } } : stored;
 
     const ts = now();
     let p = recordOutput(await host.readState(), {
-      asset: stored,
+      asset: withHash,
       unit,
       stage: job.stage,
       job: job.id,
-      provider: MANUAL_PROVIDER_ID,
+      provider: via ?? MANUAL_PROVIDER_ID,
       ts,
       ...(input.model !== undefined ? { model: input.model } : {}),
     });
+
+    if (via !== undefined) p = linkAllowance(p, viaEntry, job.id);
 
     const warnings: string[] = [];
     if (input.actual !== undefined && input.actual > 0) {

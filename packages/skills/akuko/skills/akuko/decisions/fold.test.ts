@@ -13,7 +13,7 @@ import { checkIntegrity } from '../schema/integrity.ts';
 import { serializeProject } from '../hosts/local.ts';
 import { parseArtifactRows } from './artifact-db.ts';
 import { CHAT_VIEW, loadConformedFile } from './conformed.ts';
-import { compareDecisions, foldDecisions, isAgentAuthor, type FoldOptions } from './fold.ts';
+import { batchOf, compareDecisions, foldDecisions, isAgentAuthor, type FoldOptions } from './fold.ts';
 import { readIkengaStore } from './ikenga.ts';
 import { parseJsonl } from './jsonl.ts';
 
@@ -530,5 +530,85 @@ describe('spend decisions', () => {
     p0.budget = null;
     p0.ledger = [];
     assert.equal(job(fold(p0, [approve(1)]).project).status, 'awaiting-approval');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Confirmed batch approval (views/contract.md §4 "Batch approval")
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('confirmed batch approval', () => {
+  const BATCH = '7d3c1e2a-4b5f-4c6d-8e9f-0a1b2c3d4e5f';
+  const text = (label = 'Approve all 2 shots in P1') => `${label} · batch ${BATCH}`;
+  const withFile = (p: AkukoProject, id: string) => {
+    const a = p.assets.find((x) => x.id === id)!;
+    a.file = { uri: `bible/${id}.png`, mime: 'image/png' };
+    return p;
+  };
+
+  it('reads the batch id from the text, and nothing else', () => {
+    assert.equal(batchOf({ text: text() }), BATCH);
+    assert.equal(batchOf({ text: `batch ${BATCH}` }), undefined);
+    assert.equal(batchOf({ text: `${text()} and more` }), undefined);
+    assert.equal(batchOf({}), undefined);
+  });
+
+  it('folds one approve per unit sharing a batch id: each applies, each keeps its words', () => {
+    const ds = [dec('approve', 'sc2_sh4', 1, { text: text() }), dec('approve', 'sc4_sh2', 1, { text: text() })];
+    const r = fold(fixture(), ds);
+    assert.deepEqual(r.report.rejected, []);
+    assert.deepEqual([...r.report.applied].sort(), ds.map((d) => d.id).sort());
+    for (const id of ['sc2_sh4', 'sc4_sh2']) {
+      assert.equal(unit(r.project, id).status, 'approved', id);
+      assert.ok(unit(r.project, id).comments.some((c) => c.text === text()), `${id} keeps the batch words`);
+    }
+    assert.deepEqual(checkIntegrity(r.project), []);
+    // idempotent
+    assert.equal(fold(r.project, ds).report.changed, false);
+  });
+
+  it('refuses a batch approve on a unit sent back (needs-rework), with a notice, and approves the rest', () => {
+    const ds = [dec('approve', 'sc2_sh4', 1, { text: text() }), dec('approve', 'sc2_sh3', 1, { text: text() })];
+    const r = fold(fixture(), ds);
+    assert.equal(unit(r.project, 'sc2_sh4').status, 'approved');
+    assert.equal(unit(r.project, 'sc2_sh3').status, 'needs-rework');
+    assert.deepEqual(r.report.rejected.map((x) => [x.unit, x.code]), [['sc2_sh3', 'batch-ineligible']]);
+    const cs = unit(r.project, 'sc2_sh3').comments;
+    assert.ok(cs.some((c) => c.author === 'agent' && /^Not applied: .*sent back/.test(c.text)));
+    assert.ok(!cs.some((c) => c.text === text()), 'a refused batch approval leaves no words in the thread');
+    // a second fold changes nothing, and still adds no words
+    const again = fold(r.project, ds);
+    assert.equal(again.report.changed, false);
+    assert.ok(!unit(again.project, 'sc2_sh3').comments.some((c) => c.text === text()));
+    // the same unit approved on its own (no batch) still works
+    assert.equal(unit(fold(fixture(), [dec('approve', 'sc2_sh3', 1)]).project, 'sc2_sh3').status, 'approved');
+  });
+
+  it('refuses a batch approve on an asset with no file, and accepts one with a file', () => {
+    const ds = [dec('approve', 'loc_bedroom_plate', 1, { text: text('Approve all bible entries (2)') }), dec('approve', 'char_oldman_turnaround', 1, { text: text('Approve all bible entries (2)') })];
+    const r = fold(withFile(fixture(), 'loc_bedroom_plate'), ds);
+    assert.equal(unit(r.project, 'loc_bedroom_plate').status, 'approved');
+    assert.equal(unit(r.project, 'char_oldman_turnaround').status, 'pending-review');
+    assert.deepEqual(r.report.rejected.map((x) => [x.unit, x.code]), [['char_oldman_turnaround', 'batch-ineligible']]);
+  });
+
+  it('one-click undo: one undo per decision of the batch puts every unit back', () => {
+    const ap = [dec('approve', 'sc2_sh4', 1, { text: text() }), dec('approve', 'sc4_sh2', 1, { text: text() })];
+    const first = fold(fixture(), ap).project;
+    const undos = ap.map((d) => dec('undo', d.unit, 2, { undoes: d.id, text: `Undo: ${text()}` }));
+    const r = fold(first, undos);
+    assert.deepEqual(r.report.rejected, []);
+    for (const id of ['sc2_sh4', 'sc4_sh2']) {
+      assert.equal(unit(r.project, id).status, 'pending-review', id);
+      assert.ok(!unit(r.project, id).comments.some((c) => c.text === text()), `${id}: the undone batch leaves no words`);
+    }
+    // folding approve and undo together gives the same project
+    assert.equal(bytes(fold(fixture(), [...ap, ...undos]).project), bytes(r.project));
+  });
+
+  it('a batch is never accepted from chat, nor from an agent or an unchecked view', () => {
+    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: CHAT_VIEW, text: text() })]).report.rejected[0]?.code, 'chat-without-words');
+    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { by: 'claude', text: text() })]).report.rejected[0]?.code, 'not-a-person');
+    assert.equal(fold(fixture(), [dec('approve', 'sc2_sh4', 1, { view: 'freehand:x@1', text: text() })]).report.rejected[0]?.code, 'view-not-conformed');
   });
 });

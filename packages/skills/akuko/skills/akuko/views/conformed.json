@@ -37,6 +37,18 @@
       "sha256": "b4eb1b3bdcc94cc21b691d5c6b0e420b63ff4bbdbec30dbe68fd42e4f4af6fd4",
       "checked_at": "2026-11-12T09:19:24Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.7",
+      "sha256": "8fae15ceddbd7eabd98a0655eacaa22eb5f41539d7905798ef5ad1dad0875c03",
+      "checked_at": "2026-11-12T22:32:48Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.8",
+      "sha256": "3bf276c76c46fda173bf51be2e12de734a09113b4d1ea79556e7d4b9be136440",
+      "checked_at": "2026-11-13T11:08:46Z",
+      "checker": "check-view@2"
     }
   ]
 }

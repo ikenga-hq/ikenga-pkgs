@@ -98,3 +98,63 @@ export function mutateProject(p) {
   if (asset) asset.status = 'approved';
   return q;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Confirmed batch approval (views/contract.md §4 "Batch approval")
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The ending every decision of one batch carries: ` · batch <uuid>` (decisions/fold.ts#BATCH_TEXT). */
+export const BATCH_TEXT = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+export const batchOf = (d) => BATCH_TEXT.exec(typeof d?.text === 'string' ? d.text : '')?.[1];
+
+/** A shot's part: its own, else its scene's (decisions/gates.ts, the default board). */
+export const partOf = (p, s) => s.part ?? p.scenes.find((sc) => sc.id === s.scene)?.part ?? null;
+export const partsOf = (p) => [...new Set([...p.shots.map((s) => partOf(p, s)), ...p.scenes.map((sc) => sc.part ?? null)].filter((x) => x != null))];
+
+/** A batch scope a view may offer: `bible`, or `part:<id>` for a part the project has. */
+export const isBatchScope = (p, scope) => scope === 'bible' || (/^part:/.test(scope ?? '') && partsOf(p).includes(scope.slice(5)));
+
+/**
+ * What a confirmed batch over one scope may approve, by the project's data: live units
+ * `pending-review` (never `needs-rework`), and of assets only those with a file.
+ * - `part:<id>`: the part's shots.
+ * - `bible`: bible entries with no asset of their own, and assets of the bible (stage `bible`, or owned by a bible entry); cards and intake documents are not bible.
+ */
+export function batchUnits(p, scope) {
+  const live = (u) => removedAt(p, u) === undefined && !isIdleMotionUnit(p, u);
+  const waiting = (u) => live(u) && u.status === 'pending-review';
+  if (scope === 'bible') {
+    const assetIds = new Set(p.assets.map((a) => a.id));
+    const entries = bibleEntries(p);
+    const entryIds = new Set(entries.map((e) => e.id));
+    const owned = (a) => entryIds.has(a.owner) || entries.some((e) => e.refs.includes(a.id));
+    return [
+      ...entries.filter((e) => waiting(e) && !e.refs.some((r) => assetIds.has(r))).map((e) => e.id),
+      ...p.assets.filter((a) => waiting(a) && a.kind !== 'card' && a.stage !== 'intake' && (a.stage === 'bible' || owned(a)) && !!a.file).map((a) => a.id),
+    ];
+  }
+  if (/^part:/.test(scope ?? '')) {
+    const pt = scope.slice(5);
+    return p.shots.filter((s) => waiting(s) && partOf(p, s) === pt).map((s) => s.id);
+  }
+  return [];
+}
+
+/**
+ * The project check-view runs the batch checks on: the fixture with parts (when it
+ * has none), so a part batch has more than one shot and skips one sent back, and one
+ * more bible item waiting, with a file, beside one without (which a batch must leave out).
+ */
+export function batchProject(p) {
+  const q = structuredClone(p);
+  if (partsOf(q).length === 0 && q.scenes.length) {
+    const last = q.scenes.length - 1;
+    q.scenes.forEach((sc, i) => { sc.part = i === Math.max(0, last - 1) && q.scenes.length > 1 ? 'P2' : 'P1'; });
+  }
+  const assetIds = new Set(q.assets.map((a) => a.id));
+  const loneEntry = bibleEntries(q).find((e) => e.status === 'pending' && !e.refs.some((r) => assetIds.has(r)) && e.source?.removed_at === undefined);
+  if (loneEntry) loneEntry.status = 'pending-review';
+  const fileless = q.assets.filter((a) => a.status === 'pending-review' && !a.file && a.kind !== 'card' && a.stage !== 'intake');
+  if (fileless.length > 1) { const a = fileless[fileless.length - 1]; a.file = { uri: `bible/${a.id}.png`, mime: 'image/png' }; }
+  return q;
+}

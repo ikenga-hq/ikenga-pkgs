@@ -118,7 +118,7 @@ export async function ingestBible(
   job: Job,
   unit: string,
   file: { filename: string; mime: string; data: Uint8Array },
-  extra: { actual?: number; model?: string } = {},
+  extra: { actual?: number; model?: string; via?: string; projectDir?: string; newTake?: boolean } = {},
 ): Promise<{ asset: string; warnings: string[]; refs: string[] }> {
   const r = await manual.ingest({ job, unit, file, ...extra });
   const refs = await finalizeBible(deps);

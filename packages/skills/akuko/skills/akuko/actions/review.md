@@ -51,12 +51,14 @@ Hosts with code can also call `readDecisions()` + `foldDecisions()` (`../decisio
 **Approvals typed in chat.** Only two replies count, and only in these exact words (the first word may be any case):
 
 - `approve <amount> <CURRENCY>`, in answer to the spend gate's line (e.g. `approve 0.36 USD`): one `approve-spend` for that job;
-- `approve <unit id>` (e.g. `approve sc2_sh4`): one `approve` for that one unit. Approving several units takes one reply per unit.
+- `approve <unit id>` (e.g. `approve sc2_sh4`): one `approve` for that one unit. Approving several units takes one reply per unit, or the board's confirmed batch ("Approve all N shots in P7", "Approve all bible entries (N)"), which the person opens, reads and confirms on the board (`views/contract.md` §4). Never write a batch from chat.
 
 For each such reply, record exactly one decision in the host's store:
 
 - `view: "chat@1"`, `by: "you"`, `text` = their reply verbatim, `at` = now, and a new uuid;
 - B/C: `decisions/cli.ts append`; A: one row in `decisions`.
+
+**Send-backs typed in chat.** A send-back approves nothing, so it needs no fixed words, but it must name **one unit** and say what should change, in the person's own words (e.g. "send MOM_portrait back: she should look older, grey at the temples"). Record one `request-changes` for that unit (the unit's own `stage`, `view: "chat@1"`, `by: "you"`, `text` = what they said should change, verbatim), one record per unit named; ask which unit when it is unclear, and never turn a general complaint into send-backs. The board does the same with **Request changes** on any shot, bible image, bible entry, card or intake document (`default-board@0.8`); a note is **Add a note** (`note`, the status stays).
 
 Then fold. **Never infer an approval** from "yes", "ok", "go ahead", "looks good" or "approve all". Answer with the exact words to type instead. Never record an undo from chat (folding refuses it; undo on the board), and never record an approval the person did not write.
 

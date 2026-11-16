@@ -34,11 +34,20 @@ export const jobTag = (jobId: string): string => `job:${jobId}`;
  * The asset id an output should be stored under. An asset unit that has no
  * file yet (a planned portrait, plate…) is filled in place; anything else
  * gets a new asset `<unit>-<stage>`, then `-2`, `-3`… when taken.
+ *
+ * `filled: 'refuse'` (what a manual ingest uses unless the person asked for a
+ * new take): an asset unit that already has a file and was not sent back
+ * (`needs-rework`) is refused with an OutputError instead of quietly getting a
+ * sibling. A take that replaces a sent-back image goes through the stage's
+ * redo (`step --units`), which clears the slot first.
  */
-export function planAssetId(p: AkukoProject, unit: string, stage: StageId): { id: string; inPlace: boolean } {
+export function planAssetId(p: AkukoProject, unit: string, stage: StageId, opts: { filled?: 'sibling' | 'refuse' } = {}): { id: string; inPlace: boolean } {
   const ref = findUnit(p, unit);
   if (!ref) throw new OutputError(`unknown unit "${unit}"`);
   if (ref.kind === 'asset' && !ref.unit.file) return { id: unit, inPlace: true };
+  if (opts.filled === 'refuse' && ref.kind === 'asset' && ref.unit.status !== 'needs-rework') {
+    throw new OutputError(`"${unit}" already has a file (${ref.unit.file?.uri ?? 'recorded'}, ${ref.unit.status}). Nothing was stored. To replace it, the person sends it back (Request changes on the board) and the stage redoes it (step --units ${unit}); to keep both as a separate take, ingest again with --new-take.`);
+  }
   const taken = new Set(p.assets.map((a) => a.id));
   const base = `${unit}-${stage}`;
   if (!taken.has(base)) return { id: base, inPlace: false };

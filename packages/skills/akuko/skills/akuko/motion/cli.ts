@@ -19,7 +19,7 @@
  *             --key-source pasted-this-chat --phase reserve|send|release
  *                           host A only (lib/spend.md §Host A): a paid direct API runs with a key the
  *                           person pasted into this chat, reserved first and sent second
- *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>]
+ *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>] [--via <service>] [--new-take]
  *           record a clip the person made for a manual job
  *   collect --job <id>        poll a paid job submitted earlier and record its clips
  *   treat   --shot <id>[,<id>...] --as still|still-move|video|lipsync
@@ -285,6 +285,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const r = await ingestClip(deps, manual, saved.job, unit, { filename: resolve(path).split(/[\\/]/).pop() ?? 'file', mime, data: new Uint8Array(await readFile(path)) }, {
         ...(actual !== undefined ? { actual: Number(actual) } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(str(opt.get('via')) !== undefined ? { via: str(opt.get('via'))!, projectDir: dir } : {}),
+        ...(opt.get('new-take') === true ? { newTake: true } : {}),
       });
       return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join(NL) };
     }

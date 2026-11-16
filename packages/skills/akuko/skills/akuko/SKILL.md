@@ -70,7 +70,7 @@ If nothing matches, run `status` and offer the next action it suggests. If an ac
 
 These hold on every host and in every action and view:
 
-1. **Only a person approves.** Actions move units to `pending-review`; only a person's decision moves a unit to `approved`. No action or view auto-approves, pre-ticks or batch-approves.
+1. **Only a person approves.** Actions move units to `pending-review`; only a person's decision moves a unit to `approved`. No action or view auto-approves or pre-ticks. A view may offer a **confirmed batch** (a whole part's shots, or everything waiting in the bible): the person opens it, reads the list of every unit and the count, and clicks Confirm; it then writes one ordinary approval per unit, all sharing one batch id, and one click undoes it (`views/contract.md` §4 "Batch approval"). A batch never includes a unit sent back or an asset with no file. The agent never opens, confirms or writes a batch, and never treats "approve all" in chat as one.
 2. **Never auto-advance past review.** Each stage ends at a review gate (Atelier `ux_mode: approve`): run, then pause on what was produced.
 3. **One unit at a time** inside a stage: produce, show, wait — don't regenerate the whole stage because one shot was sent back.
 4. **Decisions go through the decision format** (`Decision` in the schema), written by a review surface to the host's store. A view never edits `akuko.json` and never calls `writeState()`.

@@ -220,6 +220,7 @@ Every action starts by folding: `readDecisions(since?)` through the host adapter
 - **Only a person approves (R-12).** `approve`, `approve-spend` and `undo` count only when both hold:
   - `by` is not an agent name (`fold.ts#AGENT_AUTHOR`);
   - `view` is on the conformed-views list (`../decisions/conformed.ts`), or is `chat@1` in the exact words akuko asked for: `approve <amount> <CURRENCY>` for a spend, `approve <unit id>` for one unit (first word any case). A chat `undo` is always refused (`chat-undo`).
+  - A confirmed batch from a view (`views/contract.md` §4) is one ordinary `approve` per unit, each with text ending ` · batch <uuid>`. Each is folded on its own; one on a unit that was `needs-rework`, or on an asset with no file, is refused (`batch-ineligible`, with a notice) while the rest apply. Its one-click undo is one ordinary `undo` per approval.
 
   Notes, requests for changes and declines are accepted from any view. No action, and nothing folding writes for itself, ever sets `approved`.
 - **Rejected decisions stay visible.**
@@ -363,7 +364,9 @@ A real project can arrive with its own shot list (a spreadsheet), locked audio t
 - its `provider` is set and is not `manual`;
 - it carries a `job:<id>` tag (`providers/outputs.ts`), and the ledger has an entry with that `job`, the same `provider`, status `done`, and `unit` equal to the asset's id or its owner. The gate writes that entry in `collect()`, after the provider returned the file.
 
-A file brought back by hand is never generated, whatever the ledger says: the person made it somewhere akuko didn't see. When `file.hash` is a sha256 (the local host records one in `storeAsset`) and the file is readable, the bytes must still match it; a swapped file is refused as `generated-changed`.
+- **or**, for a file made with a connected allowance tool (Canva) and brought back with `ingest --via <service>`: its `provider` is the service, it carries `allowance:<service>` and a `job:<id>` tag, and the ledger has an allowance entry of that service, status `done`, with `allowance.job` equal to that job and `unit` equal to the asset's id or its owner (`spend/cli.ts allowance --job`, or ingest links it). For a `never_from_photo` entry such a file is also refused when it carries `refs:external` (its job gave the tool a reference akuko did not generate, or the refs could not be checked). `rules/cli.ts adopt-allowance` brings older hand-ingested files over once (dry run by default).
+
+A file brought back by hand without `--via` is never generated, whatever the ledger says: the person made it somewhere akuko didn't see. When `file.hash` is a sha256 (the local host records one in `storeAsset`) and the file is readable, the bytes must still match it; a swapped file is refused as `generated-changed`.
 
 **Slices: the contract for WP-28b.** A time-slice akuko cuts from an allowed file (a line from the master WAV) is a new file with a new hash. Its provenance lives **in the project state, never in the job**. The cutter records each slice as an asset:
 - `provider: "akuko-cut"` (`SLICE_PROVIDER`);

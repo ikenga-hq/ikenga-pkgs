@@ -111,6 +111,9 @@ const BAD: Record<string, string[]> = {
   'bad-touch-single-approve.html': ['auto-approve'],
   'bad-wheel-threshold-approve.html': ['auto-approve'],
   'bad-which-approve.html': ['auto-approve'],
+  // @0.7 confirmed batches (contract §4): an opener that approves without a confirm step; a confirm step listing images with no file
+  'bad-unconfirmed-batch.html': ['unconfirmed-batch'],
+  'bad-batch-ineligible.html': ['batch-ineligible'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
 const SKIP = ['readonly-cast-sheet.html'];

@@ -21,8 +21,17 @@
  *    has an entry with that `job`, the same `provider`, status `done`, and
  *    `unit` equal to the asset's id or its owner (the unit it was made for).
  *    The gate writes that entry only in `collect()`, after the provider
- *    returned the file. A manual ingest is never generated, whatever the
+ *    returned the file. A plain manual ingest is never generated, whatever the
  *    ledger says: the person made that file somewhere akuko didn't see.
+ * 3b. **Or by a connected allowance tool** (Canva on claude.ai, lib/spend.md
+ *    §Allowance). The file came back with `ingest --via <service>` (or was
+ *    adopted by `rules/cli.ts adopt-allowance`): its `provider` is the service,
+ *    it has the `allowance:<service>` tag and a `job:<id>` tag, and the ledger
+ *    has an allowance entry of that service, status `done`, whose
+ *    `allowance.job` is that job and whose `unit` is the asset's id or owner.
+ *    Without that entry the file is external. For a `never_from_photo` entry
+ *    such a file is trusted only when its job sent no external reference for
+ *    it: ingest records `refs:external` on the asset otherwise (`check.ts`).
  * 4. **Unchanged.** When the asset's `file.hash` is a sha256 (what the local
  *    host records in `storeAsset`) and the file is readable, the bytes on disk
  *    must still hash to it. A swapped file is refused as `generated-changed`.
@@ -69,6 +78,13 @@ import { jobTag } from '../providers/outputs.ts';
 import type { AkukoProject, Asset } from '../schema/akuko-project.ts';
 
 export const MANUAL_PROVIDER = 'manual';
+/** Tag on a file made with a connected allowance tool and brought back with `ingest --via <service>`. */
+export const allowanceTag = (service: string): string => `allowance:${service}`;
+/** Tag on such a file when its job's references for that unit were not all generated (or could not be checked). */
+export const REFS_EXTERNAL_TAG = 'refs:external';
+/** The allowance service an asset was made with, when it carries the tag for its own provider. */
+export const allowanceServiceOf = (a: Asset): string | undefined =>
+  a.provider !== undefined && a.provider !== MANUAL_PROVIDER && a.tags.includes(allowanceTag(a.provider)) ? a.provider : undefined;
 const SHA256 = /^[0-9a-f]{64}$/;
 const JOB_TAG = jobTag('');
 
@@ -80,11 +96,14 @@ const JOB_TAG = jobTag('');
 export function generatingJob(p: AkukoProject, a: Asset): string | undefined {
   if (a.kind === 'reference' || a.kind === 'card') return undefined;
   if (!a.provider || a.provider === MANUAL_PROVIDER) return undefined;
+  const service = allowanceServiceOf(a);
+  const forUnit = (unit: string): boolean => unit === a.id || (a.owner !== undefined && unit === a.owner);
   for (const t of a.tags) {
     if (!t.startsWith(JOB_TAG)) continue;
     const job = t.slice(JOB_TAG.length);
-    const done = p.ledger.some((e) =>
-      e.job === job && e.status === 'done' && e.provider === a.provider && (e.unit === a.id || (a.owner !== undefined && e.unit === a.owner)));
+    const done = service !== undefined
+      ? p.ledger.some((e) => e.status === 'done' && e.allowance?.service === service && e.allowance.job === job && forUnit(e.unit))
+      : p.ledger.some((e) => e.job === job && e.status === 'done' && e.provider === a.provider && forUnit(e.unit));
     if (done) return job;
   }
   return undefined;

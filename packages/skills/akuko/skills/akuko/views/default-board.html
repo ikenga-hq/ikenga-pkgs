@@ -1,5 +1,5 @@
 <!--
-akuko default board · default-board@0.6 · built from the locked design D-01 (option B, "Script desk")
+akuko default board · default-board@0.8 · built from the locked design D-01 (option B, "Script desk")
   What it is: the one finished review surface akuko ships. Script paper on the left, the shot list beside it with every shot lined to the
     line it came from, the spend gate pinned top-right, Bible and Ledger beneath it. It is a view in the sense of views/contract.md:
     it shows akuko.json and writes decisions through the inlined decision writer, nothing else.
@@ -21,6 +21,14 @@ akuko default board · default-board@0.6 · built from the locked design D-01 (o
     sentence to paste into chat.
   Note labels (@0.6): a person's note on a shot is labelled "Note on the shot", not with the shot's stage. A shot keeps its
     stage (sketch) while the film moves on, so a stage label read as if the note had been written at the sketch board.
+  Batch approval (@0.7, views/contract.md §4): "Approve all N shots in P7" on a one-part view and "Approve all bible entries (N)"
+    in the Bible open a confirm dialog listing every unit and the count. Only the Confirm click writes, one ordinary approve per
+    unit, all ending " · batch <uuid>". A batch never includes a unit sent back or an asset with no file. One "Undo batch" writes
+    one undo per decision of that batch. Nothing is pre-ticked and nothing happens on a timer or a page event.
+  Bible send-backs (@0.8): every reviewable bible image, entry, card and intake document gets "Request changes" ("Reopen ·
+    request changes" once approved) and "Add a note" wherever it shows "Approve", with the shot's composer ("Send back to
+    akuko"): one request-changes or note per unit, written only on the person's submit. Undo reverses the latest approval
+    or send-back. A unit sent back is never in a batch.
   Provenance: this exact file's sha256 is on views/conformed.json. Change it, bump "version", run scripts/check-view.mjs --ship again.
   Tokens: @ikenga/tokens theme A "Dusk Wood" values, defined under --ak-* names on purpose: a host that injects its own --bg-base / --fg
     (the Ikenga viewer does) must not be able to mix its palette into this page.
@@ -503,6 +511,24 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .lb-media { display: grid; place-items: center; min-height: 0; overflow: auto; }
 .lb-media img { display: block; max-width: 100%; max-height: calc(100vh - 160px); object-fit: contain; border-radius: var(--ak-radius-sm); }
 .lb-media svg { display: block; width: min(1100px, 86vw); height: auto; max-height: calc(100vh - 160px); }
+/* batch approval (@0.7): an opener, a confirm dialog that lists every unit, one Undo for the whole batch */
+.batch-open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.batch-open:empty { display: none; }
+.batch-open .fine { font-size: 12px; }
+.bp-box { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; gap: 10px; width: min(560px, 100%); max-height: min(720px, 100%); padding: 18px; background: var(--ak-bg-surface); color: var(--ak-fg); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-lg); box-shadow: var(--ak-shadow-3); }
+.bp-h { margin: 0; font: 500 18px/1.3 var(--ak-font-display); }
+.bp-h:focus { outline: none; }
+.bp-s { margin: 0; font: 500 14px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.bp-s b { color: var(--ak-fg); }
+.bp-list { margin: 0; padding: 0; list-style: none; overflow: auto; border: 1px solid var(--ak-border); border-radius: var(--ak-radius-sm); }
+.bp-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; font: 500 14px/1.4 var(--ak-font-sans); border-top: 1px solid var(--ak-border); }
+.bp-list li:first-child { border-top: 0; }
+.bp-list .mono { flex: none; }
+.bp-list .bp-what { color: var(--ak-fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-skip { margin: 0; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.bp-act { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.batch-bar[hidden] { display: none; }
 .lb-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; font: 500 14px/1.4 var(--ak-font-sans); }
 /* the stage lens: what a pipeline stage holds, at the top of the middle pane */
 .stage[data-lens="1"] { box-shadow: inset 0 -3px 0 var(--ak-info); }
@@ -700,6 +726,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
 <p class="warn-bar" id="sample-bar" role="status" hidden></p>
 <p class="warn-bar" id="store-warn" role="status" hidden></p>
+<div class="warn-bar batch-bar" id="batch-bar" role="status" hidden></div>
 
 <main class="desk" id="desk">
   <nav class="desk-nav" id="desknav" aria-label="Board sections"></nav>
@@ -730,6 +757,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     <div class="pane-head">
       <h2 class="ph-h" id="h-shots">Shots</h2>
       <p class="ph-sub mono" id="cut"></p>
+      <div class="batch-open" id="part-batch"></div>
       <div class="filters" id="parts" role="group" aria-label="Show one part of the film" hidden></div>
       <div class="filters" id="filters" role="group" aria-label="Filter shots by review status"></div>
     </div>
@@ -755,6 +783,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 <p class="vh" id="announce" aria-live="polite"></p>
 <p class="toast" id="toast" aria-hidden="true" hidden></p>
 <textarea class="copy-fallback" id="copy-fallback" readonly rows="4" aria-label="Your decisions, to copy by hand" hidden></textarea>
+<div class="lb" id="batch" role="dialog" aria-modal="true" aria-labelledby="bp-h" hidden><div class="bp-box" id="bp-box"></div></div>
 <div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-cap" hidden>
   <div class="lb-box">
     <div class="lb-media" id="lb-media"></div>
@@ -763,8 +792,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 </div>
 <input class="vh" id="file-in" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
 
-<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.6.0","variant":"default","fallback":{"mode":"mock"}}</script>
-<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.6","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
+<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.8.0","variant":"default","fallback":{"mode":"mock"}}</script>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.8","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
 <script type="application/json" id="akuko-project">{"format":"akuko","schema_version":1,"project":{"slug":"the-beating","title":"The Beating","logline":"A man insists he is sane while describing how he killed an old man for his pale, clouded eye — until the dead man's heart gives him away.","source":"Adapted from \"The Tell-Tale Heart\" by Edgar Allan Poe (1843, public domain)","runtime_s":70,"aspect_ratio":"16:9","profile":"film","created_at":"2026-11-05T00:00:00Z","notes":"Prices are illustrative fixture values, not quotes."},"host":{"level":"A","label":"Claude artifact","capabilities":{}},"stages":{"intake":{"state":"approved"},"breakdown":{"state":"approved"},"sketch":{"state":"in-review"},"bible":{"state":"in-progress"},"keyframes":{"state":"waiting-spend"},"motion":{"state":"locked"},"sound":{"state":"locked"},"assemble":{"state":"locked"},"export":{"state":"locked"}},"current_stage":"sketch","script":{"beats":[]},"scenes":[{"id":"sc1","heading":"INT. OLD MAN'S HOUSE — HALLWAY — NIGHT","summary":"Midnight. The narrator creeps to the old man's door, as he has every night for a week."},{"id":"sc2","heading":"INT. OLD MAN'S BEDROOM — NIGHT","summary":"The lantern's single ray falls on the eye. The old man wakes. The narrator strikes."},{"id":"sc3","heading":"INT. OLD MAN'S BEDROOM — LATER","summary":"He hides the body beneath the floorboards."},{"id":"sc4","heading":"INT. OLD MAN'S BEDROOM — DAWN","summary":"Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud."}],"shots":[{"id":"sc1_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"ws","camera":"Static, low angle","camera_move":"unset","action":"A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.","duration_s":6,"prompt":"Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro","refs":["char_narrator","loc_hallway","style_lookbook"],"script_line":"Every night, about midnight, I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"N","shape":"rect","x":0.72,"y":0.55,"w":0.06,"h":0.3}]},{"id":"sc1_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"insert","camera":"Macro, locked off","camera_move":"unset","action":"His hand turns the latch, a fraction at a time.","duration_s":4,"prompt":"Extreme close-up of a hand slowly turning an iron door latch, lantern light from below","refs":["char_narrator","style_lookbook"],"script_line":"I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"hand","shape":"rect","x":0.35,"y":0.35,"w":0.3,"h":0.3}]},{"id":"sc1_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"pov","camera":"Handheld, slow push","camera_move":"push-in","action":"Through the crack of the door: darkness, and the shape of the old man asleep.","duration_s":6,"prompt":"POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.","blocking":[{"who":"OM","shape":"ellipse","x":0.5,"y":0.62,"w":0.22,"h":0.12}]},{"id":"sc2_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The narrator opens the lantern a crack. A single thin ray cuts across the room.","duration_s":7,"prompt":"Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.","blocking":[{"who":"N","shape":"rect","x":0.18,"y":0.35,"w":0.12,"h":0.5},{"who":"OM","shape":"ellipse","x":0.72,"y":0.6,"w":0.2,"h":0.12}]},{"id":"sc2_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"The eye, pale blue with a film over it, wide open in the ray of light.","duration_s":4,"prompt":"Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam","refs":["char_oldman","style_lookbook"],"script_line":"It was open — wide, wide open — and I grew furious as I gazed upon it.","blocking":[{"who":"OM eye","shape":"ellipse","x":0.5,"y":0.5,"w":0.34,"h":0.2}]},{"id":"sc2_sh3","stage":"sketch","status":"needs-rework","comments":[{"ts":"2026-11-06T21:12:00Z","stage":"sketch","author":"You","text":"He should bolt up — this framing reads calm. Try a lower, tighter angle."}],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The old man sits up in bed: 'Who's there?'","duration_s":5,"prompt":"Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I heard him sit up in the bed, crying out — \"Who's there?\"","blocking":[{"who":"OM","shape":"rect","x":0.42,"y":0.3,"w":0.16,"h":0.42}]},{"id":"sc2_sh4","stage":"sketch","status":"pending-review","comments":[],"scene":"sc2","shot_type":"ws","camera":"Static, high angle","camera_move":"unset","action":"The lantern drops. The bed is dragged over him. Only shadows move.","duration_s":6,"prompt":"High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow","refs":["char_narrator","char_oldman","loc_bedroom","style_lookbook"],"script_line":"In an instant I dragged him to the floor, and pulled the heavy bed over him.","blocking":[{"who":"N","shape":"rect","x":0.3,"y":0.42,"w":0.1,"h":0.36},{"who":"bed","shape":"rect","x":0.5,"y":0.55,"w":0.32,"h":0.2}]},{"id":"sc3_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc3","shot_type":"overhead","camera":"Overhead, static","camera_move":"unset","action":"From above: he lifts three planks from the floor.","duration_s":7,"prompt":"Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I took up three planks from the flooring of the chamber, and deposited all between the scantlings.","blocking":[{"who":"N","shape":"ellipse","x":0.4,"y":0.45,"w":0.18,"h":0.18},{"who":"planks","shape":"rect","x":0.58,"y":0.3,"w":0.08,"h":0.42}]},{"id":"sc4_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ws","camera":"Static","camera_move":"unset","action":"Dawn light. Three officers stand in the doorway, hats in hand.","duration_s":6,"prompt":"Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway","refs":["char_officers","loc_bedroom","style_lookbook"],"script_line":"There entered three men, who introduced themselves, with perfect suavity, as officers of the police.","blocking":[{"who":"O1","shape":"rect","x":0.4,"y":0.3,"w":0.07,"h":0.45},{"who":"O2","shape":"rect","x":0.5,"y":0.3,"w":0.07,"h":0.45},{"who":"O3","shape":"rect","x":0.6,"y":0.3,"w":0.07,"h":0.45}]},{"id":"sc4_sh2","stage":"sketch","status":"pending-review","comments":[],"scene":"sc4","shot_type":"ms","camera":"Slow dolly in","camera_move":"push-in","action":"He places his chair directly over the hidden boards and smiles at the officers.","duration_s":8,"prompt":"Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"I placed my own seat upon the very spot beneath which reposed the corpse of the victim.","blocking":[{"who":"N","shape":"rect","x":0.44,"y":0.32,"w":0.12,"h":0.46},{"who":"O1","shape":"rect","x":0.12,"y":0.3,"w":0.06,"h":0.4}]},{"id":"sc4_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"Sweat on his temple. Under the silence, a low, dull, quick sound.","duration_s":5,"prompt":"Extreme close-up of a sweating temple and a twitching eye, cold dawn light","refs":["char_narrator","style_lookbook"],"script_line":"It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.","blocking":[{"who":"N face","shape":"ellipse","x":0.55,"y":0.45,"w":0.4,"h":0.5}]},{"id":"sc4_sh4","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ms","camera":"Handheld, whip to boards","camera_move":"whip-pan","action":"He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'","duration_s":6,"prompt":"Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"","blocking":[{"who":"N","shape":"rect","x":0.4,"y":0.5,"w":0.16,"h":0.32},{"who":"O2","shape":"rect","x":0.75,"y":0.28,"w":0.06,"h":0.42}]}],"bible":{"characters":[{"id":"char_narrator","stage":"bible","status":"approved","comments":[],"name":"The Narrator","role":"Principal","description":"Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle.","notes":[],"refs":["char_narrator_portrait","char_narrator_turnaround"]},{"id":"char_oldman","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man","role":"Principal","description":"Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'.","notes":[],"refs":["char_oldman_portrait","char_oldman_turnaround"]},{"id":"char_officers","stage":"bible","status":"pending","comments":[],"name":"Officers (×3)","role":"Supporting","description":"1840s police, dark greatcoats, polite and unhurried.","notes":[],"refs":[]}],"locations":[{"id":"loc_hallway","stage":"bible","status":"approved","comments":[],"name":"Hallway","description":"Narrow, bare boards, a single door at the end.","notes":[],"refs":["loc_hallway_plate"]},{"id":"loc_bedroom","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man's Bedroom","description":"Four-poster bed, shuttered window, wide pine floorboards.","notes":[],"refs":["loc_bedroom_plate"]}],"styles":[{"id":"style_lookbook","stage":"bible","status":"approved","comments":[],"name":"Lookbook","notes":["Lantern chiaroscuro: one warm source, everything else falls to black","Dawn scenes go cold and grey — the only daylight in the film","Fine film grain, no lens flares","Composition leaves dead space around the eye"],"refs":[]}]},"assets":[{"id":"char_narrator_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_narrator","tags":[]},{"id":"char_narrator_turnaround","stage":"bible","status":"approved","comments":[],"kind":"turnaround","owner":"char_narrator","tags":[]},{"id":"char_oldman_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_oldman","tags":[]},{"id":"char_oldman_turnaround","stage":"bible","status":"pending-review","comments":[],"kind":"turnaround","owner":"char_oldman","tags":[]},{"id":"loc_hallway_plate","stage":"bible","status":"approved","comments":[],"kind":"plate","owner":"loc_hallway","tags":[]},{"id":"loc_bedroom_plate","stage":"bible","status":"pending-review","comments":[],"kind":"plate","owner":"loc_bedroom","tags":[]}],"audio":{},"budget":{"cap":15,"currency":"USD","spent":0.84},"pending_spend":[{"id":"job_kf_sc1","stage":"keyframes","label":"Generate key frames for scene 1","units":["sc1_sh1","sc1_sh2","sc1_sh3"],"provider":"Gemini image","model":"gemini-3.1-flash-image-preview","estimate":0.36,"status":"awaiting-approval"}],"ledger":[{"ts":"2026-11-06T19:40:00Z","provider":"Gemini image","unit":"char_narrator_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T19:44:00Z","provider":"Gemini image","unit":"char_narrator_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:05:00Z","provider":"Gemini image","unit":"char_oldman_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T20:09:00Z","provider":"Gemini image","unit":"char_oldman_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:30:00Z","provider":"Gemini image","unit":"loc_hallway_plate","actual":0.06,"status":"done"},{"ts":"2026-11-06T20:33:00Z","provider":"Gemini image","unit":"loc_bedroom_plate","actual":0.06,"status":"done"}],"decisions":[],"_sample":true}</script>
 <script>
 /* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */
@@ -1103,7 +1132,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const RAILS = ['bible', 'ledger', 'gates', 'rules'];
   const FILTERS = ['all', 'pending-review', 'needs-rework', 'approved'];
   const hostMode = () => { const m = document.documentElement.getAttribute('data-mode'); return m === 'light' || m === 'dark' ? m : null; };
-  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null, showRemoved: false, lens: null, doneCopied: false };
+  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null, showRemoved: false, lens: null, doneCopied: false, batch: null };
   const saved = store.read();
   if (saved && saved.v === 2) {
     if (saved.sel && shotsById[saved.sel]) S.sel = saved.sel;
@@ -1283,6 +1312,89 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   /* every person's decision goes through the decision format (views/contract.md) */
   function decide(f) { return W.emit(f); }
+
+  /* ── batch approval (views/contract.md §4 "Batch approval") ──
+     An opener lists what a batch would approve in a confirm dialog; only the person's click on Confirm writes, one ordinary
+     approve per listed unit, all with the same text ending " · batch <uuid>" (decisions/fold.ts#BATCH_TEXT). A batch never
+     includes a unit sent back (needs-rework) or an asset with no file. "Undo batch" writes one undo per decision of the batch. */
+  const BATCH_RE = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+  const batchOf = d => { const m = BATCH_RE.exec((d && typeof d.text === 'string') ? d.text : ''); return m ? m[1] : null; };
+  function newBatchId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    const b = new Uint8Array(16); window.crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.prototype.map.call(b, x => (x + 0x100).toString(16).slice(1)).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  }
+  /* what a batch over one scope ("part:P7" or "bible") approves right now, and what it leaves out */
+  function batchScope(scope) {
+    if (scope === 'bible') {
+      const all = waitingOtherItems().filter(x => placeOf(x) === 'bible');
+      const units = all.filter(x => x.e || (x.a && x.a.uri)).map(x => ({ id: x.id, what: x.e ? x.e.name : ((x.a.owner && bibleById[x.a.owner] ? bibleById[x.a.owner].item.name + ' · ' : '') + (KIND[x.a.kind] || x.a.kind)) }));
+      const rework = Object.keys(bibleById).map(k => bibleById[k].item).filter(e => !e.removed && !hasAssetRef(e) && entryStatus(e) === 'needs-rework').length +
+        D.assets.filter(a => !a.removed && !a.idle && assetStatus(a) === 'needs-rework' && placeOf({ id: a.id, stage: a.stage, a: a }) === 'bible').length;
+      const n = units.length;
+      return { scope: scope, title: 'Approve all bible entries (' + n + ')', noun: n + ' bible ' + plural(n, 'entry', 'entries'), where: 'in the bible', units: units, rework: rework, fileless: all.length - n };
+    }
+    const m = /^part:(.+)$/.exec(scope || '');
+    if (!m || PARTS.indexOf(m[1]) === -1) return null;
+    const pt = m[1], shots = FILM.filter(s => live(s) && s.part === pt);
+    const units = shots.filter(s => shotStatus(s.id) === 'pending-review').map(s => ({ id: s.id, what: s.action }));
+    const n = units.length;
+    return { scope: scope, title: 'Approve all ' + n + ' ' + plural(n, 'shot') + ' in ' + pt, noun: n + ' ' + plural(n, 'shot'), where: 'in ' + pt, units: units, rework: shots.filter(s => shotStatus(s.id) === 'needs-rework').length, fileless: 0 };
+  }
+  function batchOpener(scope, key) {
+    const b = batchScope(scope);
+    if (!b || !b.units.length) return '';
+    return '<button class="btn btn-sm" type="button" data-act="batch-open" data-id="' + esc(scope) + '" data-akuko-batch="' + esc(scope) + '" data-k="batch-open:' + esc(key) + '" aria-haspopup="dialog">' + esc(b.title) + '</button>' +
+      (b.rework ? '<span class="fine">' + b.rework + ' sent back ' + (b.rework === 1 ? 'is' : 'are') + ' left out</span>' : '');
+  }
+  /* the approvals of one batch that still stand (not undone, not stale) */
+  const batchDecisions = bid => (EV ? EV.all : []).filter(d => d.action === 'approve' && batchOf(d) === bid && EV.active(d) && !EV.stale(d));
+  let batchReturn = null;
+  function openBatch(scope, opener) {
+    const b = batchScope(scope); if (!b || !b.units.length) return;
+    S.batch = { scope: scope };
+    batchReturn = opener && opener.dataset ? opener.dataset.k : null;
+    renderAll();
+    const h = $('#bp-h'); if (h) h.focus({ preventScroll: true });
+  }
+  function closeBatch() {
+    if (!S.batch) return;
+    S.batch = null;
+    renderAll(batchReturn);
+    batchReturn = null;
+  }
+  function renderBatch() {
+    const dlg = $('#batch'), box = $('#bp-box'); if (!dlg || !box) return;
+    const b = S.batch ? batchScope(S.batch.scope) : null;
+    if (!b || !b.units.length) { S.batch = null; dlg.hidden = true; box.removeAttribute('data-akuko-batch-panel'); setHtml(box, ''); return; }
+    box.setAttribute('data-akuko-batch-panel', b.scope);
+    const left = [b.rework ? b.rework + ' sent back (approve each on its own once it is fixed)' : '', b.fileless ? b.fileless + ' with no file yet' : ''].filter(Boolean);
+    setHtml(box, '<h2 class="bp-h" id="bp-h" tabindex="-1">' + esc(b.title) + '?</h2>' +
+      '<p class="bp-s" data-akuko-batch-count="' + b.units.length + '"><b>' + esc(b.noun) + '</b> ' + esc(b.where) + ' waiting for your review. Each gets its own approval, recorded together as one batch; one Undo reverses the whole batch.</p>' +
+      '<ol class="bp-list" aria-label="What this approves">' + b.units.map(u => '<li data-akuko-batch-unit="' + esc(u.id) + '"><span class="mono">' + esc(u.id) + '</span><span class="bp-what">' + esc(u.what || '') + '</span></li>').join('') + '</ol>' +
+      (left.length ? '<p class="bp-skip">Left out: ' + esc(left.join(' · ')) + '.</p>' : '<p class="bp-skip">Nothing waiting ' + esc(b.where) + ' is left out.</p>') +
+      '<div class="bp-act"><button class="btn" type="button" data-act="batch-cancel" data-k="batch-cancel">Cancel</button>' +
+      '<button class="btn btn-primary" type="button" data-act="batch-ok" data-id="' + esc(b.scope) + '" data-akuko-batch-confirm="' + esc(b.scope) + '" data-k="batch-ok">Approve ' + esc(b.noun) + '</button></div>');
+    dlg.hidden = false;
+  }
+  /* "Undo batch": this page's batches akuko has not folded in yet */
+  function renderBatchBar() {
+    const el = $('#batch-bar'); if (!el) return;
+    const folded = {}; D.decisions.forEach(d => { folded[d.id] = true; });
+    const seen = {}, bars = [];
+    W.all().slice().reverse().forEach(d => {
+      const bid = batchOf(d);
+      if (!bid || seen[bid] || d.action !== 'approve' || folded[d.id]) return;
+      seen[bid] = true;
+      const standing = batchDecisions(bid);
+      if (standing.length) bars.push({ bid: bid, n: standing.length, title: String(d.text).replace(BATCH_RE, '') });
+    });
+    const shown = bars.slice(0, 3);
+    el.hidden = !shown.length;
+    setHtml(el, shown.map(x => '<span>' + glyph('approved') + 'Approved ' + x.n + ' as one batch: “' + esc(x.title) + '”.</span><button class="linkbtn" type="button" data-act="batch-undo" data-id="' + x.bid + '" data-akuko-batch-undo="' + x.bid + '" data-k="batch-undo:' + x.bid + '">Undo batch (' + x.n + ')</button>').join(''));
+  }
 
   /* the money, exactly as views/contract.md §3 and the spend gate compute it */
   function moneyModel() {
@@ -1558,6 +1670,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       const a = Math.min.apply(null, shots.map(s => s._in)), b = Math.max.apply(null, shots.map(s => s._out));
       $('#cut').textContent = S.part + ' · ' + shots.length + ' ' + plural(shots.length, 'shot') + ' · ' + stamp(a) + '–' + stamp(b) + ' · ' + (c.approved || 0) + '/' + shots.length + ' approved';
     }
+    setHtml($('#part-batch'), S.part !== 'all' ? batchOpener('part:' + S.part, 'part:' + S.part) : '');
     const pe = $('#parts');
     pe.hidden = PARTS.length < 2;
     setHtml(pe, PARTS.length < 2 ? '' : '<span class="f-lbl" aria-hidden="true">Part</span>' + [['all', 'All parts', D.shots.filter(live).length]].concat(PARTS.map(pt => [pt, pt, D.shots.filter(s => live(s) && s.part === pt).length]))
@@ -1637,7 +1750,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       '<button class="btn btn-primary" type="button" data-act="approve" data-akuko-action="approve" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="approve:' + id + '" aria-disabled="' + isAp + '">' + (isAp ? 'Approved' : 'Approve') + '</button>' +
       '<button class="btn" type="button" data-act="request" data-akuko-action="request-changes" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="request:' + id + '">' + (isAp ? 'Reopen · request changes' : 'Request changes') + '</button>' +
       '<button class="btn btn-ghost" type="button" data-act="note" data-akuko-action="note" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="note:' + id + '">Add a note</button></div>';
-    if (S.compose && S.compose.id === id) {
+    if (S.compose && S.compose.id === id && !S.compose.key) {
       const req = S.compose.mode === 'request';
       rv += '<form class="composer" data-form="compose" data-id="' + id + '" novalidate>' +
         '<label class="lbl" for="compose-text">' + (req ? 'What should change? akuko redraws from this note.' : 'Note for akuko (the status stays as it is)') + '</label>' +
@@ -1773,7 +1886,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       const B = D.bible, ents = [].concat(B.characters, B.locations, B.styles).filter(e => !e.removed);
       const n = ents.reduce((a, e) => a + Math.max(1, e.assets.length), 0);
       sub = '<b>' + ents.length + ' ' + plural(ents.length, 'entry', 'entries') + '</b>, ' + n + ' ' + plural(n, 'picture') + ' · ' + waitingOtherItems().filter(x => placeOf(x) === 'bible').length + ' waiting for you. Click a picture to see it larger.';
-      body = '<div class="gal">' + ents.map(e => e.assets.length ? e.assets.filter(a => !a.removed).map(a => galleryItem(a, e.name + ' · ' + (KIND[a.kind] || a.kind))).join('')
+      const bo = batchOpener('bible', 'bible-lens');
+      body = (bo ? '<div class="batch-open">' + bo + '</div>' : '') + '<div class="gal">' + ents.map(e => e.assets.length ? e.assets.filter(a => !a.removed).map(a => galleryItem(a, e.name + ' · ' + (KIND[a.kind] || a.kind))).join('')
         : '<figure><div class="ph-frame" data-st="' + esc(entryStatus(e)) + '">' + esc(e.name) + '<small>no picture yet</small></div><figcaption><span class="g-name">' + esc(e.name) + '</span>' + chip(bibleStatus(e.id)) + approveAct(e.id, e.name, 'lens:' + e.id) + '</figcaption></figure>').join('') + '</div>';
     } else {
       const own = a => shotsById[a.owner] ? shotsById[a.owner]._in : (a.film ? a.film.in_s : Infinity);
@@ -1873,14 +1987,31 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
   /* ── bible ────────────────────────────────────────────── */
   function usedIn(bid) { return D.shots.filter(s => (s.refs || []).indexOf(bid) !== -1).length; }
+  /* the review controls of an image, entry, card or document: Approve, Request changes, Add a note (as a shot has, @0.8),
+     and the composer, shown only where the person opened it (the same unit can appear in the rail and in a lens) */
   function approveAct(unit, label, key) {
     const u = assetsById[unit] || (bibleById[unit] && bibleById[unit].item);
     if (u && u.removed) return '<div class="bib-act"><span class="flag flag-off">Removed from the sheet</span><span class="fine">Kept for the record; not reviewed.</span></div>';
     const st = effStatus(unit, (assetsById[unit] || (bibleById[unit] && bibleById[unit].item)).status);
-    if (st === 'pending-review' || st === 'needs-rework') return '<div class="bib-act"><span>' + esc(label) + ' is waiting for you</span><button class="btn btn-sm btn-primary" type="button" data-act="unit-ok" data-akuko-action="approve" data-akuko-unit="' + esc(unit) + '" data-id="' + esc(unit) + '" data-k="unit-ok:' + esc(key) + '">Approve ' + esc(label.toLowerCase()) + '</button></div>';
-    const t = undoTarget(unit, ['approve']);
-    if (st === 'approved' && t) return '<div class="bib-act" role="status"><span>' + esc(label) + ' approved.</span><button class="linkbtn" type="button" data-act="unit-undo" data-akuko-action="undo" data-akuko-unit="' + esc(unit) + '" data-id="' + esc(unit) + '" data-k="unit-undo:' + esc(key) + '">Undo</button></div>';
-    return '';
+    if (st !== 'pending-review' && st !== 'needs-rework' && st !== 'approved') return '';
+    const k = esc(key), id = esc(unit), lc = esc(label.toLowerCase());
+    const t = undoTarget(unit, ['approve', 'request-changes']);
+    const line = st === 'approved' ? esc(label) + ' approved.' : st === 'needs-rework' ? esc(label) + ' is sent back to akuko.' : esc(label) + ' is waiting for you';
+    const req = '<button class="btn btn-sm" type="button" data-act="request" data-akuko-action="request-changes" data-akuko-unit="' + id + '" data-id="' + id + '" data-ckey="' + k + '" data-k="unit-req:' + k + '">' + (st === 'approved' ? 'Reopen · request changes' : 'Request changes') + '</button>';
+    const note = '<button class="btn btn-sm btn-ghost" type="button" data-act="note" data-akuko-action="note" data-akuko-unit="' + id + '" data-id="' + id + '" data-ckey="' + k + '" data-k="unit-note:' + k + '">Add a note</button>';
+    const ok = st === 'approved' ? '' : '<button class="btn btn-sm btn-primary" type="button" data-act="unit-ok" data-akuko-action="approve" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="unit-ok:' + k + '">Approve ' + lc + '</button>';
+    const undo = t ? '<button class="linkbtn" type="button" data-act="unit-undo" data-akuko-action="undo" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="unit-undo:' + k + '">Undo</button>' : '';
+    let h = '<div class="bib-act"' + (st === 'approved' ? ' role="status"' : '') + '><span>' + line + '</span>' + ok + req + note + undo + '</div>';
+    if (S.compose && S.compose.id === unit && S.compose.key === key) {
+      const isReq = S.compose.mode === 'request';
+      h += '<form class="composer" data-form="compose" data-id="' + id + '" data-ckey="' + k + '" novalidate>' +
+        '<label class="lbl" for="compose-text">' + (isReq ? 'What should change? akuko makes this ' + lc + ' again from this note.' : 'Note for akuko (the status stays as it is)') + '</label>' +
+        '<textarea id="compose-text" rows="3" aria-describedby="compose-err" data-akuko-text>' + esc(S.compose.text || '') + '</textarea>' +
+        '<p class="err" id="compose-err" role="alert"></p>' +
+        '<div class="rv-btns"><button class="btn btn-primary" type="submit" data-akuko-submit data-k="c-submit:' + k + '">' + (isReq ? 'Send back to akuko' : 'Add note') + '</button>' +
+        '<button class="btn btn-ghost" type="button" data-act="c-cancel" data-id="' + id + '" data-ckey="' + k + '" data-k="c-cancel:' + k + '">Cancel</button><span class="kbd-hint">Ctrl + Enter sends · Esc cancels</span></div></form>';
+    }
+    return h;
   }
   function bibEntry(it, kind) {
     const bs = bibleStatus(it.id);
@@ -1919,7 +2050,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   function renderBible() {
     const PR = D.project, B = D.bible;
-    let h = '<div class="rp-body"><h2 class="rh rh-tabbed" id="h-bible" tabindex="-1">Bible</h2>' +
+    const bibleBatch = batchOpener('bible', 'bible');
+    let h = '<div class="rp-body"><h2 class="rh rh-tabbed" id="h-bible" tabindex="-1">Bible</h2>' + (bibleBatch ? '<div class="batch-open">' + bibleBatch + '</div>' : '') +
       '<section class="bib-group" aria-labelledby="bg-story"><h3 class="bib-gh" id="bg-story">Story</h3>' + (PR.logline ? '<p class="logline">' + esc(PR.logline) + '</p>' : '') + (PR.source ? '<p class="fine">' + esc(PR.source) + '</p>' : '') + '</section>' +
       '<section class="bib-group" aria-labelledby="bg-char"><h3 class="bib-gh" id="bg-char"><span>Characters</span><span class="mono">' + B.characters.length + '</span></h3>' + B.characters.map(c => bibEntry(c, 'character')).join('') + '</section>' +
       '<section class="bib-group" aria-labelledby="bg-loc"><h3 class="bib-gh" id="bg-loc"><span>Locations</span><span class="mono">' + B.locations.length + '</span></h3>' + B.locations.map(l => bibEntry(l, 'location')).join('') + '</section>';
@@ -2078,7 +2210,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const typing = ae && ae.id === 'compose-text' ? { s: ae.selectionStart, e: ae.selectionEnd } : null;
     document.documentElement.setAttribute('data-akuko-mode', S.mode);
     renderHeader(); renderNext(); renderStages(); renderNav();
-    paintScript(); renderIntake(); renderLens(); renderShots(); renderGate(); renderBible(); renderLedger(); renderGates(); renderRules(); renderFoot();
+    paintScript(); renderIntake(); renderLens(); renderShots(); renderGate(); renderBible(); renderLedger(); renderGates(); renderRules(); renderFoot(); renderBatchBar(); renderBatch();
     if (typing) {
       const ta = $('#compose-text');
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(typing.s, typing.e); } catch (e) { /* ignore */ } }
@@ -2090,7 +2222,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         else if (!el && fallbackFocus) { const fb = document.querySelector('[data-k="' + fallbackFocus + '"]'); if (fb) fb.focus({ preventScroll: true }); }
       }
     }
-    if (isSample()) $$('[data-akuko-action]').forEach(el => el.setAttribute('aria-disabled', 'true'));
+    if (isSample()) $$('[data-akuko-action], [data-akuko-batch], [data-akuko-batch-confirm], [data-akuko-batch-undo]').forEach(el => el.setAttribute('aria-disabled', 'true'));
     requestAnimationFrame(layoutLining);
     syncStuck();
   }
@@ -2228,12 +2360,14 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     let d;
     if (S.compose.mode === 'request') { d = decide({ action: 'request-changes', unit: id, stage: stageOf(id), text: text }); S.flash = { id: id, did: d.id, text: 'Sent back to akuko with your note.' }; announce(id + ' sent back to akuko'); }
     else { d = decide({ action: 'note', unit: id, stage: stageOf(id), text: text }); S.flash = { id: id, did: d.id, text: 'Note added to the thread.' }; announce('Note added to ' + id); }
+    const ck = S.compose.key;
     S.compose = null;
-    commit('approve:' + id);
+    commit(ck ? 'unit-req:' + ck : 'approve:' + id);
   }
 
   document.addEventListener('click', e => {
     if (e.target && e.target.id === 'lightbox') { closeZoom(); return; }
+    if (e.target && e.target.id === 'batch') { closeBatch(); return; }
     const t = e.target.closest('[data-act]');
     if (!t) {
       const ln = e.target.closest('#page .ln');
@@ -2241,7 +2375,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       return;
     }
     const a = t.dataset.act, id = t.dataset.id;
-    if (isSample() && t.hasAttribute('data-akuko-action')) { const msg = 'This is a sample project. Decisions start working once the board can read your project.'; announce(msg); $$('.sample-msg').forEach(n => n.remove()); const sm = document.createElement('span'); sm.className = 'sample-msg'; sm.setAttribute('role', 'status'); sm.textContent = msg; t.insertAdjacentElement('afterend', sm); return; }
+    if (isSample() && (t.hasAttribute('data-akuko-action') || t.hasAttribute('data-akuko-batch') || t.hasAttribute('data-akuko-batch-confirm') || t.hasAttribute('data-akuko-batch-undo'))) { const msg = 'This is a sample project. Decisions start working once the board can read your project.'; announce(msg); $$('.sample-msg').forEach(n => n.remove()); const sm = document.createElement('span'); sm.className = 'sample-msg'; sm.setAttribute('role', 'status'); sm.textContent = msg; t.insertAdjacentElement('afterend', sm); return; }
     if (t.getAttribute('aria-disabled') === 'true') return;
     switch (a) {
       case 'sel': selectShot(id, 'row'); break;
@@ -2252,12 +2386,14 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         S.compose = null; S.flash = { id: id, did: d.id, text: 'Approved. akuko picks this up on its next action.' };
         announce(id + ' approved'); commit('approve:' + id); break;
       }
-      case 'request': case 'note':
-        S.compose = { id: id, mode: a, text: (S.compose && S.compose.id === id && S.compose.mode === a) ? S.compose.text : '' };
+      case 'request': case 'note': {
+        const ckey = t.dataset.ckey || null;
+        S.compose = { id: id, mode: a, key: ckey, text: (S.compose && S.compose.id === id && S.compose.mode === a && S.compose.key === ckey) ? S.compose.text : '' };
         S.flash = null; renderAll();
         requestAnimationFrame(() => { const ta = $('#compose-text'); if (ta) ta.focus(); });
         break;
-      case 'c-cancel': S.compose = null; renderAll((S.sel ? 'approve:' + S.sel : null)); break;
+      }
+      case 'c-cancel': { const ck = S.compose && S.compose.key; S.compose = null; renderAll(ck ? 'unit-req:' + ck : (S.sel ? 'approve:' + S.sel : null)); break; }
       case 'undo': {
         const tg = undoTarget(id, ['approve', 'request-changes']); if (!tg) return;
         decide({ action: 'undo', unit: id, stage: stageOf(id), undoes: tg.id });
@@ -2330,9 +2466,27 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         announce('Approved'); commit('unit-undo:' + t.dataset.k.slice('unit-ok:'.length)); break;
       }
       case 'unit-undo': {
-        const tg = undoTarget(id, ['approve']); if (!tg) return;
+        const tg = undoTarget(id, ['approve', 'request-changes']); if (!tg) return;
         decide({ action: 'undo', unit: id, stage: stageOf(id), undoes: tg.id });
         announce('Undone'); commit('unit-ok:' + t.dataset.k.slice('unit-undo:'.length)); break;
+      }
+      case 'batch-open': openBatch(id, t); break;
+      case 'batch-cancel': closeBatch(); announce('Nothing approved'); break;
+      case 'batch-ok': {
+        /* the person's Confirm: one approve per unit the dialog lists, all with one batch id */
+        if (!S.batch || S.batch.scope !== id) return;
+        const b = batchScope(id);
+        if (!b || !b.units.length) { closeBatch(); return; }
+        const bid = newBatchId(), text = b.title + ' · batch ' + bid;
+        b.units.forEach(u => decide({ action: 'approve', unit: u.id, stage: stageOf(u.id), text: text }));
+        S.batch = null; batchReturn = null; S.flash = null; S.compose = null;
+        announce(b.noun + ' approved as one batch'); commit('batch-undo:' + bid); break;
+      }
+      case 'batch-undo': {
+        const list = batchDecisions(id); if (!list.length) return;
+        const text = 'Undo: ' + list[0].text;
+        list.forEach(d => decide({ action: 'undo', unit: d.unit, stage: stageOf(d.unit), undoes: d.id, text: text }));
+        announce('Batch undone. ' + list.length + ' ' + plural(list.length, 'item') + ' back to waiting for you'); commit(null); break;
       }
       case 'mode': S.mode = S.mode === 'dark' ? 'light' : 'dark'; S.modeChosen = true; commit('mode'); break;
       case 'export': copyDecisions(); break;
@@ -2383,6 +2537,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     }
   });
   document.addEventListener('keydown', e => {
+    const bp = $('#batch');
+    if (bp && !bp.hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closeBatch(); return; }
+      if (e.key === 'Tab') {
+        const f = $$('#bp-box button'); if (!f.length) return;
+        const i = f.indexOf(document.activeElement);
+        e.preventDefault();
+        f[i < 0 ? 0 : (i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus(); return;
+      }
+    }
     const lb = $('#lightbox');
     if (lb && !lb.hidden) {
       if (e.key === 'Escape') { e.preventDefault(); closeZoom(); return; }
