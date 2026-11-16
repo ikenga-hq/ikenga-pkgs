@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Discussions](https://img.shields.io/badge/community-discussions-5865F2.svg)](https://github.com/ikenga-hq/ikenga-pkgs/discussions)
-[![Newsletter](https://img.shields.io/badge/newsletter-Building%20in%20the%20Loop-e8590c.svg)](https://buildingintheloop.substack.com/subscribe)
+[![Newsletter](https://img.shields.io/badge/newsletter-nedjamez.com-e8590c.svg)](https://nedjamez.com/subscribe/)
 
 > The canonical home for first-party Ikenga packages — engines, MCP servers, mini-apps, and
 > helpers — in one Apache-2.0 monorepo.
@@ -53,7 +53,7 @@ within seconds of `pnpm changeset publish` completing, via the
 
 - [`ikenga`](https://github.com/ikenga-hq/ikenga) — the desktop shell that loads these
 - [`ikenga-contract`](https://github.com/ikenga-hq/ikenga-contract) — the manifest schema each pkg validates against
-- [Building in the Loop](https://buildingintheloop.substack.com/subscribe) — biweekly letters on running a real multi-agent Claude Code system
+- [Newsletter at nedjamez.com](https://nedjamez.com/subscribe/) — one post a month on running a real multi-agent Claude Code system
 
 ## License
 
