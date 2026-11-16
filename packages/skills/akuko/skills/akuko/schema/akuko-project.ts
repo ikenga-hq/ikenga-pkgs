@@ -285,11 +285,71 @@ export const CommentSchema = z.object({
 }).strict();
 export type Comment = z.infer<typeof CommentSchema>;
 
+// ─────────────────────────────────────────────────────────────────────────
+// AI quality flags (lib/state.md §Quality flags)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** A flag id: `flag_` and at least 8 lower-case hex characters (`review/flags.ts#newFlagId`). */
+export const FLAG_ID_PATTERN = /^flag_[0-9a-f]{8,}$/;
+export const FlagIdSchema = z.string().regex(FLAG_ID_PATTERN, 'a flag id is "flag_" and 8 or more lower-case hex characters');
+
+/** What kind of problem a flag points at. */
+export const FlagKindSchema = z.enum(['anatomy', 'style-drift', 'wardrobe-logo', 'likeness', 'text-in-image', 'continuity', 'other']);
+export type FlagKind = z.infer<typeof FlagKindSchema>;
+
+/** info: worth a look · warn: probably needs a change · block: a confirmed batch approval leaves the unit out while this is open. */
+export const FlagSeveritySchema = z.enum(['info', 'warn', 'block']);
+export type FlagSeverity = z.infer<typeof FlagSeveritySchema>;
+
+/** open until a person's decision closes it: accepted (sent back with it) or dismissed. Only folding writes accepted / dismissed. */
+export const FlagStatusSchema = z.enum(['open', 'accepted', 'dismissed']);
+export type FlagStatus = z.infer<typeof FlagStatusSchema>;
+
+/** A part of the picture, as 0–1 of its width and height. */
+export const FlagRegionSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0).max(1),
+  h: z.number().min(0).max(1),
+}).strict();
+
+/** The file the flag is about: what the agent looked at. */
+export const FlagEvidenceSchema = z.object({
+  uri: z.string().min(1).describe('The file looked at (project-relative path, asset-store path or URL).'),
+  sha256: Sha256Schema.optional().describe('Digest of that file, so a later take can tell the flag is about an earlier one.'),
+  asset: IdSchema.optional().describe('Asset id of the file, when it is an asset.'),
+  view: z.string().min(1).optional().describe('Which view of a sheet, e.g. "front", "side", "back".'),
+  region: FlagRegionSchema.optional(),
+}).strict();
+export type FlagEvidence = z.infer<typeof FlagEvidenceSchema>;
+
+/**
+ * A problem an agent spotted in what a stage produced, for a person to act
+ * on (lib/state.md §Quality flags). A flag never changes the unit's status:
+ * only a person's decision does (`request-changes` with `flag`, or
+ * `dismiss-flag`), and folding then closes the flag.
+ */
+export const FlagSchema = z.object({
+  id: FlagIdSchema,
+  ts: TimestampSchema,
+  stage: StageIdSchema,
+  kind: FlagKindSchema,
+  severity: FlagSeveritySchema,
+  text: z.string().min(1).describe('What is wrong, in plain words.'),
+  evidence: FlagEvidenceSchema,
+  suggested_change: z.string().min(1).optional().describe('Words a send-back could use; the person edits them before sending.'),
+  source: z.string().min(1).describe('Who flagged it: the agent id and model, e.g. "agent:claude-opus-5-5".'),
+  status: FlagStatusSchema,
+  decision: z.string().uuid().optional().describe('Id of the decision a person made that closed the flag. Absent while open.'),
+}).strict();
+export type Flag = z.infer<typeof FlagSchema>;
+
 /** What one stage produced for one unit. */
 export const UnitStageRecordSchema = z.object({
   status: UnitStatusSchema,
   content: z.string().optional().describe('Text output of the stage (e.g. a beat-sheet entry).'),
   output: AssetRefSchema.optional().describe('File the stage produced for this unit (panel, frame, clip).'),
+  flags: z.array(FlagSchema).optional().describe('Quality flags an agent raised on what this stage produced (lib/state.md §Quality flags).'),
 }).strict();
 export type UnitStageRecord = z.infer<typeof UnitStageRecordSchema>;
 
@@ -420,6 +480,44 @@ export const StillMoveSchema = z.object({
 }).strict();
 export type StillMove = z.infer<typeof StillMoveSchema>;
 
+/**
+ * A layout picture for a shot's key frame: a plain render of a 3D blockout of
+ * the place, from this shot's camera, that fixes where every object and figure
+ * sits in the frame (actions/keyframes.md §Layout from a 3D blockout). Made by
+ * the agent (a script in the project renders it), never a person's upload and
+ * never a generation. Set with `keyframes/cli.ts layout`, which stores the file
+ * through the host and records its sha256; the rules guard sends it only while
+ * the bytes still match that hash. A sheet re-import keeps it.
+ */
+export const ShotLayoutSchema = z.object({
+  uri: z.string().min(1).describe('The stored file (project-relative on hosts B and C).'),
+  sha256: Sha256Schema.describe('Digest of the file when it was set; a different file is a changed layout.'),
+  mime: z.string().optional(),
+  from: z.string().min(1).optional().describe('What made it, e.g. the blockout script or .blend in the project.'),
+  set_at: TimestampSchema.optional(),
+  mode: z.enum(['attach', 'two-step', 'off']).optional().describe('How the key frame uses it when `step` names no --layout-mode: attach (default: attached first with the other references, one generation), two-step (restyle the layout alone, then each character on model; 1 + characters generations), off (not used).'),
+}).strict();
+export type ShotLayout = z.infer<typeof ShotLayoutSchema>;
+
+/**
+ * One earlier step of a key frame made from a layout (actions/keyframes.md
+ * §Layout from a 3D blockout): step 1 restyles the blockout, each later step
+ * puts one character on model, and the last step's file is the take. The
+ * earlier files are kept here, on the take, so a failed later step can be
+ * retried alone and `status` and the audit can say what the frame was made
+ * from. They are not units: nobody reviews them.
+ */
+export const LayoutStepSchema = z.object({
+  step: z.enum(['restyle', 'identity']),
+  for: IdSchema.optional().describe('identity: the character this step put on model.'),
+  uri: z.string().min(1),
+  hash: z.string().optional().describe('sha256 of the file, when known; the rules guard sends it on only while it matches.'),
+  job: z.string().min(1).describe('The job that made it (a paid step job, or the manual job it was brought back for).'),
+  layout: z.string().regex(/^[0-9a-f]{16}$/).describe('First 16 hex of the sha256 of the layout it was made from.'),
+  at: TimestampSchema.optional(),
+}).strict();
+export type LayoutStep = z.infer<typeof LayoutStepSchema>;
+
 export const ShotSchema = UnitSchema.extend({
   scene: IdSchema.optional().describe('Scene id (scenes[].id).'),
   beat: z.string().optional().describe('Script beat id (script.beats[].id).'),
@@ -446,6 +544,8 @@ export const ShotSchema = UnitSchema.extend({
   tier: ShotTierSchema.optional(),
   framing: z.string().min(1).optional().describe('Framing from the sheet, free text.'),
   motion_note: z.string().optional().describe('Motion note from the sheet, free text (e.g. "Slow push-in").'),
+  source_frame: IdSchema.optional().describe('Another shot whose approved key frame this shot is a picture of (e.g. that frame as a printed photograph): attached to this key frame as a reference, which waits until it is approved. Set by hand; a sheet re-import keeps it.'),
+  layout: ShotLayoutSchema.optional().describe('A plain 3D-blockout render from the shot camera that fixes positions and composition; its `mode` says how the key frame uses it (attach by default). Set by `keyframes/cli.ts layout`; a sheet re-import keeps it.'),
   lines: z.array(ShotLineSchema).optional().describe('Dialogue lines the shot covers (audio.lines ids).'),
   treatment: ShotTreatmentSchema.optional(),
   move: StillMoveSchema.optional().describe('Camera move on the still (treatment still-move).'),
@@ -516,6 +616,7 @@ export const AssetSchema = UnitSchema.extend({
   film: FilmSpanSchema.optional().describe('Where the asset sits on the master clock, in seconds. Required on a card (integrity).'),
   source: SheetSourceSchema.optional().describe('The sheet row this asset was imported from (a card, WP-25).'),
   studio: StudioAssetExtSchema.optional(),
+  layout_steps: z.array(LayoutStepSchema).optional().describe('A key frame made from its shot\u2019s layout: the files of the steps before the last, in order (not units).'),
 }).strict();
 export type Asset = z.infer<typeof AssetSchema>;
 
@@ -668,6 +769,7 @@ export const LedgerEntrySchema = z.object({
   allowance: z.object({
     service: AllowanceServiceSchema,
     units: z.number().int().positive().describe('Generations this call used from the service allowance.'),
+    job: IdSchema.optional().describe('The (manual) job the generation was made for. Set by `recordAllowance({job})` or when the file comes back through `ingest --via <service>`; it is what lets rules/refs.ts count that file as generated.'),
   }).strict().optional().describe('Set when the call used a connected service plan allowance (e.g. the Canva monthly AI limit) instead of money: estimate and actual are then 0 (lib/spend.md §Allowance).'),
 }).strict();
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
@@ -688,15 +790,17 @@ const DecisionBase = {
 /**
  * One record per human decision. Views write decisions; they never edit the
  * project directly. `text` is required for `request-changes` and `note`;
- * `undoes` names the decision an `undo` reverses.
+ * `undoes` names the decision an `undo` reverses; `flag` names the quality
+ * flag a `dismiss-flag` dismisses, or a `request-changes` / `note` takes up.
  */
 export const DecisionSchema = z.discriminatedUnion('action', [
   z.object({ ...DecisionBase, action: z.literal('approve'), text: z.string().optional() }).strict(),
-  z.object({ ...DecisionBase, action: z.literal('request-changes'), text: z.string().min(1) }).strict(),
-  z.object({ ...DecisionBase, action: z.literal('note'), text: z.string().min(1) }).strict(),
+  z.object({ ...DecisionBase, action: z.literal('request-changes'), text: z.string().min(1), flag: FlagIdSchema.optional().describe('The quality flag this send-back takes up; folding marks it accepted.') }).strict(),
+  z.object({ ...DecisionBase, action: z.literal('note'), text: z.string().min(1), flag: FlagIdSchema.optional().describe('The quality flag this note is about; the flag stays open.') }).strict(),
   z.object({ ...DecisionBase, action: z.literal('approve-spend'), text: z.string().optional() }).strict(),
   z.object({ ...DecisionBase, action: z.literal('decline-spend'), text: z.string().optional() }).strict(),
   z.object({ ...DecisionBase, action: z.literal('undo'), undoes: z.string().uuid(), text: z.string().optional() }).strict(),
+  z.object({ ...DecisionBase, action: z.literal('dismiss-flag'), flag: FlagIdSchema.describe('The quality flag the person dismissed.'), text: z.string().optional() }).strict(),
 ]);
 export type Decision = z.infer<typeof DecisionSchema>;
 export type DecisionAction = Decision['action'];
@@ -992,6 +1096,7 @@ export const Schemas = {
   Unit: UnitSchema,
   UnitStageRecord: UnitStageRecordSchema,
   Comment: CommentSchema,
+  Flag: FlagSchema,
   Shot: ShotSchema,
   Blocking: BlockingSchema,
   BibleEntry: BibleEntrySchema,

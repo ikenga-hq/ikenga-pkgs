@@ -336,3 +336,18 @@ describe('audit: review follow-ups', () => {
     assert.doesNotMatch(second.out, /Dropped/);
   });
 });
+
+describe('audit: bible ids match as whole tokens', () => {
+  it('does not take cornflower-blue for BLUE, or TOM-NOW and TOM-HOME for TOM; the sheet form [TOM] still counts', () => {
+    const p = clean();
+    const base = p.bible.characters[0]!;
+    p.bible.characters.push({ ...base, id: 'BLUE', name: 'BLUE', refs: [] }, { ...base, id: 'TOM', name: 'TOM', refs: [] });
+    const shot = p.shots.find((s) => s.id === 'sc3_sh1')!;
+    shot.action = 'A cornflower-blue mug on the TOM-HOME counter while TOM-NOW smiles; the sky is blue.';
+    assert.ok(!checks(auditProject(p, { now: NOW }), 'sc3_sh1').some((c) => c.startsWith('character-not-in-prompt')));
+    shot.action = '[TOM] lifts his phone.';
+    assert.deepEqual(checks(auditProject(p, { now: NOW }), 'sc3_sh1'), ['character-not-in-prompt:low']);
+    shot.action = 'BLUE waits by the door.';
+    assert.deepEqual(checks(auditProject(p, { now: NOW }), 'sc3_sh1'), ['character-not-in-prompt:low']);
+  });
+});

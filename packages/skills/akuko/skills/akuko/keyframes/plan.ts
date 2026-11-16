@@ -15,19 +15,21 @@
  *   unitReadiness()   ready / blocked / in flight / in review / approved
  *   buildKeyframeJob() one gate-ready Job (default: the next shot)
  *   beginUnits() / abandonUnits() / repairFileless() / refreshStageState()
- *   stampRefs()       record which reference files a take was made from
+ *   stampRefs()       record which reference files (and layout) a take was made from
+ *   layoutState()     whether a take was made from the shot's current layout
+ *   layoutStepPlan() / parkLayoutSteps()   a key frame made from a layout, in steps
  *
  * Nothing here calls a provider, writes `approved`, or writes the project:
  * every function returns a new project for the caller to write via the host.
  */
 
 import { createHash } from 'node:crypto';
-import { STAGES, type AkukoProject, type Asset, type BibleEntry, type Shot } from '../schema/akuko-project.ts';
+import { STAGES, type AkukoProject, type Asset, type BibleEntry, type LayoutStep, type Shot } from '../schema/akuko-project.ts';
 import { jobTag } from '../providers/outputs.ts';
-import type { Job, JobItem, JobRef } from '../providers/contract.ts';
-import { BibleError, MAX_REFS, bibleAssets, requestedChanges, roleOf, type BibleRole } from '../bible/plan.ts';
+import type { Job, JobItem, JobRef, JobStep } from '../providers/contract.ts';
+import { BibleError, LOOKBOOK_NOTE, MAX_REFS, bibleAssets, mergeNegative, projectNegative, requestedChanges, roleOf, type BibleRole } from '../bible/plan.ts';
 import { removedAt } from '../decisions/fold.ts';
-import { keyframePrompt, type KeyframeContext } from './prompts.ts';
+import { identityPrompt, keyframePrompt, restylePrompt, type KeyframeContext } from './prompts.ts';
 
 export { MAX_REFS };
 
@@ -128,8 +130,43 @@ const ROLE_ORDER: Record<EntryKind, number> = { character: 0, location: 1, style
  * set from approved images) with the asset itself checked too. An image that
  * is planned but not in `refs[]` still comes back, `synced: false`, so the
  * caller can say what is missing.
+ *
+ * A lookbook is attached only when a location plate is: a lookbook is a
+ * picture of some place, and with no plate to say where the shot is, the model
+ * paints the lookbook's room, objects and people into it. A shot with no plate
+ * gets its look as text only (and so does not wait for the lookbook image).
+ *
+ * A shot with a layout in mode `two-step` is made in steps (`layoutStepPlan`):
+ * the blockout is restyled from words alone, then each character is put on
+ * model from their image. So it needs only the characters' images; its plate
+ * and lookbook are not attached (with them the model copies the picture and
+ * ignores the blockout) and it does not wait for them. In mode `attach` (the
+ * default) and `off` it needs what a shot without a layout needs.
  */
-export function neededRefs(p: AkukoProject, shot: Shot): NeededRef[] {
+export function neededRefs(p: AkukoProject, shot: Shot, mode: LayoutMode = layoutModeOf(shot)): NeededRef[] {
+  const out = pickedRefs(p, shot);
+  if (mode === 'two-step') return out.filter((r) => r.kind === 'character');
+  return out.some((r) => r.kind === 'location') ? out : out.filter((r) => r.kind !== 'style');
+}
+
+/**
+ * How a key frame uses its shot's layout (actions/keyframes.md §Layout modes):
+ *   attach    the layout attached first with the other references; one generation (the default: what a layout always did)
+ *   two-step  restyle the layout alone, then each character on model; 1 + characters generations
+ *   off       the layout is ignored for this job
+ */
+export type LayoutMode = 'attach' | 'two-step' | 'off';
+export const LAYOUT_MODES: readonly LayoutMode[] = ['attach', 'two-step', 'off'];
+/** The mode a shot's key frame uses: the job's `--layout-mode`, else the shot's `layout.mode`, else attach (only meaningful when it has a layout). */
+export function layoutModeOf(shot: Shot, override?: LayoutMode): LayoutMode {
+  return override ?? shot.layout?.mode ?? 'attach';
+}
+/** Generations one take of the shot's key frame costs in `mode`. */
+export function layoutGenerations(p: AkukoProject, shot: Shot, mode: LayoutMode = layoutModeOf(shot)): number {
+  return shot.layout && mode === 'two-step' ? layoutStepPlan(p, shot).length : 1;
+}
+
+function pickedRefs(p: AkukoProject, shot: Shot): NeededRef[] {
   const out: NeededRef[] = [];
   const mine = bibleAssets(p);
   for (const { kind, entry } of entriesOf(p, shot)) {
@@ -141,9 +178,181 @@ export function neededRefs(p: AkukoProject, shot: Shot): NeededRef[] {
   return out.sort((a, b) => ROLE_ORDER[a.kind] - ROLE_ORDER[b.kind]);
 }
 
-/** Ids a key frame is waiting for: bible images not approved with a file, or not yet in the entry's `refs[]`. */
+/** The style entries a shot is made in: those its `refs[]` names, or every style entry when it names none. */
+export const shotStyles = (p: AkukoProject, shot: Shot): BibleEntry[] => entriesOf(p, shot).filter((e) => e.kind === 'style').map((e) => e.entry);
+
+/**
+ * The key frame a shot is a picture of (`shot.source_frame`), when it has one:
+ * the asset, or why it cannot be used. A chain is fine (C shows B which shows
+ * A); a loop never becomes ready.
+ */
+export function sourceFrameOf(p: AkukoProject, shot: Shot): { shot: string; asset?: Asset; problem?: string } | undefined {
+  const id = shot.source_frame;
+  if (id === undefined) return undefined;
+  const src = p.shots.find((s) => s.id === id);
+  if (!src || removedAt(p, src) !== undefined) return { shot: id, problem: `${id} (source frame: no such shot)` };
+  // Follow the chain from the source; coming back to a shot already seen is a loop.
+  const seen = new Set([shot.id, src.id]);
+  for (let next = src.source_frame; next !== undefined; next = p.shots.find((s) => s.id === next)?.source_frame) {
+    if (seen.has(next)) return { shot: id, problem: `${id} (source frames loop back to ${next})` };
+    seen.add(next);
+  }
+  const asset = p.assets.find((a) => a.id === assetIdFor(id) && isKeyframe(a));
+  return asset ? { shot: id, asset } : { shot: id, problem: `${assetIdFor(id)} (source frame not planned)` };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Layout: a 3D-blockout render that fixes positions (shot.layout)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The id a shot's layout goes by in a job's refs (it is not an asset). */
+export const layoutRefId = (shotId: string): string => `${shotId}_layout`;
+/** Stamp on a take made from a layout: `layout:<first 16 hex of its sha256>`. */
+const LAYOUT_STAMP = 'layout:';
+/** The short form of a layout's sha256 that stamps and recorded steps carry. */
+export const layoutKey = (sha256: string): string => sha256.slice(0, 16);
+const layoutStamp = (sha256: string): string => `${LAYOUT_STAMP}${layoutKey(sha256)}`;
+
+/** The layout's note in mode two-step (step 1, where it is the only picture). */
+export const LAYOUT_NOTE = "a plain untextured 3D blockout render from this shot's camera, the only picture for this step: restyle it into the finished frame, keeping the camera, the composition and the position and size of every wall, object and figure exactly";
+/** The layout's note in mode attach (attached first with the other references). */
+export const LAYOUT_ATTACH_NOTE = "a plain untextured 3D blockout render from this shot's camera: keep the camera angle, the composition and the position and size of every object and figure exactly; take no colour, material, lighting or style from it; its grey or blue box figures are stand-ins for the named characters";
+/** Stamp on a take made in mode two-step. */
+const TWO_STEP_STAMP = 'layout-mode:two-step';
+/** Whether a take was made from its layout in two steps (its stamp), for the audit. */
+export const madeInSteps = (a: Asset): boolean => a.tags.includes(TWO_STEP_STAMP);
+
+/** One generation of a key frame made from its layout: restyle the blockout, or put one character on model. */
+export interface LayoutStepPlan {
+  step: 'restyle' | 'identity';
+  /** identity: the character and the image it is put on model from (turnaround, portrait if none). */
+  character?: NeededRef;
+  /** Short name for people: `restyle`, `identity MARA`. */
+  name: string;
+}
+
+/**
+ * The steps a shot's key frame is made in when it has a layout: step 1
+ * restyles the blockout (the layout is its only picture), then one step per
+ * character in frame with an approved image (turnaround, portrait if none),
+ * each an edit of the step before with that character's image. No character
+ * image: the restyle is the take. Empty without a layout.
+ */
+export function layoutStepPlan(p: AkukoProject, shot: Shot): LayoutStepPlan[] {
+  if (!shot.layout) return [];
+  const chars = neededRefs(p, shot, 'two-step');
+  return [{ step: 'restyle', name: 'restyle' }, ...chars.map((n) => ({ step: 'identity' as const, character: n, name: `identity ${n.entry.name}` }))];
+}
+
+/** The job id of step `i` (0-based) of `total` for a take whose job id is `base`: the last step is `base` itself, the earlier ones `<base>_s<i+1>`. */
+export const layoutStepJobId = (base: string, i: number, total: number): string => (i === total - 1 ? base : `${base}_s${i + 1}`);
+const STEP_JOB = /^(.+)_s(\d+)$/;
+/** The id a recorded earlier step goes by in a job's refs (not an asset): `<key frame>_step<n>`, 1-based. */
+export const layoutStepRefId = (assetId: string, n: number): string => `${assetId}_step${n}`;
+
+/** How many steps of the take `base` are already made and recorded on `a` (they must be the first ones, in order, from the current layout). */
+export function layoutStepsDone(p: AkukoProject, a: Asset, base: string, total: number): number {
+  const shot = p.shots.find((s) => s.id === a.owner);
+  if (!shot?.layout) return 0;
+  const key = layoutKey(shot.layout.sha256);
+  const rec = a.layout_steps ?? [];
+  let n = 0;
+  while (n < total - 1 && rec[n] !== undefined && rec[n]!.layout === key && rec[n]!.job === layoutStepJobId(base, n, total)) n++;
+  return n;
+}
+
+/**
+ * After a paid step job before the last was collected, the gate has filled the
+ * key frame with that step's file and moved it to review. It is not a take:
+ * record it in `layout_steps`, clear the file and put the key frame back to
+ * `draft`, so the next step can run and nobody is asked to review it. A step
+ * is recognised by its job tag `job:<base>_s<n>` on a key frame that has no
+ * `job:<base>` tag yet (the last step's). Safe to run again; never writes `approved`.
+ */
+export function parkLayoutSteps(project: AkukoProject, ts: string): { project: AkukoProject; parked: string[] } {
+  let p = project;
+  const parked: string[] = [];
+  for (const a of liveKeyframes(project)) {
+    if (!a.file) continue;
+    const inProgress = new Map<string, number>();
+    for (const t of a.tags) {
+      if (!t.startsWith('job:')) continue;
+      const m = STEP_JOB.exec(t.slice(4));
+      if (!m || a.tags.includes(jobTag(m[1]!))) continue;
+      inProgress.set(m[1]!, Math.max(inProgress.get(m[1]!) ?? 0, Number(m[2])));
+    }
+    for (const [base, n] of inProgress) {
+      const job = `${base}_s${n}`;
+      if ((a.layout_steps ?? []).some((s) => s.job === job)) continue;
+      const shot = p.shots.find((s) => s.id === a.owner);
+      const made = a.tags.find((t) => t.startsWith(LAYOUT_STAMP))?.slice(LAYOUT_STAMP.length) ?? (shot?.layout ? layoutKey(shot.layout.sha256) : undefined);
+      if (!made || !/^[0-9a-f]{16}$/.test(made)) continue;
+      const plan = shot ? layoutStepPlan(p, shot)[n - 1] : undefined;
+      const step: LayoutStep = {
+        step: plan?.step ?? (n === 1 ? 'restyle' : 'identity'),
+        ...(plan?.character ? { for: plan.character.entry.id } : {}),
+        uri: a.file.uri,
+        ...(a.file.hash !== undefined ? { hash: a.file.hash } : {}),
+        job,
+        layout: made,
+        at: ts,
+      };
+      p = structuredClone(p);
+      const x = p.assets.find((y) => y.id === a.id)!;
+      // Keep the steps of this take that come before it; anything else is from an earlier take or layout.
+      const keep = (x.layout_steps ?? []).filter((s, i) => i < n - 1 && s.job === `${base}_s${i + 1}`);
+      x.layout_steps = [...keep, step];
+      delete x.file;
+      x.status = 'draft';
+      x.by_stage = { ...(x.by_stage ?? {}), [KEYFRAME_STAGE]: { status: 'draft' } };
+      x.updated_at = ts;
+      parked.push(`${a.id} step ${n}`);
+      break;
+    }
+  }
+  return { project: p, parked };
+}
+
+/** Where a key frame made from its layout stands, for `status`: how many steps are recorded for the current layout, and how many it takes. */
+export function layoutProgress(p: AkukoProject, a: Asset): { mode: LayoutMode; done: number; total: number; names: string[] } | undefined {
+  const shot = p.shots.find((s) => s.id === a.owner);
+  if (!shot?.layout) return undefined;
+  const mode = layoutModeOf(shot);
+  if (mode !== 'two-step') return { mode, done: 0, total: 1, names: [] };
+  const plan = layoutStepPlan(p, shot);
+  const key = layoutKey(shot.layout.sha256);
+  const rec = (a.layout_steps ?? []).filter((s) => s.layout === key);
+  return { mode, done: Math.min(rec.length, plan.length - 1), total: plan.length, names: plan.map((s) => s.name) };
+}
+
+/**
+ * Whether a key frame's take was made from its shot's layout:
+ *   none      the shot has no layout and the take was made without one
+ *   pending   the shot has a layout and there is no take to judge yet (the next take uses it)
+ *   used      the take was made from the current layout
+ *   not-used  the take was made without a layout; the shot has one now
+ *   changed   the take was made from a layout that has since been replaced or removed
+ * Reporting only, like superseded references: a person alone sends a frame back.
+ */
+export type LayoutState = 'none' | 'pending' | 'used' | 'not-used' | 'changed';
+
+export function layoutState(p: AkukoProject, a: Asset): LayoutState {
+  const shot = p.shots.find((s) => s.id === a.owner);
+  const want = shot?.layout ? layoutStamp(shot.layout.sha256) : undefined;
+  const made = a.tags.find((t) => t.startsWith(LAYOUT_STAMP));
+  const judged = hasFile(a) && a.status !== 'needs-rework' && a.status !== 'draft';
+  if (!judged) return want ? 'pending' : 'none';
+  if (made === undefined) return want ? 'not-used' : 'none';
+  return made === want ? 'used' : 'changed';
+}
+
+/** Ids a key frame is waiting for: bible images not approved with a file, or not yet in the entry's `refs[]`, and its source frame until a person approved it. */
 function waitingFor(p: AkukoProject, shot: Shot): string[] {
-  return neededRefs(p, shot).filter((r) => !approvedWithFile(r.asset) || !r.synced).map((r) => r.asset.id);
+  const out = neededRefs(p, shot).filter((r) => !approvedWithFile(r.asset) || !r.synced).map((r) => r.asset.id);
+  const src = sourceFrameOf(p, shot);
+  if (src?.problem) out.push(src.problem);
+  else if (src?.asset && !approvedWithFile(src.asset)) out.push(src.asset.id);
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -177,8 +386,9 @@ export interface StatusRow {
   status: Asset['status'];
   state: ReadinessState;
   waiting: string[];
-  /** References this take was made from that have since been sent back or replaced. */
+  /** References this take was made from that have since been sent back or replaced (`<shot>_layout` for a changed layout). */
   superseded: string[];
+  layout: LayoutState;
 }
 
 /** Short fingerprint of a file; identical to the bible stage's, so its stamps and ours agree. */
@@ -200,13 +410,14 @@ export function supersededRefs(p: AkukoProject, a: Asset): string[] {
     const dep = p.assets.find((x) => x.id === m[1]);
     if (!dep || !approvedWithFile(dep) || fingerprint(dep) !== m[2]) out.push(m[1]!);
   }
+  if (layoutState(p, a) === 'changed') out.push(layoutRefId(a.owner ?? ''));
   return out;
 }
 
 export function keyframeStatus(p: AkukoProject): StatusRow[] {
   return liveKeyframes(p).map((a) => {
     const r = unitReadiness(p, a);
-    return { shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, superseded: supersededRefs(p, a) };
+    return { shot: a.owner ?? '', asset: a.id, status: a.status, state: r.state, waiting: r.waiting, superseded: supersededRefs(p, a), layout: layoutState(p, a) };
   });
 }
 
@@ -221,9 +432,10 @@ export function jobRan(p: AkukoProject, id: string): boolean {
 }
 
 /** Deterministic id: `job_kf_<hash of units + provider + model>_r<n>`. A regeneration after a send-back is the next `r<n>` with its own approval. */
-export function keyframeJobId(p: AkukoProject, units: string[], provider = '', model = ''): string {
+export function keyframeJobId(p: AkukoProject, units: string[], provider = '', model = '', layout = ''): string {
   // Provider and model are part of the id: a person's approval binds to one provider and model, so changing either is a new job with a fresh approval.
-  const base = `job_kf_${hash8([[...units].sort().join('|'), provider, model].join('#'))}`;
+  // A key frame made from a layout also hashes the layout's key, so a new layout starts its steps afresh.
+  const base = `job_kf_${hash8([[...units].sort().join('|'), provider, model, ...(layout ? [layout] : [])].join('#'))}`;
   let n = 1;
   while (jobRan(p, `${base}_r${n}`)) n++;
   return `${base}_r${n}`;
@@ -236,24 +448,33 @@ export interface BuildOptions {
   units?: string[];
   /** Generate every ready key frame of this scene in one job. */
   scene?: string;
+  /** How a shot's layout is used in this job; default each shot's `layout.mode`, else attach. */
+  layoutMode?: LayoutMode;
 }
 
 /** A ready key frame that could not be built, and why. */
 export interface Skipped { unit: string; reason: string }
-export interface BuiltJob { job: Job; units: string[]; refs: Record<string, string[]>; skipped: Skipped[] }
+/** A key frame made from its layout by a paid provider: one job per step, run in order (`keyframes/run.ts`). */
+export interface LayoutChain {
+  unit: string;
+  /** The take's job id: the last step's. */
+  base: string;
+  total: number;
+  /** Steps already made and recorded on the key frame. */
+  done: number;
+  /** The steps still to run, the next first. A later identity step has no ref to the earlier step's file yet (it does not exist); it is priced without it and rebuilt when its turn comes. */
+  steps: Array<{ index: number; name: string; job: Job }>;
+}
+export interface BuiltJob { job: Job; units: string[]; refs: Record<string, string[]>; skipped: Skipped[]; chain?: LayoutChain }
 
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`;
-
-/** The film's written look, from the style entries. */
-const lookText = (p: AkukoProject): string =>
-  p.bible.styles.map((s) => [s.name + (s.description ? `: ${s.description}` : ''), ...s.notes].join('. ').replace(/\.\.+/g, '.')).join(' | ');
 
 const REF_NOTE: Record<EntryKind, (name: string, role: BibleRole) => string> = {
   character: (name, role) => role === 'turnaround'
     ? `the approved turnaround sheet of ${name}: keep face, hair, build and clothing exactly; ignore the sheet's layout and labels`
     : `the approved portrait of ${name}: keep face, hair, build and clothing exactly`,
   location: (name) => `the approved plate of ${name}: keep the place, its layout and props`,
-  style: () => 'the approved lookbook: match its light, palette and grain',
+  style: () => LOOKBOOK_NOTE,
 };
 
 /**
@@ -287,17 +508,121 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   }
   if (new Set(chosen.map((a) => a.id)).size !== chosen.length) throw new KeyframeError('a unit was listed twice');
 
-  const look = lookText(p);
+  const filmNegative = projectNegative(p);
   const refsOut: Record<string, string[]> = {};
+  const contextOf = (shot: Shot, needed: NeededRef[], src?: { shot: string; asset?: Asset }): KeyframeContext => {
+    const scene = p.scenes.find((s) => s.id === shot.scene);
+    const named = entriesOf(p, shot);
+    return {
+      shot,
+      aspect: p.project.aspect_ratio,
+      scene: scene ? [scene.heading, scene.summary].filter(Boolean).join(' - ') : '',
+      styles: shotStyles(p, shot),
+      lookbook: needed.some((n) => n.kind === 'style'),
+      ...(src?.asset ? { source: src.shot } : {}),
+      characters: needed.filter((n) => n.kind === 'character').map((n) => n.entry),
+      // With a layout the plate is not attached, but the place is still described in words.
+      location: needed.find((n) => n.kind === 'location')?.entry ?? (shot.layout ? named.find((e) => e.kind === 'location')?.entry : undefined),
+      unreferenced: named.filter((e) => e.kind === 'character' && !needed.some((n) => n.entry.id === e.entry.id)).map((e) => e.entry),
+    };
+  };
+  const askedOf = (a: Asset): string => {
+    const changes = requestedChanges(a);
+    return (a.status === 'needs-rework' || a.status === 'draft') && changes !== '' ? changes : '';
+  };
+  const charRef = (n: NeededRef): JobRef => ({ id: n.asset.id, uri: n.asset.file!.uri, role: n.kind, note: REF_NOTE[n.kind](n.entry.name, roleOf(n.asset)) });
+
+  /** The generations of a key frame made from its layout (see `layoutStepPlan`), as job steps. `prev(i)` is the ref to step i's result (1-based), when it exists. */
+  const layoutSteps = (a: Asset, prev: (i: number) => JobRef | undefined): JobStep[] => {
+    const shot = shotOf(p, a);
+    const plan = layoutStepPlan(p, shot);
+    const ctx = contextOf(shot, neededRefs(p, shot, 'two-step'));
+    const asked = askedOf(a);
+    const negative = mergeNegative(shot.negative, filmNegative);
+    return plan.map((s, i): JobStep => {
+      if (s.step === 'restyle') {
+        return { name: s.name, prompt: restylePrompt(ctx, asked), refs: [{ id: layoutRefId(shot.id), uri: shot.layout!.uri, role: 'layout', note: LAYOUT_NOTE }], ...(negative ? { negative } : {}), ...(shot.seed !== undefined ? { seed: shot.seed } : {}) };
+      }
+      const n = s.character!;
+      const before = prev(i) ?? { id: layoutStepRefId(a.id, i), role: 'previous-step', note: `the result of step ${i} (${plan[i - 1]!.name}): keep it exactly; this step changes only ${n.entry.name}` };
+      return {
+        name: s.name,
+        prompt: identityPrompt({ shot, name: n.entry.name, image: roleOf(n.asset) === 'turnaround' ? 'turnaround' : 'portrait', alone: plan.length === 2, asked }),
+        refs: [before, charRef(n)],
+        ...(negative ? { negative } : {}),
+      };
+    });
+  };
+  const recordedRef = (a: Asset, i: number): JobRef | undefined => {
+    const r = a.layout_steps?.[i - 1];
+    return r ? { id: layoutStepRefId(a.id, i), uri: r.uri, role: 'previous-step', note: `the result of step ${i} (${r.step}${r.for ? ` ${r.for}` : ''}): keep everything in it exactly` } : undefined;
+  };
+  const itemOf = (a: Asset, s: JobStep): JobItem => ({
+    unit: a.id,
+    prompt: s.prompt,
+    output: 'keyframe',
+    aspect_ratio: p.project.aspect_ratio,
+    count: 1,
+    ...(s.negative ? { negative: s.negative } : {}),
+    ...(s.seed !== undefined ? { seed: s.seed } : {}),
+    ...(s.refs?.length ? { refs: s.refs } : {}),
+  });
+  /** Manual provider: one item that carries every step, for the person to run in order. */
+  const manualLayoutItem = (a: Asset): JobItem => {
+    const steps = layoutSteps(a, () => undefined);
+    const all = steps.flatMap((s) => s.refs ?? []).filter((r) => r.uri !== undefined);
+    refsOut[a.id] = all.map((r) => r.id);
+    return { ...itemOf(a, steps[0]!), ...(all.length ? { refs: all } : {}), ...(steps.length > 1 ? { steps } : {}) };
+  };
+  let chain: LayoutChain | undefined;
+  const layoutChain = (a: Asset): JobItem => {
+    const shot = shotOf(p, a);
+    const plan = layoutStepPlan(p, shot);
+    const total = plan.length;
+    const base = keyframeJobId(p, [a.id], o.provider, o.model ?? '', layoutKey(shot.layout!.sha256));
+    const done = layoutStepsDone(p, a, base, total);
+    const steps = layoutSteps(a, (i) => (i <= done ? recordedRef(a, i) : undefined));
+    const out: LayoutChain['steps'] = [];
+    for (let i = done; i < total; i++) {
+      const s = steps[i]!;
+      // A later step's earlier-step ref does not exist yet: price it without that ref; it is rebuilt when it runs.
+      const item = i === done ? itemOf(a, s) : itemOf(a, { ...s, refs: (s.refs ?? []).filter((r) => r.uri !== undefined) });
+      out.push({ index: i, name: s.name, job: {
+        id: layoutStepJobId(base, i, total),
+        stage: KEYFRAME_STAGE,
+        kind: 'image',
+        provider: o.provider,
+        ...(o.model !== undefined ? { model: o.model } : {}),
+        label: `Key frames: 1 shot (${shot.id}), step ${i + 1} of ${total} from its layout: ${s.name}`,
+        items: [item],
+      } });
+    }
+    chain = { unit: a.id, base, total, done, steps: out };
+    refsOut[a.id] = (out[0]!.job.items[0]!.refs ?? []).map((r) => r.id);
+    return out[0]!.job.items[0]!;
+  };
+  const isManual = o.provider === 'manual';
+  const modeOf = (a: Asset): LayoutMode | undefined => { const s = shotOf(p, a); return s.layout ? layoutModeOf(s, o.layoutMode) : undefined; };
   const buildItem = (a: Asset): JobItem => {
     const shot = shotOf(p, a);
-    const needed = neededRefs(p, shot);
-    const refs: JobRef[] = needed.map((n) => ({
+    const mode = modeOf(a);
+    if (mode === 'two-step') return isManual ? manualLayoutItem(a) : layoutChain(a);
+    const needed = neededRefs(p, shot, mode ?? 'attach');
+    // A --layout-mode that differs from the shot's own can need an image readiness did not wait for.
+    const unready = needed.filter((n) => !approvedWithFile(n.asset));
+    if (unready.length) throw new KeyframeError(`${a.id} in layout mode ${mode} needs ${unready.map((n) => n.asset.id).join(', ')}, which ${unready.length === 1 ? 'is' : 'are'} not approved with a file yet.`);
+    // Mode attach: the layout goes first; it fixes where everything is, and every image after it is for identity and look.
+    const attach = mode === 'attach';
+    const layoutRef: JobRef[] = attach ? [{ id: layoutRefId(shot.id), uri: shot.layout!.uri, role: 'layout', note: LAYOUT_ATTACH_NOTE }] : [];
+    const refs: JobRef[] = [...layoutRef, ...needed.map((n) => ({
       id: n.asset.id,
       uri: n.asset.file!.uri,
       role: n.kind,
-      note: REF_NOTE[n.kind](n.entry.name, roleOf(n.asset)),
-    }));
+      note: attach && n.kind === 'location' ? `${REF_NOTE.location(n.entry.name, roleOf(n.asset))}; with a layout attached, for the look of the place only (surfaces, materials, colour, light): where things are comes from the layout` : REF_NOTE[n.kind](n.entry.name, roleOf(n.asset)),
+    }))];
+    // The key frame this shot is a picture of (readiness has checked it is approved with a file).
+    const src = sourceFrameOf(p, shot);
+    if (src?.asset?.file) refs.push({ id: src.asset.id, uri: src.asset.file.uri, role: 'frame', note: `the approved key frame of shot ${src.shot}: this shot shows that same picture; keep its people, clothes, colours and composition` });
     // Pictures the person supplied for this shot.
     for (const x of p.assets) {
       if (x.kind === 'reference' && x.owner === shot.id && hasFile(x)) refs.push({ id: x.id, uri: x.file!.uri, role: 'reference', note: 'supplied by the person' });
@@ -305,26 +630,18 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
     if (refs.length > MAX_REFS) {
       throw new KeyframeError(`${a.id} would send ${refs.length} reference images; the image providers accept at most ${MAX_REFS}. Remove some supplied references.`);
     }
-    const scene = p.scenes.find((s) => s.id === shot.scene);
-    const ctx: KeyframeContext = {
-      shot,
-      aspect: p.project.aspect_ratio,
-      scene: scene ? [scene.heading, scene.summary].filter(Boolean).join(' - ') : '',
-      look,
-      characters: needed.filter((n) => n.kind === 'character').map((n) => n.entry),
-      location: needed.find((n) => n.kind === 'location')?.entry,
-      unreferenced: entriesOf(p, shot).filter((e) => e.kind === 'character' && !needed.some((n) => n.entry.id === e.entry.id)).map((e) => e.entry),
-    };
-    const changes = requestedChanges(a);
-    const asked = (a.status === 'needs-rework' || a.status === 'draft') && changes !== '' ? changes : '';
+    const ctx = { ...contextOf(shot, needed, src), ...(attach ? { layout: true } : {}) };
+    const asked = askedOf(a);
     refsOut[a.id] = refs.map((r) => r.id);
+    // The shot's own negative and the film's (the house style's "Negative prompt:"), so a term added to either reaches the frame.
+    const negative = mergeNegative(shot.negative, filmNegative);
     return {
       unit: a.id,
       prompt: keyframePrompt(ctx, asked),
       output: 'keyframe',
       aspect_ratio: p.project.aspect_ratio,
       count: 1,
-      ...(shot.negative?.trim() ? { negative: shot.negative } : {}),
+      ...(negative ? { negative } : {}),
       ...(shot.seed !== undefined ? { seed: shot.seed } : {}),
       ...(refs.length ? { refs } : {}),
     };
@@ -332,17 +649,26 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
 
   // Explicit units: the person named them, so an unbuildable one is an error. Otherwise a frame that
   // cannot be built is skipped and reported, and the next ready frame is tried (a batch builds what it can).
+  // A key frame made from its layout by a paid provider runs in steps, one job each, so it is always a job of its own.
+  const stepped = (a: Asset): boolean => !isManual && modeOf(a) === 'two-step';
+  if (o.units && chosen.length > 1 && chosen.some(stepped)) {
+    throw new KeyframeError(`${chosen.filter(stepped).map((a) => a.id).join(', ')} ${chosen.filter(stepped).length === 1 ? 'is' : 'are'} made from a layout in steps, one job each; generate ${chosen.filter(stepped).length === 1 ? 'it' : 'each'} on its own (--units <one id>).`);
+  }
   const items: JobItem[] = [];
   const skipped: Skipped[] = [];
   for (const a of chosen) {
     if (o.units) { items.push(buildItem(a)); continue; }
+    if (items.length > 0 && stepped(a)) {
+      skipped.push({ unit: a.id, reason: `made from its layout in steps, so it runs as a job of its own; run step --units ${a.id}` });
+      continue;
+    }
     try {
       items.push(buildItem(a));
     } catch (e) {
       skipped.push({ unit: a.id, reason: e instanceof Error ? e.message : String(e) });
       continue;
     }
-    if (o.scene === undefined) break; // default: one shot
+    if (o.scene === undefined || stepped(a)) break; // default: one shot
   }
   if (items.length === 0) {
     throw new KeyframeError(`No ready key frame could be built: ${skipped.map((x) => `${x.unit}: ${x.reason}`).join(' ')}`);
@@ -351,21 +677,31 @@ export function buildKeyframeJob(p: AkukoProject, o: BuildOptions): BuiltJob {
   chosen = chosen.filter((a) => built.has(a.id));
 
   const units = chosen.map((a) => a.id);
+  if (chain) return { job: chain.steps[0]!.job, units, refs: refsOut, skipped, chain };
+  // One manual key frame made from its layout: its id carries the layout too, like the paid steps.
+  const lay = isManual && chosen.length === 1 && modeOf(chosen[0]!) === 'two-step' ? shotOf(p, chosen[0]!).layout : undefined;
+  // Say how each layout is used, and what it costs in generations, wherever the label is shown (the spend and allowance lines).
+  const withLayout = chosen.filter((a) => modeOf(a) !== undefined);
+  const gens = items.reduce((n, i) => n + (i.steps?.length ?? 1), 0);
+  const layoutNote = withLayout.length
+    ? `; layout ${[...new Set(withLayout.map((a) => modeOf(a)))].join('/')}${withLayout.length < chosen.length ? ` for ${withLayout.map((a) => a.owner).join(', ')}` : ''}, ${plural(gens, 'generation')}`
+    : '';
   const job: Job = {
-    id: keyframeJobId(p, units, o.provider, o.model ?? ''),
+    id: keyframeJobId(p, units, o.provider, o.model ?? '', lay ? layoutKey(lay.sha256) : ''),
     stage: KEYFRAME_STAGE,
     kind: 'image',
     provider: o.provider,
     ...(o.model !== undefined ? { model: o.model } : {}),
-    label: `Key frames: ${plural(units.length, 'shot')} (${chosen.map((a) => a.owner).join(', ')})`,
+    label: `Key frames: ${plural(units.length, 'shot')} (${chosen.map((a) => a.owner).join(', ')})${layoutNote}`,
     items,
   };
   return { job, units, refs: refsOut, skipped };
 }
 
 /**
- * Record, on each unit of a job, which bible files it is generated from
- * (`from:<ref id>@<fingerprint>` tags, the same format the bible stage uses).
+ * Record, on each unit of a job, which bible files (and source key frame) it is generated from
+ * (`from:<ref id>@<fingerprint>` tags, the same format the bible stage uses), and the layout
+ * it was given (`layout:<sha256 prefix>`, from the shot's layout when the job sent it).
  * Replaces any earlier stamp, so it always describes the latest take.
  */
 export function stampRefs(project: AkukoProject, job: Job): AkukoProject {
@@ -375,9 +711,21 @@ export function stampRefs(project: AkukoProject, job: Job): AkukoProject {
     if (!a) continue;
     const stamps = (item.refs ?? [])
       .map((r) => p.assets.find((x) => x.id === r.id))
-      .filter((r): r is Asset => r !== undefined && r.stage === 'bible' && hasFile(r))
+      .filter((r): r is Asset => r !== undefined && (r.stage === 'bible' || isKeyframe(r)) && hasFile(r))
       .map((r) => `${FROM}${r.id}@${fingerprint(r)}`);
-    a.tags = [...a.tags.filter((t) => !t.startsWith(FROM)), ...stamps];
+    const shot = p.shots.find((s) => s.id === a.owner);
+    const refs = item.refs ?? [];
+    // A later step of a key frame made from its layout edits the step before: it keeps that step's stamps and adds its own.
+    const later = refs.some((r) => r.id.startsWith(`${a.id}_step`));
+    const key = shot?.layout ? layoutKey(shot.layout.sha256) : undefined;
+    const sentLayout = shot?.layout !== undefined && (refs.some((r) => r.id === layoutRefId(shot.id) && r.uri === shot.layout!.uri)
+      || (later && (a.layout_steps ?? []).some((s) => s.layout === key)));
+    if (sentLayout) stamps.push(layoutStamp(shot!.layout!.sha256));
+    // Made in two steps: the restyle (the layout its only ref), a later step, or a manual item that carries the steps.
+    const twoStep = sentLayout && (later || item.steps !== undefined || (refs.length === 1 && refs[0]!.id === layoutRefId(shot!.id)));
+    if (twoStep) stamps.push(TWO_STEP_STAMP);
+    const kept = later ? a.tags.filter((t) => t.startsWith(FROM) && !stamps.includes(t)) : [];
+    a.tags = [...a.tags.filter((t) => !t.startsWith(FROM) && !t.startsWith(LAYOUT_STAMP) && t !== TWO_STEP_STAMP), ...kept, ...stamps];
   }
   return p;
 }
@@ -402,6 +750,7 @@ export function beginUnits(project: AkukoProject, ids: string[], ts: string): Ak
     } else if (a.status === 'needs-rework') {
       const prev = a.file?.uri;
       delete a.file;
+      delete a.layout_steps; // a new take from a layout starts again at step 1 (the files stay where they were stored)
       a.status = 'draft';
       a.comments.push({ ts, stage: KEYFRAME_STAGE, author: 'agent', text: `Revised: regenerating after the requested changes${prev ? `; the previous take stays at ${prev}` : ''}` });
     } else {

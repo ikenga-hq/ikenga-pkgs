@@ -36,6 +36,7 @@ import {
   keyframeStatus,
   neededRefs,
   planKeyframes,
+  stampRefs,
   refreshStageState,
   unitReadiness,
 } from './plan.ts';
@@ -145,10 +146,10 @@ describe('the prompt: composition as text, nothing invented', () => {
     assert.match(prompt, /Scene: EXT\. RIVER PIER - DUSK/);
     assert.match(prompt, /Mara - Thirties/);
     assert.match(prompt, /Oren - Sixties/);
-    assert.match(prompt, /Look \(match the attached lookbook\): Fog and Lamplight/);
+    assert.match(prompt, /Look \(the attached lookbook is for light and colour only; do not copy its room, objects or people\): Fog and Lamplight: Muted blue dusk/);
     assert.match(prompt, /No blocking was set/);
     assert.equal(built.job.items[0]!.aspect_ratio, '16:9');
-    assert.match(keyframePrompt({ shot: p.shots[0]!, aspect: '16:9', scene: '', look: '', characters: [], location: undefined }, 'Colder.'), /Changes the person asked for: Colder\./);
+    assert.match(keyframePrompt({ shot: p.shots[0]!, aspect: '16:9', scene: '', characters: [], location: undefined }, 'Colder.'), /Changes the person asked for: Colder\./);
   });
 
   it('puts the composition in the prompt and attaches no sketch file (the panel is an SVG and no provider takes SVG)', () => {
@@ -285,6 +286,101 @@ describe('references: the approved turnarounds, plates and lookbook', () => {
       p.assets.push({ id: `ref${i}`, stage: 'keyframes', status: 'approved', comments: [], kind: 'reference', owner: 'sc1_sh1', tags: [], file: { uri: `r${i}.png`, mime: 'image/png' } });
     }
     assert.throws(() => buildKeyframeJob(p, { provider: 'manual', units: [kf('sc1_sh1')] }), /sc1_sh1_keyframe would send 17 reference images/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('the look, the lookbook and the negative: only what the shot uses', () => {
+  const STYLE = (id: string, name: string, description: string, notes: string[] = []) =>
+    ({ id, name, description, notes, refs: [], status: 'approved' as const, stage: 'breakdown' as const, comments: [] });
+  const item = (p: AkukoProject, shot: string) => buildKeyframeJob(p, { provider: 'manual', units: [kf(shot)] }).job.items[0]!;
+
+  it('the Look line carries the shot\'s own styles, not every look in the film, and no "Use for:" or negative note', () => {
+    const p = planned();
+    p.bible.styles[0]!.notes.push('Use for: S07, S08', 'Negative prompt: long slender necks');
+    p.bible.styles.push(STYLE('style_night', 'Night', 'Sodium orange streets, hard shadow.'));
+    const prompt = item(p, 'sc1_sh1').prompt;
+    assert.match(prompt, /Fog and Lamplight: Muted blue dusk/);
+    assert.doesNotMatch(prompt, /Sodium orange/, 'a style the shot does not name stays out');
+    assert.doesNotMatch(prompt, /Use for:|Negative prompt:|long slender necks/);
+    // a shot that names no style still gets every style (the film's look), as text
+    p.shots[0]!.refs = p.shots[0]!.refs.filter((x) => !x.startsWith('style_'));
+    assert.match(buildKeyframeJob(p, { provider: 'manual', units: [kf('sc1_sh1')] }).job.items[0]!.prompt, /Fog and Lamplight: Muted blue dusk.* \| Night: Sodium orange/);
+  });
+
+  it('a style the director\'s note already words is named, not repeated', () => {
+    const p = planned();
+    p.shots[0]!.prompt = 'Mara waits at the rail, muted blue dusk, warm lantern pools, heavy fog';
+    const prompt = item(p, 'sc1_sh1').prompt;
+    assert.match(prompt, /Fog and Lamplight \(worded in the director's note\)\./);
+    assert.equal(prompt.split('warm lantern pools').length - 1, 1, 'the wording appears once');
+  });
+
+  it('the film\'s negative (the house style\'s "Negative prompt:") reaches every key frame, merged with the shot\'s own, without repeats', () => {
+    const p = planned();
+    p.bible.styles[0]!.notes.push('Negative prompt: text, long slender necks');
+    assert.equal(item(p, 'sc1_sh1').negative, 'text, long slender necks');
+    p.shots[0]!.negative = 'Text, watermark';
+    assert.equal(item(p, 'sc1_sh1').negative, 'Text, watermark, long slender necks');
+  });
+
+  it('a lookbook is attached only with a location plate, labelled for light and colour only; with no plate the look is text and nothing waits for the lookbook', () => {
+    const p = planned();
+    const withPlate = item(p, 'sc1_sh1');
+    const lb = withPlate.refs!.find((x) => x.id === 'style_fog-and-lamplight_lookbook')!;
+    assert.match(lb.note!, /for light, palette and grain only; do not copy its room, objects or people/);
+    p.shots[0]!.refs = p.shots[0]!.refs.filter((x) => x !== 'loc_river-pier');
+    const bare = item(p, 'sc1_sh1');
+    assert.ok((bare.refs ?? []).every((x) => x.role !== 'style'), 'no lookbook without a plate');
+    assert.match(bare.prompt, /Look \(no lookbook attached; from this text only\): Fog and Lamplight: Muted blue dusk/);
+    assert.doesNotMatch(bare.prompt, /Location \(match/);
+    asset(p, 'style_fog-and-lamplight_lookbook').status = 'needs-rework';
+    assert.equal(unitReadiness(p, asset(p, kf('sc1_sh1'))).state, 'ready', 'it does not wait for an image it will not send');
+    assert.equal(unitReadiness(p, asset(p, kf('sc1_sh2'))).state, 'blocked', 'a shot with a plate still does');
+  });
+});
+
+describe('a source frame: a key frame of another shot\'s approved key frame', () => {
+  const approvedFrame = (p: AkukoProject, shot: string) => {
+    const a = asset(p, kf(shot));
+    a.status = 'approved';
+    a.file = { uri: `keyframes/${shot}.png`, mime: 'image/png' };
+  };
+
+  it('waits, blocked, until the source frame is approved with its file; then attaches it and says so in the prompt', () => {
+    const p = planned();
+    p.shots[1]!.source_frame = 'sc1_sh1';
+    assert.deepEqual(unitReadiness(p, asset(p, kf('sc1_sh2'))), { state: 'blocked', waiting: [kf('sc1_sh1')] });
+    asset(p, kf('sc1_sh1')).status = 'pending-review';
+    asset(p, kf('sc1_sh1')).file = { uri: 'x.png', mime: 'image/png' };
+    assert.equal(unitReadiness(p, asset(p, kf('sc1_sh2'))).state, 'blocked', 'pending-review is not approved');
+    approvedFrame(p, 'sc1_sh1');
+    const built = buildKeyframeJob(p, { provider: 'manual', units: [kf('sc1_sh2')] });
+    const it0 = built.job.items[0]!;
+    const ref = it0.refs!.find((x) => x.id === kf('sc1_sh1'))!;
+    assert.equal(ref.uri, 'keyframes/sc1_sh1.png');
+    assert.equal(ref.role, 'frame');
+    assert.match(it0.prompt, /Source frame \(attached\): the approved key frame of shot sc1_sh1\./);
+    // the take is stamped with it, so sending the source back later flags this frame
+    const stamped = stampRefs(p, built.job);
+    assert.ok(asset(stamped, kf('sc1_sh2')).tags.some((t) => t.startsWith(`from:${kf('sc1_sh1')}@`)));
+    asset(stamped, kf('sc1_sh2')).file = { uri: 'y.png', mime: 'image/png' };
+    asset(stamped, kf('sc1_sh2')).status = 'pending-review';
+    asset(stamped, kf('sc1_sh1')).status = 'needs-rework';
+    assert.ok(keyframeStatus(stamped).find((x) => x.asset === kf('sc1_sh2'))!.superseded.includes(kf('sc1_sh1')));
+  });
+
+  it('a loop, or a shot that does not exist, never becomes ready; integrity names the bad id', () => {
+    const p = planned();
+    p.shots[1]!.source_frame = 'sc1_sh3';
+    p.shots[2]!.source_frame = 'sc1_sh2';
+    approvedFrame(p, 'sc1_sh3');
+    const looped = unitReadiness(p, asset(p, kf('sc1_sh2')));
+    assert.equal(looped.state, 'blocked');
+    assert.match(looped.waiting.join(' '), /loop back to sc1_sh2/);
+    p.shots[1]!.source_frame = 'nope';
+    assert.match(unitReadiness(p, asset(p, kf('sc1_sh2'))).waiting.join(' '), /nope \(source frame: no such shot\)/);
+    assert.match(JSON.stringify(checkIntegrity(p)), /source frame \\"nope\\" is not a shot id/);
   });
 });
 

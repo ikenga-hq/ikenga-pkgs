@@ -9,7 +9,7 @@
  *           [--model <id>] [--units a,b]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
  *             manual: prints the prompt package and stops; bring files back with `ingest`
- *   ingest  --job <id> --unit <asset id> --file <path> [--actual <n>] [--model <id>]
+ *   ingest  --job <id> --unit <asset id> --file <path> [--actual <n>] [--model <id>] [--via <service>] [--new-take]
  *           record a file the person made for a manual job
  *   collect --job <id>        poll a paid job submitted earlier and record its files
  *   sync                      refs[] and the stage state, after decisions were folded
@@ -142,6 +142,8 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const r = await ingestBible(deps, manual, saved.job, unit, { filename: resolve(path).split(/[\\/]/).pop() ?? 'file', mime, data: new Uint8Array(await readFile(path)) }, {
         ...(actual !== undefined ? { actual: Number(actual) } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(str(opt.get('via')) !== undefined ? { via: str(opt.get('via'))!, projectDir: dir } : {}),
+        ...(opt.get('new-take') === true ? { newTake: true } : {}),
       });
       return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join('\n') };
     }

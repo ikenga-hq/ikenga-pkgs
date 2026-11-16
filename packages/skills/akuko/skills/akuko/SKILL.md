@@ -55,6 +55,8 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "animatic", "preview the film", "let me watch it", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | B-11 (`preview` built) · WP-13 (rough cut, picture lock: stub) |
 | "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
 | "I reviewed it", "apply my notes", "review" | [`actions/review.md`](actions/review.md) | WP-07a |
+| "review in chat", "approve in chat", "go through what's waiting", "approve all the plates" | [`actions/review.md`](actions/review.md) §1b "Review in chat": loop `review/chat.ts next` → ask (exact replies) → `review/chat.ts decide` → next; a batch only via `review/chat.ts batch` (full list, one exact reply) | Approval by chat |
+| "go through the flags", "address open flags", "next flag", "what did you flag" | [`actions/review.md`](actions/review.md) §3b "In chat": loop `review/flags.ts next` → ask (exact replies) → `review/flags.ts decide` → next, until done | AI quality flags |
 | "show me …", "open the board", "view" | [`actions/view.md`](actions/view.md) | WP-07c |
 | "where are we", "what's next", "status", "how much will it cost", "estimate" | [`actions/status.md`](actions/status.md) | WP-30 (whole-film estimate) |
 
@@ -70,11 +72,12 @@ If nothing matches, run `status` and offer the next action it suggests. If an ac
 
 These hold on every host and in every action and view:
 
-1. **Only a person approves.** Actions move units to `pending-review`; only a person's decision moves a unit to `approved`. No action or view auto-approves, pre-ticks or batch-approves.
+1. **Only a person approves.** Actions move units to `pending-review`; only a person's decision moves a unit to `approved`. No action or view auto-approves or pre-ticks. A view may offer a **confirmed batch** (a whole part's shots, or everything waiting in the bible): the person opens it, reads the list of every unit and the count, and clicks Confirm; it then writes one ordinary approval per unit, all sharing one batch id, and one click undoes it (`views/contract.md` §4 "Batch approval"). A batch never includes a unit sent back or an asset with no file. In chat the same holds (`actions/review.md` §1b): the person approves one unit with the exact reply `approve <unit>`, or a confirmed batch you listed in full (`review/chat.ts batch`) with the one exact reply `approve all <N> <scope words>`; you record it with `review/chat.ts`, which checks the words. Never infer an approval or a batch from "yes", "ok" or "approve all", and never confirm one yourself.
 2. **Never auto-advance past review.** Each stage ends at a review gate (Atelier `ux_mode: approve`): run, then pause on what was produced.
 3. **One unit at a time** inside a stage: produce, show, wait — don't regenerate the whole stage because one shot was sent back.
 4. **Decisions go through the decision format** (`Decision` in the schema), written by a review surface to the host's store. A view never edits `akuko.json` and never calls `writeState()`.
 5. **Requested changes are honoured, then marked**: revise the unit, add a "Revised: …" comment, return it to `pending-review`.
+6. **What you spot, you flag; the person decides.** A problem you see in a generation (anatomy, style drift, a logo the bible forbids, likeness, text, continuity) becomes a quality flag on the board (`review/flags.ts add`, `actions/review.md` §3b), not only a line in chat. A flag never changes a status and never sends, approves or pre-fills anything; only the person acts on it: on the board (**Send back with this**, **Dismiss**, **Note**) or by their exact reply in chat, which you record with `review/flags.ts decide`. Put each new flag to them in chat at once; never answer for them.
 
 ## Spend rules
 

@@ -4,14 +4,21 @@
  *   node --experimental-strip-types keyframes/cli.ts <command> --project <dir> [options]
  *
  *   plan                      create a planned key frame for every shot (idempotent)
- *   status                    one line per key frame: its status and what it is waiting for
+ *   status                    one line per key frame: its status, what it is waiting for, and its layout
+ *   layout  --shot <id> --file <path> [--from <what made it>]
+ *           make a 3D-blockout render the shot's layout (stored through the host, sha256 recorded);
+ *           [--mode attach|two-step|off]  how its key frame uses it by default (attach if never set);
+ *           --mode alone changes only the mode; --clear instead of --file removes the layout
  *   step    --provider <id>   the next key frame (one shot) through the spend gate: manual | gemini-image | fal | byteplus-image
- *           [--model <id>] [--units a,b] [--scene sc1]
+ *           [--model <id>] [--units a,b] [--scene sc1] [--allowance <service>] [--layout-mode attach|two-step|off]
  *             paid: prints the spend line and stops until a person approves it, then runs and records
+ *               (--layout-mode overrides each shot's layout.mode for this job; two-step: one approval per generation, run in order)
  *             manual: prints the prompt package and stops; bring files back with `ingest`
- *   ingest  --job <id> --unit <asset id> --file <path> [--actual <n>] [--model <id>]
- *           record a file the person made for a manual job
- *   collect --job <id>        poll a paid job submitted earlier and record its files
+ *               --allowance canva also prints the allowance line, counting every generation
+ *   ingest  --job <id> --unit <asset id> --file <path> [--step-files <p1>[,<p2>]] [--actual <n>] [--model <id>] [--via <service>] [--new-take]
+ *           record a file the person made for a manual job (from a layout: the last step's result;
+ *           --step-files the earlier steps' results, in order)
+ *   collect --job <id>        poll a paid job submitted earlier and record its files (a layout step: then the next steps run)
  *   sync                      repair and refresh the stage state, after decisions were folded
  *
  * Fold decisions first (`decisions/cli.ts fold`); `approved` only ever arrives that way.
@@ -34,7 +41,10 @@ import { createManualProvider } from '../providers/manual/index.ts';
 import { createSpendGate, isPhaseStop, phasedGateOptions } from '../spend/gate.ts';
 import { guardGate } from '../rules/guard.ts';
 import { KeyframeError, keyframeStatus, planKeyframes } from './plan.ts';
-import { collectKeyframes, finalizeKeyframes, generateKeyframes, ingestKeyframe, type StepResult } from './run.ts';
+import { collectAndContinue, finalizeKeyframes, generateKeyframes, ingestKeyframe, type StepResult } from './run.ts';
+import { allowanceLine } from '../spend/allowance.ts';
+import { LAYOUT_MODES, layoutProgress, type LayoutMode } from './plan.ts';
+import { clearLayout, setLayout, setLayoutMode } from './layout.ts';
 
 export interface CliResult { code: number; out: string }
 
@@ -58,8 +68,13 @@ const jobFile = (dir: string, id: string): string => join(dir, 'keyframes', 'job
 
 function describe(r: StepResult, costLine?: string): { code: number; out: string } {
   const o = describeStatus(r, costLine);
+  const money = (n: number): string => String(Number(n.toFixed(4)));
+  const steps = r.steps?.length && r.status !== 'done'
+    ? [`Made so far, each in the ledger: ${r.steps.map((s) => `${s.name} (${s.job}, ${money(s.cost)})`).join(', ')}. Run step again to go on from the next step; the steps already made are kept.`]
+    : [];
   const skipped = (r.skipped ?? []).map((x) => `Skipped ${x.unit}: ${x.reason}`);
-  return skipped.length ? { code: o.code, out: [o.out, ...skipped].join(String.fromCharCode(10)) } : o;
+  const extra = [...steps, ...skipped];
+  return extra.length ? { code: o.code, out: [o.out, ...extra].join(String.fromCharCode(10)) } : o;
 }
 
 function describeStatus(r: StepResult, costLine?: string): { code: number; out: string } {
@@ -74,9 +89,17 @@ function describeStatus(r: StepResult, costLine?: string): { code: number; out: 
     case 'running':
       return { code: 0, out: `Job ${r.job.id} is still running (${r.message}). Run collect --job ${r.job.id} later.` };
     case 'done':
+      if (r.generations !== undefined && r.steps?.length) {
+        return { code: 0, out: `Done: ${r.assets.join(', ')} recorded, made from its layout in ${r.generations} generation${r.generations === 1 ? '' : 's'} (${r.steps.map((s) => `${s.name} ${s.job} ${Number(s.cost.toFixed(4))}`).join(', ')}${r.steps.length < r.generations ? `, and ${r.generations - r.steps.length} made earlier` : ''}), cost ${Number(r.cost.toFixed(4))} for these. It is waiting for the person's review.` };
+      }
       return { code: 0, out: `Done: ${r.assets.length} key frame${r.assets.length === 1 ? '' : 's'} recorded (${r.assets.join(', ')}), ${costLine ?? `cost ${Number(r.cost.toFixed(4))}`}. They are waiting for the person's review.` };
-    case 'handoff':
-      return { code: 0, out: `${r.text}\n\nJob ${r.job.id}. When the files are back: ingest --job ${r.job.id} --unit <asset id> --file <path> for each.` };
+    case 'handoff': {
+      const stepped = r.job.items.filter((i) => i.steps);
+      const how = stepped.length
+        ? ` For a key frame made in steps (${stepped.map((i) => `${i.unit}: ${i.steps!.length} generations`).join(', ')}), --file is the last step's result; add --step-files <step 1>[,<step 2>…] for the earlier ones.`
+        : '';
+      return { code: 0, out: `${r.text}\n\nJob ${r.job.id}. When the files are back: ingest --job ${r.job.id} --unit <asset id> --file <path> for each.${how}` };
+    }
   }
 }
 
@@ -91,7 +114,40 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
     if (cmd === 'status') {
       const rows = keyframeStatus(await host.readState());
       if (rows.length === 0) return { code: 0, out: 'Nothing planned yet. Run plan.' };
-      return { code: 0, out: rows.map((r) => `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for the bible image ${r.waiting.join(', ')}` : ''}${r.superseded.length ? `; made from a superseded ${r.superseded.join(', ')} - consider sending it back` : ''})`).join('\n') };
+      const p = await host.readState();
+      const LAYOUT: Record<string, string> = { pending: 'layout set; the next take is made from it', used: 'made from its layout', 'not-used': 'made without the layout the shot now has - consider sending it back', changed: 'made from an earlier layout' };
+      const progress = (asset: string, state: string): string => {
+        const a = p.assets.find((x) => x.id === asset);
+        const g = a ? layoutProgress(p, a) : undefined;
+        if (!g) return '';
+        if (state !== 'pending') return '';
+        if (g.mode !== 'two-step') return `; mode ${g.mode}${g.mode === 'off' ? ' (the layout is not used)' : ''}, 1 generation`;
+        return `; mode two-step, ${g.total} generation${g.total === 1 ? '' : 's'} (${g.names.join(', ')})${g.done ? `, ${g.done} made, next: ${g.names[g.done]}` : ''}`;
+      };
+      return { code: 0, out: rows.map((r) => `${r.asset}: ${r.status} (${r.state}${r.waiting.length ? `, waiting for ${r.waiting.join(', ')}` : ''}${r.superseded.length ? `; made from a superseded ${r.superseded.join(', ')} - consider sending it back` : ''}${r.layout !== 'none' ? `; ${LAYOUT[r.layout]}${progress(r.asset, r.layout)}` : ''})`).join('\n') };
+    }
+    if (cmd === 'layout') {
+      const shot = str(opt.get('shot'));
+      const path = str(opt.get('file'));
+      const modeArg = str(opt.get('mode'));
+      if (opt.has('mode') && !(LAYOUT_MODES as readonly string[]).includes(modeArg ?? '')) return { code: 2, out: `akuko: --mode takes ${LAYOUT_MODES.join(', ')}.` };
+      if (shot && !path && modeArg) {
+        const r = await setLayoutMode(host, shot, modeArg as LayoutMode);
+        return { code: 0, out: r.changed ? `${shot}'s key frame now uses its layout in mode ${modeArg} by default (a step's --layout-mode still overrides it).` : `${shot} already uses mode ${modeArg}.` };
+      }
+      if (!shot || (!path && opt.get('clear') !== true)) return { code: 2, out: 'akuko: layout needs --shot <id> and --file <path> (or --mode <mode>, or --clear).' };
+      const stale = (t: string | undefined): string[] => (t ? [`${t} already has a take made from ${path ? 'an earlier layout or none' : 'this layout'}; status flags it. Only a person sends it back.`] : []);
+      if (!path) {
+        const r = await clearLayout(host, shot);
+        return { code: 0, out: r.changed ? [`Removed ${shot}'s layout (the file stays at ${r.previous!.uri}).`, ...stale(r.staleTake)].join('\n') : `${shot} has no layout.` };
+      }
+      const from = str(opt.get('from'));
+      const r = await setLayout(host, shot, { filename: resolve(path).split(/[\\/]/).pop() ?? 'layout', data: new Uint8Array(await readFile(path)) }, { now: clock(), ...(from ? { from } : {}) });
+      const m = modeArg ? await setLayoutMode(host, shot, modeArg as LayoutMode) : undefined;
+      const mode = (m?.layout ?? r.layout)?.mode ?? 'attach';
+      const how = mode === 'two-step' ? 'mode two-step: the layout restyled on its own, then each character put on model, 1 + characters generations' : mode === 'off' ? 'mode off: not used unless a step asks for it' : 'mode attach: attached first with the other references, 1 generation';
+      if (!r.changed) return { code: 0, out: `${shot} already has this file as its layout (${r.layout!.uri}); ${m?.changed ? `its mode is now ${mode}` : 'nothing changed'}.` };
+      return { code: 0, out: [`${shot}'s layout is ${r.layout!.uri} (sha256 ${r.layout!.sha256.slice(0, 12)}…${r.previous ? `; it replaces ${r.previous.uri}` : ''}). Its key frame uses it in ${how} (--mode to change; step --layout-mode for one job).`, ...stale(r.staleTake)].join('\n') };
     }
     if (cmd === 'plan') {
       const r = planKeyframes(await host.readState(), clock());
@@ -121,12 +177,23 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       const model = str(opt.get('model'));
       const units = str(opt.get('units'))?.split(',').filter(Boolean);
       const scene = str(opt.get('scene'));
-      const r = await generateKeyframes(deps, { provider, ...(model ? { model } : {}), ...(units ? { units } : {}), ...(scene ? { scene } : {}) });
+      const service = str(opt.get('allowance'));
+      if (opt.has('allowance') && (!service || provider !== 'manual')) return { code: 2, out: 'akuko: --allowance <service> (e.g. canva) goes with --provider manual: the frames are made with that connected tool from the prompt package.' };
+      const lm = str(opt.get('layout-mode'));
+      if (opt.has('layout-mode') && !(LAYOUT_MODES as readonly string[]).includes(lm ?? '')) return { code: 2, out: `akuko: --layout-mode takes ${LAYOUT_MODES.join(', ')}.` };
+      const r = await generateKeyframes(deps, { provider, ...(model ? { model } : {}), ...(units ? { units } : {}), ...(scene ? { scene } : {}), ...(lm ? { layoutMode: lm as LayoutMode } : {}) });
       if (r.status === 'handoff' || r.status === 'running') {
         await mkdir(join(dir, 'keyframes', 'jobs'), { recursive: true });
         await writeFileAtomic(jobFile(dir, r.job.id), `${JSON.stringify({ job: r.job, handle: r.handle } satisfies SavedJob, null, 2)}\n`);
       }
-      return describe(r);
+      const d = describe(r);
+      if (service && r.status === 'handoff') {
+        // The allowance count is every generation: a key frame made from its layout in steps counts each step.
+        const wave = { label: r.job.label, service, serviceLabel: service.charAt(0).toUpperCase() + service.slice(1), units: r.job.items.map((i) => ({ unit: i.unit, count: i.steps?.length ?? i.count ?? 1 })) };
+        const record = `After the generations: spend/cli.ts allowance --project <folder> --service ${service} --job ${r.job.id} --units ${wave.units.map((u) => (u.count > 1 ? `${u.unit}:${u.count}` : u.unit)).join(',')}`;
+        return { code: d.code, out: [d.out, '', allowanceLine(await host.readState(), wave), record].join('\n') };
+      }
+      return d;
     }
 
     const jobId = str(opt.get('job'));
@@ -136,8 +203,11 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       if (!existsSync(file)) return { code: 1, out: `akuko: no saved job ${jobId}; run step first.` };
       const saved = JSON.parse(await readFile(file, 'utf8')) as SavedJob;
       if (cmd === 'collect') {
-        const r = await collectKeyframes(deps, saved.job, saved.handle);
-        return describe(r, r.status === 'done' ? ledgerCostLine(await host.readState(), saved.job.id, r.cost) : undefined);
+        const r = await collectAndContinue(deps, saved.job, saved.handle);
+        if (r.status === 'running') {
+          await writeFileAtomic(jobFile(dir, r.job.id), `${JSON.stringify({ job: r.job, handle: r.handle } satisfies SavedJob, null, 2)}\n`);
+        }
+        return describe(r, r.status === 'done' && !r.steps ? ledgerCostLine(await host.readState(), saved.job.id, r.cost) : undefined);
       }
       const unit = str(opt.get('unit'));
       const path = str(opt.get('file'));
@@ -146,14 +216,24 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
       if (!mime) return { code: 1, out: `akuko: ${path} is not a .png, .jpg or .webp image.` };
       const actual = str(opt.get('actual'));
       const model = str(opt.get('model'));
+      const stepPaths = str(opt.get('step-files'))?.split(',').map((x) => x.trim()).filter(Boolean) ?? [];
+      const stepFiles = [];
+      for (const sp of stepPaths) {
+        const m = MIME[extname(sp).toLowerCase()];
+        if (!m) return { code: 1, out: `akuko: ${sp} is not a .png, .jpg or .webp image.` };
+        stepFiles.push({ filename: resolve(sp).split(/[\\/]/).pop() ?? 'step', mime: m, data: new Uint8Array(await readFile(sp)) });
+      }
       const r = await ingestKeyframe(deps, manual, saved.job, unit, { filename: resolve(path).split(/[\\/]/).pop() ?? 'file', mime, data: new Uint8Array(await readFile(path)) }, {
+        ...(stepFiles.length ? { stepFiles } : {}),
         ...(actual !== undefined ? { actual: Number(actual) } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(str(opt.get('via')) !== undefined ? { via: str(opt.get('via'))!, projectDir: dir } : {}),
+        ...(opt.get('new-take') === true ? { newTake: true } : {}),
       });
       return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join('\n') };
     }
 
-    return { code: 2, out: 'akuko: command must be plan, status, step, ingest, collect or sync.' };
+    return { code: 2, out: 'akuko: command must be plan, status, layout, step, ingest, collect or sync.' };
   } catch (err) {
     if (err instanceof KeyframeError) return { code: 1, out: err.message };
     return { code: 1, out: `akuko: ${err instanceof Error ? err.message : String(err)}` };

@@ -98,3 +98,101 @@ export function mutateProject(p) {
   if (asset) asset.status = 'approved';
   return q;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Confirmed batch approval (views/contract.md §4 "Batch approval")
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The ending every decision of one batch carries: ` · batch <uuid>` (decisions/fold.ts#BATCH_TEXT). */
+export const BATCH_TEXT = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+export const batchOf = (d) => BATCH_TEXT.exec(typeof d?.text === 'string' ? d.text : '')?.[1];
+
+/** A shot's part: its own, else its scene's (decisions/gates.ts, the default board). */
+export const partOf = (p, s) => s.part ?? p.scenes.find((sc) => sc.id === s.scene)?.part ?? null;
+export const partsOf = (p) => [...new Set([...p.shots.map((s) => partOf(p, s)), ...p.scenes.map((sc) => sc.part ?? null)].filter((x) => x != null))];
+
+/** A batch scope a view may offer: `bible`, or `part:<id>` for a part the project has. */
+export const isBatchScope = (p, scope) => scope === 'bible' || (/^part:/.test(scope ?? '') && partsOf(p).includes(scope.slice(5)));
+
+/**
+ * What a confirmed batch over one scope may approve, by the project's data: live units
+ * `pending-review` (never `needs-rework`, never with an open `block` quality flag), and of assets only those with a file.
+ * - `part:<id>`: the part's shots.
+ * - `bible`: bible entries with no asset of their own, and assets of the bible (stage `bible`, or owned by a bible entry); cards and intake documents are not bible.
+ */
+export function batchUnits(p, scope) {
+  const live = (u) => removedAt(p, u) === undefined && !isIdleMotionUnit(p, u);
+  const waiting = (u) => live(u) && u.status === 'pending-review' && !hasBlockFlag(u);
+  if (scope === 'bible') {
+    const assetIds = new Set(p.assets.map((a) => a.id));
+    const entries = bibleEntries(p);
+    const entryIds = new Set(entries.map((e) => e.id));
+    const owned = (a) => entryIds.has(a.owner) || entries.some((e) => e.refs.includes(a.id));
+    return [
+      ...entries.filter((e) => waiting(e) && !e.refs.some((r) => assetIds.has(r))).map((e) => e.id),
+      ...p.assets.filter((a) => waiting(a) && a.kind !== 'card' && a.stage !== 'intake' && (a.stage === 'bible' || owned(a)) && !!a.file).map((a) => a.id),
+    ];
+  }
+  if (/^part:/.test(scope ?? '')) {
+    const pt = scope.slice(5);
+    return p.shots.filter((s) => waiting(s) && partOf(p, s) === pt).map((s) => s.id);
+  }
+  return [];
+}
+
+/**
+ * The project check-view runs the batch checks on: the fixture with parts (when it
+ * has none), so a part batch has more than one shot and skips one sent back, and one
+ * more bible item waiting, with a file, beside one without (which a batch must leave out).
+ */
+export function batchProject(p) {
+  const q = structuredClone(p);
+  if (partsOf(q).length === 0 && q.scenes.length) {
+    const last = q.scenes.length - 1;
+    q.scenes.forEach((sc, i) => { sc.part = i === Math.max(0, last - 1) && q.scenes.length > 1 ? 'P2' : 'P1'; });
+  }
+  const assetIds = new Set(q.assets.map((a) => a.id));
+  const loneEntry = bibleEntries(q).find((e) => e.status === 'pending' && !e.refs.some((r) => assetIds.has(r)) && e.source?.removed_at === undefined);
+  if (loneEntry) loneEntry.status = 'pending-review';
+  const fileless = q.assets.filter((a) => a.status === 'pending-review' && !a.file && a.kind !== 'card' && a.stage !== 'intake');
+  if (fileless.length > 1) { const a = fileless[fileless.length - 1]; a.file = { uri: `bible/${a.id}.png`, mime: 'image/png' }; }
+  return q;
+}
+
+/** Open quality flags on a unit's current stage (lib/state.md §Quality flags). */
+export const openFlags = (u) => (u.by_stage?.[u.stage]?.flags ?? []).filter((f) => f.status === 'open');
+/** An open `block` flag keeps a unit out of every batch (decisions/fold.ts, batch-ineligible). */
+export const hasBlockFlag = (u) => openFlags(u).some((f) => f.severity === 'block');
+
+/** The E01 findings that made quality flags (default-board@0.9), as fixture flags. */
+export const FLAG_EXAMPLES = [
+  { kind: 'anatomy', severity: 'warn', text: 'Long slender neck', suggested_change: 'Shorter, thicker neck in proportion to the head and shoulders, as in the bible portrait.' },
+  { kind: 'style-drift', severity: 'warn', text: 'Near-photographic, not clay style', suggested_change: 'Make it read as hand-made clay: soft matte surfaces, visible sculpting, no photographic skin or lens detail.' },
+  { kind: 'wardrobe-logo', severity: 'warn', text: 'Patch on cap; bible says plain cap', suggested_change: 'Plain cap with no patch, logo or lettering.' },
+  { kind: 'anatomy', severity: 'warn', text: 'Tom looks short; should be ~6\'5"', suggested_change: 'Tom is about 6\'5": tall, a head above the people beside him.' },
+  { kind: 'text-in-image', severity: 'info', text: 'Name label dropped from turnaround', suggested_change: 'Keep the name label under the turnaround, as on the other sheets.' },
+];
+
+/**
+ * The project check-view runs the flag checks on: the fixture with open quality flags on every unit
+ * waiting for review (a file given to each such asset), drawn from FLAG_EXAMPLES. Ids are fixed so
+ * the check is repeatable.
+ */
+export function flagProject(p) {
+  const q = structuredClone(p);
+  let n = 0;
+  const add = (u, file) => {
+    const ex = FLAG_EXAMPLES[n % FLAG_EXAMPLES.length];
+    const id = `flag_${(0xc0ffee00 + n).toString(16)}`;
+    n++;
+    const rec = ((u.by_stage ??= {})[u.stage] ??= { status: u.status });
+    (rec.flags ??= []).push({ id, ts: '2026-11-14T09:00:00Z', stage: u.stage, ...ex, evidence: { uri: file ?? `board/panels/${u.id}-${u.stage}.svg` }, source: 'agent:check-view', status: 'open' });
+  };
+  for (const s of q.shots) if (s.status === 'pending-review' && removedAt(q, s) === undefined) add(s);
+  for (const a of q.assets) {
+    if (a.status !== 'pending-review' || removedAt(q, a) !== undefined || a.kind === 'card' || a.stage === 'intake') continue;
+    a.file ??= { uri: `bible/${a.id}.png`, mime: 'image/png' };
+    add(a, a.file.uri);
+  }
+  return q;
+}

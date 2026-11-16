@@ -19,3 +19,9 @@ export declare function mutateProject(p: AkukoProject): AkukoProject;
 export declare function removedAt(p: AkukoProject, u: object): string | undefined;
 /** motion/stage.ts#isIdleMotionUnit in plain JS: a clip, lip-sync or line cut kept although its shot no longer asks for it. */
 export declare function isIdleMotionUnit(p: AkukoProject, a: { stage: string; kind?: string; tags?: string[]; owner?: string }): boolean;
+export declare const openFlags: (u: object) => { id: string; severity: string; status: string; suggested_change?: string; text: string }[];
+export declare const hasBlockFlag: (u: object) => boolean;
+export declare const FLAG_EXAMPLES: { kind: string; severity: string; text: string; suggested_change: string }[];
+export declare function flagProject(p: AkukoProject): AkukoProject;
+/** The units a confirmed batch in `scope` (`bible` | `part:<id>`) may approve (views/contract.md §4). */
+export declare function batchUnits(p: AkukoProject, scope: string): string[];

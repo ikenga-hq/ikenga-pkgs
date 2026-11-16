@@ -11,7 +11,7 @@
 import type { Job, JobItem, JobRef, Provider } from '../providers/contract.ts';
 import type { AkukoProject, Asset, BibleEntry, RuleScope, Rules, Scene, Shot } from '../schema/akuko-project.ts';
 import { RulesSchema, findUnit } from '../schema/akuko-project.ts';
-import { MANUAL_PROVIDER, classifyRef, type HashCache, type RefOrigin } from './refs.ts';
+import { MANUAL_PROVIDER, REFS_EXTERNAL_TAG, allowanceServiceOf, classifyRef, type HashCache, type RefOrigin } from './refs.ts';
 import { bannedHits, bannedMatches, containsRequired, foldText, normalizeRequired, snippet } from './text.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -25,7 +25,8 @@ export type RuleName =
   | 'require'             // rules.require
   | 'uploads'             // an external file not in rules.uploads.allow, or outside its `for`, or unverifiable
   | 'never-from-photo'    // rules.never_from_photo
-  | 'generated-changed';  // a generated file whose bytes no longer match the hash recorded when it was stored
+  | 'generated-changed'   // a generated file whose bytes no longer match the hash recorded when it was stored
+  | 'layout-changed';     // a shot's layout whose bytes no longer match the sha256 recorded when it was set
 
 export interface Breach {
   rule: RuleName;
@@ -50,7 +51,7 @@ export const SKIP_NAMES = ['banned', 'require', 'house-style'] as const;
 /** The bible style entry whose text `skip: ["house-style"]` refers to (WP-25 imports the sheet's STYLE BLOCK under this id). */
 export const HOUSE_STYLE_ID = 'house-style';
 /** Ref rules are hard: an exemption can't switch them off. */
-export const UNSKIPPABLE = ['required', 'uploads', 'never-from-photo', 'generated-changed'] as const;
+export const UNSKIPPABLE = ['required', 'uploads', 'never-from-photo', 'generated-changed', 'layout-changed'] as const;
 /** Outputs that are pictures made from a prompt: `require` applies to their prompt and negative. */
 export const PICTURE_OUTPUTS = ['keyframe', 'clip'] as const;
 
@@ -235,9 +236,55 @@ async function refBreaches(
   const base = { where: where(c, unit), ...(unit ? { unit } : {}), ...ids(c), ref: ref.id };
   const out: Breach[] = [];
   if (origin.kind === 'no-file') return { origin, breaches: out };
+  if (origin.kind === 'layout') {
+    // The record in the project is its provenance (refs.ts §A shot's layout): no allow-list entry, but the bytes must match.
+    if (c.shot !== undefined && c.shot.id !== origin.shot) {
+      out.push({ ...base, rule: 'uploads', file: origin.uri,
+        message: `ref ${ref.id} is the layout of shot ${origin.shot}; a layout is sent only for its own shot, not ${c.shot.id}` });
+    } else if (c.shot === undefined) {
+      out.push({ ...base, rule: 'uploads', file: origin.uri,
+        message: `ref ${ref.id} is the layout of shot ${origin.shot}; a layout is sent only with that shot's key frame` });
+    } else if (origin.actual === undefined) {
+      const why = origin.reason === 'missing' ? 'the file is not there' : origin.reason === 'remote' ? 'it is not a local file, so its content cannot be checked' : 'it cannot be read';
+      out.push({ ...base, rule: 'uploads', file: origin.uri,
+        message: `ref ${ref.id} is the layout of shot ${origin.shot} (${origin.uri}), but ${why}; a layout is sent only when its bytes match the sha256 recorded when it was set` });
+    } else if (origin.actual !== origin.expected) {
+      out.push({ ...base, rule: 'layout-changed', file: origin.uri, sha256: origin.actual,
+        message: `ref ${ref.id} is the layout of shot ${origin.shot} (${origin.uri}), but the file has changed since it was set (sha256 ${short(origin.actual)}, recorded ${short(origin.expected)}); set it again with keyframes/cli.ts layout` });
+    }
+    return { origin, breaches: out };
+  }
+  if (origin.kind === 'layout-step') {
+    // An earlier step of this key frame (refs.ts §An earlier step): generated, its own shot's, and still the same bytes.
+    const of = `ref ${ref.id} is step ${origin.n} of ${origin.asset.id} (${origin.uri})`;
+    if (c.shot === undefined || origin.asset.owner !== c.shot.id) {
+      out.push({ ...base, rule: 'uploads', file: origin.uri, message: `${of}; an earlier step is sent only for its own key frame` });
+    } else if (!origin.generated) {
+      out.push({ ...base, rule: 'uploads', file: origin.uri, message: `${of}, but the ledger has no done generation for its job ${origin.job}, so it is not a file akuko generated` });
+    } else if (origin.actual === undefined) {
+      const why = origin.reason === 'missing' ? 'the file is not there' : origin.reason === 'remote' ? 'it is not a local file, so its content cannot be checked' : 'it cannot be read';
+      out.push({ ...base, rule: 'uploads', file: origin.uri, message: `${of}, but ${why}` });
+    } else if (origin.expected !== undefined && origin.actual !== origin.expected) {
+      out.push({ ...base, rule: 'generated-changed', file: origin.uri, sha256: origin.actual,
+        message: `${of}, but the file has changed since it was made (sha256 ${short(origin.actual)}, recorded ${short(origin.expected)}); it is treated as a different file` });
+    } else if (origin.expected === undefined) {
+      const nfp = targetsOf(p, origin.asset, c).filter((t) => rules.never_from_photo.includes(t));
+      if (nfp.length) out.push({ ...base, rule: 'never-from-photo', file: origin.uri,
+        message: `${of}, but it has no recorded sha256, so it can't be verified as generated; ${nfp.join(', ')} may only use verified generated references (rules.never_from_photo)` });
+    }
+    return { origin, breaches: out };
+  }
   if (origin.kind === 'generated') {
     // A generated file is trusted for a never-from-photo entry only when its recorded sha256 still matches the bytes.
-    const forbidden = origin.verified ? [] : targetsOf(p, origin.asset, c).filter((t) => rules.never_from_photo.includes(t));
+    const nfp = targetsOf(p, origin.asset, c).filter((t) => rules.never_from_photo.includes(t));
+    // A file from a connected allowance tool whose job sent it a reference akuko did not generate may come from a photo.
+    const service = allowanceServiceOf(origin.asset);
+    if (service !== undefined && origin.asset.tags.includes(REFS_EXTERNAL_TAG) && nfp.length) {
+      out.push({ ...base, rule: 'never-from-photo', file: origin.asset.file?.uri ?? ref.uri ?? '',
+        message: `ref ${ref.id} was made with ${service} for job ${origin.job}, but that job gave it a reference that is not a file akuko generated, so ${nfp.join(', ')} can't trust it (rules.never_from_photo)` });
+      return { origin, breaches: out };
+    }
+    const forbidden = origin.verified ? [] : nfp;
     if (forbidden.length) {
       out.push({ ...base, rule: 'never-from-photo', file: origin.asset.file?.uri ?? ref.uri ?? '',
         message: `ref ${ref.id} was generated by job ${origin.job}, but it has no recorded sha256 that its file still matches, so it can't be verified as generated; ${forbidden.join(', ')} may only use verified generated references (rules.never_from_photo)` });
@@ -319,6 +366,11 @@ function itemFields(job: Job, item: JobItem): TextField[] {
     // Not the negative: listing a word there is how a prompt avoids it (orchestrator decision, WP-26 review).
     { field: 'camera note', text: item.camera },
     ...(item.refs ?? []).map((r) => ({ field: `note on ref ${r.id}`, text: r.note })),
+    // A unit made in steps (manual package): each step's prompt is pasted too.
+    ...(item.steps ?? []).flatMap((s, k) => [
+      { field: `prompt of step ${k + 1}`, text: s.prompt },
+      ...(s.refs ?? []).map((r) => ({ field: `note on ref ${r.id} (step ${k + 1})`, text: r.note })),
+    ]),
   ];
 }
 
@@ -439,6 +491,10 @@ export async function checkProjectRules(p: AkukoProject, opts: Omit<CheckOptions
       if (a.kind !== 'reference' || a.owner !== shot.id || !hasFile(a)) continue;
       counts.refs++;
       breaches.push(...(await refBreaches(p, rules, c, { id: a.id, uri: a.file!.uri }, ctx)).breaches);
+    }
+    if (shot.layout) {
+      counts.refs++;
+      breaches.push(...(await refBreaches(p, rules, c, { id: `${shot.id}_layout`, uri: shot.layout.uri }, ctx)).breaches);
     }
   }
 

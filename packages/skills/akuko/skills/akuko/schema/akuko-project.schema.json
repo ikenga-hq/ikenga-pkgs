@@ -329,6 +329,13 @@
         "output": {
           "$ref": "#/definitions/AssetRef",
           "description": "File the stage produced for this unit (panel, frame, clip)."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Flag"
+          },
+          "description": "Quality flags an agent raised on what this stage produced (lib/state.md §Quality flags)."
         }
       },
       "required": [
@@ -363,6 +370,140 @@
         "stage",
         "author",
         "text"
+      ],
+      "additionalProperties": false
+    },
+    "Flag": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^flag_[0-9a-f]{8,}$"
+        },
+        "ts": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageId"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "anatomy",
+            "style-drift",
+            "wardrobe-logo",
+            "likeness",
+            "text-in-image",
+            "continuity",
+            "other"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warn",
+            "block"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What is wrong, in plain words."
+        },
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The file looked at (project-relative path, asset-store path or URL)."
+            },
+            "sha256": {
+              "$ref": "#/definitions/Sha256",
+              "description": "Digest of that file, so a later take can tell the flag is about an earlier one."
+            },
+            "asset": {
+              "$ref": "#/definitions/Id",
+              "description": "Asset id of the file, when it is an asset."
+            },
+            "view": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Which view of a sheet, e.g. \"front\", \"side\", \"back\"."
+            },
+            "region": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "y": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "w": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "h": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "w",
+                "h"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "suggested_change": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Words a send-back could use; the person edits them before sending."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who flagged it: the agent id and model, e.g. \"agent:claude-opus-5-5\"."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "accepted",
+            "dismissed"
+          ]
+        },
+        "decision": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the decision a person made that closed the flag. Absent while open."
+        }
+      },
+      "required": [
+        "id",
+        "ts",
+        "stage",
+        "kind",
+        "severity",
+        "text",
+        "evidence",
+        "source",
+        "status"
       ],
       "additionalProperties": false
     },
@@ -525,6 +666,51 @@
         "motion_note": {
           "type": "string",
           "description": "Motion note from the sheet, free text (e.g. \"Slow push-in\")."
+        },
+        "source_frame": {
+          "$ref": "#/definitions/Id",
+          "description": "Another shot whose approved key frame this shot is a picture of (e.g. that frame as a printed photograph): attached to this key frame as a reference, which waits until it is approved. Set by hand; a sheet re-import keeps it."
+        },
+        "layout": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The stored file (project-relative on hosts B and C)."
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Digest of the file when it was set; a different file is a changed layout."
+            },
+            "mime": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What made it, e.g. the blockout script or .blend in the project."
+            },
+            "set_at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "attach",
+                "two-step",
+                "off"
+              ],
+              "description": "How the key frame uses it when `step` names no --layout-mode: attach (default: attached first with the other references, one generation), two-step (restyle the layout alone, then each character on model; 1 + characters generations), off (not used)."
+            }
+          },
+          "required": [
+            "uri",
+            "sha256"
+          ],
+          "additionalProperties": false,
+          "description": "A plain 3D-blockout render from the shot camera that fixes positions and composition; its `mode` says how the key frame uses it (attach by default). Set by `keyframes/cli.ts layout`; a sheet re-import keeps it."
         },
         "lines": {
           "type": "array",
@@ -720,6 +906,54 @@
         },
         "studio": {
           "$ref": "#/definitions/StudioAssetExt"
+        },
+        "layout_steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "step": {
+                "type": "string",
+                "enum": [
+                  "restyle",
+                  "identity"
+                ]
+              },
+              "for": {
+                "$ref": "#/definitions/Id",
+                "description": "identity: the character this step put on model."
+              },
+              "uri": {
+                "type": "string",
+                "minLength": 1
+              },
+              "hash": {
+                "type": "string",
+                "description": "sha256 of the file, when known; the rules guard sends it on only while it matches."
+              },
+              "job": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The job that made it (a paid step job, or the manual job it was brought back for)."
+              },
+              "layout": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$",
+                "description": "First 16 hex of the sha256 of the layout it was made from."
+              },
+              "at": {
+                "$ref": "#/definitions/Timestamp"
+              }
+            },
+            "required": [
+              "step",
+              "uri",
+              "job",
+              "layout"
+            ],
+            "additionalProperties": false
+          },
+          "description": "A key frame made from its shot’s layout: the files of the steps before the last, in order (not units)."
         }
       },
       "required": [
@@ -962,6 +1196,10 @@
               "type": "integer",
               "exclusiveMinimum": 0,
               "description": "Generations this call used from the service allowance."
+            },
+            "job": {
+              "$ref": "#/definitions/Id",
+              "description": "The (manual) job the generation was made for. Set by `recordAllowance({job})` or when the file comes back through `ingest --via <service>`; it is what lets rules/refs.ts count that file as generated."
             }
           },
           "required": [
@@ -1057,6 +1295,10 @@
             "text": {
               "type": "string",
               "minLength": 1
+            },
+            "flag": {
+              "$ref": "#/definitions/Flag/properties/id",
+              "description": "The quality flag this send-back takes up; folding marks it accepted."
             }
           },
           "required": [
@@ -1099,6 +1341,10 @@
             "text": {
               "type": "string",
               "minLength": 1
+            },
+            "flag": {
+              "$ref": "#/definitions/Flag/properties/id",
+              "description": "The quality flag this note is about; the flag stays open."
             }
           },
           "required": [
@@ -1235,6 +1481,52 @@
             "view",
             "action",
             "undoes"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/id"
+            },
+            "unit": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/unit"
+            },
+            "stage": {
+              "$ref": "#/definitions/StageId"
+            },
+            "by": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/by"
+            },
+            "at": {
+              "$ref": "#/definitions/Timestamp"
+            },
+            "view": {
+              "$ref": "#/definitions/Decision/anyOf/0/properties/view"
+            },
+            "action": {
+              "type": "string",
+              "const": "dismiss-flag"
+            },
+            "flag": {
+              "type": "string",
+              "pattern": "^flag_[0-9a-f]{8,}$",
+              "description": "The quality flag the person dismissed."
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "unit",
+            "stage",
+            "by",
+            "at",
+            "view",
+            "action",
+            "flag"
           ],
           "additionalProperties": false
         }

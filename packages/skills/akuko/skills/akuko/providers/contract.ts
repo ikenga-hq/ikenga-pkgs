@@ -98,6 +98,23 @@ export interface JobItem {
   seed?: number;
   negative?: string;       // things to avoid
   camera?: string;         // free-text camera note
+  /**
+   * A unit a person makes in several dependent generations, in order, each from
+   * the result of the one before (a key frame from its layout, keyframes/plan.ts).
+   * Only the manual provider gets these (its package prints each step); a paid
+   * provider gets one job per step instead. `prompt` and `refs` then hold step 1
+   * and every file any step attaches.
+   */
+  steps?: JobStep[];
+}
+
+/** One generation of a stepped unit (see `JobItem.steps`). A ref with role `previous-step` and no uri is the result of the step before. */
+export interface JobStep {
+  name: string;            // e.g. 'restyle', 'identity MARA'
+  prompt: string;
+  refs?: JobRef[];
+  negative?: string;
+  seed?: number;
 }
 
 /**

@@ -37,6 +37,36 @@
       "sha256": "b4eb1b3bdcc94cc21b691d5c6b0e420b63ff4bbdbec30dbe68fd42e4f4af6fd4",
       "checked_at": "2026-11-12T09:19:24Z",
       "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.7",
+      "sha256": "8fae15ceddbd7eabd98a0655eacaa22eb5f41539d7905798ef5ad1dad0875c03",
+      "checked_at": "2026-11-12T22:32:48Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.8",
+      "sha256": "3bf276c76c46fda173bf51be2e12de734a09113b4d1ea79556e7d4b9be136440",
+      "checked_at": "2026-11-13T11:08:46Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.9",
+      "sha256": "baaca0ff944da23f0eb50a20eb841002923b870f5c934b2b5fa6cc284a6f9353",
+      "checked_at": "2026-11-14T08:07:51Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.10",
+      "sha256": "19611ce2ce55d85dcc843c61bbf96f04386d39eccea646d5376d17ea750afa5d",
+      "checked_at": "2026-11-16T01:33:27Z",
+      "checker": "check-view@2"
+    },
+    {
+      "view": "default-board@0.11",
+      "sha256": "f09300794777e45a2506d879332a9bff0a0bd2773133ca23b29b54c4138b7eac",
+      "checked_at": "2026-11-16T14:04:18Z",
+      "checker": "check-view@2"
     }
   ]
 }

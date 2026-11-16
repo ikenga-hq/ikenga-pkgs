@@ -171,6 +171,7 @@ The schema doc calls the ledger "append-only". The real rule is narrower:
   place, matched by `id`**, to `done` (with `actual`), `failed` or
   `cancelled`. It is not appended twice: the integrity check rejects
   repeated ids.
+- An entry names a project unit, with one exception. A **zero-money allowance record** (`allowance` set, estimate and actual 0) may name something that was never a project unit: integrity accepts it as spend history. E01's pre-bible style frames were recorded this way before `spend/cli.ts allowance` began refusing unknown units. An entry that costs money must name a unit.
 - Entries are never deleted, and ids are never reused. A retry opens new
   entries with the next attempt number.
 - `budget.spent` always equals the sum of `actual` over `done` entries,
@@ -237,6 +238,13 @@ ledger record); on host A you follow it by hand.
    but that made nothing is `failed` with the units it used; a call it refused
    without charging is not recorded. Allowance entries need no money budget
    (integrity allows them with `budget: null`) and never change `budget.spent`.
+   On hosts B and C record them with `node --experimental-strip-types
+   spend/cli.ts allowance --project <dir> --service canva --tool generate-image
+   --job <manual job> --units <unit>,…` (`--failed <unit>` for a charged call
+   that made nothing). `--job` (`allowance.job`) ties each generation to the
+   manual job its file comes back for, so the file can be **ingested with
+   `--via canva`** and counts as generated in the rules (`lib/providers.md`
+   §Allowance tools). A Canva wave ends with that record and those ingests.
 5. **A cap, if the person wants one.** `budget.allowance_caps` holds the most
    generations they allow per service in this project (`{"canva": 20}`; set it
    on their words). A wave that would pass it is not run: say how many are used

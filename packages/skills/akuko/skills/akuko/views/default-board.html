@@ -1,5 +1,5 @@
 <!--
-akuko default board · default-board@0.6 · built from the locked design D-01 (option B, "Script desk")
+akuko default board · default-board@0.11 · built from the locked design D-01 (option B, "Script desk")
   What it is: the one finished review surface akuko ships. Script paper on the left, the shot list beside it with every shot lined to the
     line it came from, the spend gate pinned top-right, Bible and Ledger beneath it. It is a view in the sense of views/contract.md:
     it shows akuko.json and writes decisions through the inlined decision writer, nothing else.
@@ -21,6 +21,26 @@ akuko default board · default-board@0.6 · built from the locked design D-01 (o
     sentence to paste into chat.
   Note labels (@0.6): a person's note on a shot is labelled "Note on the shot", not with the shot's stage. A shot keeps its
     stage (sketch) while the film moves on, so a stage label read as if the note had been written at the sketch board.
+  Batch approval (@0.7, views/contract.md §4): "Approve all N shots in P7" on a one-part view and "Approve all bible entries (N)"
+    in the Bible open a confirm dialog listing every unit and the count. Only the Confirm click writes, one ordinary approve per
+    unit, all ending " · batch <uuid>". A batch never includes a unit sent back or an asset with no file. One "Undo batch" writes
+    one undo per decision of that batch. Nothing is pre-ticked and nothing happens on a timer or a page event.
+  Bible send-backs (@0.8): every reviewable bible image, entry, card and intake document gets "Request changes" ("Reopen ·
+    request changes" once approved) and "Add a note" wherever it shows "Approve", with the shot's composer ("Send back to
+    akuko"): one request-changes or note per unit, written only on the person's submit. Undo reverses the latest approval
+    or send-back. A unit sent back is never in a batch.
+  AI quality flags (@0.9, lib/state.md §Quality flags): problems an agent spotted in a generation (by_stage[stage].flags) show as
+    a "⚑ N" badge on the shot row and bible card, and as a list under the unit's review controls: what is wrong, the file looked
+    at, who flagged it, the suggested change. Per flag: "Send back with this" opens the request-changes composer with the
+    suggested change in it (the person edits it; only their submit writes, signed as them, carrying `flag`), "Dismiss" writes
+    one dismiss-flag (with Undo), "Note" opens the note composer. A flag never sends, approves or ticks anything; a unit with
+    an open block flag is left out of every batch. Decision writer v3 (adds `flag`).
+  Room for the shot list (@0.10): the columns are resizable (a separator between Script | Shots | side panel, or between the two
+    columns at 761-1279px: drag it, or focus it and use the arrow keys, Shift for bigger steps, Home/End, Enter or double-click to
+    reset; widths kept in this page's view settings). On a window under 900px tall, or when the person presses "Compact", the header
+    is one slim row and the stage strip one thin line. The part chips are one sideways-scrolling row. The current stage counts its own
+    units (key frames count key frames). A decision akuko has not folded that is older than one it has folded on the same unit is
+    overtaken: it no longer paints over the project and is not counted or copied again (it stays in this browser).
   Provenance: this exact file's sha256 is on views/conformed.json. Change it, bump "version", run scripts/check-view.mjs --ship again.
   Tokens: @ikenga/tokens theme A "Dusk Wood" values, defined under --ak-* names on purpose: a host that injects its own --bg-base / --fg
     (the Ikenga viewer does) must not be able to mix its palette into this page.
@@ -469,6 +489,27 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .card-row .bib-act { margin-top: 6px; }
 .flag { display: inline-block; padding: 2px 6px; border: 1px solid var(--ak-border); border-radius: var(--ak-radius-xs); font: 600 12px/1.2 var(--ak-font-sans); color: var(--ak-fg); }
 .flag-off { border-style: dashed; color: var(--ak-fg-muted); }
+/* AI quality flags (@0.9) */
+.qf-badge { display: inline-flex; align-items: center; gap: 2px; padding: 1px 7px; border-radius: var(--ak-radius-pill); font: 600 12px/1.4 var(--ak-font-sans); color: var(--ak-fg); background: var(--ak-achievement-soft); border: 1px solid transparent; white-space: nowrap; }
+.qf-badge[data-sev="info"] { background: transparent; border-color: var(--ak-border); color: var(--ak-fg-muted); }
+.qf-badge[data-sev="block"] { background: var(--ak-danger-soft); }
+.bib-h .qf-badge, figcaption .qf-badge { margin-left: 6px; }
+.qf { flex: 1 1 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--ak-border); border-radius: var(--ak-radius-md); background: var(--ak-bg-raised, transparent); }
+.qf-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0 0 6px; font: 600 13px/1.4 var(--ak-font-sans); color: var(--ak-fg); }
+.qf-hint { font: 400 13px/1.4 var(--ak-font-body); color: var(--ak-fg-muted); }
+.qf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.qf-i { padding: 8px 0 0; border-top: 1px solid var(--ak-border); }
+.qf-i:first-child { border-top: 0; padding-top: 0; }
+.qf-top { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font: 500 14px/1.45 var(--ak-font-body); color: var(--ak-fg); }
+.qf-sev, .qf-kind { padding: 1px 6px; border-radius: var(--ak-radius-xs); font: 600 12px/1.4 var(--ak-font-sans); border: 1px solid var(--ak-border); color: var(--ak-fg); }
+.qf-sev[data-sev="warn"] { background: var(--ak-achievement-soft); border-color: transparent; }
+.qf-sev[data-sev="block"] { background: var(--ak-danger-soft); border-color: transparent; }
+.qf-ev { margin: 4px 0 0; font: 400 13px/1.45 var(--ak-font-body); color: var(--ak-fg-muted); overflow-wrap: anywhere; }
+.qf-sug { margin: 6px 0 0; font: 400 14px/1.45 var(--ak-font-body); color: var(--ak-fg); }
+.qf-sug-l { display: block; font: 600 12px/1.4 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.qf-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.qf-done { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font: 500 13px/1.4 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.qf .composer { margin-top: 8px; }
 .gt { padding: 14px 0; border-bottom: 1px solid var(--ak-border-soft); }
 .gt-h { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 10px; }
 .gt-id { font: 600 15px/1.3 var(--ak-font-mono); }
@@ -503,6 +544,24 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 .lb-media { display: grid; place-items: center; min-height: 0; overflow: auto; }
 .lb-media img { display: block; max-width: 100%; max-height: calc(100vh - 160px); object-fit: contain; border-radius: var(--ak-radius-sm); }
 .lb-media svg { display: block; width: min(1100px, 86vw); height: auto; max-height: calc(100vh - 160px); }
+/* batch approval (@0.7): an opener, a confirm dialog that lists every unit, one Undo for the whole batch */
+.batch-open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.batch-open:empty { display: none; }
+.batch-open .fine { font-size: 12px; }
+.bp-box { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; gap: 10px; width: min(560px, 100%); max-height: min(720px, 100%); padding: 18px; background: var(--ak-bg-surface); color: var(--ak-fg); border: 1px solid var(--ak-border); border-radius: var(--ak-radius-lg); box-shadow: var(--ak-shadow-3); }
+.bp-h { margin: 0; font: 500 18px/1.3 var(--ak-font-display); }
+.bp-h:focus { outline: none; }
+.bp-s { margin: 0; font: 500 14px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.bp-s b { color: var(--ak-fg); }
+.bp-list { margin: 0; padding: 0; list-style: none; overflow: auto; border: 1px solid var(--ak-border); border-radius: var(--ak-radius-sm); }
+.bp-list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; font: 500 14px/1.4 var(--ak-font-sans); border-top: 1px solid var(--ak-border); }
+.bp-list li:first-child { border-top: 0; }
+.bp-list .mono { flex: none; }
+.bp-list .bp-what { color: var(--ak-fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-skip { margin: 0; font: 500 13px/1.45 var(--ak-font-sans); color: var(--ak-fg-muted); }
+.bp-act { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.batch-bar[hidden] { display: none; }
 .lb-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; font: 500 14px/1.4 var(--ak-font-sans); }
 /* the stage lens: what a pipeline stage holds, at the top of the middle pane */
 .stage[data-lens="1"] { box-shadow: inset 0 -3px 0 var(--ak-info); }
@@ -573,15 +632,68 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   .bib.flash { background: var(--ak-primary-soft); }
 }
 
-/* ── layout: wide (three columns, fixed panes) ── */
+/* ── resizable columns (@0.10): a separator between panes, dragged or moved with the arrow keys ── */
+.split { display: none; position: relative; z-index: 4; width: 7px; min-height: 0; cursor: col-resize; touch-action: none; background: linear-gradient(var(--ak-border), var(--ak-border)) center / 1px 100% no-repeat; }
+.split::after { content: ""; position: absolute; top: 50%; left: 2px; width: 3px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--ak-fg-faint); opacity: .7; }
+.split:hover, .split.is-drag { background-image: linear-gradient(var(--ak-primary), var(--ak-primary)); background-size: 3px 100%; }
+.split:hover::after, .split.is-drag::after, .split:focus-visible::after { background: var(--ak-fg); opacity: 1; }
+.split:focus-visible { outline: 2px solid var(--ak-info); outline-offset: -2px; }
+body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-select: none; }
+.head-btn[aria-pressed="true"] { background: var(--ak-bg-raised); }
+/* the part chips are one row that scrolls sideways, so a 12-part film does not push the shot list down */
+#parts { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: 2px; }
+
+/* ── layout: wide (three columns, resizable panes) ── */
 @media (min-width: 761px) {
   html, body { height: 100%; }
   body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
   .top, .foot, .warn-bar { flex: none; }
   .desk { flex: 1; min-height: 0; }
+  .split { display: block; }
+  .pane-script, .pane-shots { border-right: 0; }
+  /* the open shot's large picture never fills the list: the next shots stay in view (the full size is a click away) */
+  .panel-big .pic, .panel-big svg { max-height: max(140px, calc(100vh - 560px)); }
+  .panel-big .pic { object-fit: contain; }
+  .foot { flex-wrap: nowrap; white-space: nowrap; }
+  .foot > span:not(.sp) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .foot > button { flex: none; }
+  /* compact header (@0.10): on a short window (or when the person asks) the header is one slim row and the stage strip one
+     thin line, so the shot list keeps its height. Nothing is removed: the host note is the dot's tooltip, the details are in the footer. */
+  body[data-compact="1"] .top-row { flex-wrap: nowrap; gap: 14px; padding: 6px 16px; }
+  body[data-compact="1"] .eyebrow, body[data-compact="1"] .meta, body[data-compact="1"] .next-sub, body[data-compact="1"] .next-done .fine { display: none; }
+  body[data-compact="1"] .title { font-size: 19px; white-space: nowrap; }
+  body[data-compact="1"] .next { gap: 10px; padding-left: 14px; }
+  body[data-compact="1"] .next-txt { flex: 1 1 auto; }
+  body[data-compact="1"] .next-main { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body[data-compact="1"] .next-done { flex-wrap: nowrap; margin-top: 2px; font-size: 12px; white-space: nowrap; }
+  body[data-compact="1"] .next-done > span { flex: none; }
+  body[data-compact="1"] .next-done code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  body[data-compact="1"] .next-done .btn { flex: none; min-height: 26px; }
+  body[data-compact="1"] .host { order: 0; flex: none; padding: 8px; border: 0; }
+  body[data-compact="1"] .host > span:not(.hdot) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  body[data-compact="1"] .mode-btn { height: 32px; }
+  body[data-compact="1"] .stage-in { gap: 0; padding: 3px 10px 4px; }
+  body[data-compact="1"] .st-top { font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; }
+  body[data-compact="1"] .st-top > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  body[data-compact="1"] .st-s { font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body[data-compact="1"] .st-s > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+  body[data-compact="1"] .pane-head { padding: 8px 16px; gap: 2px 10px; }
+  body[data-compact="1"] .ph-h { font-size: 17px; }
+  body[data-compact="1"] .legend { display: none; }
+  body[data-compact="1"] .filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; margin-top: 5px; padding-bottom: 2px; }
+  body[data-compact="1"] .fchip { height: 28px; }
+  body[data-compact="1"] .batch-open { margin-top: 4px; }
+  body[data-compact="1"] .desk-nav { padding: 5px 10px; }
+  body[data-compact="1"] .dn { height: 34px; }
+  body[data-compact="1"] .foot { padding: 5px 16px; }
 }
 @media (min-width: 1280px) {
-  .desk { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) 344px; grid-template-rows: minmax(0, 1fr); }
+  .desk { grid-template-columns: var(--ak-w-script, minmax(0, 1.12fr)) 7px minmax(0, 1fr) 7px var(--ak-w-rail, 344px); grid-template-rows: minmax(0, 1fr); }
+  .pane-script { grid-column: 1; grid-row: 1; }
+  #split-a { grid-column: 2; grid-row: 1; }
+  .pane-shots { grid-column: 3; grid-row: 1; }
+  #split-b { grid-column: 4; grid-row: 1; }
+  .rail { grid-column: 5; grid-row: 1; }
   .desk-nav { display: none; }
   .rh-tabbed { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   /* the whole rail scrolls; once the gate has scrolled away, the sticky bar keeps its money and its two buttons in reach */
@@ -603,10 +715,12 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 }
 /* ── layout: medium (script | tabbed right column) ── */
 @media (min-width: 761px) and (max-width: 1279px) {
-  .desk { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .desk { grid-template-columns: var(--ak-w-left, minmax(0, 1fr)) 7px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .pane-script { grid-column: 1; grid-row: 1 / span 2; }
-  .desk-nav { grid-column: 2; grid-row: 1; }
-  .pane-shots, .rail { grid-column: 2; grid-row: 2; }
+  #split-a { grid-column: 2; grid-row: 1 / span 2; }
+  #split-b { display: none; }
+  .desk-nav { grid-column: 3; grid-row: 1; }
+  .pane-shots, .rail { grid-column: 3; grid-row: 2; }
   .desk-nav [data-v="script"] { display: none; }
   .rail-tabs { display: none; }
   .rail .rail-panel { display: none; }
@@ -636,6 +750,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 /* ── layout: phone (switchable panes, page scroll) ── */
 @media (max-width: 760px) {
   :root { --ak-lining-w: 92px; --ak-nav-h: 57px; }
+  .head-btn { display: none; }
   .top-row { flex-wrap: wrap; gap: 12px; padding: 14px 16px; }
   .ident { flex: 1 1 0; min-width: 0; }
   .title { font-size: 24px; }
@@ -693,6 +808,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     </div>
     <div class="next" id="next" data-akuko-view="your-move"></div>
     <div class="host" id="host" role="note"></div>
+    <button class="mode-btn head-btn" id="head-btn" type="button" data-act="head" data-k="head"></button>
     <button class="mode-btn" id="mode-btn" type="button" data-act="mode" data-k="mode"></button>
   </div>
   <nav class="pipeline" aria-label="Pipeline stages" data-akuko-view="pipeline"><ol id="stages"></ol></nav>
@@ -700,6 +816,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
 <p class="warn-bar" id="sample-bar" role="status" hidden></p>
 <p class="warn-bar" id="store-warn" role="status" hidden></p>
+<div class="warn-bar batch-bar" id="batch-bar" role="status" hidden></div>
 
 <main class="desk" id="desk">
   <nav class="desk-nav" id="desknav" aria-label="Board sections"></nav>
@@ -725,16 +842,19 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       </div>
     </div>
   </section>
+  <div class="split" id="split-a" data-split="a" data-k="split:a" role="separator" aria-orientation="vertical" tabindex="0" aria-controls="script" aria-label="Resize the script column" title="Drag, or use the arrow keys, to resize. Double-click or Enter resets."></div>
 
   <section class="pane pane-shots" id="shots" data-akuko-view="shots" aria-labelledby="h-shots" tabindex="-1">
     <div class="pane-head">
       <h2 class="ph-h" id="h-shots">Shots</h2>
       <p class="ph-sub mono" id="cut"></p>
+      <div class="batch-open" id="part-batch"></div>
       <div class="filters" id="parts" role="group" aria-label="Show one part of the film" hidden></div>
       <div class="filters" id="filters" role="group" aria-label="Filter shots by review status"></div>
     </div>
     <div class="scroller" id="shot-scroll"><section class="lens" id="lens" aria-label="Stage"></section><div id="shotlist"></div></div>
   </section>
+  <div class="split" id="split-b" data-split="b" data-k="split:b" role="separator" aria-orientation="vertical" tabindex="0" aria-controls="rail" aria-label="Resize the side panel" title="Drag, or use the arrow keys, to resize. Double-click or Enter resets."></div>
 
   <aside class="rail" id="rail" aria-label="Spend, bible, ledger, gates and rules">
     <section class="rail-panel gate" id="p-spend" data-akuko-view="spend-gate" aria-labelledby="h-spend"></section>
@@ -755,6 +875,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 <p class="vh" id="announce" aria-live="polite"></p>
 <p class="toast" id="toast" aria-hidden="true" hidden></p>
 <textarea class="copy-fallback" id="copy-fallback" readonly rows="4" aria-label="Your decisions, to copy by hand" hidden></textarea>
+<div class="lb" id="batch" role="dialog" aria-modal="true" aria-labelledby="bp-h" hidden><div class="bp-box" id="bp-box"></div></div>
 <div class="lb" id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-cap" hidden>
   <div class="lb-box">
     <div class="lb-media" id="lb-media"></div>
@@ -763,11 +884,11 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 </div>
 <input class="vh" id="file-in" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true">
 
-<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.6.0","variant":"default","fallback":{"mode":"mock"}}</script>
-<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.6","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
+<script type="application/json" id="ikenga-manifest">{"name":"akuko-board","title":"akuko board","version":"0.11.0","variant":"default","fallback":{"mode":"mock"}}</script>
+<script type="application/json" id="akuko-view">{"contract":"akuko-view@1","id":"default-board","version":"0.11","title":"akuko default board","writes_decisions":true,"views":["pipeline","shots","shot-detail","bible","spend-gate","ledger","script-link","your-move"]}</script>
 <script type="application/json" id="akuko-project">{"format":"akuko","schema_version":1,"project":{"slug":"the-beating","title":"The Beating","logline":"A man insists he is sane while describing how he killed an old man for his pale, clouded eye — until the dead man's heart gives him away.","source":"Adapted from \"The Tell-Tale Heart\" by Edgar Allan Poe (1843, public domain)","runtime_s":70,"aspect_ratio":"16:9","profile":"film","created_at":"2026-11-05T00:00:00Z","notes":"Prices are illustrative fixture values, not quotes."},"host":{"level":"A","label":"Claude artifact","capabilities":{}},"stages":{"intake":{"state":"approved"},"breakdown":{"state":"approved"},"sketch":{"state":"in-review"},"bible":{"state":"in-progress"},"keyframes":{"state":"waiting-spend"},"motion":{"state":"locked"},"sound":{"state":"locked"},"assemble":{"state":"locked"},"export":{"state":"locked"}},"current_stage":"sketch","script":{"beats":[]},"scenes":[{"id":"sc1","heading":"INT. OLD MAN'S HOUSE — HALLWAY — NIGHT","summary":"Midnight. The narrator creeps to the old man's door, as he has every night for a week."},{"id":"sc2","heading":"INT. OLD MAN'S BEDROOM — NIGHT","summary":"The lantern's single ray falls on the eye. The old man wakes. The narrator strikes."},{"id":"sc3","heading":"INT. OLD MAN'S BEDROOM — LATER","summary":"He hides the body beneath the floorboards."},{"id":"sc4","heading":"INT. OLD MAN'S BEDROOM — DAWN","summary":"Three officers arrive. He sits above the boards, calm — until the heartbeat grows too loud."}],"shots":[{"id":"sc1_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"ws","camera":"Static, low angle","camera_move":"unset","action":"A long dark hallway. A shuttered lantern glows faintly in the narrator's hand at the far end.","duration_s":6,"prompt":"Wide low-angle shot down a narrow 1840s hallway at midnight, a single shuttered lantern far away, deep shadow, candlelit chiaroscuro","refs":["char_narrator","loc_hallway","style_lookbook"],"script_line":"Every night, about midnight, I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"N","shape":"rect","x":0.72,"y":0.55,"w":0.06,"h":0.3}]},{"id":"sc1_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"insert","camera":"Macro, locked off","camera_move":"unset","action":"His hand turns the latch, a fraction at a time.","duration_s":4,"prompt":"Extreme close-up of a hand slowly turning an iron door latch, lantern light from below","refs":["char_narrator","style_lookbook"],"script_line":"I turned the latch of his door and opened it — oh so gently!","blocking":[{"who":"hand","shape":"rect","x":0.35,"y":0.35,"w":0.3,"h":0.3}]},{"id":"sc1_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc1","shot_type":"pov","camera":"Handheld, slow push","camera_move":"push-in","action":"Through the crack of the door: darkness, and the shape of the old man asleep.","duration_s":6,"prompt":"POV through a narrow door gap into a pitch-dark bedroom, faint outline of a sleeping figure","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I put in a dark lantern, all closed, closed, so that no light shone out, and then I thrust in my head.","blocking":[{"who":"OM","shape":"ellipse","x":0.5,"y":0.62,"w":0.22,"h":0.12}]},{"id":"sc2_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The narrator opens the lantern a crack. A single thin ray cuts across the room.","duration_s":7,"prompt":"Medium shot, a man in shadow opening a lantern shutter a crack, one thin beam of light crossing a dark room","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I undid the lantern cautiously — oh, so cautiously — just so much that a single thin ray fell upon the vulture eye.","blocking":[{"who":"N","shape":"rect","x":0.18,"y":0.35,"w":0.12,"h":0.5},{"who":"OM","shape":"ellipse","x":0.72,"y":0.6,"w":0.2,"h":0.12}]},{"id":"sc2_sh2","stage":"sketch","status":"approved","comments":[],"scene":"sc2","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"The eye, pale blue with a film over it, wide open in the ray of light.","duration_s":4,"prompt":"Extreme close-up of an old man's pale blue eye clouded with a cataract, lit by a single beam","refs":["char_oldman","style_lookbook"],"script_line":"It was open — wide, wide open — and I grew furious as I gazed upon it.","blocking":[{"who":"OM eye","shape":"ellipse","x":0.5,"y":0.5,"w":0.34,"h":0.2}]},{"id":"sc2_sh3","stage":"sketch","status":"needs-rework","comments":[{"ts":"2026-11-06T21:12:00Z","stage":"sketch","author":"You","text":"He should bolt up — this framing reads calm. Try a lower, tighter angle."}],"scene":"sc2","shot_type":"ms","camera":"Static","camera_move":"unset","action":"The old man sits up in bed: 'Who's there?'","duration_s":5,"prompt":"Medium shot, an old man bolting upright in a four-poster bed in darkness, terrified","refs":["char_oldman","loc_bedroom","style_lookbook"],"script_line":"I heard him sit up in the bed, crying out — \"Who's there?\"","blocking":[{"who":"OM","shape":"rect","x":0.42,"y":0.3,"w":0.16,"h":0.42}]},{"id":"sc2_sh4","stage":"sketch","status":"pending-review","comments":[],"scene":"sc2","shot_type":"ws","camera":"Static, high angle","camera_move":"unset","action":"The lantern drops. The bed is dragged over him. Only shadows move.","duration_s":6,"prompt":"High-angle wide shot of a dark bedroom, a fallen lantern on the floor, an overturned bed, motion only in shadow","refs":["char_narrator","char_oldman","loc_bedroom","style_lookbook"],"script_line":"In an instant I dragged him to the floor, and pulled the heavy bed over him.","blocking":[{"who":"N","shape":"rect","x":0.3,"y":0.42,"w":0.1,"h":0.36},{"who":"bed","shape":"rect","x":0.5,"y":0.55,"w":0.32,"h":0.2}]},{"id":"sc3_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc3","shot_type":"overhead","camera":"Overhead, static","camera_move":"unset","action":"From above: he lifts three planks from the floor.","duration_s":7,"prompt":"Overhead shot of a man kneeling on a wooden floor lifting three planks, lantern beside him","refs":["char_narrator","loc_bedroom","style_lookbook"],"script_line":"I took up three planks from the flooring of the chamber, and deposited all between the scantlings.","blocking":[{"who":"N","shape":"ellipse","x":0.4,"y":0.45,"w":0.18,"h":0.18},{"who":"planks","shape":"rect","x":0.58,"y":0.3,"w":0.08,"h":0.42}]},{"id":"sc4_sh1","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ws","camera":"Static","camera_move":"unset","action":"Dawn light. Three officers stand in the doorway, hats in hand.","duration_s":6,"prompt":"Wide shot, grey dawn light, three 1840s police officers standing in a bedroom doorway","refs":["char_officers","loc_bedroom","style_lookbook"],"script_line":"There entered three men, who introduced themselves, with perfect suavity, as officers of the police.","blocking":[{"who":"O1","shape":"rect","x":0.4,"y":0.3,"w":0.07,"h":0.45},{"who":"O2","shape":"rect","x":0.5,"y":0.3,"w":0.07,"h":0.45},{"who":"O3","shape":"rect","x":0.6,"y":0.3,"w":0.07,"h":0.45}]},{"id":"sc4_sh2","stage":"sketch","status":"pending-review","comments":[],"scene":"sc4","shot_type":"ms","camera":"Slow dolly in","camera_move":"push-in","action":"He places his chair directly over the hidden boards and smiles at the officers.","duration_s":8,"prompt":"Medium shot, a man seated calmly on a chair in the middle of a bedroom floor, smiling, officers out of focus","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"I placed my own seat upon the very spot beneath which reposed the corpse of the victim.","blocking":[{"who":"N","shape":"rect","x":0.44,"y":0.32,"w":0.12,"h":0.46},{"who":"O1","shape":"rect","x":0.12,"y":0.3,"w":0.06,"h":0.4}]},{"id":"sc4_sh3","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ecu","camera":"Locked off","camera_move":"unset","action":"Sweat on his temple. Under the silence, a low, dull, quick sound.","duration_s":5,"prompt":"Extreme close-up of a sweating temple and a twitching eye, cold dawn light","refs":["char_narrator","style_lookbook"],"script_line":"It was a low, dull, quick sound — much such a sound as a watch makes when enveloped in cotton.","blocking":[{"who":"N face","shape":"ellipse","x":0.55,"y":0.45,"w":0.4,"h":0.5}]},{"id":"sc4_sh4","stage":"sketch","status":"approved","comments":[],"scene":"sc4","shot_type":"ms","camera":"Handheld, whip to boards","camera_move":"whip-pan","action":"He leaps up, screaming, and tears at the planks: 'Here, here! It is the beating of his hideous heart!'","duration_s":6,"prompt":"Handheld medium shot, a man on his knees tearing up floorboards, screaming, officers recoiling","refs":["char_narrator","char_officers","loc_bedroom","style_lookbook"],"script_line":"\"Villains!\" I shrieked, \"dissemble no more! I admit the deed! — tear up the planks! here, here! — it is the beating of his hideous heart!\"","blocking":[{"who":"N","shape":"rect","x":0.4,"y":0.5,"w":0.16,"h":0.32},{"who":"O2","shape":"rect","x":0.75,"y":0.28,"w":0.06,"h":0.42}]}],"bible":{"characters":[{"id":"char_narrator","stage":"bible","status":"approved","comments":[],"name":"The Narrator","role":"Principal","description":"Thirties, gaunt, immaculate collar, unnervingly calm voice; eyes that never settle.","notes":[],"refs":["char_narrator_portrait","char_narrator_turnaround"]},{"id":"char_oldman","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man","role":"Principal","description":"Seventies, frail, kindly; one pale blue eye clouded with a film — 'the eye of a vulture'.","notes":[],"refs":["char_oldman_portrait","char_oldman_turnaround"]},{"id":"char_officers","stage":"bible","status":"pending","comments":[],"name":"Officers (×3)","role":"Supporting","description":"1840s police, dark greatcoats, polite and unhurried.","notes":[],"refs":[]}],"locations":[{"id":"loc_hallway","stage":"bible","status":"approved","comments":[],"name":"Hallway","description":"Narrow, bare boards, a single door at the end.","notes":[],"refs":["loc_hallway_plate"]},{"id":"loc_bedroom","stage":"bible","status":"pending-review","comments":[],"name":"The Old Man's Bedroom","description":"Four-poster bed, shuttered window, wide pine floorboards.","notes":[],"refs":["loc_bedroom_plate"]}],"styles":[{"id":"style_lookbook","stage":"bible","status":"approved","comments":[],"name":"Lookbook","notes":["Lantern chiaroscuro: one warm source, everything else falls to black","Dawn scenes go cold and grey — the only daylight in the film","Fine film grain, no lens flares","Composition leaves dead space around the eye"],"refs":[]}]},"assets":[{"id":"char_narrator_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_narrator","tags":[]},{"id":"char_narrator_turnaround","stage":"bible","status":"approved","comments":[],"kind":"turnaround","owner":"char_narrator","tags":[]},{"id":"char_oldman_portrait","stage":"bible","status":"approved","comments":[],"kind":"portrait","owner":"char_oldman","tags":[]},{"id":"char_oldman_turnaround","stage":"bible","status":"pending-review","comments":[],"kind":"turnaround","owner":"char_oldman","tags":[]},{"id":"loc_hallway_plate","stage":"bible","status":"approved","comments":[],"kind":"plate","owner":"loc_hallway","tags":[]},{"id":"loc_bedroom_plate","stage":"bible","status":"pending-review","comments":[],"kind":"plate","owner":"loc_bedroom","tags":[]}],"audio":{},"budget":{"cap":15,"currency":"USD","spent":0.84},"pending_spend":[{"id":"job_kf_sc1","stage":"keyframes","label":"Generate key frames for scene 1","units":["sc1_sh1","sc1_sh2","sc1_sh3"],"provider":"Gemini image","model":"gemini-3.1-flash-image-preview","estimate":0.36,"status":"awaiting-approval"}],"ledger":[{"ts":"2026-11-06T19:40:00Z","provider":"Gemini image","unit":"char_narrator_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T19:44:00Z","provider":"Gemini image","unit":"char_narrator_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:05:00Z","provider":"Gemini image","unit":"char_oldman_portrait","actual":0.12,"status":"done"},{"ts":"2026-11-06T20:09:00Z","provider":"Gemini image","unit":"char_oldman_turnaround","actual":0.24,"status":"done"},{"ts":"2026-11-06T20:30:00Z","provider":"Gemini image","unit":"loc_hallway_plate","actual":0.06,"status":"done"},{"ts":"2026-11-06T20:33:00Z","provider":"Gemini image","unit":"loc_bedroom_plate","actual":0.06,"status":"done"}],"decisions":[],"_sample":true}</script>
 <script>
-/* akuko-decision-writer v2 — views/contract.md §Decision writer. Inline this block verbatim. */
+/* akuko-decision-writer v3 — views/contract.md §Decision writer. Inline this block verbatim. */
 (function () {
   'use strict';
   var STATE_KEY = 'akuko.decisions';
@@ -810,11 +931,12 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
   /**
    * Write one decision. Call ONLY from a person's click / submit / key press,
-   * once per unit. f = {action, unit, stage, text?, undoes?}. Returns the record.
+   * once per unit. f = {action, unit, stage, text?, undoes?, flag?}. Returns the record.
    */
   function emit(f) {
     var d = { id: uuid(), action: f.action, unit: f.unit, stage: f.stage };
     if (f.action === 'undo') d.undoes = f.undoes;
+    if (typeof f.flag === 'string' && f.flag !== '') d.flag = f.flag;
     if (typeof f.text === 'string' && (f.text !== '' || f.action === 'note' || f.action === 'request-changes')) d.text = f.text;
     d.by = who;
     d.at = new Date().toISOString();
@@ -911,13 +1033,15 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       if (k === 'clip') return (t === undefined || t === 'video') ? '' : 'the shot is ' + t + ', not a video shot';
       return ((s.treatment === 'lipsync' || s.treatment === 'video') && spokenIn(s)) ? '' : 'the shot no longer asks for a lip-sync';
     };
-    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '', name: a.name || '', film: a.film || null, uri: (a.file && a.file.uri) || '', comments: a.comments || [], mime: (a.file && a.file.mime) || '',
+    /* AI quality flags on the unit's current stage (lib/state.md §Quality flags); the board only shows them and offers the person's decisions */
+    const flagsOf = u => ((u.by_stage && u.by_stage[u.stage] && u.by_stage[u.stage].flags) || []).map(f => Object.assign({}, f));
+    const asset = a => ({ id: a.id, kind: a.kind, status: disp(a.status), _status: a.status, stage: a.stage, owner: a.owner || '', name: a.name || '', film: a.film || null, uri: (a.file && a.file.uri) || '', hash: (a.file && a.file.hash) || '', flags: flagsOf(a), comments: a.comments || [], mime: (a.file && a.file.mime) || '',
       removed: !!(a.source && a.source.removed_at) || !!(a.owner && goneAt[a.owner]), removed_at: (a.source && a.source.removed_at) || (a.owner && goneAt[a.owner]) || '', idle: idleOf(a) });
     const scenePart = {};
     p.scenes.forEach(s => { scenePart[s.id] = s.part || null; });
     const lineById = {};
     ((p.audio && p.audio.lines) || []).forEach(l => { lineById[l.id] = l; });
-    const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes || [], comments: e.comments || [], removed: !!(e.source && e.source.removed_at), removed_at: (e.source && e.source.removed_at) || '',
+    const entry = e => ({ id: e.id, name: e.name, role: e.role, status: disp(e.status), _status: e.status, stage: e.stage, description: e.description || '', notes: e.notes || [], comments: e.comments || [], flags: flagsOf(e), removed: !!(e.source && e.source.removed_at), removed_at: (e.source && e.source.removed_at) || '',
       assets: (e.refs || []).filter(r => assetById[r]).map(r => asset(assetById[r])) });
     const styles = (p.bible.styles || []).map(entry);
     return {
@@ -930,7 +1054,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         action: s.action || '', script_line: s.script_line || '', prompt: s.prompt || '', refs: s.refs || [], blocking: s.blocking || [],
         move: MV[s.camera_move] || (!s.camera_move || s.camera_move === 'unset' || s.camera_move === 'static' ? null : s.camera_move), comments: s.comments || [],
         part: s.part || (s.scene && scenePart[s.scene]) || null, film: s.film || null, tier: s.tier || '', framing: s.framing || '', motion_note: s.motion_note || '', lighting: s.lighting || '', negative: s.negative || '',
-        notes: s.notes || '', by_stage: s.by_stage || {}, removed: !!(s.source && s.source.removed_at), removed_at: (s.source && s.source.removed_at) || '', source: s.source || null,
+        notes: s.notes || '', by_stage: s.by_stage || {}, flags: flagsOf(s), removed: !!(s.source && s.source.removed_at), removed_at: (s.source && s.source.removed_at) || '', source: s.source || null,
         lines: (s.lines || []).map(l => Object.assign({ id: l.id, kind: l.kind }, lineById[l.id] ? { text: lineById[l.id].text || '', character: lineById[l.id].character || '' } : {})) })),
       bible: { characters: (p.bible.characters || []).map(entry), locations: (p.bible.locations || []).map(entry), styles: styles },
       assets: p.assets.map(asset),
@@ -1103,7 +1227,9 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const RAILS = ['bible', 'ledger', 'gates', 'rules'];
   const FILTERS = ['all', 'pending-review', 'needs-rework', 'approved'];
   const hostMode = () => { const m = document.documentElement.getAttribute('data-mode'); return m === 'light' || m === 'dark' ? m : null; };
-  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null, showRemoved: false, lens: null, doneCopied: false };
+  /* column widths the person dragged (px; null = the layout's default): script and rail on the three-column layout, left on the two-column one */
+  const COLS = ['script', 'rail', 'left'];
+  const S = { sel: null, view: 'script', rail: 'bible', filter: 'all', part: 'all', mode: hostMode() || 'dark', modeChosen: false, compose: null, flash: null, showRemoved: false, lens: null, doneCopied: false, batch: null, head: 'auto', cols: { script: null, rail: null, left: null } };
   const saved = store.read();
   if (saved && saved.v === 2) {
     if (saved.sel && shotsById[saved.sel]) S.sel = saved.sel;
@@ -1112,10 +1238,12 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     if (typeof saved.part === 'string' && PARTS.indexOf(saved.part) !== -1) S.part = saved.part;
     if (saved.mode === 'light' || saved.mode === 'dark') { S.mode = saved.mode; S.modeChosen = true; }
     if (VIEWS.indexOf(saved.view) !== -1) S.view = saved.view;
+    if (saved.head === 'compact' || saved.head === 'full') S.head = saved.head;
+    if (saved.cols && typeof saved.cols === 'object') COLS.forEach(k => { const v = saved.cols[k]; if (typeof v === 'number' && isFinite(v) && v > 0) S.cols[k] = Math.round(v); });
   }
   /* a link can open one part: default-board.html#part=P7 */
   { const m = /(?:^#|&)part=([^&]+)/.exec(location.hash || ''); const want = m ? decodeURIComponent(m[1]) : null; if (want && PARTS.indexOf(want) !== -1) S.part = want; }
-  function save() { store.write({ v: 2, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, part: S.part, mode: S.modeChosen ? S.mode : null }); }
+  function save() { store.write({ v: 2, sel: S.sel, view: S.view, rail: S.rail, filter: S.filter, part: S.part, mode: S.modeChosen ? S.mode : null, head: S.head === 'auto' ? null : S.head, cols: { script: S.cols.script, rail: S.cols.rail, left: S.cols.left } }); }
   /* parts: what the one-part view shows. "all" shows the whole film. */
   const inPart = s => S.part === 'all' || s.part === S.part;
   /* units removed from the imported shot list (source.removed_at) are kept for the record: shown in a collapsed group, never
@@ -1128,12 +1256,14 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   const hasRail = id => (id === 'gates' ? D.gates.length > 0 || D.people.length > 0 : id === 'rules' ? !!D.rules : true);
   /* Decisions this page holds that the project does not have yet. Ones already folded into the project (their ids are in its
      decisions) are left out of the copy, so a second copy never resends them. Nothing here deletes a decision. */
-  function unfoldedDecisions() { const have = {}; (D ? D.decisions : []).forEach(d => { have[d.id] = true; }); return W.all().filter(d => !have[d.id]); }
+  /* A decision akuko has since overtaken (a later decision on the same unit is already in the project, @0.10) is left out too:
+     it no longer shows, and copying it again would only replay an old answer. It stays in this browser's store. */
+  function unfoldedDecisions() { const have = {}; (D ? D.decisions : []).forEach(d => { have[d.id] = true; }); return W.all().filter(d => !have[d.id] && !(EV && EV.sup[d.id])); }
   let toastTimer = null;
   function toast(msg) { const el = $('#toast'); if (!el) return; el.textContent = msg; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 5000); }
   function copyDecisions() {
-    const fresh = unfoldedDecisions(), done = W.all().length - fresh.length;
-    const note = (done ? ' (' + done + ' already in your project)' : '');
+    const fresh = unfoldedDecisions(), old = W.all().filter(d => EV && EV.sup[d.id]).length, done = W.all().length - fresh.length - old;
+    const note = (done ? ' (' + done + ' already in your project)' : '') + (old ? ' (' + old + ' overtaken by a later decision, left out)' : '');
     if (!fresh.length) { const m = 'Nothing new to copy' + (done ? ': ' + done + ' ' + plural(done, 'decision') + ' already in your project' : ''); announce(m); toast(m); return; }
     const text = fresh.map(d => JSON.stringify(d)).join(String.fromCharCode(10)) + String.fromCharCode(10);
     const ok = () => { const m = 'Copied ' + fresh.length + ' ' + plural(fresh.length, 'decision') + note + '. Paste them to akuko.'; announce(m); toast(m); };
@@ -1147,7 +1277,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
      every decision akuko has not folded in yet (this page's outbox and,
      on claude.ai, other reviewers' rows). Nothing is cached: it is derived
      again on every render, so a republished project or a new row just shows. */
-  const ACTIONS = ['approve', 'request-changes', 'note', 'approve-spend', 'decline-spend', 'undo'];
+  const ACTIONS = ['approve', 'request-changes', 'note', 'approve-spend', 'decline-spend', 'undo', 'dismiss-flag'];
   const validDecision = d => !!(d && typeof d === 'object' && typeof d.id === 'string' && ACTIONS.indexOf(d.action) !== -1 && typeof d.unit === 'string' && typeof d.at === 'string');
   let remote = [];
   let myId = null;
@@ -1164,7 +1294,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     all.forEach(d => { byId[d.id] = d; if (d.action === 'undo' && d.undoes) (hit[d.undoes] = hit[d.undoes] || []).push(d); });
     const memo = {};
     const active = d => { if (memo[d.id] === undefined) { memo[d.id] = true; memo[d.id] = !(hit[d.id] || []).some(active); } return memo[d.id]; };
-    const ev = { status: {}, job: {}, extra: {}, hide: {}, last: {}, byId: byId, active: active, all: all };
+    const ev = { status: {}, job: {}, extra: {}, hide: {}, last: {}, flag: {}, sup: {}, byId: byId, active: active, all: all };
+    /* Overtaken (@0.10): a status decision akuko has not folded, made before a status decision on the same unit that akuko has
+       folded, is history. The project already shows the later answer, so the old one must not paint over it (E01: an old
+       "request changes" on a character's portrait, never folded, showed "Needs rework" over the approval folded the next day). */
+    const STATUSY = ['approve', 'request-changes', 'undo', 'approve-spend', 'decline-spend'];
+    const lastFolded = {};
+    all.forEach((d, i) => { if (folded[d.id] && STATUSY.indexOf(d.action) !== -1) lastFolded[d.unit] = i; });
+    all.forEach((d, i) => { if (!folded[d.id] && STATUSY.indexOf(d.action) !== -1 && lastFolded[d.unit] !== undefined && i < lastFolded[d.unit]) ev.sup[d.id] = true; });
+    /* a flag a decision on this page closed (or reopened, by undoing a folded closer) before akuko folds it */
+    const closes = d => (d.action === 'request-changes' || d.action === 'dismiss-flag') && typeof d.flag === 'string';
     const trailWas = (unit, did) => {
       /* shots, bible entries and assets (key frames, bible images, cards, intake documents) all keep the trail */
       const cs = (shotsById[unit] && shotsById[unit].comments) || (bibleById[unit] && bibleById[unit].item.comments) || (assetsById[unit] && assetsById[unit].comments) || [];
@@ -1179,6 +1318,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     all.forEach(d => {
       if (!active(d)) return;
       if (stale(d)) return;
+      if (ev.sup[d.id]) return;
       if (d.action === 'undo') {
         const t = byId[d.undoes];
         if (t && stale(t)) return;
@@ -1186,14 +1326,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
           ev.hide[t.id] = true;
           if (t.action === 'approve' || t.action === 'request-changes') { ev.status[t.unit] = trailWas(t.unit, t.id) || 'pending-review'; }
           if (t.action === 'approve-spend' || t.action === 'decline-spend') ev.job[t.unit] = 'awaiting-approval';
+          if (closes(t)) ev.flag[t.flag] = { status: 'open' };
         }
         return;
       }
+      if (d.action === 'dismiss-flag') { if (!folded[d.id] && !ev.flag[d.flag]) ev.flag[d.flag] = { status: 'dismissed', did: d.id }; return; }
       ev.last[d.unit] = d;
       if (folded[d.id]) return;
       const note = kind => { (ev.extra[d.unit] = ev.extra[d.unit] || []).push({ ts: d.at, stage: d.stage, author: d.by, kind: kind, text: d.text || '', decision: d.id }); };
       if (d.action === 'approve') { ev.status[d.unit] = 'approved'; note('approve'); }
-      else if (d.action === 'request-changes') { ev.status[d.unit] = 'needs-rework'; note('request'); }
+      else if (d.action === 'request-changes') { ev.status[d.unit] = 'needs-rework'; note('request'); if (closes(d) && !ev.flag[d.flag]) ev.flag[d.flag] = { status: 'accepted', did: d.id }; }
       else if (d.action === 'note') note('note');
       else if (d.action === 'approve-spend') ev.job[d.unit] = 'approved';
       else if (d.action === 'decline-spend') ev.job[d.unit] = 'declined';
@@ -1201,6 +1343,65 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     EV = ev;
   }
   const effStatus = (id, raw) => (EV && EV.status[id]) || raw;
+  /* ── AI quality flags (@0.9, lib/state.md §Quality flags) ──
+     An agent's observation about one file, shown with three controls, each the person's own decision: "Send back with this"
+     opens the request-changes composer with the flag's suggested change in it (the person edits it; only their submit
+     writes), "Dismiss" writes one dismiss-flag, "Note" opens the note composer. Nothing is written, sent or ticked otherwise. */
+  const FLAG_KIND = { anatomy: 'Anatomy', 'style-drift': 'Style drift', 'wardrobe-logo': 'Wardrobe / logo', likeness: 'Likeness', 'text-in-image': 'Text in image', continuity: 'Continuity', other: 'Other' };
+  const FLAG_SEV = { info: 'Info', warn: 'Warn', block: 'Block' };
+  const SEV_RANK = { info: 0, warn: 1, block: 2 };
+  const flagState = f => (EV && EV.flag[f.id] ? EV.flag[f.id].status : f.status);
+  const unitOf = id => shotsById[id] || assetsById[id] || (bibleById[id] && bibleById[id].item) || null;
+  const openFlagsOf = id => { const u = unitOf(id); return u && !u.removed ? (u.flags || []).filter(f => flagState(f) === 'open') : []; };
+  /* an open block flag keeps a unit out of every batch (decisions/fold.ts, batch-ineligible) */
+  const blocked = id => openFlagsOf(id).some(f => f.severity === 'block');
+  function qfBadge(ids) {
+    const list = [].concat.apply([], ids.map(openFlagsOf));
+    if (!list.length) return '';
+    const sev = list.reduce((m, f) => (SEV_RANK[f.severity] > SEV_RANK[m] ? f.severity : m), 'info');
+    return '<span class="qf-badge" data-sev="' + esc(sev) + '" data-akuko-field="flag-count" title="Open AI flags"><span aria-hidden="true">⚑ </span>' + list.length + '<span class="vh"> open AI ' + plural(list.length, 'flag') + '</span></span>';
+  }
+  /* the Dismiss of a flag that still stands, for its Undo */
+  const flagUndo = fid => (EV ? EV.all : []).slice().reverse().find(d => d.action === 'dismiss-flag' && d.flag === fid && EV.active(d)) || null;
+  function flagsBlock(id, key) {
+    const u = unitOf(id); if (!u || u.removed) return '';
+    const all = u.flags || [];
+    const open = all.filter(f => flagState(f) === 'open');
+    const justDismissed = all.filter(f => flagState(f) === 'dismissed' && EV.flag[f.id] && EV.flag[f.id].did);
+    if (!open.length && !justDismissed.length) return '';
+    const uid = esc(id), file = u.uri || '';
+    const item = f => {
+      const ck = key + '#' + f.id, fk = esc(ck), ev = f.evidence || {};
+      const earlier = !!(ev.uri && file && ((ev.uri === file && ev.sha256 && /^[0-9a-f]{64}$/.test(u.hash || '') && ev.sha256 !== u.hash) || (ev.uri !== file && ev.asset === id)));
+      const where = [ev.view ? esc(ev.view) + ' view' : '', ev.region ? 'region ' + [ev.region.x, ev.region.y, ev.region.w, ev.region.h].map(n => Math.round(n * 100) + '%').join(' · ') : '', ev.sha256 ? 'sha ' + esc(ev.sha256.slice(0, 8)) : ''].filter(Boolean).join(' · ');
+      let h = '<li class="qf-i" data-sev="' + esc(f.severity) + '" data-akuko-flag="' + esc(f.id) + '">' +
+        '<p class="qf-top"><span class="qf-sev" data-sev="' + esc(f.severity) + '">' + esc(FLAG_SEV[f.severity] || f.severity) + '</span><span class="qf-kind">' + esc(FLAG_KIND[f.kind] || f.kind) + '</span><span class="qf-t">' + esc(f.text) + '</span></p>' +
+        '<p class="qf-ev">Looked at <span class="mono">' + esc(ev.uri || '') + '</span>' + (where ? ' · ' + where : '') + ' · flagged by ' + esc(f.source) + ' · ' + esc(when(f.ts)) + '</p>' +
+        (earlier ? '<p class="qf-ev"><b>About an earlier take.</b> The file has changed since this was flagged; look again before acting on it.</p>' : '') +
+        (f.suggested_change ? '<p class="qf-sug"><span class="qf-sug-l">Suggested change</span> “' + esc(f.suggested_change) + '”</p>' : '') +
+        '<div class="qf-act">' +
+        '<button class="btn btn-sm" type="button" data-act="flag-send" data-akuko-action="request-changes" data-akuko-unit="' + uid + '" data-id="' + uid + '" data-akuko-flag="' + esc(f.id) + '" data-ckey="' + fk + '" data-k="flag-send:' + fk + '">Send back with this</button>' +
+        '<button class="btn btn-sm btn-ghost" type="button" data-act="flag-dismiss" data-akuko-action="dismiss-flag" data-akuko-unit="' + uid + '" data-id="' + uid + '" data-akuko-flag="' + esc(f.id) + '" data-k="flag-dismiss:' + fk + '">Dismiss</button>' +
+        '<button class="btn btn-sm btn-ghost" type="button" data-act="flag-note" data-akuko-action="note" data-akuko-unit="' + uid + '" data-id="' + uid + '" data-akuko-flag="' + esc(f.id) + '" data-ckey="' + fk + '" data-k="flag-note:' + fk + '">Note</button></div>';
+      if (S.compose && S.compose.id === id && S.compose.key === ck) {
+        const isReq = S.compose.mode === 'request';
+        h += '<form class="composer" data-form="compose" data-id="' + uid + '" data-ckey="' + fk + '" novalidate>' +
+          '<label class="lbl" for="compose-text">' + (isReq ? 'What should change? This starts from the flag: edit it as you like. It is sent as your words.' : 'Note for akuko about this flag (the status stays as it is)') + '</label>' +
+          '<textarea id="compose-text" rows="3" aria-describedby="compose-err" data-akuko-text>' + esc(S.compose.text || '') + '</textarea>' +
+          '<p class="err" id="compose-err" role="alert"></p>' +
+          '<div class="rv-btns"><button class="btn btn-primary" type="submit" data-akuko-submit data-k="c-submit:' + fk + '">' + (isReq ? 'Send back to akuko' : 'Add note') + '</button>' +
+          '<button class="btn btn-ghost" type="button" data-act="c-cancel" data-id="' + uid + '" data-ckey="' + fk + '" data-k="c-cancel:' + fk + '">Cancel</button><span class="kbd-hint">Ctrl + Enter sends · Esc cancels</span></div></form>';
+      }
+      return h + '</li>';
+    };
+    const gone = f => {
+      const d = flagUndo(f.id), fk = esc(key + '#' + f.id);
+      return '<li class="qf-i qf-done" role="status"><span>Dismissed: ' + esc(f.text) + '</span>' + (d ? '<button class="linkbtn" type="button" data-act="flag-undo" data-akuko-action="undo" data-akuko-unit="' + uid + '" data-id="' + uid + '" data-akuko-flag="' + esc(f.id) + '" data-k="flag-undo:' + fk + '">Undo</button>' : '') + '</li>';
+    };
+    return '<section class="qf" aria-label="AI flags on ' + uid + '" data-akuko-field="flags" data-akuko-unit="' + uid + '">' +
+      (open.length ? '<h5 class="qf-h">' + qfBadge([id]) + '<span>AI ' + plural(open.length, 'flag') + '</span><span class="qf-hint">An agent spotted ' + (open.length === 1 ? 'this' : 'these') + '. You decide; nothing is sent until you do.</span></h5>' : '') +
+      '<ul class="qf-list">' + open.map(item).join('') + justDismissed.map(gone).join('') + '</ul></section>';
+  }
   const shotStatus = id => effStatus(id, shotsById[id].status);
   const assetStatus = a => effStatus(a.id, a.status);
   const jobStatus = j => (EV && EV.job[j.id]) || j.status;
@@ -1283,6 +1484,91 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   /* every person's decision goes through the decision format (views/contract.md) */
   function decide(f) { return W.emit(f); }
+
+  /* ── batch approval (views/contract.md §4 "Batch approval") ──
+     An opener lists what a batch would approve in a confirm dialog; only the person's click on Confirm writes, one ordinary
+     approve per listed unit, all with the same text ending " · batch <uuid>" (decisions/fold.ts#BATCH_TEXT). A batch never
+     includes a unit sent back (needs-rework) or an asset with no file. "Undo batch" writes one undo per decision of the batch. */
+  const BATCH_RE = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+  const batchOf = d => { const m = BATCH_RE.exec((d && typeof d.text === 'string') ? d.text : ''); return m ? m[1] : null; };
+  function newBatchId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    const b = new Uint8Array(16); window.crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.prototype.map.call(b, x => (x + 0x100).toString(16).slice(1)).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  }
+  /* what a batch over one scope ("part:P7" or "bible") approves right now, and what it leaves out */
+  function batchScope(scope) {
+    if (scope === 'bible') {
+      const all = waitingOtherItems().filter(x => placeOf(x) === 'bible');
+      const units = all.filter(x => (x.e || (x.a && x.a.uri)) && !blocked(x.id)).map(x => ({ id: x.id, what: x.e ? x.e.name : ((x.a.owner && bibleById[x.a.owner] ? bibleById[x.a.owner].item.name + ' · ' : '') + (KIND[x.a.kind] || x.a.kind)) }));
+      const rework = Object.keys(bibleById).map(k => bibleById[k].item).filter(e => !e.removed && !hasAssetRef(e) && entryStatus(e) === 'needs-rework').length +
+        D.assets.filter(a => !a.removed && !a.idle && assetStatus(a) === 'needs-rework' && placeOf({ id: a.id, stage: a.stage, a: a }) === 'bible').length;
+      const n = units.length;
+      const flagged = all.filter(x => blocked(x.id)).length;
+      return { scope: scope, title: 'Approve all bible entries (' + n + ')', noun: n + ' bible ' + plural(n, 'entry', 'entries'), where: 'in the bible', units: units, rework: rework, flagged: flagged, fileless: all.length - n - flagged };
+    }
+    const m = /^part:(.+)$/.exec(scope || '');
+    if (!m || PARTS.indexOf(m[1]) === -1) return null;
+    const pt = m[1], shots = FILM.filter(s => live(s) && s.part === pt);
+    const waiting = shots.filter(s => shotStatus(s.id) === 'pending-review');
+    const units = waiting.filter(s => !blocked(s.id)).map(s => ({ id: s.id, what: s.action }));
+    const n = units.length;
+    return { scope: scope, title: 'Approve all ' + n + ' ' + plural(n, 'shot') + ' in ' + pt, noun: n + ' ' + plural(n, 'shot'), where: 'in ' + pt, units: units, rework: shots.filter(s => shotStatus(s.id) === 'needs-rework').length, flagged: waiting.length - n, fileless: 0 };
+  }
+  function batchOpener(scope, key) {
+    const b = batchScope(scope);
+    if (!b || !b.units.length) return '';
+    return '<button class="btn btn-sm" type="button" data-act="batch-open" data-id="' + esc(scope) + '" data-akuko-batch="' + esc(scope) + '" data-k="batch-open:' + esc(key) + '" aria-haspopup="dialog">' + esc(b.title) + '</button>' +
+      (b.rework ? '<span class="fine">' + b.rework + ' sent back ' + (b.rework === 1 ? 'is' : 'are') + ' left out</span>' : '');
+  }
+  /* the approvals of one batch that still stand (not undone, not stale) */
+  const batchDecisions = bid => (EV ? EV.all : []).filter(d => d.action === 'approve' && batchOf(d) === bid && EV.active(d) && !EV.stale(d));
+  let batchReturn = null;
+  function openBatch(scope, opener) {
+    const b = batchScope(scope); if (!b || !b.units.length) return;
+    S.batch = { scope: scope };
+    batchReturn = opener && opener.dataset ? opener.dataset.k : null;
+    renderAll();
+    const h = $('#bp-h'); if (h) h.focus({ preventScroll: true });
+  }
+  function closeBatch() {
+    if (!S.batch) return;
+    S.batch = null;
+    renderAll(batchReturn);
+    batchReturn = null;
+  }
+  function renderBatch() {
+    const dlg = $('#batch'), box = $('#bp-box'); if (!dlg || !box) return;
+    const b = S.batch ? batchScope(S.batch.scope) : null;
+    if (!b || !b.units.length) { S.batch = null; dlg.hidden = true; box.removeAttribute('data-akuko-batch-panel'); setHtml(box, ''); return; }
+    box.setAttribute('data-akuko-batch-panel', b.scope);
+    const left = [b.rework ? b.rework + ' sent back (approve each on its own once it is fixed)' : '', b.flagged ? b.flagged + ' with an open block flag (look at the flag first)' : '', b.fileless ? b.fileless + ' with no file yet' : ''].filter(Boolean);
+    setHtml(box, '<h2 class="bp-h" id="bp-h" tabindex="-1">' + esc(b.title) + '?</h2>' +
+      '<p class="bp-s" data-akuko-batch-count="' + b.units.length + '"><b>' + esc(b.noun) + '</b> ' + esc(b.where) + ' waiting for your review. Each gets its own approval, recorded together as one batch; one Undo reverses the whole batch.</p>' +
+      '<ol class="bp-list" aria-label="What this approves">' + b.units.map(u => '<li data-akuko-batch-unit="' + esc(u.id) + '"><span class="mono">' + esc(u.id) + '</span><span class="bp-what">' + esc(u.what || '') + '</span></li>').join('') + '</ol>' +
+      (left.length ? '<p class="bp-skip">Left out: ' + esc(left.join(' · ')) + '.</p>' : '<p class="bp-skip">Nothing waiting ' + esc(b.where) + ' is left out.</p>') +
+      '<div class="bp-act"><button class="btn" type="button" data-act="batch-cancel" data-k="batch-cancel">Cancel</button>' +
+      '<button class="btn btn-primary" type="button" data-act="batch-ok" data-id="' + esc(b.scope) + '" data-akuko-batch-confirm="' + esc(b.scope) + '" data-k="batch-ok">Approve ' + esc(b.noun) + '</button></div>');
+    dlg.hidden = false;
+  }
+  /* "Undo batch": this page's batches akuko has not folded in yet */
+  function renderBatchBar() {
+    const el = $('#batch-bar'); if (!el) return;
+    const folded = {}; D.decisions.forEach(d => { folded[d.id] = true; });
+    const seen = {}, bars = [];
+    W.all().slice().reverse().forEach(d => {
+      const bid = batchOf(d);
+      if (!bid || seen[bid] || d.action !== 'approve' || folded[d.id]) return;
+      seen[bid] = true;
+      const standing = batchDecisions(bid);
+      if (standing.length) bars.push({ bid: bid, n: standing.length, title: String(d.text).replace(BATCH_RE, '') });
+    });
+    const shown = bars.slice(0, 3);
+    el.hidden = !shown.length;
+    setHtml(el, shown.map(x => '<span>' + glyph('approved') + 'Approved ' + x.n + ' as one batch: “' + esc(x.title) + '”.</span><button class="linkbtn" type="button" data-act="batch-undo" data-id="' + x.bid + '" data-akuko-batch-undo="' + x.bid + '" data-k="batch-undo:' + x.bid + '">Undo batch (' + x.n + ')</button>').join(''));
+  }
 
   /* the money, exactly as views/contract.md §3 and the spend gate compute it */
   function moneyModel() {
@@ -1461,6 +1747,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       : hk === 'A'
         ? '<span class="hdot" aria-hidden="true"></span><span><b>Claude artifact</b> · your approvals reach akuko on its next action</span>'
         : '<span class="hdot" aria-hidden="true"></span><span><b>Local file</b> · copy your decisions to akuko when you are done</span>';
+    host.title = host.textContent;
+    applyHead();
     const b = $('#mode-btn');
     b.innerHTML = (S.mode === 'dark' ? SUN + 'Light' : MOON + 'Dark');
     b.setAttribute('aria-label', S.mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
@@ -1490,6 +1778,45 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     }
     setHtml($('#next'), '<div class="next-txt"><p class="next-main">' + (cats.length ? cats[0].main : 'Nothing waiting on you') + '</p><p class="next-sub">' + parts.join(' · ') + '</p>' + done + '</div>' + btn);
   }
+  /* ── room for the shot list (@0.10): compact header, resizable columns ──
+     The header is compact on a window under 900px tall, or whenever the person chose it (the toggle, remembered). Column widths
+     are the person's, in px, kept in this page's view settings; they are clamped to the window, never stored clamped. */
+  const compactWanted = () => !isMobile() && (S.head === 'compact' || (S.head !== 'full' && (window.innerHeight || 900) < 900));
+  function applyHead() {
+    const on = compactWanted();
+    if (on) document.body.setAttribute('data-compact', '1'); else document.body.removeAttribute('data-compact');
+    const hb = $('#head-btn');
+    if (hb) { hb.textContent = 'Compact'; hb.setAttribute('aria-label', 'Compact header'); hb.setAttribute('aria-pressed', String(on)); hb.title = on ? 'Show the full header' : 'Make the header one slim row, so the shot list has more room'; }
+  }
+  const SPLIT_MIN = { script: 280, shots: 340, rail: 260, left: 300, right: 360 }, RAIL_MAX = 640, GUTTER = 7;
+  const colMode = () => (isMobile() ? null : mqWide.matches ? 'wide' : 'mid');
+  const splitKey = sp => { const m = colMode(); return !m ? null : sp === 'b' ? (m === 'wide' ? 'rail' : null) : (m === 'wide' ? 'script' : 'left'); };
+  const colWidth = k => { const el = k === 'rail' ? $('#rail') : $('#script'); return el ? el.getBoundingClientRect().width : 0; };
+  function colBounds(k) {
+    const W = ($('#desk') && $('#desk').clientWidth) || 0;
+    if (k === 'script') { const rail = S.cols.rail || colWidth('rail') || 344; return [SPLIT_MIN.script, Math.max(SPLIT_MIN.script, W - 2 * GUTTER - rail - SPLIT_MIN.shots)]; }
+    if (k === 'rail') { const sc = S.cols.script || SPLIT_MIN.script; return [SPLIT_MIN.rail, Math.max(SPLIT_MIN.rail, Math.min(RAIL_MAX, W - 2 * GUTTER - sc - SPLIT_MIN.shots))]; }
+    return [SPLIT_MIN.left, Math.max(SPLIT_MIN.left, W - GUTTER - SPLIT_MIN.right)];
+  }
+  const COL_VAR = { script: '--ak-w-script', rail: '--ak-w-rail', left: '--ak-w-left' };
+  const COL_NAME = { script: 'Script column', rail: 'Side panel', left: 'Script column' };
+  function applyCols() {
+    const desk = $('#desk'); if (!desk) return;
+    const m = colMode(), use = m === 'wide' ? ['rail', 'script'] : m === 'mid' ? ['left'] : [];
+    COLS.forEach(k => {
+      const v = S.cols[k];
+      if (use.indexOf(k) !== -1 && v) { const b = colBounds(k); desk.style.setProperty(COL_VAR[k], Math.round(Math.min(Math.max(v, b[0]), b[1])) + 'px'); }
+      else desk.style.removeProperty(COL_VAR[k]);
+    });
+    ['a', 'b'].forEach(sp => {
+      const el = $('#split-' + sp), k = splitKey(sp); if (!el || !k) return;
+      const b = colBounds(k), now = Math.round(colWidth(k));
+      el.setAttribute('aria-valuemin', String(Math.round(b[0]))); el.setAttribute('aria-valuemax', String(Math.round(b[1]))); el.setAttribute('aria-valuenow', String(now));
+      el.setAttribute('aria-valuetext', COL_NAME[k] + ' ' + now + ' pixels wide' + (S.cols[k] ? '' : ' (default)'));
+    });
+  }
+  function setCol(k, px) { const b = colBounds(k); S.cols[k] = Math.round(Math.min(Math.max(px, b[0]), b[1])); applyCols(); }
+  function resetCol(sp) { const k = splitKey(sp.dataset.split); if (!k) return; S.cols[k] = null; applyCols(); save(); requestAnimationFrame(layoutLining); announce(COL_NAME[k] + ' back to its default width'); }
   function doneText() { return 'I have finished reviewing ' + currentStage.label + ' on the akuko board. Read my decisions and carry on.'; }
   function copyDone() {
     const text = doneText();
@@ -1498,7 +1825,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     try { const p = navigator.clipboard.writeText(text); if (p && p.then) p.then(ok, bad); else ok(); } catch (err) { bad(); }
   }
   function renderStages() {
-    const c = counts(), wit = waitingOtherItems();
+    const wit = waitingOtherItems();
     setHtml($('#stages'), D.stages.map(st => {
       const wo = wit.filter(x => x.stage === st.id).length;
       let s = STAGE_TXT[st.state] || st.state, g = '';
@@ -1507,8 +1834,14 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       else if (st.state === 'in-progress') g = '<span class="g g-prog" aria-hidden="true"></span>';
       else if (st.state === 'waiting-spend') g = '<span class="g g-money" aria-hidden="true"></span>';
       else if (st.state === 'locked') g = LOCK;
-      const nLive = D.shots.filter(live).length;
-      if (st.current && nLive) s += ' · ' + c.approved + '/' + nLive + ' approved';
+      /* the current stage counts its own units (@0.10): key frames count key frames, the bible its images; only a stage whose
+         units are the shots themselves (breakdown, sketch) counts shots. 11 of 211 key frames approved reads 11/211, not 211/211. */
+      if (st.current) {
+        const own = D.assets.filter(a => a.stage === st.id && !a.removed && !a.idle);
+        const shotsHere = D.shots.filter(x => live(x) && x.stage === st.id);
+        if (own.length) s += ' · ' + own.filter(a => assetStatus(a) === 'approved').length + '/' + own.length + ' approved';
+        else if (shotsHere.length) s += ' · ' + shotsHere.filter(x => shotStatus(x.id) === 'approved').length + '/' + shotsHere.length + ' approved';
+      }
       if (wo) s += ' · ' + wo + ' to review';
       const jobs = D.pending_spend.filter(j => j.stage === st.id);
       if (jobs.length) {
@@ -1558,6 +1891,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       const a = Math.min.apply(null, shots.map(s => s._in)), b = Math.max.apply(null, shots.map(s => s._out));
       $('#cut').textContent = S.part + ' · ' + shots.length + ' ' + plural(shots.length, 'shot') + ' · ' + stamp(a) + '–' + stamp(b) + ' · ' + (c.approved || 0) + '/' + shots.length + ' approved';
     }
+    setHtml($('#part-batch'), S.part !== 'all' ? batchOpener('part:' + S.part, 'part:' + S.part) : '');
     const pe = $('#parts');
     pe.hidden = PARTS.length < 2;
     setHtml(pe, PARTS.length < 2 ? '' : '<span class="f-lbl" aria-hidden="true">Part</span>' + [['all', 'All parts', D.shots.filter(live).length]].concat(PARTS.map(pt => [pt, pt, D.shots.filter(s => live(s) && s.part === pt).length]))
@@ -1620,7 +1954,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     return '<li class="shot' + (sel ? ' is-sel' : '') + '" id="shot-' + s.id + '" data-akuko-field="shot" data-akuko-unit="' + s.id + '">' +
       '<button class="shot-row" type="button" data-act="sel" data-id="' + s.id + '" data-k="sel:' + s.id + '" data-hover="' + s.id + '" aria-expanded="' + sel + '"' + (sel ? ' aria-controls="det-' + s.id + '"' : '') + '>' +
       '<span class="thumb" data-akuko-field="panel">' + rowThumb(s) + '</span>' +
-      '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + s.id + '</span><span class="sr-type" data-akuko-field="shot-type">' + esc(s.type) + '</span>' + (s.tier ? '<span class="flag">Tier ' + esc(s.tier) + '</span>' : '') + (s.removed ? '<span class="flag flag-off">Left the sheet</span>' : '') + '<span class="sr-tc" data-akuko-field="duration">' + dur(s.duration_s) + 's · ' + stamp(s._in) + '–' + stamp(s._out) + '</span>' + lensFlag(s) + '</span>' +
+      '<span class="sr-main"><span class="sr-top"><span class="sr-id">' + s.id + '</span><span class="sr-type" data-akuko-field="shot-type">' + esc(s.type) + '</span>' + (s.tier ? '<span class="flag">Tier ' + esc(s.tier) + '</span>' : '') + (s.removed ? '<span class="flag flag-off">Left the sheet</span>' : '') + '<span class="sr-tc" data-akuko-field="duration">' + dur(s.duration_s) + 's · ' + stamp(s._in) + '–' + stamp(s._out) + '</span>' + lensFlag(s) + qfBadge([s.id, s.id + '_keyframe']) + '</span>' +
       '<span class="sr-act">' + esc(s.action) + '</span></span><span data-akuko-field="status" data-akuko-status="' + akStatus(st) + '">' + chip(st) + '</span></button>' +
       (sel ? detail(s) : '') + '</li>';
   }
@@ -1637,7 +1971,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       '<button class="btn btn-primary" type="button" data-act="approve" data-akuko-action="approve" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="approve:' + id + '" aria-disabled="' + isAp + '">' + (isAp ? 'Approved' : 'Approve') + '</button>' +
       '<button class="btn" type="button" data-act="request" data-akuko-action="request-changes" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="request:' + id + '">' + (isAp ? 'Reopen · request changes' : 'Request changes') + '</button>' +
       '<button class="btn btn-ghost" type="button" data-act="note" data-akuko-action="note" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="note:' + id + '">Add a note</button></div>';
-    if (S.compose && S.compose.id === id) {
+    if (S.compose && S.compose.id === id && !S.compose.key) {
       const req = S.compose.mode === 'request';
       rv += '<form class="composer" data-form="compose" data-id="' + id + '" novalidate>' +
         '<label class="lbl" for="compose-text">' + (req ? 'What should change? akuko redraws from this note.' : 'Note for akuko (the status stays as it is)') + '</label>' +
@@ -1654,7 +1988,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         (ut ? '<button class="linkbtn" type="button" data-act="undo" data-akuko-action="undo" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="undo:' + id + '">Undo</button>' : '') +
         (nx ? '<button class="linkbtn" type="button" data-act="goto" data-id="' + nx + '" data-k="goto:' + nx + '">Next waiting: ' + nx + '</button>' : '') + '</p>';
     }
-    rv += '</div>';
+    rv += '</div>' + flagsBlock(id, 'shot:' + id);
 
     const refs = (s.refs || []).map(r => {
       const e = bibleById[r];
@@ -1773,7 +2107,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       const B = D.bible, ents = [].concat(B.characters, B.locations, B.styles).filter(e => !e.removed);
       const n = ents.reduce((a, e) => a + Math.max(1, e.assets.length), 0);
       sub = '<b>' + ents.length + ' ' + plural(ents.length, 'entry', 'entries') + '</b>, ' + n + ' ' + plural(n, 'picture') + ' · ' + waitingOtherItems().filter(x => placeOf(x) === 'bible').length + ' waiting for you. Click a picture to see it larger.';
-      body = '<div class="gal">' + ents.map(e => e.assets.length ? e.assets.filter(a => !a.removed).map(a => galleryItem(a, e.name + ' · ' + (KIND[a.kind] || a.kind))).join('')
+      const bo = batchOpener('bible', 'bible-lens');
+      body = (bo ? '<div class="batch-open">' + bo + '</div>' : '') + '<div class="gal">' + ents.map(e => e.assets.length ? e.assets.filter(a => !a.removed).map(a => galleryItem(a, e.name + ' · ' + (KIND[a.kind] || a.kind))).join('')
         : '<figure><div class="ph-frame" data-st="' + esc(entryStatus(e)) + '">' + esc(e.name) + '<small>no picture yet</small></div><figcaption><span class="g-name">' + esc(e.name) + '</span>' + chip(bibleStatus(e.id)) + approveAct(e.id, e.name, 'lens:' + e.id) + '</figcaption></figure>').join('') + '</div>';
     } else {
       const own = a => shotsById[a.owner] ? shotsById[a.owner]._in : (a.film ? a.film.in_s : Infinity);
@@ -1873,14 +2208,31 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
 
   /* ── bible ────────────────────────────────────────────── */
   function usedIn(bid) { return D.shots.filter(s => (s.refs || []).indexOf(bid) !== -1).length; }
+  /* the review controls of an image, entry, card or document: Approve, Request changes, Add a note (as a shot has, @0.8),
+     and the composer, shown only where the person opened it (the same unit can appear in the rail and in a lens) */
   function approveAct(unit, label, key) {
     const u = assetsById[unit] || (bibleById[unit] && bibleById[unit].item);
     if (u && u.removed) return '<div class="bib-act"><span class="flag flag-off">Removed from the sheet</span><span class="fine">Kept for the record; not reviewed.</span></div>';
     const st = effStatus(unit, (assetsById[unit] || (bibleById[unit] && bibleById[unit].item)).status);
-    if (st === 'pending-review' || st === 'needs-rework') return '<div class="bib-act"><span>' + esc(label) + ' is waiting for you</span><button class="btn btn-sm btn-primary" type="button" data-act="unit-ok" data-akuko-action="approve" data-akuko-unit="' + esc(unit) + '" data-id="' + esc(unit) + '" data-k="unit-ok:' + esc(key) + '">Approve ' + esc(label.toLowerCase()) + '</button></div>';
-    const t = undoTarget(unit, ['approve']);
-    if (st === 'approved' && t) return '<div class="bib-act" role="status"><span>' + esc(label) + ' approved.</span><button class="linkbtn" type="button" data-act="unit-undo" data-akuko-action="undo" data-akuko-unit="' + esc(unit) + '" data-id="' + esc(unit) + '" data-k="unit-undo:' + esc(key) + '">Undo</button></div>';
-    return '';
+    if (st !== 'pending-review' && st !== 'needs-rework' && st !== 'approved') return '';
+    const k = esc(key), id = esc(unit), lc = esc(label.toLowerCase());
+    const t = undoTarget(unit, ['approve', 'request-changes']);
+    const line = st === 'approved' ? esc(label) + ' approved.' : st === 'needs-rework' ? esc(label) + ' is sent back to akuko.' : esc(label) + ' is waiting for you';
+    const req = '<button class="btn btn-sm" type="button" data-act="request" data-akuko-action="request-changes" data-akuko-unit="' + id + '" data-id="' + id + '" data-ckey="' + k + '" data-k="unit-req:' + k + '">' + (st === 'approved' ? 'Reopen · request changes' : 'Request changes') + '</button>';
+    const note = '<button class="btn btn-sm btn-ghost" type="button" data-act="note" data-akuko-action="note" data-akuko-unit="' + id + '" data-id="' + id + '" data-ckey="' + k + '" data-k="unit-note:' + k + '">Add a note</button>';
+    const ok = st === 'approved' ? '' : '<button class="btn btn-sm btn-primary" type="button" data-act="unit-ok" data-akuko-action="approve" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="unit-ok:' + k + '">Approve ' + lc + '</button>';
+    const undo = t ? '<button class="linkbtn" type="button" data-act="unit-undo" data-akuko-action="undo" data-akuko-unit="' + id + '" data-id="' + id + '" data-k="unit-undo:' + k + '">Undo</button>' : '';
+    let h = '<div class="bib-act"' + (st === 'approved' ? ' role="status"' : '') + '><span>' + line + '</span>' + ok + req + note + undo + '</div>';
+    if (S.compose && S.compose.id === unit && S.compose.key === key) {
+      const isReq = S.compose.mode === 'request';
+      h += '<form class="composer" data-form="compose" data-id="' + id + '" data-ckey="' + k + '" novalidate>' +
+        '<label class="lbl" for="compose-text">' + (isReq ? 'What should change? akuko makes this ' + lc + ' again from this note.' : 'Note for akuko (the status stays as it is)') + '</label>' +
+        '<textarea id="compose-text" rows="3" aria-describedby="compose-err" data-akuko-text>' + esc(S.compose.text || '') + '</textarea>' +
+        '<p class="err" id="compose-err" role="alert"></p>' +
+        '<div class="rv-btns"><button class="btn btn-primary" type="submit" data-akuko-submit data-k="c-submit:' + k + '">' + (isReq ? 'Send back to akuko' : 'Add note') + '</button>' +
+        '<button class="btn btn-ghost" type="button" data-act="c-cancel" data-id="' + id + '" data-ckey="' + k + '" data-k="c-cancel:' + k + '">Cancel</button><span class="kbd-hint">Ctrl + Enter sends · Esc cancels</span></div></form>';
+    }
+    return h + flagsBlock(unit, key);
   }
   function bibEntry(it, kind) {
     const bs = bibleStatus(it.id);
@@ -1898,7 +2250,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     if (!it.assets.length) acts += approveAct(it.id, it.name, it.id);
     const n = usedIn(it.id);
     return '<article class="bib" id="bib-' + it.id + '" tabindex="-1" aria-labelledby="bnm-' + it.id + '" data-akuko-field="bible-entry" data-akuko-unit="' + it.id + '" data-akuko-status="' + esc(akStatus(entryStatus(it))) + '">' +
-      '<div class="bib-h"><h4 class="bib-name" id="bnm-' + it.id + '">' + esc(it.name) + '</h4>' + chip(bs) + '</div>' +
+      '<div class="bib-h"><h4 class="bib-name" id="bnm-' + it.id + '">' + esc(it.name) + '</h4>' + qfBadge([it.id].concat(it.assets.map(a => a.id))) + chip(bs) + '</div>' +
       (it.role ? '<p class="bib-role">' + esc(it.role) + '</p>' : '') +
       (it.description ? '<p class="bib-d">' + esc(it.description) + '</p>' : '') +
       '<div class="bib-frames">' + frames + '</div>' + acts +
@@ -1911,7 +2263,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   function looseEntry(a) {
     const st = assetStatus(a);
-    return '<article class="bib" id="bib-' + a.id + '" tabindex="-1" aria-labelledby="bnm-' + a.id + '"><div class="bib-h"><h4 class="bib-name mono" id="bnm-' + a.id + '">' + esc(a.id) + '</h4>' + chip(st) + '</div>' +
+    return '<article class="bib" id="bib-' + a.id + '" tabindex="-1" aria-labelledby="bnm-' + a.id + '"><div class="bib-h"><h4 class="bib-name mono" id="bnm-' + a.id + '">' + esc(a.id) + '</h4>' + qfBadge([a.id]) + chip(st) + '</div>' +
       '<p class="bib-role">' + esc(KIND[a.kind] || a.kind) + ' · ' + esc(stageLabel(a.stage)) + '</p>' +
       (isImage(a) ? '<div class="bib-frames">' + picture(a, { key: 'loose:' + a.id, label: KIND[a.kind] || a.kind }) + '</div>' : '') +
       (a.idle ? '<p class="fine"><span class="flag flag-off">Idle</span> Kept, not counted: ' + esc(a.idle) + '. It never holds the stage back.</p>' : '') +
@@ -1919,7 +2271,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   }
   function renderBible() {
     const PR = D.project, B = D.bible;
-    let h = '<div class="rp-body"><h2 class="rh rh-tabbed" id="h-bible" tabindex="-1">Bible</h2>' +
+    const bibleBatch = batchOpener('bible', 'bible');
+    let h = '<div class="rp-body"><h2 class="rh rh-tabbed" id="h-bible" tabindex="-1">Bible</h2>' + (bibleBatch ? '<div class="batch-open">' + bibleBatch + '</div>' : '') +
       '<section class="bib-group" aria-labelledby="bg-story"><h3 class="bib-gh" id="bg-story">Story</h3>' + (PR.logline ? '<p class="logline">' + esc(PR.logline) + '</p>' : '') + (PR.source ? '<p class="fine">' + esc(PR.source) + '</p>' : '') + '</section>' +
       '<section class="bib-group" aria-labelledby="bg-char"><h3 class="bib-gh" id="bg-char"><span>Characters</span><span class="mono">' + B.characters.length + '</span></h3>' + B.characters.map(c => bibEntry(c, 'character')).join('') + '</section>' +
       '<section class="bib-group" aria-labelledby="bg-loc"><h3 class="bib-gh" id="bg-loc"><span>Locations</span><span class="mono">' + B.locations.length + '</span></h3>' + B.locations.map(l => bibEntry(l, 'location')).join('') + '</section>';
@@ -2077,8 +2430,8 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     const k = ae && ae.dataset ? ae.dataset.k : null;
     const typing = ae && ae.id === 'compose-text' ? { s: ae.selectionStart, e: ae.selectionEnd } : null;
     document.documentElement.setAttribute('data-akuko-mode', S.mode);
-    renderHeader(); renderNext(); renderStages(); renderNav();
-    paintScript(); renderIntake(); renderLens(); renderShots(); renderGate(); renderBible(); renderLedger(); renderGates(); renderRules(); renderFoot();
+    renderHeader(); renderNext(); renderStages(); renderNav(); applyCols();
+    paintScript(); renderIntake(); renderLens(); renderShots(); renderGate(); renderBible(); renderLedger(); renderGates(); renderRules(); renderFoot(); renderBatchBar(); renderBatch();
     if (typing) {
       const ta = $('#compose-text');
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(typing.s, typing.e); } catch (e) { /* ignore */ } }
@@ -2090,7 +2443,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         else if (!el && fallbackFocus) { const fb = document.querySelector('[data-k="' + fallbackFocus + '"]'); if (fb) fb.focus({ preventScroll: true }); }
       }
     }
-    if (isSample()) $$('[data-akuko-action]').forEach(el => el.setAttribute('aria-disabled', 'true'));
+    if (isSample()) $$('[data-akuko-action], [data-akuko-batch], [data-akuko-batch-confirm], [data-akuko-batch-undo]').forEach(el => el.setAttribute('aria-disabled', 'true'));
     requestAnimationFrame(layoutLining);
     syncStuck();
   }
@@ -2226,14 +2579,17 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       ta.setAttribute('aria-invalid', 'true'); ta.focus(); return;
     }
     let d;
-    if (S.compose.mode === 'request') { d = decide({ action: 'request-changes', unit: id, stage: stageOf(id), text: text }); S.flash = { id: id, did: d.id, text: 'Sent back to akuko with your note.' }; announce(id + ' sent back to akuko'); }
-    else { d = decide({ action: 'note', unit: id, stage: stageOf(id), text: text }); S.flash = { id: id, did: d.id, text: 'Note added to the thread.' }; announce('Note added to ' + id); }
+    const fl = S.compose.flag ? { flag: S.compose.flag } : {};
+    if (S.compose.mode === 'request') { d = decide(Object.assign({ action: 'request-changes', unit: id, stage: stageOf(id), text: text }, fl)); S.flash = { id: id, did: d.id, text: 'Sent back to akuko with your note.' }; announce(id + ' sent back to akuko'); }
+    else { d = decide(Object.assign({ action: 'note', unit: id, stage: stageOf(id), text: text }, fl)); S.flash = { id: id, did: d.id, text: 'Note added to the thread.' }; announce('Note added to ' + id); }
+    const ck = S.compose.key, home = S.compose.home;
     S.compose = null;
-    commit('approve:' + id);
+    commit(home || (ck ? 'unit-req:' + ck : 'approve:' + id));
   }
 
   document.addEventListener('click', e => {
     if (e.target && e.target.id === 'lightbox') { closeZoom(); return; }
+    if (e.target && e.target.id === 'batch') { closeBatch(); return; }
     const t = e.target.closest('[data-act]');
     if (!t) {
       const ln = e.target.closest('#page .ln');
@@ -2241,7 +2597,7 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       return;
     }
     const a = t.dataset.act, id = t.dataset.id;
-    if (isSample() && t.hasAttribute('data-akuko-action')) { const msg = 'This is a sample project. Decisions start working once the board can read your project.'; announce(msg); $$('.sample-msg').forEach(n => n.remove()); const sm = document.createElement('span'); sm.className = 'sample-msg'; sm.setAttribute('role', 'status'); sm.textContent = msg; t.insertAdjacentElement('afterend', sm); return; }
+    if (isSample() && (t.hasAttribute('data-akuko-action') || t.hasAttribute('data-akuko-batch') || t.hasAttribute('data-akuko-batch-confirm') || t.hasAttribute('data-akuko-batch-undo'))) { const msg = 'This is a sample project. Decisions start working once the board can read your project.'; announce(msg); $$('.sample-msg').forEach(n => n.remove()); const sm = document.createElement('span'); sm.className = 'sample-msg'; sm.setAttribute('role', 'status'); sm.textContent = msg; t.insertAdjacentElement('afterend', sm); return; }
     if (t.getAttribute('aria-disabled') === 'true') return;
     switch (a) {
       case 'sel': selectShot(id, 'row'); break;
@@ -2252,12 +2608,37 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         S.compose = null; S.flash = { id: id, did: d.id, text: 'Approved. akuko picks this up on its next action.' };
         announce(id + ' approved'); commit('approve:' + id); break;
       }
-      case 'request': case 'note':
-        S.compose = { id: id, mode: a, text: (S.compose && S.compose.id === id && S.compose.mode === a) ? S.compose.text : '' };
+      case 'request': case 'note': {
+        const ckey = t.dataset.ckey || null;
+        S.compose = { id: id, mode: a, key: ckey, text: (S.compose && S.compose.id === id && S.compose.mode === a && S.compose.key === ckey) ? S.compose.text : '' };
         S.flash = null; renderAll();
         requestAnimationFrame(() => { const ta = $('#compose-text'); if (ta) ta.focus(); });
         break;
-      case 'c-cancel': S.compose = null; renderAll((S.sel ? 'approve:' + S.sel : null)); break;
+      }
+      case 'flag-send': case 'flag-note': {
+        /* opens a composer only; the person's submit writes the one decision (the text starts from the flag, theirs to edit) */
+        const u = unitOf(id), f = u && (u.flags || []).find(x => x.id === t.dataset.akukoFlag);
+        if (!f || flagState(f) !== 'open') return;
+        const mode = a === 'flag-send' ? 'request' : 'note', ckey = t.dataset.ckey;
+        const same = S.compose && S.compose.id === id && S.compose.mode === mode && S.compose.key === ckey;
+        S.compose = { id: id, mode: mode, key: ckey, flag: f.id, home: t.dataset.k, text: same ? S.compose.text : (mode === 'request' ? (f.suggested_change || f.text) : '') };
+        S.flash = null; renderAll();
+        requestAnimationFrame(() => { const ta = $('#compose-text'); if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e2) { /* ignore */ } } });
+        break;
+      }
+      case 'flag-dismiss': {
+        const u = unitOf(id), f = u && (u.flags || []).find(x => x.id === t.dataset.akukoFlag);
+        if (!f || flagState(f) !== 'open') return;
+        decide({ action: 'dismiss-flag', unit: id, stage: stageOf(id), flag: f.id });
+        if (S.compose && S.compose.flag === f.id) S.compose = null;
+        announce('Flag dismissed'); commit('flag-undo:' + t.dataset.k.slice('flag-dismiss:'.length)); break;
+      }
+      case 'flag-undo': {
+        const d = flagUndo(t.dataset.akukoFlag); if (!d) return;
+        decide({ action: 'undo', unit: id, stage: stageOf(id), undoes: d.id });
+        announce('Flag open again'); commit('flag-dismiss:' + t.dataset.k.slice('flag-undo:'.length)); break;
+      }
+      case 'c-cancel': { const ck = S.compose && S.compose.key, home = S.compose && S.compose.home; S.compose = null; renderAll(home || (ck ? 'unit-req:' + ck : (S.sel ? 'approve:' + S.sel : null))); break; }
       case 'undo': {
         const tg = undoTarget(id, ['approve', 'request-changes']); if (!tg) return;
         decide({ action: 'undo', unit: id, stage: stageOf(id), undoes: tg.id });
@@ -2330,11 +2711,30 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
         announce('Approved'); commit('unit-undo:' + t.dataset.k.slice('unit-ok:'.length)); break;
       }
       case 'unit-undo': {
-        const tg = undoTarget(id, ['approve']); if (!tg) return;
+        const tg = undoTarget(id, ['approve', 'request-changes']); if (!tg) return;
         decide({ action: 'undo', unit: id, stage: stageOf(id), undoes: tg.id });
         announce('Undone'); commit('unit-ok:' + t.dataset.k.slice('unit-undo:'.length)); break;
       }
+      case 'batch-open': openBatch(id, t); break;
+      case 'batch-cancel': closeBatch(); announce('Nothing approved'); break;
+      case 'batch-ok': {
+        /* the person's Confirm: one approve per unit the dialog lists, all with one batch id */
+        if (!S.batch || S.batch.scope !== id) return;
+        const b = batchScope(id);
+        if (!b || !b.units.length) { closeBatch(); return; }
+        const bid = newBatchId(), text = b.title + ' · batch ' + bid;
+        b.units.forEach(u => decide({ action: 'approve', unit: u.id, stage: stageOf(u.id), text: text }));
+        S.batch = null; batchReturn = null; S.flash = null; S.compose = null;
+        announce(b.noun + ' approved as one batch'); commit('batch-undo:' + bid); break;
+      }
+      case 'batch-undo': {
+        const list = batchDecisions(id); if (!list.length) return;
+        const text = 'Undo: ' + list[0].text;
+        list.forEach(d => decide({ action: 'undo', unit: d.unit, stage: stageOf(d.unit), undoes: d.id, text: text }));
+        announce('Batch undone. ' + list.length + ' ' + plural(list.length, 'item') + ' back to waiting for you'); commit(null); break;
+      }
       case 'mode': S.mode = S.mode === 'dark' ? 'light' : 'dark'; S.modeChosen = true; commit('mode'); break;
+      case 'head': S.head = compactWanted() ? 'full' : 'compact'; commit('head'); requestAnimationFrame(layoutLining); break;
       case 'export': copyDecisions(); break;
       case 'gate-top': { const rl = $('#rail'); if (rl) rl.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' }); const hh = $('#h-spend'); if (hh) hh.focus({ preventScroll: true }); break; }
       case 'load': { const fi = $('#file-in'); if (fi) fi.click(); break; }
@@ -2383,6 +2783,16 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
     }
   });
   document.addEventListener('keydown', e => {
+    const bp = $('#batch');
+    if (bp && !bp.hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closeBatch(); return; }
+      if (e.key === 'Tab') {
+        const f = $$('#bp-box button'); if (!f.length) return;
+        const i = f.indexOf(document.activeElement);
+        e.preventDefault();
+        f[i < 0 ? 0 : (i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus(); return;
+      }
+    }
     const lb = $('#lightbox');
     if (lb && !lb.hidden) {
       if (e.key === 'Escape') { e.preventDefault(); closeZoom(); return; }
@@ -2392,6 +2802,19 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitCompose(e.target.form); return; }
       if (e.key === 'Escape') { e.preventDefault(); const id = S.compose && S.compose.id; S.compose = null; renderAll(id ? 'approve:' + id : null); return; }
     }
+    /* a column separator: the arrows move it (Shift: further), Home/End go to the narrowest and widest, Enter resets */
+    if (e.target.classList && e.target.classList.contains('split')) {
+      const k = splitKey(e.target.dataset.split); if (!k) return;
+      const step = e.shiftKey ? 64 : 16, cur = Math.round(colWidth(k)), b = colBounds(k), dir = k === 'rail' ? -1 : 1;
+      let to = null;
+      if (e.key === 'ArrowLeft') to = cur - step * dir;
+      else if (e.key === 'ArrowRight') to = cur + step * dir;
+      else if (e.key === 'Home') to = b[0];
+      else if (e.key === 'End') to = b[1];
+      else if (e.key === 'Enter') { e.preventDefault(); resetCol(e.target); return; }
+      if (to !== null) { e.preventDefault(); setCol(k, to); save(); requestAnimationFrame(layoutLining); }
+      return;
+    }
     if (e.target.getAttribute && e.target.getAttribute('role') === 'tab' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
       e.preventDefault();
       const tabs = $$('#rail-tabs [role="tab"]'), i = tabs.indexOf(e.target);
@@ -2399,6 +2822,28 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
       S.rail = tabs[n].dataset.id; commit('rail:' + S.rail);
     }
   });
+
+  /* dragging a column separator: widths follow the pointer, and are kept when it lets go */
+  let drag = null;
+  document.addEventListener('pointerdown', e => {
+    const sp = e.target.closest ? e.target.closest('.split') : null;
+    if (!sp || e.button !== 0) return;
+    const k = splitKey(sp.dataset.split); if (!k) return;
+    e.preventDefault();
+    drag = { k: k, sp: sp, x: e.clientX, w: colWidth(k), moved: false };
+    try { sp.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    try { sp.focus({ preventScroll: true }); } catch (err) { /* ignore */ }
+    sp.classList.add('is-drag'); document.body.classList.add('is-resizing');
+  });
+  document.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x; if (!dx && !drag.moved) return;
+    drag.moved = true; setCol(drag.k, drag.w + (drag.k === 'rail' ? -dx : dx));
+  });
+  const endDrag = () => { if (!drag) return; drag.sp.classList.remove('is-drag'); document.body.classList.remove('is-resizing'); if (drag.moved) { save(); requestAnimationFrame(layoutLining); } drag = null; };
+  document.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointercancel', endDrag);
+  document.addEventListener('dblclick', e => { const sp = e.target.closest ? e.target.closest('.split') : null; if (sp) { e.preventDefault(); resetCol(sp); } });
 
   /* linked hover: script line <-> tramline <-> shot row */
   let hoverId = null;
@@ -2500,9 +2945,9 @@ code { font: 500 13px/1.4 var(--ak-font-mono); padding: 1px 5px; background: var
   if (window.claude && typeof window.claude.use === 'function') watchDb(); else watchFile();
   const relayout = () => requestAnimationFrame(layoutLining);
   if (window.ResizeObserver) new ResizeObserver(relayout).observe($('#paper'));
-  window.addEventListener('resize', relayout);
+  window.addEventListener('resize', () => { applyHead(); applyCols(); relayout(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(relayout).catch(() => {});
-  const onMq = () => { renderNav(); relayout(); };
+  const onMq = () => { renderNav(); applyHead(); applyCols(); relayout(); };
   [mqMobile, mqWide].forEach(mq => { if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq); });
   window.addEventListener('load', () => { renderHeader(); relayout(); });
   requestAnimationFrame(() => {

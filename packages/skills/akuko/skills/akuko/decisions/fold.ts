@@ -43,6 +43,7 @@ import {
   type Asset,
   type Comment,
   type Decision,
+  type Flag,
   type StageId,
   type Unit,
   type UnitStatus,
@@ -64,6 +65,13 @@ export const isAgentAuthor = (by: string): boolean => AGENT_AUTHOR.test(by.trim(
 
 /** The only words a chat spend approval may carry: the spend gate's own reply line (spend/gate.ts#confirmationLine). */
 const CHAT_SPEND_WORDS = /^approve \d+(?:\.\d+)? [A-Z]{3}$/;
+/**
+ * A confirmed batch from chat (review/chat.ts batch): the person's one reply
+ * "approve all <N> <scope words>", recorded as N ordinary chat@1 approvals whose
+ * text is that reply + " · batch <uuid>". Counts only when exactly N such records
+ * share the batch id and the text, one per unit (resolve() checks the group).
+ */
+export const CHAT_BATCH_WORDS = /^approve all ([1-9]\d*) [a-z0-9][a-z0-9 :_-]*[a-z0-9]$/i;
 
 const TRAIL = /^Status: (pending|draft|pending-review|needs-rework|approved) → (pending|draft|pending-review|needs-rework|approved)$/;
 const NOTICE_PREFIX = 'Not applied: ';
@@ -72,7 +80,7 @@ const NOTICE_PREFIX = 'Not applied: ';
 const REVIEWABLE: ReadonlySet<UnitStatus> = new Set(['pending-review', 'needs-rework', 'approved']);
 
 const STATUS_OF: Partial<Record<Decision['action'], UnitStatus>> = { approve: 'approved', 'request-changes': 'needs-rework' };
-const PROVENANCE_ACTIONS: ReadonlySet<Decision['action']> = new Set(['approve', 'approve-spend', 'undo']);
+const PROVENANCE_ACTIONS: ReadonlySet<Decision['action']> = new Set(['approve', 'approve-spend', 'undo', 'dismiss-flag']);
 const SPEND_ACTIONS: ReadonlySet<Decision['action']> = new Set(['approve-spend', 'decline-spend']);
 
 export type RejectCode =
@@ -88,7 +96,25 @@ export type RejectCode =
   | 'spend-refused'       // canApprove() refused (budget, amount shown, cap)
   | 'already-ran'         // the job already ran or is running; spend decisions can't change it
   | 'conflict'            // same id as a stored decision with different content (ignored)
-  | 'removed-from-sheet'; // the unit left the imported shot list (source.removed_at): kept for the record, takes no decisions (WP-29)
+  | 'removed-from-sheet'  // the unit left the imported shot list (source.removed_at): kept for the record, takes no decisions (WP-29)
+  | 'batch-ineligible'    // a confirmed-batch approve on a unit a batch may not include: sent back (needs-rework), no file where one is required, or an open block flag
+  | 'unknown-flag'        // a dismiss-flag naming no flag on that unit
+  | 'flag-closed'         // a dismiss-flag on a flag an earlier decision already closed
+  | 'chat-batch-mismatch'; // a chat batch whose records don't match the reply: not exactly N records, different texts, or a unit twice
+
+/**
+ * A confirmed batch (views/contract.md §4 "Batch approval"): the person
+ * confirmed one list, and the view wrote one ordinary `approve` per unit,
+ * each with the same text, ending ` · batch <uuid>`. A batch's one-click
+ * undo writes one ordinary `undo` per decision, with the same ending.
+ */
+export const BATCH_TEXT = / · batch ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** The batch id a decision carries, else undefined. */
+export const batchOf = (d: Pick<Decision, 'text'>): string | undefined => BATCH_TEXT.exec(d.text ?? '')?.[1];
+
+/** A unit that must have a file before a batch may approve it: any asset (an image, a clip, a sound, a card, a document). Shots and bible entries need none. */
+export const needsFile = (kind: string): boolean => kind === 'asset';
 
 /** When a unit left the imported shot list (WP-25 sets `source.removed_at`), else undefined. Such a unit takes no decisions and doesn't hold its stage back. */
 export const removedFromSheet = (u: object): string | undefined => (u as { source?: { removed_at?: string } }).source?.removed_at;
@@ -176,8 +202,14 @@ function provenance(d: Decision, conformed: Set<string>): Verdict | Refused {
     if (d.action === 'undo') {
       return { ok: false, code: 'chat-undo', reason: 'an undo can only come from a checked view, never from chat.' };
     }
-    if (d.action === 'approve' && words !== `approve ${d.unit}`) {
+    const chatBatch = d.action === 'approve' && batchOf(d) !== undefined && CHAT_BATCH_WORDS.test(words.replace(BATCH_TEXT, '').slice(0, 11).toLowerCase() + words.replace(BATCH_TEXT, '').slice(11));
+    if (d.action === 'approve' && !chatBatch && words !== `approve ${d.unit}`) {
       return { ok: false, code: 'chat-without-words', reason: `a chat approval of ${d.unit} must quote the person's reply "approve ${d.unit}" exactly.` };
+    }
+    // "approve <unit>" in reply to a flag on that unit approves it as is, which also dismisses the flag
+    // (review/flags.ts decide writes both decisions from the one reply; the flag must be on d.unit).
+    if (d.action === 'dismiss-flag' && words !== `dismiss ${d.flag}` && words !== `approve ${d.unit}`) {
+      return { ok: false, code: 'chat-without-words', reason: `a chat dismissal must quote the person's reply "dismiss ${d.flag}" (or "approve ${d.unit}") exactly.` };
     }
     if (d.action === 'approve-spend' && !CHAT_SPEND_WORDS.test(words)) {
       return { ok: false, code: 'chat-without-words', reason: 'a chat spend approval must quote the person\'s reply "approve <amount> <CURRENCY>" exactly.' };
@@ -210,6 +242,20 @@ function resolve(sorted: Decision[], conformed: Set<string>, refused: Map<string
     if (v.ok && r) v = r;
     eligible.set(d.id, v);
   }
+  // A chat batch counts only as a whole: exactly N records for "approve all N …", one text, one per unit.
+  const chatBatches = new Map<string, Decision[]>();
+  for (const d of sorted) {
+    const b = d.action === 'approve' && d.view === CHAT_VIEW ? batchOf(d) : undefined;
+    if (b !== undefined) chatBatches.set(b, [...(chatBatches.get(b) ?? []), d]);
+  }
+  for (const group of chatBatches.values()) {
+    const n = Number(CHAT_BATCH_WORDS.exec((group[0]!.text ?? '').replace(BATCH_TEXT, '').trim())?.[1] ?? NaN);
+    const units = new Set(group.map((d) => d.unit));
+    const bad = group.length !== n || units.size !== group.length || group.some((d) => d.text !== group[0]!.text);
+    if (!bad) continue;
+    const reason = `a chat batch must be exactly the ${Number.isFinite(n) ? n : 'N'} approvals the person's reply names, one per unit, all with that reply; this one has ${group.length} record(s) for ${units.size} unit(s). Nothing in it was applied; ask again.`;
+    for (const d of group) if (eligible.get(d.id)?.ok) eligible.set(d.id, { ok: false, code: 'chat-batch-mismatch', reason });
+  }
   // Undos only point backwards in the total order, so walking from the latest
   // decision down settles each undo before the decision it names.
   const undone = new Set<string>();
@@ -239,7 +285,25 @@ const noticeComment = (d: Decision, reason: string): Comment => ({ ts: d.at, sta
 const personComment = (d: Decision): Comment => ({ ts: d.at, stage: d.stage, author: d.by, text: d.text ?? '', decision: d.id });
 
 const carriesWords = (d: Decision): boolean =>
-  d.action === 'note' || d.action === 'request-changes' || (d.action === 'approve' && (d.text ?? '').trim() !== '');
+  d.action === 'note' || d.action === 'request-changes' || ((d.action === 'approve' || d.action === 'dismiss-flag') && (d.text ?? '').trim() !== '');
+
+// ─────────────────────────────────────────────────────────────────────────
+// Quality flags (lib/state.md §Quality flags)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The flag a decision names, if any (`request-changes`, `note` and `dismiss-flag` may carry one). */
+export const flagOf = (d: Decision): string | undefined => ('flag' in d ? d.flag : undefined);
+
+/** Decisions that close a flag: a send-back that takes it up (→ accepted) or a dismissal (→ dismissed). */
+const closesFlag = (d: Decision): boolean => (d.action === 'request-changes' || d.action === 'dismiss-flag') && flagOf(d) !== undefined;
+
+/** Every flag on a unit, every stage. */
+export function unitFlags(u: Unit): Flag[] {
+  return Object.values(u.by_stage ?? {}).flatMap((r) => r?.flags ?? []);
+}
+
+/** Open flags on a unit's current stage. */
+export const openFlags = (u: Unit): Flag[] => (u.by_stage?.[u.stage]?.flags ?? []).filter((f) => f.status === 'open');
 
 /** Comments in time order; ties keep their order (people's words, then the trail, then notices). */
 function sortComments(cs: Comment[]): Comment[] {
@@ -425,6 +489,21 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
         continue;
       }
       const pos = chain.findIndex((x) => compareDecisions(keyOf(x), d) > 0);
+      // A confirmed batch never includes a unit sent back, or one with no file where a file is required (contract §4).
+      if (d.action === 'approve' && batchOf(d) !== undefined) {
+        const before = pos < 0 ? status : chain[pos]!.was;
+        const fileless = needsFile(ref.kind) && !(unit as { file?: unknown }).file;
+        // A block flag raised before the batch and not closed by an earlier decision keeps the unit out of it.
+        const blocking = (unit.by_stage?.[d.stage]?.flags ?? []).find((f) => f.severity === 'block' && instant(f.ts) <= instant(d.at)
+          && !ds.some((c) => closesFlag(c) && flagOf(c) === f.id && effective(rNew, c) && compareDecisions(c, d) < 0));
+        if (before === 'needs-rework' || fileless || blocking) {
+          notice(d, 'batch-ineligible', before === 'needs-rework'
+            ? `"${unitId}" was sent back (needs rework); a batch approval never includes it. Approve it on its own.`
+            : fileless ? `"${unitId}" has no file yet; a batch approval never includes it.`
+            : `"${unitId}" has an open block flag (${blocking!.id}: ${blocking!.text}); a batch approval never includes it. Look at the flag, then approve it on its own.`);
+          continue;
+        }
+      }
       const entry: ChainEntry = { id: d.id, stage: d.stage, was: status, now, at: d.at };
       if (pos < 0) {
         entry.was = status;
@@ -441,7 +520,7 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
 
     // 2b. People's words.
     const wantWords = new Map<string, Decision>();
-    for (const d of ds) if (carriesWords(d) && rNew.eligible.get(d.id)?.ok && !rNew.undone.has(d.id)) wantWords.set(d.id, d);
+    for (const d of ds) if (carriesWords(d) && rNew.eligible.get(d.id)?.ok && !rNew.undone.has(d.id) && !(batchOf(d) !== undefined && noticed.has(d.id))) wantWords.set(d.id, d);
     const known = new Set(all.map((d) => d.id));
     let comments = unit.comments.filter((c) => {
       if (isTrail(c) || isNotice(c) || c.decision === undefined || !known.has(c.decision)) return true;
@@ -472,6 +551,32 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
     }
     const rec = unit.by_stage?.[unit.stage];
     if (rec && rec.status !== unit.status) rec.status = unit.status;
+  }
+
+  // 2c. Quality flags: each flag's status follows from the decisions, so folding stays idempotent and
+  //     order-independent. The first effective closer in the total order closes it; none (or all undone) → open.
+  //     A closer counts only where it took effect (no "Not applied" notice). Flags never touch status.
+  for (const { unit } of listUnits(p)) {
+    const ds = byUnit.get(unit.id) ?? [];
+    const flags = unitFlags(unit);
+    const ids = new Set(flags.map((f) => f.id));
+    for (const d of ds) {
+      if (d.action !== 'dismiss-flag' || !fresh.has(d.id) || !rNew.eligible.get(d.id)?.ok) continue;
+      if (!ids.has(d.flag)) reject(d, 'unknown-flag', `"${unit.id}" has no flag "${d.flag}"; nothing was dismissed.`);
+    }
+    for (const f of flags) {
+      const closers = ds.filter((d) => closesFlag(d) && flagOf(d) === f.id && d.stage === f.stage && effective(rNew, d) && !noticed.has(d.id));
+      const c = closers[0];
+      for (const late of closers.slice(1)) if (late.action === 'dismiss-flag') reject(late, 'flag-closed', `flag ${f.id} was already closed by decision ${c!.id}.`);
+      const status = c === undefined ? 'open' : c.action === 'dismiss-flag' ? 'dismissed' : 'accepted';
+      if (status === f.status && c?.id === f.decision) continue;
+      const was = f.decision;
+      f.status = status;
+      if (c) f.decision = c.id; else delete f.decision;
+      if (c && fresh.has(c.id)) applied.add(c.id);
+      const u = was === undefined ? undefined : rNew.undoneBy.get(was);
+      if (u && fresh.has(u.id)) applied.add(u.id);
+    }
   }
 
   // A unit that received a decision is updated as of the latest decision on

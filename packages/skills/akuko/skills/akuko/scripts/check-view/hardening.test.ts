@@ -16,9 +16,12 @@ import { smallText, substituteVars } from './hidden.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const WRITER = readFileSync(join(HERE, 'decision-writer.js'), 'utf8');
+/** v2, kept frozen: the fixtures inline it, and check-view still accepts it (LEGACY_WRITERS). */
+const WRITER_V2 = readFileSync(join(HERE, 'decision-writer-v2.js'), 'utf8');
+const FLAG_LINE = "    if (typeof f.flag === 'string' && f.flag !== '') d.flag = f.flag;\n";
 const V2_GUARD = '  if (outbox.length) toIkenga(); // never post an empty list over a stored one (host C remount)';
 /** The v1 writer, rebuilt from v2 by undoing exactly its two edits (to show what v2 fixes). */
-const WRITER_V1 = WRITER
+const WRITER_V1 = WRITER_V2
   .replace('/* akuko-decision-writer v2 —', '/* akuko-decision-writer v1 —')
   .replace(V2_GUARD, '  toIkenga();');
 
@@ -28,10 +31,26 @@ const stored = [
 ];
 const stateValue = (p: { payload?: { key?: string; value?: unknown } }) => (p.payload?.key === 'akuko.decisions' ? p.payload.value : undefined);
 
-describe('decision writer v2 (host C remount guard)', () => {
-  it('is the canonical block: v2 header and the guarded load-site post', () => {
-    assert.match(WRITER, /^\/\* akuko-decision-writer v2 — views\/contract\.md §Decision writer\. Inline this block verbatim\. \*\/\n/);
+describe('decision writer v3 (v2 host C remount guard + flag)', () => {
+  it('is the canonical block: v3 header and the guarded load-site post', () => {
+    assert.match(WRITER, /^\/\* akuko-decision-writer v3 — views\/contract\.md §Decision writer\. Inline this block verbatim\. \*\/\n/);
     assert.ok(WRITER.includes(`  // Host C: re-publish the outbox after a pane reload.\n${V2_GUARD}\n`));
+  });
+
+  it('v3 is v2 plus exactly the flag line (and its header and doc comment)', () => {
+    const back = WRITER.replace(FLAG_LINE, '').replace('akuko-decision-writer v3 —', 'akuko-decision-writer v2 —').replace('text?, undoes?, flag?}', 'text?, undoes?}');
+    assert.equal(back.replace(/\r\n/g, '\n'), WRITER_V2.replace(/\r\n/g, '\n'));
+  });
+
+  it('v3 writes the flag a control names; v2 never does', () => {
+    const page = loadWriter({ writer: WRITER, outbox: [] });
+    const { decision } = page.emit({ action: 'dismiss-flag', unit: 'sc2_sh4', stage: 'sketch', flag: 'flag_0a1b2c3d' });
+    assert.equal((decision as { flag?: string }).flag, 'flag_0a1b2c3d');
+    assert.equal('flag' in page.emit({ action: 'note', unit: 'sc2_sh4', stage: 'sketch', text: 'x' }).decision, false);
+    page.close();
+    const old = loadWriter({ writer: WRITER_V2, outbox: [] });
+    assert.equal('flag' in old.emit({ action: 'request-changes', unit: 'sc2_sh4', stage: 'sketch', text: 'x', flag: 'flag_0a1b2c3d' }).decision, false);
+    old.close();
   });
 
   it('on load with an empty outbox it posts nothing to the parent', () => {
@@ -73,16 +92,19 @@ describe('decision writer v2 (host C remount guard)', () => {
   it('stale-writer: a page must inline the current canonical block byte for byte', () => {
     const FX = join(HERE, '..', '..', 'views', '__fixtures__');
     const tiny = readFileSync(join(FX, 'tiny-board.html'), 'utf8');
-    assert.equal(WRITER_VERSION, 'v2');
-    assert.equal(staleWriter(tiny), null);
+    assert.equal(WRITER_VERSION, 'v3');
+    assert.equal(staleWriter(tiny), null, 'the frozen v2 block is still accepted');
+    assert.equal(staleWriter(tiny.replace(WRITER_V2.trim(), WRITER.trim())), null, 'and so is v3');
     assert.equal(staleWriter(readFileSync(join(FX, 'board-b-instrumented.html'), 'utf8')), null);
     assert.equal(staleWriter(tiny.replace(/\n/g, '\r\n')), null, 'line endings aside');
     assert.equal(staleWriter('<script>var x = 1;</script>'), null, 'a page that writes the stores itself is not judged here');
-    const v1 = tiny.replace(WRITER.trim(), WRITER_V1.trim());
+    const v1 = tiny.replace(WRITER_V2.trim(), WRITER_V1.trim());
     assert.notEqual(v1, tiny);
-    assert.match(staleWriter(v1) ?? '', /inlines akuko-decision-writer v1; inline the current canonical v2 block/);
+    assert.match(staleWriter(v1) ?? '', /inlines akuko-decision-writer v1; inline the current canonical v3 block/);
     const edited = tiny.replace("var who = 'you';", "var who = 'claude';");
-    assert.match(staleWriter(edited) ?? '', /a changed copy of akuko-decision-writer v2/);
+    assert.match(staleWriter(edited) ?? '', /inlines akuko-decision-writer v2; inline the current canonical v3 block/);
+    const edited3 = tiny.replace(WRITER_V2.trim(), WRITER.trim()).replace("var who = 'you';", "var who = 'claude';");
+    assert.match(staleWriter(edited3) ?? '', /a changed copy of akuko-decision-writer v3/);
     assert.match(staleWriter(tiny.replace(/akuko-decision-writer v2 —/, 'akuko-decision-writer —')) ?? '', /an unversioned copy/);
   });
 
@@ -90,8 +112,9 @@ describe('decision writer v2 (host C remount guard)', () => {
     const FX = join(HERE, '..', '..', 'views', '__fixtures__');
     const tiny = readFileSync(join(FX, 'tiny-board.html'), 'utf8');
     const headless = WRITER_V1.trim().split('\n').filter((l) => !/akuko-decision-writer/.test(l)).join('\n');
-    assert.match(staleWriter(tiny.replace(WRITER.trim(), headless)) ?? '', /a decision writer of its own \(it defines window\.akukoDecisions\)/);
-    assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER.trim()}\n</script></body>`)) ?? '', /inlines the decision writer 2 times/);
+    assert.match(staleWriter(tiny.replace(WRITER_V2.trim(), headless)) ?? '', /a decision writer of its own \(it defines window\.akukoDecisions\)/);
+    assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER_V2.trim()}\n</script></body>`)) ?? '', /inlines the decision writer 2 times/);
+    assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER.trim()}\n</script></body>`)) ?? '', /defines another decision writer beside the canonical v3 block/);
     assert.match(staleWriter(tiny.replace('</body>', `<script>\n${WRITER_V1.trim()}\n</script></body>`)) ?? '', /defines another decision writer beside the canonical v2 block/);
     assert.match(staleWriter(tiny.replace('</body>', '<script>window.akukoDecisions = { emit: function () {} };</script></body>')) ?? '', /another decision writer/);
     assert.equal(staleWriter(tiny.replace('</body>', '<script>var W = window.akukoDecisions; W.onChange(function () {});</script></body>')), null, 'using the writer is not defining one');

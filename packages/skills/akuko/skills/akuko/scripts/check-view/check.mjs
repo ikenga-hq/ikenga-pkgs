@@ -16,7 +16,7 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 import { blankComments, conformanceHash, escapeJsonForScript, findJsonBlock, PROJECT_BLOCK } from './hash.mjs';
 import { decisionWriteSigns } from './predicates.mjs';
 import { hiddenReason, smallText } from './hidden.mjs';
-import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, removedAt, unitsById } from './expected.mjs';
+import { STAGE_IDS, approveSpendText, gateMoney, bibleEntries, expectedMoney, expectedYourMove, mutateProject, removedAt, unitsById, batchOf, batchProject, batchUnits, isBatchScope, partsOf, flagProject, openFlags } from './expected.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..', '..');
@@ -26,6 +26,11 @@ export const DEFAULT_PROJECT = join(SKILL, 'fixtures', 'the-beating', 'akuko.jso
 /** The canonical decision writer: a page that inlines one carries it byte for byte (views/contract.md §Decision writer). */
 export const WRITER = readFileSync(join(HERE, 'decision-writer.js'), 'utf8').replace(/\r\n/g, '\n').trim();
 export const WRITER_VERSION = /akuko-decision-writer (v\d+)/.exec(WRITER)?.[1] ?? 'v?';
+/**
+ * Earlier canonical writers a page may still inline, byte for byte. v2 is v3 without `flag` (quality flags,
+ * lib/state.md §Quality flags): a page with v2 works exactly as before, but cannot write a flag decision.
+ */
+export const LEGACY_WRITERS = { v2: readFileSync(join(HERE, 'decision-writer-v2.js'), 'utf8').replace(/\r\n/g, '\n').trim() };
 const VIEWS_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'views.schema.json'), 'utf8'));
 const DECISION_SCHEMA = JSON.parse(readFileSync(join(SKILL, 'views', 'decision.schema.json'), 'utf8'));
 
@@ -44,6 +49,8 @@ const TEN_MINUTES = 10 * 60 * 1000;
 const WIDTH = 1440;
 const EPS = 1e-9;
 let decisionsChecked = 0;
+let batchesChecked = 0;
+let flagsChecked = 0;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Static checks
@@ -110,11 +117,13 @@ export function staleWriter(html) {
   const fix = `inline the current canonical ${WRITER_VERSION} block (scripts/check-view/decision-writer.js) verbatim, once`;
   // a writer is anything that defines the global the decision API lives on (07a2 review C6)
   const defines = (c) => /(?<![\w$.])(?:window\s*\.\s*|window\s*\[\s*["'`])?akukoDecisions(?:["'`]\s*\])?\s*=(?!=)/.test(c) || /akuko-decision-writer/.test(c);
-  const copies = code.split(WRITER).length - 1;
-  if (copies > 1) return `the page inlines the decision writer ${copies} times; ${fix}`;
-  if (copies === 1) {
-    if (defines(code.replace(WRITER, ''))) return `the page defines another decision writer beside the canonical ${WRITER_VERSION} block; ${fix}`;
-    return null;
+  for (const [v, block] of [[WRITER_VERSION, WRITER], ...Object.entries(LEGACY_WRITERS)]) {
+    const copies = code.split(block).length - 1;
+    if (copies > 1) return `the page inlines the decision writer ${copies} times; ${fix}`;
+    if (copies === 1) {
+      if (defines(code.replace(block, ''))) return `the page defines another decision writer beside the canonical ${v} block; ${fix}`;
+      return null;
+    }
   }
   if (!defines(code)) return null;
   const found = /akuko-decision-writer (v\d+)/.exec(code)?.[1];
@@ -172,7 +181,7 @@ function fakeDb(rec, project) {
   return { doc: ref, collection: coll };
 }
 
-async function load(html, project, host, wait = 40) {
+async function load(html, project, host, wait = 40, hash = '') {
   const rec = { epoch: 0, writes: [], posts: [], violations: [], errors: [], clipboard: null, timers: new Map(), now: 0 };
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { if (!/Not implemented/i.test(String(e.message))) rec.errors.push(String(e.message).split('\n')[0]); });
@@ -180,7 +189,7 @@ async function load(html, project, host, wait = 40) {
   const dom = new JSDOM(doc, {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
-    url: 'https://view.check-view.test/view.html',
+    url: `https://view.check-view.test/view.html${hash}`,
     virtualConsole: vc,
     beforeParse(w) {
       // A browser's user agent: a page must not behave differently under the check.
@@ -639,7 +648,78 @@ function checkControls(page, p, fail) {
     for (const a of ['approve-spend', 'decline-spend']) if (!control(a, j.id)) fail('contract', 'missing-control', `the paid job ${j.id} has no visible "${a}" control`);
   }
   for (const a of p.assets.filter((x) => x.status === 'pending-review' && removedAt(p, x) === undefined)) if (!control('approve', a.id)) fail('contract', 'missing-control', `${a.id} is waiting for review but has no visible approve control`);
+  checkBatchMarks(page, p, fail);
   return { detail: ds, control };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Confirmed batch approval (§4 "Batch approval")
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Batch marks at rest: openers are real controls naming a scope; no confirm dialog is open, and no confirm control stands outside one. */
+function checkBatchMarks(page, p, fail, tag = '') {
+  const { d, w } = page;
+  for (const el of d.querySelectorAll('[data-akuko-batch]')) {
+    const scope = el.getAttribute('data-akuko-batch');
+    if (!isBatchScope(p, scope)) fail('contract', 'bad-batch-scope', `a batch opener names "${scope}": a batch covers "bible" or "part:<a part of the project>"${tag}`);
+    if (el.hasAttribute('data-akuko-action')) fail('R1', 'batch-approve', `the batch opener for ${scope} is also a decision control (data-akuko-action): it may only open the confirm step${tag}`);
+    if (!isFocusable(el)) fail('R5', 'not-keyboard-reachable', `the batch opener for ${scope} cannot be reached with the keyboard${tag}`);
+  }
+  for (const box of d.querySelectorAll('[data-akuko-batch-panel]')) {
+    if (!hiddenReason(w, box)) fail('R1', 'unconfirmed-batch', `a batch confirm step (${box.getAttribute('data-akuko-batch-panel')}) is open before the person asked for it${tag}`);
+    for (const c of box.querySelectorAll('input[type="checkbox" i], input[type="radio" i]')) if (c.checked || c.hasAttribute('checked')) fail('R1', 'pre-ticked', `a box in the batch confirm step is ticked before the person touched it${tag}`);
+  }
+  for (const el of d.querySelectorAll('[data-akuko-batch-confirm]')) {
+    if (!el.closest('[data-akuko-batch-panel]')) fail('R1', 'unconfirmed-batch', `a batch confirm control (${el.getAttribute('data-akuko-batch-confirm')}) stands outside a confirm step that lists its units${tag}`);
+    if (el.hasAttribute('data-akuko-action')) fail('R1', 'batch-approve', `the batch confirm control is also marked data-akuko-action${tag}`);
+  }
+}
+
+/** The confirm step a confirm control belongs to, as the person sees it before clicking: its scope, the units it lists and the count it shows. */
+function batchPanel(page, el) {
+  const box = el.closest('[data-akuko-batch-panel]');
+  if (!box || hiddenReason(page.w, box) || hiddenReason(page.w, el)) return null;
+  const units = [...box.querySelectorAll('[data-akuko-batch-unit]')].filter((e) => !hiddenReason(page.w, e)).map((e) => e.getAttribute('data-akuko-batch-unit'));
+  const c = [...box.querySelectorAll('[data-akuko-batch-count]')].find((e) => !hiddenReason(page.w, e));
+  return { scope: box.getAttribute('data-akuko-batch-panel'), confirm: el.getAttribute('data-akuko-batch-confirm'), units, count: c ? firstNumber(text(c)) : null };
+}
+
+/**
+ * What one Confirm click wrote: exactly one ordinary approve per unit the confirm step
+ * listed, every one with the same text ending " · batch <uuid>", every listed unit one a
+ * batch may approve (waiting for review; never sent back; an asset only with a file).
+ */
+function checkBatchWrite(fresh, panel, p, fail, where = '') {
+  const list = fresh.map((x) => `${x.action}:${x.unit}`).join(', ');
+  if (!panel) { fail('R1', 'unconfirmed-batch', `a batch confirm control wrote ${list} without a visible confirm step listing those units${where}`); return; }
+  const tag = `the batch confirm for ${panel.scope}`;
+  if (panel.confirm !== panel.scope) fail('contract', 'bad-batch-scope', `${tag} is marked for "${panel.confirm}"${where}`);
+  if (panel.count !== panel.units.length) fail('contract', 'batch-count', `${tag} shows the count ${panel.count ?? '(none)'} but lists ${panel.units.length} units${where}`);
+  for (const x of fresh) if (x.action !== 'approve') fail('decision', 'wrong-action', `${tag} wrote "${x.action}" for ${x.unit}${where}`);
+  const wrote = fresh.map((x) => x.unit).sort();
+  const listed = [...panel.units].sort();
+  if (new Set(wrote).size !== wrote.length || wrote.join('|') !== listed.join('|')) {
+    fail('R1', 'batch-unlisted', `${tag} listed ${listed.join(', ') || 'nothing'} but wrote ${list || 'nothing'}: Confirm writes one approve per listed unit, and nothing else${where}`);
+  }
+  const allowed = new Set(batchUnits(p, panel.scope));
+  for (const u of panel.units) if (!allowed.has(u)) fail('R1', 'batch-ineligible', `${tag} includes ${u}, which a batch may not approve (not waiting for review, sent back, out of scope, or an asset with no file)${where}`);
+  const ids = new Set(fresh.map((x) => batchOf(x)));
+  const texts = new Set(fresh.map((x) => x.text));
+  if (ids.has(undefined) || ids.size !== 1 || texts.size !== 1) fail('decision', 'batch-no-id', `${tag} wrote decisions that do not share one text ending " · batch <uuid>"${where}`);
+}
+
+/** What one "undo batch" click wrote: one undo for each approval of that batch still standing, and nothing else. */
+function checkBatchUndo(page, bid, fresh, fail, where = '') {
+  const all = [...decisions(page).values()].map((v) => v.d);
+  const freshIds = new Set(fresh.map((x) => x.id));
+  const batch = all.filter((x) => x.action === 'approve' && batchOf(x) === bid);
+  const undoneBefore = new Set(all.filter((x) => x.action === 'undo' && !freshIds.has(x.id)).map((x) => x.undoes));
+  const want = batch.filter((x) => !undoneBefore.has(x.id)).map((x) => x.id).sort();
+  const got = fresh.map((x) => x.undoes).sort();
+  const bad = fresh.filter((x) => x.action !== 'undo' || !batch.some((b) => b.id === x.undoes && b.unit === x.unit));
+  if (bad.length || new Set(got).size !== got.length || got.join('|') !== want.join('|')) {
+    fail('R1', 'batch-undo', `the undo for batch ${bid} wrote ${fresh.map((x) => `${x.action}:${x.unit}`).join(', ') || 'nothing'}; it must write one undo per approval of that batch still standing (${want.length})${where}`);
+  }
 }
 
 function checkDecision(dec, page, p, want, fail, manifest) {
@@ -747,6 +827,17 @@ async function clickTests(html, p, manifest, fail) {
   }
   page.close();
 
+  // 6. confirmed batches (§4), on a copy of the project with parts: open → the confirm step lists exactly what a batch may
+  //    approve → Cancel writes nothing → Confirm writes one approve per listed unit, one batch id → "your move" drops →
+  //    the batch's Undo writes one undo per approval. Batches are optional: a view with no opener skips this.
+  await batchTests(html, p, manifest, fail);
+
+  // 7. quality flags (lib/state.md §Quality flags), on a copy of the project with open flags: Dismiss writes one
+  //    dismiss-flag naming the flag; "Send back with this" writes nothing until the person submits its composer,
+  //    which starts from the flag's suggested change and writes one request-changes carrying the flag. Optional:
+  //    a view that shows no flag controls skips this.
+  await flagTests(html, p, manifest, fail);
+
   // 4. host C: the decision is posted to the Ikenga bridge, cumulatively
   // 5. no host store (a local file): the decision stays in the outbox, with a way to copy it out
   for (const host of ['C', 'local']) {
@@ -761,6 +852,112 @@ async function clickTests(html, p, manifest, fail) {
         if (![...page.d.querySelectorAll('[data-akuko-export]')].some((e) => !hiddenReason(page.w, e))) fail('contract', 'no-export', 'without a host store there is no visible "copy decisions for akuko" control (data-akuko-export)');
       }
     }
+    page.close();
+  }
+}
+
+async function flagTests(html, p0, manifest, fail) {
+  const p = flagProject(p0);
+  const units = unitsById(p);
+  const visible = (page, q) => [...page.d.querySelectorAll(q)].find((e) => !hiddenReason(page.w, e));
+  const ctlOf = (u, f) => (a) => `${sel('data-akuko-action', a)}${sel('data-akuko-unit', u.id)}${sel('data-akuko-flag', f.id)}`;
+  const all = [...units.values()].flatMap((u) => openFlags(u).map((f) => ({ u, f })));
+  const probe = await load(html, p, 'A');
+  const shown = all.filter(({ u, f }) => visible(probe, ctlOf(u, f)('dismiss-flag')));
+  probe.close();
+  // one flag on a shot and one on anything else are enough to check the controls (each check reloads the page)
+  const isShot = (u) => p.shots.some((s) => s.id === u.id);
+  const flags = [shown.find((x) => isShot(x.u)), shown.find((x) => !isShot(x.u))].filter(Boolean);
+  for (const { u, f } of flags) {
+    const ctl = ctlOf(u, f);
+    let page = await load(html, p, 'A');
+    const dismiss = visible(page, ctl('dismiss-flag'));
+    if (!dismiss) { page.close(); continue; }
+    flagsChecked++;
+    let r = await act(page, dismiss);
+    if (r.fresh.length !== 1) fail('R1', r.fresh.length ? 'batch-approve' : 'writes-nothing', `Dismiss on flag ${f.id} of ${u.id} wrote ${r.fresh.length} decisions`);
+    for (const dec of r.fresh) {
+      checkDecision(dec, page, p, { action: 'dismiss-flag', unit: u.id }, fail, manifest);
+      if (dec.flag !== f.id) fail('decision', 'wrong-flag', `Dismiss on flag ${f.id} of ${u.id} wrote flag ${JSON.stringify(dec.flag ?? null)}`);
+    }
+    page.close();
+
+    page = await load(html, p, 'A');
+    const send = visible(page, ctl('request-changes'));
+    if (!send) { fail('contract', 'missing-control', `flag ${f.id} of ${u.id} has a Dismiss but no "request-changes" control naming it (data-akuko-flag)`); page.close(); continue; }
+    r = await act(page, send);
+    if (r.fresh.length) { fail('R1', 'flag-auto-send', `"Send back with this" on flag ${f.id} of ${u.id} wrote ${r.fresh.map((x) => x.action).join(', ')} before the person submitted anything`); page.close(); continue; }
+    const ta = visible(page, 'textarea[data-akuko-text], input[data-akuko-text]');
+    const submit = visible(page, '[data-akuko-submit]');
+    if (!ta || !submit) { fail('contract', 'no-composer', `"Send back with this" on flag ${f.id} of ${u.id} opened no composer`); page.close(); continue; }
+    const start = f.suggested_change ?? f.text;
+    if (!String(ta.value).includes(start)) fail('contract', 'flag-not-prefilled', `the composer for flag ${f.id} starts with ${JSON.stringify(ta.value)}, not the flag's suggested change`);
+    const before = new Set(decisions(page).keys());
+    page.rec.epoch++;
+    click(page.w, submit);
+    await settle(page.w);
+    const fresh = [...decisions(page).entries()].filter(([id]) => !before.has(id)).map(([, v]) => v.d);
+    if (fresh.length !== 1) fail('decision', fresh.length ? 'batch-approve' : 'writes-nothing', `submitting the send-back for flag ${f.id} of ${u.id} wrote ${fresh.length} decisions`);
+    for (const dec of fresh) {
+      checkDecision(dec, page, p, { action: 'request-changes', unit: u.id, text: String(ta.value).trim() }, fail, manifest);
+      if (dec.flag !== f.id) fail('decision', 'wrong-flag', `the send-back for flag ${f.id} of ${u.id} wrote flag ${JSON.stringify(dec.flag ?? null)}`);
+    }
+    for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after a flag control: ${v}; views write decisions only`);
+    page.close();
+  }
+}
+
+async function batchTests(html, p0, manifest, fail) {
+  const p = batchProject(p0);
+  const visible = (page, q) => [...page.d.querySelectorAll(q)].find((e) => !hiddenReason(page.w, e));
+  const scopes = [['bible', ''], ...partsOf(p).map((pt) => [`part:${pt}`, `#part=${encodeURIComponent(pt)}`])];
+  for (const [scope, hash] of scopes) {
+    const want = batchUnits(p, scope);
+    const page = await load(html, p, 'A', 40, hash);
+    const tag = ` (batch ${scope})`;
+    const opener = () => visible(page, `[data-akuko-batch="${scope}"]`);
+    if (!opener()) { page.close(); continue; }
+    batchesChecked++;
+    checkBatchMarks(page, p, fail, tag);
+    let r = await act(page, opener());
+    if (r.fresh.length) fail('R1', 'unconfirmed-batch', `opening the batch for ${scope} wrote ${r.fresh.map((x) => `${x.action}:${x.unit}`).join(', ')} before anything was confirmed`);
+    let confirm = visible(page, `[data-akuko-batch-confirm="${scope}"]`);
+    let panel = confirm && batchPanel(page, confirm);
+    if (!panel) { fail('contract', 'no-batch-confirm', `the batch opener for ${scope} opened no confirm step ([data-akuko-batch-panel] listing [data-akuko-batch-unit], with a [data-akuko-batch-confirm] control)`); page.close(); continue; }
+    const listed = [...panel.units].sort(), wanted = [...want].sort();
+    for (const u of listed) if (!want.includes(u)) fail('R1', 'batch-ineligible', `the confirm step for ${scope} lists ${u}, which a batch may not approve`);
+    for (const u of wanted) if (!panel.units.includes(u)) fail('contract', 'batch-incomplete', `the confirm step for ${scope} leaves out ${u}, which is waiting for review`);
+    if (panel.count !== panel.units.length) fail('contract', 'batch-count', `the confirm step for ${scope} shows the count ${panel.count ?? '(none)'} but lists ${panel.units.length} units`);
+    // Cancel (any other control in the confirm step) writes nothing
+    const box = confirm.closest('[data-akuko-batch-panel]');
+    const cancel = [...box.querySelectorAll('button, [role="button"], a[href]')].find((e) => e !== confirm && !hiddenReason(page.w, e));
+    if (cancel) {
+      r = await act(page, cancel);
+      if (r.fresh.length) fail('R1', 'unconfirmed-batch', `"${text(cancel)}" in the confirm step for ${scope} wrote ${r.fresh.map((x) => `${x.action}:${x.unit}`).join(', ')}`);
+      if (opener()) await act(page, opener());
+      confirm = visible(page, `[data-akuko-batch-confirm="${scope}"]`);
+      panel = confirm && batchPanel(page, confirm);
+      if (!panel) { fail('contract', 'no-batch-confirm', `the batch opener for ${scope} did not open the confirm step again after Cancel`); page.close(); continue; }
+    }
+    // Confirm
+    const ym = expectedYourMove(p);
+    r = await act(page, confirm);
+    if (r.fresh.length === 0) { fail('decision', 'writes-nothing', `Confirm in the batch for ${scope} wrote nothing`); page.close(); continue; }
+    checkBatchWrite(r.fresh, panel, p, fail, '');
+    for (const dec of r.fresh) checkDecision(dec, page, p, { action: 'approve', unit: dec.unit }, fail, manifest);
+    for (const v of page.rec.violations.splice(0)) fail('R4', 'writes-project', `after a batch Confirm: ${v}; views write decisions only`);
+    const units = unitsById(p);
+    const shotsIn = r.fresh.filter((x) => p.shots.some((s) => s.id === x.unit)).length;
+    const othersIn = r.fresh.filter((x) => units.has(x.unit) && !p.shots.some((s) => s.id === x.unit)).length;
+    if (inViews(page.d, 'your-move').length) checkYourMove(page, inViews(page.d, 'your-move'), { ...ym, 'waiting-shots': ym['waiting-shots'] - shotsIn, 'waiting-other': ym['waiting-other'] - othersIn }, fail, '', ` after the batch for ${scope}`);
+    // one click undoes the whole batch
+    const bid = batchOf(r.fresh[0]);
+    const undo = bid && visible(page, `[data-akuko-batch-undo="${bid}"]`);
+    if (!undo) { fail('contract', 'no-batch-undo', `after the batch for ${scope} there is no visible [data-akuko-batch-undo="<batch id>"] control: one click must undo the whole batch`); page.close(); continue; }
+    r = await act(page, undo);
+    checkBatchUndo(page, bid, r.fresh, fail, '');
+    for (const dec of r.fresh) checkDecision(dec, page, p, { action: 'undo', unit: dec.unit }, fail, manifest);
+    if (inViews(page.d, 'your-move').length) checkYourMove(page, inViews(page.d, 'your-move'), ym, fail, '', ` after undoing the batch for ${scope}`);
     page.close();
   }
 }
@@ -785,6 +982,7 @@ async function sweep(html, p, fail, host = 'A') {
     const a = el.getAttribute('data-akuko-action');
     const u = el.getAttribute('data-akuko-unit');
     const before = new Set(decisions(page).keys());
+    const panel = el.hasAttribute('data-akuko-batch-confirm') ? batchPanel(page, el) : null; // what the person saw before Confirm (§4)
     page.rec.epoch++;
     click(page.w, el);
     if (!a) gestures(page.w, el); // right button, touch, pen: none of them decides anything on a control that is not a decision control
@@ -797,6 +995,9 @@ async function sweep(html, p, fail, host = 'A') {
     const list = fresh.map((x) => `${x.action}:${x.unit}`).join(', ');
     if (!a) {
       if (el.hasAttribute('data-akuko-submit') && fresh.length <= 1) continue;
+      if (fresh.length && el.hasAttribute('data-akuko-batch-confirm')) { checkBatchWrite(fresh, panel, p, fail, where); continue; }
+      if (fresh.length && el.hasAttribute('data-akuko-batch-undo')) { checkBatchUndo(page, el.getAttribute('data-akuko-batch-undo'), fresh, fail, where); continue; }
+      if (fresh.length && el.hasAttribute('data-akuko-batch')) { fail('R1', 'unconfirmed-batch', `the batch opener "${name(el)}" wrote ${list} before the person confirmed anything${where}`); continue; }
       if (fresh.length) fail('R1', 'unmarked-control-writes', `"${name(el)}" is not a decision control (no data-akuko-action) but ${picks ? 'clicking it or picking one of its values' : 'clicking it'} wrote ${list}${where}`);
     } else {
       if (fresh.some((x) => x.unit !== u)) fail('R1', 'writes-other-unit', `the "${a}" control for ${u} also wrote ${list}: one click, one unit${where}`);
@@ -951,6 +1152,8 @@ export async function checkView(html, opts = {}) {
   };
   const sha256 = conformanceHash(html);
   decisionsChecked = 0;
+  batchesChecked = 0;
+  flagsChecked = 0;
   let manifest = null;
   const raw = jsonBlock(html, 'akuko-view');
   if (raw === undefined) fail('contract', 'no-manifest', 'no <script type="application/json" id="akuko-view"> manifest');
@@ -1027,6 +1230,8 @@ export async function checkView(html, opts = {}) {
     sha256,
     failures,
     decisions_checked: decisionsChecked,
+    batches_checked: batchesChecked,
+    flags_checked: flagsChecked,
     manual: ['R5 contrast ≥ 4.5:1 and body text ≥ 14px are checked by eye (designs/_spec.md)'],
   };
 }

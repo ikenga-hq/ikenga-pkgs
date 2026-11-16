@@ -111,6 +111,9 @@ const BAD: Record<string, string[]> = {
   'bad-touch-single-approve.html': ['auto-approve'],
   'bad-wheel-threshold-approve.html': ['auto-approve'],
   'bad-which-approve.html': ['auto-approve'],
+  // @0.7 confirmed batches (contract §4): an opener that approves without a confirm step; a confirm step listing images with no file
+  'bad-unconfirmed-batch.html': ['unconfirmed-batch'],
+  'bad-batch-ineligible.html': ['batch-ineligible'],
 };
 const GOOD = ['board-b-instrumented.html', 'tiny-board.html'];
 const SKIP = ['readonly-cast-sheet.html'];
@@ -194,9 +197,10 @@ describe('check-view fails each bad fixture for its reason', { timeout: TIMEOUT 
 
 describe('fixtures and helpers', { timeout: TIMEOUT }, () => {
   const writer = readFileSync(join(SKILL, 'scripts', 'check-view', 'decision-writer.js'), 'utf8').trim();
+  const writerV2 = readFileSync(join(SKILL, 'scripts', 'check-view', 'decision-writer-v2.js'), 'utf8').trim();
 
-  it('the conforming fixtures inline the decision writer verbatim', () => {
-    for (const f of GOOD) assert.ok(readFileSync(join(FX, f), 'utf8').includes(writer), f);
+  it('the conforming fixtures inline a canonical decision writer verbatim (v3, or the frozen v2 check-view still accepts)', () => {
+    for (const f of GOOD) { const h = readFileSync(join(FX, f), 'utf8'); assert.ok(h.includes(writer) || h.includes(writerV2), f); }
   });
 
   it('every fixture inlining the writer carries the current one (no stale-writer outside the signed-by-agent fixture, which edits it)', async () => {

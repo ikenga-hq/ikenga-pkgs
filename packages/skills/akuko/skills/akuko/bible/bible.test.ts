@@ -160,6 +160,22 @@ describe('planning: what the stage makes, and when it opens', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+describe('the film\'s look and negative in bible prompts', () => {
+  it('the house style alone is the overall look; its "Negative prompt:" goes to the negative, not the text; lookbooks are labelled for light and colour only', () => {
+    const base = breakdownApproved();
+    base.bible.styles[0]!.notes.push('Use for: S07');
+    base.bible.styles.push({ id: 'house-style', name: 'House style', description: 'Painted clay, soft light.', notes: ['Negative prompt: text, long slender necks'], refs: [], status: 'approved', stage: 'breakdown', comments: [] });
+    const p = planBible(base, NOW).project;
+    for (const a of bibleAssets(p).filter((x) => x.kind === 'lookbook')) { a.status = 'approved'; a.file = { uri: `${a.id}.png`, mime: 'image/png' }; }
+    const item = buildBibleJob(p, { provider: 'manual', units: ['char_mara_portrait'] }).job.items[0]!;
+    assert.match(item.prompt, /Overall look of the film: House style: Painted clay, soft light/);
+    assert.doesNotMatch(item.prompt, /Muted blue dusk|Negative prompt|long slender necks|Use for/);
+    assert.equal(item.negative, 'text, long slender necks');
+    assert.ok(item.refs!.filter((x) => x.role === 'style').every((x) => /do not copy its room, objects or people/.test(x.note ?? '')));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 describe('order: lookbook, then portraits and plates, then turnarounds', () => {
   it('only the lookbook is ready at first; the rest wait for a person to approve what they need', () => {
     const p = planBible(breakdownApproved(), NOW).project;

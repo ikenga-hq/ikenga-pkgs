@@ -149,7 +149,7 @@ export async function ingestClip(
   job: Job,
   unit: string,
   file: { filename: string; mime: string; data: Uint8Array },
-  extra: { actual?: number; model?: string } = {},
+  extra: { actual?: number; model?: string; via?: string; projectDir?: string; newTake?: boolean } = {},
 ): Promise<{ asset: string; warnings: string[] }> {
   const r = await manual.ingest({ job, unit, file, ...extra });
   await finalizeMotion(deps);
