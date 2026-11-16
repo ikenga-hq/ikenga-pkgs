@@ -227,7 +227,7 @@ export interface LayoutStepPlan {
   step: 'restyle' | 'identity';
   /** identity: the character and the image it is put on model from (turnaround, portrait if none). */
   character?: NeededRef;
-  /** Short name for people: `restyle`, `identity RAVEN`. */
+  /** Short name for people: `restyle`, `identity MARA`. */
   name: string;
 }
 

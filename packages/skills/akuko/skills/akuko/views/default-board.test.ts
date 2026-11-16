@@ -512,7 +512,7 @@ describe('default board: copy decisions (A-4)', () => {
     const lines = String(p.w.akukoDecisions.jsonl()).trim().split('\n').map((l: string) => JSON.parse(l));
     assert.equal(lines.length, 1);
     assert.equal(lines[0].action, 'approve');
-    assert.equal(lines[0].view, 'default-board@0.10');
+    assert.equal(lines[0].view, 'default-board@0.11');
     p.close();
   });
 });
@@ -564,7 +564,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
     assert.equal(statusOf(p, id), 'approved');
     assert.equal(p.d.querySelector('#p-ledger > .rp-body'), sideways, 'a panel that did not change is not rebuilt');
     const [d] = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.10']);
+    assert.deepEqual([d?.action, d?.unit, d?.stage, d?.view], ['approve', id, 'sketch', 'default-board@0.11']);
     p.close();
   });
 
@@ -736,7 +736,7 @@ describe('default board: a 211-shot project (WP-29)', { timeout: 600_000 }, () =
   it('decisions written by the @0.1 and @0.2 boards still fold on a real-project-shaped film', () => {
     const p = clone(BIG);
     const units = [['S19-030', 'sketch'], ['card_P7-CARD', 'export'], ['S19-050_keyframe', 'keyframes']] as const;
-    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5', 'default-board@0.6', 'default-board@0.7', 'default-board@0.8', 'default-board@0.9', 'default-board@0.10']) {
+    for (const view of ['default-board@0.1', 'default-board@0.2', 'default-board@0.3', 'default-board@0.4', 'default-board@0.5', 'default-board@0.6', 'default-board@0.7', 'default-board@0.8', 'default-board@0.9', 'default-board@0.10', 'default-board@0.11']) {
       const ds = units.map(([unit, stage], i) => ({ id: uuid(100 + i), action: 'approve', unit, stage, by: 'you', at: `2026-11-10T10:0${i}:00Z`, view }) as Decision);
       const { report, project } = foldDecisions(structuredClone(p), ds, { conformed: CONFORMED });
       assert.deepEqual(report.rejected, [], view);
@@ -1099,7 +1099,7 @@ describe('default board: confirmed batch approval (@0.7)', { timeout: 600_000 },
     click(p, '[data-akuko-batch-confirm="part:P7"]');
     await p.tick();
     const ds = p.w.akukoDecisions.all() as Decision[];
-    assert.deepEqual(JSON.parse(JSON.stringify(ds.map((d) => [d.action, d.unit, d.stage, d.by, d.view]))), waiting.map((id) => ['approve', id, 'sketch', 'you', 'default-board@0.10']));
+    assert.deepEqual(JSON.parse(JSON.stringify(ds.map((d) => [d.action, d.unit, d.stage, d.by, d.view]))), waiting.map((id) => ['approve', id, 'sketch', 'you', 'default-board@0.11']));
     const ids = new Set(ds.map((d) => BATCH.exec(d.text ?? '')?.[1]));
     assert.equal(ids.size, 1);
     const bid = [...ids][0]!;
@@ -1221,7 +1221,7 @@ describe('default board: sending a bible image back (@0.8)', { timeout: 600_000 
     fire(p, p.d.querySelector('#p-bible form[data-form="compose"] [data-akuko-submit]'));
     await p.tick();
     const ds = JSON.parse(JSON.stringify(p.w.akukoDecisions.all())) as Decision[];
-    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.view]), [['request-changes', 'loc_bedroom_plate', 'bible', 'The window should be on the left, and the bed smaller.', 'default-board@0.10']]);
+    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.view]), [['request-changes', 'loc_bedroom_plate', 'bible', 'The window should be on the left, and the bed smaller.', 'default-board@0.11']]);
     assert.equal(p.d.querySelectorAll('#compose-text').length, 0, 'the composer closed');
     assert.match(p.text('#p-bible'), /Location plate is sent back to akuko\./);
     assert.equal(p.num('waiting-other'), other - 1);
@@ -1336,7 +1336,7 @@ describe('default board: AI quality flags (@0.9)', { timeout: 600_000 }, () => {
     fire(p, p.d.querySelector('[data-akuko-field="flags"] form[data-form="compose"] [data-akuko-submit]'));
     await p.tick();
     const ds = all(p);
-    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.flag, d.by, d.view]), [['request-changes', 'char_oldman_turnaround', 'bible', 'Plain cap, no patch. Keep the brim worn.', 'flag_c0ffee02', 'you', 'default-board@0.10']]);
+    assert.deepEqual(ds.map((d) => [d.action, d.unit, d.stage, d.text, d.flag, d.by, d.view]), [['request-changes', 'char_oldman_turnaround', 'bible', 'Plain cap, no patch. Keep the brim worn.', 'flag_c0ffee02', 'you', 'default-board@0.11']]);
     assert.match(p.text('#p-bible'), /Turnaround sheet is sent back to akuko\./);
     assert.ok(!p.d.querySelector(ctl('dismiss-flag', 'char_oldman_turnaround', 'flag_c0ffee02')), 'the flag is taken up: no longer open');
     p.close();

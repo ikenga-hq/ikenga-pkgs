@@ -45,7 +45,7 @@ describe('views/publish.ts', () => {
     const embedded = JSON.parse(raw);
     assert.equal(embedded.project.title, 'A <b>bold</b> </script> film');
     assert.equal(embedded._sample, undefined, 'no longer a sample');
-    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.10', html), 'same hash as the recorded board');
+    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.11', html), 'same hash as the recorded board');
     assert.equal(viewHash(html), viewHash(readFileSync(DEFAULT_BOARD, 'utf8')));
   });
 
@@ -115,7 +115,7 @@ describe('views/publish.ts: pictures for a local board (@0.5)', () => {
     assert.ok(!JSON.stringify(b).includes('images.example.com') && !JSON.stringify(b).includes('/_blob/'), 'remote and artifact paths are left to the page');
     const how = Object.fromEntries(r.media.items.map((i) => [i.unit, i.how]));
     assert.deepEqual([how.char_narrator_portrait, how.char_oldman_portrait, how.loc_hallway_plate, how.loc_bedroom_plate, how['script-screenplay']], ['embedded', 'remote', 'blob', 'linked', 'text']);
-    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.10', html), 'pictures live in the project block, outside the hash');
+    assert.ok(isConformedHtml(CONFORMED, 'default-board@0.11', html), 'pictures live in the project block, outside the hash');
     assert.match(mediaSummary(r.media), /^1 picture embedded; 1 linked only/);
   });
 
