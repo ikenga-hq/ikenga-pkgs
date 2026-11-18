@@ -1,5 +1,41 @@
 # @ikenga/skill-akuko
 
+## 0.4.0
+
+### Minor Changes
+
+- [#229](https://github.com/ikenga-hq/ikenga-pkgs/pull/229) [`58ca2d2`](https://github.com/ikenga-hq/ikenga-pkgs/commit/58ca2d2dab5b9dd2763219eb74bdbd8d3cf3ad99) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: AI quality flags. Problems an agent spots in a generation (long neck, photographic instead of clay, a logo on a plain cap, a character drawn too short, a dropped name label) are recorded as flags on the unit's stage record (`by_stage[stage].flags`, `review/flags.ts add | list | clear`, hosts A/B/C) and shown on the default board (@0.9) with **Send back with this** (the send-back composer starts from the suggested change; the person edits and submits), **Dismiss** (new decision action `dismiss-flag`) and **Note**. Folding closes a flag only on a person's decision (`accepted` / `dismissed`, undo reopens); a flag never changes a status, and a unit with an open `block` flag is left out of batch approvals. Decision writer v3 carries `flag`; check-view accepts the frozen v2 block and checks the flag controls.
+
+  Flags in chat: `review/flags.ts next` shows the oldest open flag with the exact replies to offer, and `review/flags.ts decide --flag <id> --action approve|send-back|dismiss --said "<reply>"` records the person's reply as `chat@1` decisions and folds them (approve as is = approve + dismiss-flag, only on the exact words `approve <unit>`; nothing is written on any other reply). The agent puts each new flag to the person in chat right after flagging; "go through the flags" loops next → ask → decide.
+
+  Review in chat: `review/chat.ts next | decide | batch` lets the person approve or send back any waiting unit from chat, on the exact reply `approve <unit>` (approving a flagged unit as is dismisses its open flags, the same path as `flags.ts decide`), and confirm a batch the agent listed in full with the one exact reply `approve all <N> <scope words>` (the board batch's eligibility rules). Folding refuses a chat batch whole (`chat-batch-mismatch`) unless exactly N records with that text arrive, one per unit.
+
+  Key-frame prompts carry only the shot's own looks (its lighting and the house style, named once when the shot's prompt already words it), not every style in the film. A lookbook image is attached only with a location plate and is labelled for light and colour only; a shot with no plate gets its look as text. The film's negative (the house style's "Negative prompt:") is merged into every key frame's and bible image's things to avoid. A shot can name `source_frame: <shot id>` to be made from that shot's approved key frame, and waits until it is approved.
+
+  Default board `@0.10` (and `@0.11`, the same board with a project name taken out of a code comment; decisions from `@0.10` still fold): resizable columns (drag or arrow keys, Enter or double-click resets, kept per project), a compact header on short windows (or by the Compact button) and part chips in one scrolling row, so the shot list keeps its height. The stage strip counts the current stage's own units (11/211 key frames, not 211/211 shots). A browser-held decision akuko never folded that is older than a folded one on the same unit no longer shows over the project and is not copied again.
+
+- [#229](https://github.com/ikenga-hq/ikenga-pkgs/pull/229) [`36beabd`](https://github.com/ikenga-hq/ikenga-pkgs/commit/36beabdb9da548c7ff03ff7f7ff27119d428ae52) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: files from a connected allowance tool (Canva) count as generated in the rules, and an explicit allow-list command.
+
+  - `ingest … --via <service>` (bible, key frames, motion; `ingest({ via })` in code) takes a file made with a connected tool on the person's plan. It is accepted only when the ledger holds a done allowance entry of that service for the unit, free for the job; the entry is linked to the job (new optional `ledger[].allowance.job`), the asset is recorded with the service as its provider, the tag `allowance:<service>`, and the file's sha256.
+  - `rules/refs.ts` counts such a file as generated (§3b) when that linked entry exists; without it the file stays external. For a `never_from_photo` entry it is trusted only if its job gave the tool no reference akuko did not generate (otherwise ingest tags it `refs:external` and the check refuses it there).
+  - `spend/cli.ts allowance --project <dir> --service <id> --units <unit[:n]>,… [--tool] [--job] [--failed]` records allowance generations from the command line (`recordAllowance()` now takes `job`).
+  - `rules/cli.ts allow --project <dir> --file <path> --label "…" [--for <entry> …]` hashes a file and appends it to `rules.uploads.allow`, refusing duplicates; run only on the person's explicit word (`actions/bible.md`, `actions/keyframes.md`).
+  - `rules/cli.ts adopt-allowance --project <dir> --service <id> [--apply]`: a one-time back-fill that brings files ingested by hand before `--via` over to generated, in generation order; a dry run unless `--apply`.
+  - Docs: `lib/providers.md` §Allowance tools, `lib/spend.md` §Allowance, `lib/state.md` ("Generated", precisely), `actions/bible.md` step 4 and Rules check, `actions/keyframes.md` Rules check.
+
+- [#229](https://github.com/ikenga-hq/ikenga-pkgs/pull/229) [`36beabd`](https://github.com/ikenga-hq/ikenga-pkgs/commit/36beabdb9da548c7ff03ff7f7ff27119d428ae52) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: confirmed batch approval on the default board (`default-board@0.7`).
+
+  - **"Approve all N shots in P7"** on a one-part view and **"Approve all bible entries (N)"** in the Bible (rail and stage lens) open a confirm dialog that lists every unit and the count and says what it leaves out. Only the person's click on Confirm writes: one ordinary `approve` per listed unit, all with the same text ending ` · batch <uuid>`. Cancel, Escape and a click outside write nothing; nothing is pre-ticked, and no timer or page event opens or confirms it.
+  - A batch never includes a unit sent back (`needs-rework`) or an asset with no file. **"Undo batch (N)"** reverses the whole batch in one click, as one ordinary `undo` per approval.
+  - `views/contract.md` §4 "Batch approval" defines the pattern (marks `data-akuko-batch`, `data-akuko-batch-panel`, `data-akuko-batch-unit`, `data-akuko-batch-count`, `data-akuko-batch-confirm`, `data-akuko-batch-undo`), and R1 now allows a confirmed batch. The decision schema is unchanged. SKILL.md review rule 1, `actions/view.md`, `actions/review.md` and `lib/state.md` say the same.
+  - Folding accepts batch-tagged approvals like any other from a conformed view, and refuses one on a unit that was sent back or an asset with no file (`batch-ineligible`, with a notice), applying the rest.
+  - check-view opens, cancels, confirms and undoes every batch a view offers, on a copy of the fixture with parts, and fails `unconfirmed-batch`, `batch-unlisted`, `batch-ineligible`, `batch-incomplete`, `batch-count`, `batch-no-id` and `batch-undo`. New bad fixtures: `bad-unconfirmed-batch.html`, `bad-batch-ineligible.html`.
+
+  `default-board@0.8`: bible images can be sent back.
+
+  - Every reviewable bible image, bible entry, card and intake document gets **Request changes** ("Reopen · request changes" once approved) and **Add a note** beside its Approve, in the Bible column and the stage lens, with the shot's composer ("Send back to akuko"): one `request-changes` or `note` per unit, written only on the person's submit. **Undo** reverses the latest approval or send-back there. A unit sent back stays out of every batch.
+  - `actions/review.md`: a send-back may also be typed in chat, naming one unit and what should change (recorded as `request-changes`, `view: "chat@1"`). `actions/bible.md` §When a person sends an image back and `views/README.md` say how.
+
 ## 0.3.0
 
 ### Minor Changes
