@@ -27,6 +27,19 @@
    - **Worktree-vs-branch recommendation**: based on parallel WP count and isolation axis.
 4. **Link designs to work packages**: read `groundwork_state.py design-data --plan <plan>`. For each `WP-NN` that builds a designed surface, declare the link explicitly: `register-design-impl --plan <plan> --wp WP-NN --designs D-01,D-03`. That link is what later derives each design's build status. The brief's `DESIGNS` field lists each implemented `D-NN` with its locked file, lock round, and the states the spec names. Only a WP with no `implements` falls back to the old phase match (every locked `D-NN` in its phase), marked `(inferred — declare with register-design-impl)`. A WP that implements an unlocked design fails clarify check 3 unless the user opts in, and its brief says so.
 5. **Write `09-orchestration.md`** — this is the one file `orchestrate` rewrites whole; the convention is "delete and re-author." Hand-written sections live above an explicit `<!-- groundwork:auto:start orchestration -->` fence and are preserved.
+5b. **Write the three `05-tracking.md` fences.** `orchestrate` owns `wp-matrix`, `wave-plan` and `critical-path` in `05-tracking.md` (`lib/state.md` §"Reserved fence IDs"). Write each through the script, never by editing the file, and never with `--force` unless the user asked for it in this turn:
+
+   ```bash
+   python3 <skill>/scripts/groundwork_state.py write-region --plan <plan> --file 05-tracking.md --id wp-matrix     --action orchestrate --content-file <matrix.md>
+   python3 <skill>/scripts/groundwork_state.py write-region --plan <plan> --file 05-tracking.md --id wave-plan     --action orchestrate --content-file <waves.md>
+   python3 <skill>/scripts/groundwork_state.py write-region --plan <plan> --file 05-tracking.md --id critical-path --action orchestrate --content-file <critical-path.md>
+   ```
+
+   - `wp-matrix`: the same Work-package matrix table as in `09` (one row per `WP-NN`: title, owner, depends on, wave).
+   - `wave-plan`: one line per wave, `Wave N: WP-01, WP-02 (parallel)`, with any gate between waves.
+   - `critical-path`: the longest dependency chain as one arrow line (`WP-01 → WP-03 → WP-05`), then one line per gate on it.
+
+   Each call prints `WRITTEN`, `UNCHANGED` or `SKIPPED_DIRTY`. On `SKIPPED_DIRTY` the user edited inside that fence: leave it, keep going with the other fences and `09`, and say in the report which fence was skipped and that `--force` would overwrite it. Do not stop the run for it.
 6. **Update `.groundwork.json`**:
    - Bump `docs["09-orchestration.md"]`.
    - Set `orchestrate.last_run` to now.
@@ -277,6 +290,7 @@ Per `lib/state.md`:
 
 - Identical generated content → no write.
 - Changed `05` or IDs → re-generate the `09` fence content; whole-file hash bumps.
+- The three `05-tracking.md` fences (step 5b) go through `write-region`: identical content → `UNCHANGED`; a hand edit inside one → `SKIPPED_DIRTY`, reported, never overwritten without `--force`.
 - Hand-written sections above the fence: byte-identical.
 
 The hash-diff is over the **generated section's** content, not the whole file.

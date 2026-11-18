@@ -6,7 +6,7 @@
 
 **Spine-version**: `expected = "1"`. Runs [`../lib/state.md` §"Spine-version preamble gate"](../lib/state.md#spine-version-preamble-gate) as the first step after loading `.groundwork.json` — writing action (rewrites the `explorer-data` + `explorer-meta` fences in `artifact/explorer.html`), so refuses on either direction of mismatch. No-op at v1=current.
 
-**Composition**: `explorer.html` is a self-contained Ikenga artifact with its **own** inline manifest (`id: groundwork-explorer`). It does **not** compose `ikenga-artifact-builder` — there is no file-explorer/explorer+viewer archetype (the closest is `dashboard`, which is the wrong shape), so the static template is the canonical form, exactly as the board falls back. The viewer pulls `marked` + `DOMPurify` from CDN for markdown rendering (same CDN posture as React/Babel in the board).
+**Composition**: `explorer.html` is a self-contained Ikenga artifact with its **own** inline manifest (`id: groundwork-explorer`). It does **not** compose `ikenga-artifact-builder` — there is no file-explorer/explorer+viewer archetype (the closest is `dashboard`, which is the wrong shape), so the static template is the canonical form, exactly as the board falls back. React, `marked` and `DOMPurify` are inlined and the view is pre-transpiled, so unlike the board it needs no CDN at runtime (see §"Automation, offline & live refresh").
 
 ---
 
