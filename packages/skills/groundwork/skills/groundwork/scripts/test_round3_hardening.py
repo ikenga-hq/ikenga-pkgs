@@ -880,5 +880,20 @@ class MergeConfirmationDocs(unittest.TestCase):
             self.assertIn("pnpm install", text, rel)
 
 
+class OrchestrateTrackingFencesDocs(unittest.TestCase):
+    """lib/state.md gives orchestrate the three 05-tracking.md fences; the
+    action must tell the model to write them through write-region (hash-checked),
+    not by hand, and to report SKIPPED_DIRTY rather than force."""
+
+    def test_orchestrate_writes_05_fences_through_write_region(self):
+        text = read(os.path.join(SKILL, "actions/orchestrate.md"))
+        for fence in ("wp-matrix", "wave-plan", "critical-path"):
+            self.assertIn("--file 05-tracking.md --id %s " % fence, text, fence)
+        self.assertIn("SKIPPED_DIRTY", text)
+        state = read(os.path.join(SKILL, "lib/state.md"))
+        for fence in ("wp-matrix", "wave-plan", "critical-path"):
+            self.assertIn("| `05-tracking.md` | `%s` | `orchestrate` |" % fence, state)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
