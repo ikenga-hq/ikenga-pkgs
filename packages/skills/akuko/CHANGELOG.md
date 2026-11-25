@@ -1,5 +1,27 @@
 # @ikenga/skill-akuko
 
+## 0.5.0
+
+### Minor Changes
+
+- [#236](https://github.com/ikenga-hq/ikenga-pkgs/pull/236) [`bcce068`](https://github.com/ikenga-hq/ikenga-pkgs/commit/bcce0685e52575edc37fe61feb575bb153ac88e8) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: `assemble rough`, a free rough cut with sound. Each live shot in film order is exactly its length: the approved clip (a longer clip is cut at the shot's end, a shorter one holds its last frame), else the approved key frame with its gentle move, else black with the reason. Approved voice-over takes sit at each shot's start plus 0.1 s at -16 LUFS. Optional music (ducked under the voice), room tone and per-shot effects come from flags. The mix is limited and its loudness measured. A project with locked master audio is cut on the master's clock with the master laid untouched. `--dry-run` prints the per-shot plan. Like `assemble preview`, it is a by-product: never a review unit, nothing written to `akuko.json`, no stage moved. Picture lock is still a stub.
+
+### Patch Changes
+
+- [#235](https://github.com/ikenga-hq/ikenga-pkgs/pull/235) [`7afb442`](https://github.com/ikenga-hq/ikenga-pkgs/commit/7afb442bbca3df40a4b8f3129bec10d9a1743697) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: safer manual ingest, and clip checks at ingest.
+
+  - A planned asset that a person sent back (`needs-rework`) and still holds its old file now takes a manually ingested file in place (a new file name, the old file kept, a "Revised: …" comment), in every stage. Before, it got a separate `<unit>-<stage>` asset that waited for review and held the stage open while the unit kept its old file. A file for an asset that was not sent back is still refused, and the message now says to send it back and ingest again.
+  - Motion `ingest` reads the clip's length from its header and compares it with the shot: a shorter clip, or one more than 0.5 s longer, gets an agent comment and a line in the output ("Clip runs 3 s; the shot is 3.5 s: …"). It never refuses.
+  - Motion `ingest` keeps a clip's sound: the clip is stored unchanged, and with ffmpeg its sound is also copied to `sound-incoming/clip-audio/<shot>_clip-audio.wav` (not an asset). `--no-keep-audio` skips the copy. The continuity chain no longer says to strip a clip's sound after download.
+
+- [#237](https://github.com/ikenga-hq/ikenga-pkgs/pull/237) [`f74576e`](https://github.com/ikenga-hq/ikenga-pkgs/commit/f74576e3c323a3246d7d391f523df214a9aeb4ff) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: docs from a real film run.
+
+  - `actions/motion.md`: the same-angle chain now edits the previous approved clip's last frame by default (only the action changes); tools with a 3 s floor (shorter shots cut from the start, longer shots end on a held frame); keep each clip's original with its audio before making the silent copy.
+  - `actions/keyframes.md` "Continuity rules": points new same-angle shots at that edit.
+  - `actions/sound.md`: the agent cannot hear audio (what it can measure, what needs the person's ears); fitting a take to its shot (trim silence, then up to about 1.15x tempo); room tone from kept clip audio; manual takes block captions (transcription untested).
+  - `lib/providers.md`: who presses generate (the person, unless they allowed it this session); Flow's 3 s floor, timing and audio; AI Studio's 1920 px attachment limit and blob: read-back; AI Studio speech and music as manual sound tools; driving the person's Chrome over CDP from WSL.
+  - `lib/hosts.md`: FFmpeg from WSL (Windows ffmpeg.exe, `-/filter_complex`, drawtext font).
+
 ## 0.4.1
 
 ### Patch Changes
