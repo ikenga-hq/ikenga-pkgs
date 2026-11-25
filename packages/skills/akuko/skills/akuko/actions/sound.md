@@ -24,9 +24,9 @@ requires_capabilities:
 
 **Reads first**: `../lib/state.md` (§6 sound, §Status transitions, §Decision folding), `../lib/hosts.md`, `../lib/spend.md`, `../lib/providers.md`.
 
-**Stage**: `sound` (6) · voice-over is **paid** (spend gate before every call) or free through the manual provider · music and SFX are person-supplied files, never generated. Never approves.
+**Stage**: `sound` (6) · voice-over is **paid** (spend gate before every call) or free through the manual provider · music and SFX are person-supplied files: akuko generates none (the person may make them in a tool such as AI Studio, `../lib/providers.md` §"AI Studio, speech and music"). Never approves.
 
-**What is judgement and what is code.** Which voice-overs exist, the text each speaks, the job id, the word timings, `audio.narration`, the captions and every status move are code in `../sound/` (tested). Yours: asking the person to confirm any text that is not already narration, hearing each take before it goes to review, what to tell the person, and handing them the right thing at each gate. **Never write a status, an id or a timing yourself, and never call a provider directly: only `gate.run()` does.**
+**What is judgement and what is code.** Which voice-overs exist, the text each speaks, the job id, the word timings, `audio.narration`, the captions and every status move are code in `../sound/` (tested). Yours: asking the person to confirm any text that is not already narration, checking each take before it goes to review (what can be measured; you cannot hear it, step 5), what to tell the person, and handing them the right thing at each gate. **Never write a status, an id or a timing yourself, and never call a provider directly: only `gate.run()` does.**
 
 ## The technique
 
@@ -50,17 +50,34 @@ All commands: `node --experimental-strip-types ../sound/cli.ts <command> --proje
 3. **Choose the provider** (the person decides): `manual` (free; hosts A, B, C) or `elevenlabs` (paid direct API, needs `ELEVENLABS_API_KEY`; hosts B and C only, refused on A). A paid provider needs a budget cap from `/akuko setup`.
 4. **`step --provider <id> --voice <voice>`** makes the next job, by default **one shot**:
    - **Paid:** it prints the spend line (characters × price). **Show it and wait.** Nothing has been sent. The person approves on the board (or replies in the exact words of the line, `approve <amount> <CURRENCY>`); fold, then `step` again. It then runs, records the audio and its words file, and marks the take `pending-review`. `--scene <id>` or `--units a,b` batches several shots into one job with one approval for the total.
-   - **Manual:** it prints the exact words and the shot's length. Give them to the person (voice notes are theirs to apply). They bring the audio back: `ingest --job <id> --unit <asset id> --file <audio> [--words <words.json>]`. A words file is `{word, start_ms, end_ms}` in milliseconds from the start of the audio (a bare list, or `{ "words": [...] }`). If the file turns up later: `words --unit <asset id> --file <words.json>` (do not ingest the audio again: ingest refuses a second file for a take that was not sent back).
-5. **Listen to each take** before telling the person it is ready: it says the right words, at a pace that fits the shot, with no clipped ends or stray sounds. If one is wrong, say what and offer another try (paid: a new approval). A take longer than its shot is flagged for you: `step`/`ingest`/`words` print "Audio runs 8.4 s; the shot is 6 s" and the same sentence is an agent comment on the `<shot>_vo` asset, so the person sees it at review. Tell them. They can shorten the line, pick a faster voice or model, or lengthen the shot in breakdown. You change neither the text nor the shot. Such a take is left out of the film's narration until it fits (step 8).
-6. **Music and SFX**, only if the person supplies them: `add-music` / `add-sfx --file <audio> --licence "<their words>" [--source "<where from>"] [--shot <id> | --scene <id>]` (the film by default). **Ask for the licence**: it is required, akuko records what they say and cannot check it. Nothing is generated.
+   - **Manual:** it prints the exact words and the shot's length. Give them to the person (voice notes are theirs to apply). A free route is AI Studio's speech model (preset voices and a Style field, `../lib/providers.md` §"AI Studio, speech and music"); its takes come without word timings. They bring the audio back: `ingest --job <id> --unit <asset id> --file <audio> [--words <words.json>]`. A words file is `{word, start_ms, end_ms}` in milliseconds from the start of the audio (a bare list, or `{ "words": [...] }`). If the file turns up later: `words --unit <asset id> --file <words.json>` (do not ingest the audio again: ingest refuses a second file for a take that was not sent back).
+5. **Check each take** before telling the person it is ready. **You cannot hear audio.** Whether it says the right words, the accent, the delivery and any stray sounds need the person's ears: when you put a take to review, say plainly that you have not heard it and ask them to listen. What you can do is measure:
+   - length: `ffprobe -v error -show_entries format=duration -of csv=p=0 take.wav`;
+   - loudness: `ffmpeg -i take.wav -af ebur128=framelog=quiet -f null -` (integrated LUFS in the summary) or `-af volumedetect` (mean and peak; a peak at 0 dB may be clipped);
+   - silence at the ends (below).
+
+   If one is wrong, say what and offer another try (paid: a new approval). A take longer than its shot is flagged for you: `step`/`ingest`/`words` print "Audio runs 8.4 s; the shot is 6 s" and the same sentence is an agent comment on the `<shot>_vo` asset, so the person sees it at review. Tell them. They can shorten the line, pick a faster voice or model, or lengthen the shot in breakdown, or ask you to fit the take (§Fitting a take to its shot). You change neither the text nor the shot. Such a take is left out of the film's narration until it fits (step 8).
+6. **Music and SFX**, only if the person supplies them. The sound that motion ingest copies out of each clip (`sound-incoming/clip-audio/<shot>_clip-audio.wav`, `motion.md` step 4) is a good source of effects and room tone: to find quiet stretches for room tone, measure RMS per second (`ffmpeg -i sound-incoming/clip-audio/<shot>_clip-audio.wav -af asetnsamples=48000,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=rms.txt -f null -`, at 48 kHz) and take the lowest, steady seconds; the person listens before it goes in. Then `add-music` / `add-sfx --file <audio> --licence "<their words>" [--source "<where from>"] [--shot <id> | --scene <id>]` (the film by default). **Ask for the licence**: it is required, akuko records what they say and cannot check it. Nothing is generated.
 7. **Stop at the review gate.** Everything made is `pending-review`; the stage is `in-review`. The person reviews each take on the board. Don't call anything approved.
 8. **After the person's answers**: fold, then `sync`. It rebuilds `audio.narration` from the **approved** takes only (each placed at its shot's start on the film's timeline, words in composition-absolute milliseconds) and writes `audio/vo/captions.vtt` and `captions.srt`. Tell the person what it reports: takes without timings, takes it left out because they overrun their shot (named with shot, take length and shot length; the rest is still built), or "no single narration track".
+
+## Fitting a take to its shot
+
+For a take with **no word timings** only (a manual take): trimming or speeding a take with timings would leave its words file wrong. Do it before `ingest`, on the person's OK, and keep the original file next to the fitted one.
+
+1. **Trim the silence at both ends** (mechanical): `ffmpeg -i take.wav -af "silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse" trimmed.wav` (the second pass runs on the reversed audio, so it trims the end). Measure the length again.
+2. **Speed it up only if it still runs long** (mechanical): factor = take length ÷ the room the shot leaves for it; `ffmpeg -i trimmed.wav -af atempo=<factor> fitted.wav`. Stay at or under about **1.15**: past that, voices start to sound hurried. If 1.15 is not enough, stop and give the person the choices in step 5 (a shorter line, a faster voice, a longer shot).
+3. **Whether it still sounds natural is judgement, and it is the person's**: you cannot hear it. Say what you did (seconds trimmed, the factor) and ask them to listen.
+
+In one run all 17 voice lines fitted their shots this way.
 
 ## When a person sends a take back
 
 Folding turns it into `needs-rework` with their words. `step --units <asset id>` for it: the old file is cleared (it stays stored; the "Revised: …" comment says where), the new take fills the same asset, and it goes to `pending-review` again. A paid re-record is a new job (`…_r2`) and needs a new approval. `sync` then rebuilds without the take until it is approved again.
 
 ## Captions
+
+**Manual takes have no word timings, so captions are blocked for them** until a words file is brought (`words --unit …`). AI Studio's transcription model might produce `{word, start_ms, end_ms}` from a take; this is **untested**: if the person tries it, check the words against the line and the last end time against the take's length before using the file.
 
 A pure function of the word timings: a cue starts at its first word's start and ends at its last word's end. A cue holds at most 42 characters and 5 seconds, breaks at a pause of 1 second or more, and always ends at the end of a sentence (`.`, `!`, `?`, `…`).
 

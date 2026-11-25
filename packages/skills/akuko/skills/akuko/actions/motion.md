@@ -105,11 +105,11 @@ Making clips with a connected tool that uses the person's plan allowance (Canva 
 Clips that share a camera angle must start from where the last one ended, or the set, props and faces jump between cuts. Example: in a two-person café scene the chains might be "first character single", "profile two-shot" and "second character at the booth".
 
 1. **Angle groups.** Group the shots by camera angle. If the shots carry an `angle` (`../profiles/film/breakdown.md`), the chain is the shots of one `angle` in shot order; otherwise group them yourself and tell the person the groups.
-2. **Before each clip:**
+2. **Before each clip (the default for every shot after the first in a chain):**
    - Take the last frame of the previous approved clip in the same angle: `ffmpeg -sseof -0.1 -i prev.mp4 -frames:v 1 -update 1 end.jpg`.
-   - Compare it with this shot's still.
-   - If they differ, rebuild the still by editing that end frame (`keyframes.md` §Continuity rules), changing only what this shot needs (expression, a new person, food arriving).
+   - Make this shot's start still by **editing that end frame**, literally: keep everything in it and change only this shot's action, in one sentence ("he now holds the cup in both hands"; "she has turned to the window"). Use the edit prompt of `keyframes.md` §Continuity rules (rule 4). Do this even when the key frame made from the blocking and references looks close: an edit of the end frame keeps the set, props, light and faces exactly; a fresh generation never quite does.
    - Get the still approved, then make the clip.
+   - Generate from the blocking and references only for the **first** shot of a chain (no approved clip from that angle yet), or when the person asks for a fresh take.
 3. **One-off angles** borrow from the nearest matching frame (for example the plate from the previous clip that shows it).
 4. **Hidden faces.** If the start frame hides a face (hands or a napkin over it), the model invents one. Use Start + End frames: take a bad take's last frame, correct the face from that angle's previous clip, and set it as the End frame.
 5. **Clip prompt template:**
@@ -117,8 +117,10 @@ Clips that share a camera angle must start from where the last one ended, or the
    - fixed character traits (for example "SHORT neatly trimmed beard");
    - the list of props to keep exactly as in the start frame;
    - "no other people/tables, no text, no music".
-6. **Length.** Pick the model length at or above the planned shot length (3 s or 5 s). Assemble trims to the plan.
-7. **After download:** keep the file as it came, sound and all (the tool's sound can become the film's effects and room tone; ingest stores the clip unchanged and copies its sound out, step 4). Build a 4–6 frame contact strip and check it against the start frame. Flag any readable text (menus, signs) when asking for approval.
+6. **Length.** Pick the model length at or above the planned shot length (3 s or 5 s). Assemble trims to the plan. Some tools have a floor (Google Flow's shortest clip is 3 s):
+   - **Shot shorter than the clip:** the shot is cut from the clip's start. That works when the key frame is the shot's first beat; if the action the shot needs comes later in the clip, say so.
+   - **Shot longer than the clip** (a 3.5 s shot on a 3 s clip): `assemble rough` holds the clip's last frame for the rest, and the Resolve export leaves that time empty (akuko never stretches a clip). Ingest says so in a comment on the clip (step 4). Tell the person when a shot will end on a held frame, so they can choose a longer clip instead.
+7. **After download:** keep the file as it came, sound and all. Clips from Google Flow and Gemini Omni Flash come with sound (room tone, small effects such as cutlery, steam, a door) that can become the film's effects and room tone. Do not strip it before ingest: ingest stores the clip unchanged and copies its sound out to `sound-incoming/clip-audio/` (step 4). Build a 4–6 frame contact strip and check it against the start frame. Flag any readable text (menus, signs) when asking for approval.
 
 ## When a clip is still running: `collect`
 
@@ -130,7 +132,7 @@ If a run fails (the provider refused it, the request failed, no clip came back),
 
 ## Sound
 
-Clips are made **silent** by default; sound has its own stage. If the person asks for the model's own sound, pass `--audio`. It costs more (a different price in config), it changes the job, so it needs a fresh approval, and not every model has it (the command says so). Do not turn it on yourself.
+Clips are made **silent** by default; sound has its own stage. A clip that comes with sound anyway (Gemini Omni Flash always makes it; Google Flow clips have it) is ingested as it is: ingest copies its sound to `sound-incoming/clip-audio/` for the sound stage (§Same-angle continuity chain, step 7). If the person asks for the model's own sound, pass `--audio`. It costs more (a different price in config), it changes the job, so it needs a fresh approval, and not every model has it (the command says so). Do not turn it on yourself.
 
 ## The retry limit
 

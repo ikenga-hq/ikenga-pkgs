@@ -184,27 +184,57 @@ The person brings files back by attaching them in chat, or by dropping them
 in the project folder. Never mark the result approved: the person approves
 it on the board.
 
-## Manual video and still tools (Google Flow, AI Studio)
+## Manual video, still and sound tools (Google Flow, AI Studio)
 
-These are not entries in `providers/config.json`: akuko never calls them. They are where the person (or the agent, driving a browser) does a `manual` job. Use the manual provider's prompt package and `ingest` as usual; nothing is approved until the person approves it.
+These are not entries in `providers/config.json`: akuko never calls them. They are where the person (or the agent, driving a browser, §Driving the person's browser below) does a `manual` job. Use the manual provider's prompt package and `ingest` as usual; nothing is approved until the person approves it.
+
+**Who presses generate.** By default the person presses it. The agent may press it only when the person has said, in this session, that it may. If a site then shows a warning such as "unusual activity", stop and hand back to the person. Never try to get round a site's checks (no faked input, no retry loops, no hiding automation).
 
 ### Google Flow (video)
 
-- The person presses generate; automated clicks get "unusual activity". The agent uploads the start frame, opens Animate, sets the length and fills in the prompt.
+- The agent uploads the start frame (or picks it by searching the assets for its file name), opens Animate, sets the length and fills in the prompt. Then the person presses generate (above).
 - Costs: 9 credits per 3 s, 15 per 5 s on Omni 1.2 Flash.
+- The shortest clip is **3 s**. A shorter shot is cut from the clip's start; a longer shot than its clip ends on a held last frame at assembly (`actions/motion.md` §Same-angle continuity chain, step 6).
+- A generation takes about 60 s.
 - The tab often freezes after an upload reaches 100%: wait about 20 s, reload, and the tile will be there.
-- Download "720p Original size".
+- Download "720p Original size". The clip has **sound**: ingest that file as it is; ingest copies the sound out for the sound stage (`actions/motion.md` §Same-angle continuity chain, step 7).
 
 ### AI Studio, Nano Banana 2.1 (stills, free)
 
 - Open `/library` first, then `/prompts/new_chat`.
 - Settings: Images only, 16:9, 2K.
+- **Attachments over about 1920 px on the long side can fail without an error**, and the model then invents an unrelated scene. Downscale first (`ffmpeg -i in.png -vf "scale='min(1920,iw)':-2" out.png` for a landscape frame) and check that the attachment's token count shows before running.
+- When reading the result back from the page, take only `blob:` images: a `data:` image there is your own attachment.
 - Keep each script call under 45 s.
 - "Model isn't available" or "Permission denied" usually clears after a minute and a rerun.
+
+### AI Studio, speech and music (sound stage, free in the playground)
+
+Both make files the person brings to the sound stage (`actions/sound.md`): a voice take through the manual provider's `ingest`, music through `add-music` with the licence in the person's words.
+
+- **Speech** (Gemini 3.8 Flash TTS, "generate speech"): about 70 preset voices and a free-text Style field (for example "warm, unhurried, slight smile"). Voice Design and the large voice library need a paid key with billing, so they are not free. The result is a `data:audio/wav` in an `<audio>` element; the first tiny file is a placeholder, skip it. A take has no word timings (`actions/sound.md` §Captions).
+- **Music** (Lyria 3.5, "new music"): accepts timed sections in the prompt (`[0:00-0:52] quiet piano … [0:52-1:02] drums come in …`) and returns roughly that. Timing can land a few seconds late (a change asked for at 0:52 came about 6 s later): listen, or ask the person to, before placing a cue on a cut. The file is **MP3 even when it looks like WAV**: check with `ffprobe` and name it `.mp3`.
 
 ### Both
 
 If Claude in Chrome lists several browsers, pick the one on this computer, or downloads land elsewhere.
+
+### Driving the person's browser (host B, Chrome on Windows from WSL)
+
+Playwright can drive the person's own Chrome over the Chrome DevTools Protocol, with no extension. Seen working with Claude Code in WSL and Chrome on Windows. The person stays signed in as themselves; the agent drives only the tab it is given.
+
+1. **The person turns it on**: open `chrome://inspect/#remote-debugging` and tick the remote-debugging switch. It is their choice; ask, never change Chrome's settings yourself.
+2. **Find the address.** `/json/version` is not served. Read `%LOCALAPPDATA%\Google\Chrome\User Data\DevToolsActivePort` (from WSL: `/mnt/c/Users/<user>/AppData/Local/Google/Chrome/User Data/DevToolsActivePort`): line 1 is the port, line 2 the path. Connect to `ws://127.0.0.1:<port><path>` (Python: `p.chromium.connect_over_cdp(url)`).
+3. **One Allow per connection.** Chrome asks the person to Allow every new connection, so keep **one long-lived Playwright process** for the whole session (a small script that reads commands) rather than a new connection per step.
+4. **Sleeping tabs can hang the connect.** `connect_over_cdp` waits for every tab to answer; a tab Chrome put to sleep may never answer. If the connect hangs, ask the person to click into their other tabs (or close the sleeping one), then connect again.
+5. **Uploads.** `set_input_files` passes WSL paths that Chrome on Windows cannot read. Catch the chooser with `page.expect_file_chooser()` so no dialog opens, then set the file with CDP `DOM.setFileInputFiles` on the page's `input[type=file]`, giving the **Windows** path (`C:\…`, not `/mnt/c/…`).
+6. **Downloads.** Download with the browser context's request (`context.request.get(src)`), which carries the site's cookies. A `fetch` inside the page fails on CORS.
+
+**Google Flow, as seen on 2026-11-25** (selectors change; if one is missing, look at the page again rather than guessing):
+
+- Prompt box: a ProseMirror editor, `.prosemirror-editor [contenteditable=true]`. Fill the prompt there.
+- Generate button: `aria-label="Start generation"`. Press it only under the rule at the top of this section.
+- A tile's `<video>` gets its `src` only when the pointer hovers over it: hover, then read `src` and download it as in step 6.
 
 ## The fal lip-sync provider (`providers/lipsync/fal/`)
 
