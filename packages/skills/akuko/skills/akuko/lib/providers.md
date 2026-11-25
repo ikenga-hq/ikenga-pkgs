@@ -184,6 +184,28 @@ The person brings files back by attaching them in chat, or by dropping them
 in the project folder. Never mark the result approved: the person approves
 it on the board.
 
+## Manual video and still tools (Google Flow, AI Studio)
+
+These are not entries in `providers/config.json`: akuko never calls them. They are where the person (or the agent, driving a browser) does a `manual` job. Use the manual provider's prompt package and `ingest` as usual; nothing is approved until the person approves it.
+
+### Google Flow (video)
+
+- The person presses generate; automated clicks get "unusual activity". The agent uploads the start frame, opens Animate, sets the length and fills in the prompt.
+- Costs: 9 credits per 3 s, 15 per 5 s on Omni 1.2 Flash.
+- The tab often freezes after an upload reaches 100%: wait about 20 s, reload, and the tile will be there.
+- Download "720p Original size".
+
+### AI Studio, Nano Banana 2.1 (stills, free)
+
+- Open `/library` first, then `/prompts/new_chat`.
+- Settings: Images only, 16:9, 2K.
+- Keep each script call under 45 s.
+- "Model isn't available" or "Permission denied" usually clears after a minute and a rerun.
+
+### Both
+
+If Claude in Chrome lists several browsers, pick the one on this computer, or downloads land elsewhere.
+
 ## The fal lip-sync provider (`providers/lipsync/fal/`)
 
 Id `fal-lipsync`; paid direct API (key `FAL_KEY`); hosts B and C, and A under R-11; kind `video`.

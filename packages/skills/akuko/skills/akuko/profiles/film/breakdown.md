@@ -57,6 +57,10 @@ Each shot lists the characters in frame and its location **by checklist name**; 
 
 Everything the breakdown writes is `pending-review`. Bible work (images, sheets) is the next paid stage and is not started here.
 
+## Camera angle (optional)
+
+A shot may carry `angle`: a short group id for its camera setup, shared by every shot filmed from the same place ("single-a", "profile-two-shot"). Motion uses it to work out the same-angle reference chain (`actions/motion.md` §Same-angle continuity chain): the previous approved clip with the same `angle` supplies the end frame. Leave it unset when unsure; a one-off angle gets its own id or none. It is optional, so older projects load unchanged.
+
 ## Tags
 
 `[[sc<N>_sh<M>]]` is appended to the screenplay paragraph each shot came from (`script/screenplay.fountain`), or to the source paragraph on the direct route (`script/source.md`). It is invisible to a reader. Rules:

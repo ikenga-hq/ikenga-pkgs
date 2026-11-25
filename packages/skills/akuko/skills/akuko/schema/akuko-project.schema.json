@@ -719,6 +719,11 @@
           },
           "description": "Dialogue lines the shot covers (audio.lines ids)."
         },
+        "angle": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Camera-angle group id; shots sharing it form one same-angle continuity chain for motion."
+        },
         "treatment": {
           "type": "string",
           "enum": [
