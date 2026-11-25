@@ -130,6 +130,34 @@ describe('manual provider: ingest', () => {
     assert.deepEqual(checkIntegrity(host.peek()), []);
   });
 
+  it('a planned asset sent back with its old file still on it takes the new file in place (bible, key frames and motion share this path)', async () => {
+    const { manual, host } = setup();
+    const job: Job = { id: 'job_portrait', stage: 'bible', kind: 'image', provider: 'manual', label: 'Portrait', items: [{ unit: 'char_n_portrait', prompt: 'Portrait of the narrator', output: 'portrait' }] };
+    await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p.png', mime: 'image/png', data: PNG } });
+    const oldUri = host.peek().assets[0]!.file!.uri;
+    const p = host.peek();
+    host.set({ ...p, assets: p.assets.map((a) => ({ ...a, status: 'needs-rework' as const })) });
+
+    const second = new Uint8Array([...PNG, 9]);
+    const { asset } = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p2.png', mime: 'image/png', data: second } });
+    assert.equal(asset.id, 'char_n_portrait');
+    assert.equal(host.peek().assets.length, 1, 'no stray char_n_portrait-bible asset');
+    assert.equal(asset.status, 'pending-review');
+    assert.notEqual(asset.file?.uri, oldUri, 'a new file name, so no host writes over the old take');
+    assert.deepEqual(host.files.get(asset.file!.uri), second);
+    assert.deepEqual(host.files.get(oldUri), PNG, 'the old take stays stored');
+    assert.ok(asset.comments.some((c) => c.author === 'agent' && c.text.startsWith('Revised:') && c.text.includes(oldUri)));
+    assert.deepEqual(checkIntegrity(host.peek()), []);
+
+    // Waiting for review now: a third file is refused, and nothing is stored.
+    const files = host.files.size;
+    await assert.rejects(manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p3.png', mime: 'image/png', data: PNG } }), /"char_n_portrait" already has a file .*pending-review\)\. Nothing was stored\./);
+    assert.equal(host.files.size, files);
+    // --new-take, on the person's word, still keeps a separate take.
+    const take = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p4.png', mime: 'image/png', data: PNG }, newTake: true });
+    assert.equal(take.asset.id, 'char_n_portrait-bible');
+  });
+
   it('a second take gets its own asset and sends the unit back for review', async () => {
     const { manual, host } = setup();
     await manual.ingest({ job: kfJob, unit: 'sc1_sh1', file: { filename: 'a.png', mime: 'image/png', data: PNG } });

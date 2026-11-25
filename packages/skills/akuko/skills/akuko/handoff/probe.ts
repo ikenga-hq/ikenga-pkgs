@@ -62,6 +62,28 @@ export async function probeMp4(path: string): Promise<Probe> {
   }
 }
 
+/**
+ * The same reading for a file already in memory (a clip a person brought back, at ingest): the top-level boxes are
+ * walked in place, nothing is copied.
+ */
+export function probeMp4Bytes(b: Uint8Array): Probe {
+  let pos = 0;
+  while (pos + 8 <= b.length) {
+    let boxSize = u32(b, pos);
+    const type = fourcc(b, pos + 4);
+    let header = 8;
+    if (boxSize === 1) {
+      if (pos + 16 > b.length) return {};
+      boxSize = u32(b, pos + 8) * 2 ** 32 + u32(b, pos + 12);
+      header = 16;
+    } else if (boxSize === 0) boxSize = b.length - pos;
+    if (boxSize < header) return {};
+    if (type === 'moov') return mvhdIn(b.subarray(pos + header, Math.min(pos + boxSize, b.length)));
+    pos += boxSize;
+  }
+  return {};
+}
+
 /** The boxes directly inside `body`: [type, content start, content end]. */
 function boxes(b: Uint8Array, from = 0, to = b.length): Array<[string, number, number]> {
   const out: Array<[string, number, number]> = [];

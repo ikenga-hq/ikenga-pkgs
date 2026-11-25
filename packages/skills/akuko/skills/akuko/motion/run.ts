@@ -20,6 +20,7 @@ import type { ManualProvider } from '../providers/manual/index.ts';
 import type { SpendGate } from '../spend/gate.ts';
 import { abandonUnits, beginUnits, buildMotionJob, recordClipFilm, repairFileless } from './plan.ts';
 import { refreshMotionStage } from './stage.ts';
+import { annotateClipLength, keepClipAudio, probeClip, type KeepAudioOptions } from './clip-ingest.ts';
 
 export interface StepDeps {
   host: WaveOneHost;
@@ -142,16 +143,35 @@ export async function collectClips(deps: StepDeps, job: Job, handle: JobHandle, 
   return { status: 'done', job, handle, assets: [...made], cost, ...(missing.length ? { missing, ...(s.message ? { message: s.message } : {}) } : {}) };
 }
 
-/** The person brought a file back for a manual job. */
+/**
+ * The person brought a file back for a manual job. The file is stored as it is. Then (`clip-ingest.ts`): its length
+ * is checked against the shot (an agent comment on the clip when they differ; never a refusal), and with `keepAudio`
+ * a clip with a sound track also has its sound copied to `sound-incoming/clip-audio/` (a by-product, not an asset).
+ */
 export async function ingestClip(
   deps: Pick<StepDeps, 'host' | 'now'>,
   manual: ManualProvider,
   job: Job,
   unit: string,
   file: { filename: string; mime: string; data: Uint8Array },
-  extra: { actual?: number; model?: string; via?: string; projectDir?: string; newTake?: boolean } = {},
-): Promise<{ asset: string; warnings: string[] }> {
-  const r = await manual.ingest({ job, unit, file, ...extra });
+  extra: { actual?: number; model?: string; via?: string; projectDir?: string; newTake?: boolean; keepAudio?: KeepAudioOptions } = {},
+): Promise<{ asset: string; warnings: string[]; notes: string[]; audio?: string }> {
+  const { keepAudio, ...rest } = extra;
+  const r = await manual.ingest({ job, unit, file, ...rest });
+  const warnings = [...r.warnings];
+  const notes: string[] = [];
+  const probe = probeClip(file.mime, file.data);
+  const recorded = await deps.host.readState();
+  const length = annotateClipLength(recorded, r.asset.id, probe.durationS, clock(deps));
+  if (length.note) warnings.push(length.note);
+  if (length.project !== recorded) await deps.host.writeState(length.project);
   await finalizeMotion(deps);
-  return { asset: r.asset.id, warnings: r.warnings };
+  let audio: string | undefined;
+  if (keepAudio) {
+    const shot = recorded.assets.find((a) => a.id === unit)?.owner ?? unit.replace(/_clip$/, '');
+    const kept = await keepClipAudio(shot, probe, keepAudio);
+    if (kept.note) notes.push(kept.note);
+    audio = kept.path;
+  }
+  return { asset: r.asset.id, warnings, notes, ...(audio !== undefined ? { audio } : {}) };
 }

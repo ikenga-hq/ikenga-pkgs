@@ -108,7 +108,8 @@ export function moveArgs(job: MoveRenderJob, out: string): string[] {
 
 export type Runner = (cmd: string, args: string[]) => Promise<void>;
 
-const spawnRunner: Runner = (cmd, args) =>
+/** Runs a command, failing with the end of its stderr. Shared with motion ingest (keeping a clip's sound). */
+export const spawnRunner: Runner = (cmd, args) =>
   new Promise((ok, fail) => {
     const p = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
