@@ -14,7 +14,7 @@
  *     with ffmpeg; silent.
  *
  * It is a **preview, never a review unit**: it writes no unit, no asset, no decision, and nothing in `akuko.json`;
- * it never marks a stage done (assemble stays a stub: rough cut and picture lock are not built). No provider, no
+ * it never marks a stage done. The rough cut with sound is `rough.ts`; picture lock is not built. No provider, no
  * spend gate, no network.
  */
 
@@ -32,7 +32,7 @@ import { DRIFT_PX, DRIFT_PY, DRIFT_SCALE, PULL, PUSH, parseMotionNote } from '..
 
 /** Every preview says this, so nobody mistakes it for a stage output. */
 export const PREVIEW_NOTICE =
-  'Preview only: not a review unit and not saved to the project. Nothing in akuko.json changed and no stage moved; the assemble stage (rough cut, picture lock) is not built yet.';
+  'Preview only: not a review unit and not saved to the project. Nothing in akuko.json changed and no stage moved. For a rough cut with sound run assemble rough; picture lock is not built yet.';
 
 export interface PreviewSegment {
   n: number;
@@ -83,7 +83,7 @@ const approvedFrame = (p: AkukoProject, shot: string): Asset | undefined =>
   p.assets.find((a) => a.id === `${shot}_keyframe` && a.status === 'approved' && a.file !== undefined && removedAt(p, a) === undefined);
 
 /** Even pixel size, two thirds of the export frame (1280 x 720 for 16:9): quick to render, plenty to judge timing. */
-function previewSize(p: AkukoProject): { width: number; height: number } {
+export function previewSize(p: AkukoProject): { width: number; height: number } {
   const [dw, dh] = ASPECT_SIZE[p.project.aspect_ratio] ?? [1920, 1080];
   const w = p.project.resolution?.w ?? dw;
   const h = p.project.resolution?.h ?? dh;
@@ -154,7 +154,7 @@ const ENCODE = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '16', '-pix_fmt'
 const rate = (fps: Fps): string => `${fps.den}/${fps.num}`;
 
 /** ffmpeg arguments for one segment. Pure, so it can be tested without ffmpeg. */
-export function segmentArgs(plan: PreviewPlan, seg: PreviewSegment, image: string | undefined, out: string): string[] {
+export function segmentArgs(plan: Pick<PreviewPlan, 'width' | 'height' | 'fps'>, seg: Pick<PreviewSegment, 'frames' | 'move'>, image: string | undefined, out: string): string[] {
   const { width: W, height: H, fps } = plan;
   if (image === undefined) {
     return ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${rate(fps)}`, '-frames:v', String(seg.frames), '-r', rate(fps), ...ENCODE, out];

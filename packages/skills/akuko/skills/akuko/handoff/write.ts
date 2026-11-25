@@ -96,7 +96,7 @@ export function localPath(projectDir: string, uri: string): string | undefined {
 }
 
 /** Where `audio.master.uri` is: relative to the project folder (it may go up out of it) or absolute. */
-function masterPath(projectDir: string, uri: string): string | undefined {
+export function masterPath(projectDir: string, uri: string): string | undefined {
   if (/^file:/i.test(uri)) {
     try {
       return fileURLToPath(uri);

@@ -52,7 +52,7 @@ The project format is `schema/akuko-project.ts` (`akuko.json`, JSON Schema in `s
 | "animate", "make the clips", "motion", "treatment", "camera moves" | [`actions/motion.md`](actions/motion.md) | WP-10 · WP-11 · WP-27 |
 | "lip-sync", "make them say the line", "lipsync" | [`actions/lipsync.md`](actions/lipsync.md) | WP-28b |
 | "voice-over", "music", "sound effects", "sound" | [`actions/sound.md`](actions/sound.md) | WP-12 |
-| "animatic", "preview the film", "let me watch it", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | B-11 (`preview` built) · WP-13 (rough cut, picture lock: stub) |
+| "animatic", "preview the film", "let me watch it", "rough cut", "assemble" | [`actions/assemble.md`](actions/assemble.md) | B-11 (`preview` built) · `rough` built · WP-13 (picture lock: stub) |
 | "export", "send to Resolve", "give me a timeline" | [`actions/export.md`](actions/export.md) | WP-23 (Resolve handoff) |
 | "I reviewed it", "apply my notes", "review" | [`actions/review.md`](actions/review.md) | WP-07a |
 | "review in chat", "approve in chat", "go through what's waiting", "approve all the plates" | [`actions/review.md`](actions/review.md) §1b "Review in chat": loop `review/chat.ts next` → ask (exact replies) → `review/chat.ts decide` → next; a batch only via `review/chat.ts batch` (full list, one exact reply) | Approval by chat |
