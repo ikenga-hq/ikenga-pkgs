@@ -547,6 +547,7 @@ export const ShotSchema = UnitSchema.extend({
   source_frame: IdSchema.optional().describe('Another shot whose approved key frame this shot is a picture of (e.g. that frame as a printed photograph): attached to this key frame as a reference, which waits until it is approved. Set by hand; a sheet re-import keeps it.'),
   layout: ShotLayoutSchema.optional().describe('A plain 3D-blockout render from the shot camera that fixes positions and composition; its `mode` says how the key frame uses it (attach by default). Set by `keyframes/cli.ts layout`; a sheet re-import keeps it.'),
   lines: z.array(ShotLineSchema).optional().describe('Dialogue lines the shot covers (audio.lines ids).'),
+  angle: z.string().min(1).optional().describe('Camera-angle group id; shots sharing it form one same-angle continuity chain for motion.'),
   treatment: ShotTreatmentSchema.optional(),
   move: StillMoveSchema.optional().describe('Camera move on the still (treatment still-move).'),
   studio: StudioShotExtSchema.optional(),

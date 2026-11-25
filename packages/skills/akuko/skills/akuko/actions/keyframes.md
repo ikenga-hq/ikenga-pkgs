@@ -115,6 +115,26 @@ Run it after key frames are generated (any number of them), and before motion sp
 
 **On host A** (claude.ai): there is no `board/audit.json` and no folder. Read the project with the host adapter (ArtifactData `get` of doc `akuko/project`, `../lib/hosts.md`), keep your visual notes in the conversation, and in the workspace's Node call `auditProject(project, { visual })` from `../audit/audit.ts`, with `visual` as `{ unit, text, severity, take }` notes (`take` is `takeOf(asset)`). Then `applyAuditComments(project, report, now)` gives the project with the audit's comments swapped in; write it back with the host's `writeState` (ArtifactData `set` of `akuko/project`), and show the person `renderSummary(report)` in chat. The workspace cannot call the artifact tools itself, so the read and the write are your tool calls, as in the other actions. If no code can run, read the frames and the references, report what you see in chat only, and write nothing. Notes you do not keep in the conversation are lost with it; the "Audit:" comments are the durable record.
 
+## Continuity rules
+
+Wide shots of one set drift unless the blocking, the set reference and the prop counts are pinned. These hold for any interior or repeated set (example: a one-table café scene). They add to the audit above; none of them changes who approves.
+
+1. **Blocking first.** Each interior frame uses the Blender blocking render as Image 1: "keep camera, framing, object positions and counts; add nothing". Anything that recurs in the background (staff, counter props, plates, lamps) goes into the blockout, never into prompt-only edits.
+2. **The set reference must show the layout.** Attach one clean "hero" frame of the set, such as the empty table, as the reference for furniture and props. Close-ups only fix the look, so wide shots drift: extra placemats, a second chair, a longer table. Name counts in the prompt: "exactly two slate placemats, one napkin holder, one armchair, no other tables or chairs".
+3. **Set geography.** Record in the location bible what sits behind each character from each side (example: the booth and mural are behind the first character; the window wall is behind the second). Check every still against it. For a shot facing a wall, say which landmarks are NOT in frame, or the model moves them onto that wall.
+4. **Edit, don't regenerate.** To fix an approved frame, edit that still with a minimal prompt: "ONE change only… keep everything else exactly", plus "do not brighten or relight". Attach the reference for the missing thing (for example the shot that shows the napkin holder).
+5. **If the model copies the reference image wholesale,** attach only a tight crop of the element to add (the waitress, the food) and say it is "only a reference for X".
+6. **Audit checklist for every frame before asking for approval:**
+   - prop count and presence (placemats, holder, handbag, plates);
+   - the background wall on each side;
+   - no second table or chair;
+   - light matches its neighbours;
+   - recurring facial traits (beard length, glasses);
+   - no readable text.
+
+   Show before and after side by side.
+7. **Retakes.** Request-changes → fold → `step` for a new job → ingest once. Never ingest twice into the same job.
+
 ## When a person sends a frame back
 
 Folding turns it into `needs-rework` with their words. Run `step --units <asset id>` for it: the old file is cleared (it stays stored; the "Revised: …" comment says where), their words are added to the prompt, the new take fills the same asset, and it goes to `pending-review` again. A paid regeneration is a new job and needs a new approval.

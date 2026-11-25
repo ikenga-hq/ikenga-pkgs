@@ -96,6 +96,26 @@ Making clips with a connected tool that uses the person's plan allowance (Canva 
 7. **Stop at the review gate.** Everything made is `pending-review` and the stage is `in-review`. The person reviews each clip on the board. Don't call anything approved.
 8. **After the person's answers**: fold, `sync`, then `step` again for the next shot.
 
+## Same-angle continuity chain
+
+Clips that share a camera angle must start from where the last one ended, or the set, props and faces jump between cuts. Example: in a two-person café scene the chains might be "first character single", "profile two-shot" and "second character at the booth".
+
+1. **Angle groups.** Group the shots by camera angle. If the shots carry an `angle` (`../profiles/film/breakdown.md`), the chain is the shots of one `angle` in shot order; otherwise group them yourself and tell the person the groups.
+2. **Before each clip:**
+   - Take the last frame of the previous approved clip in the same angle: `ffmpeg -sseof -0.1 -i prev.mp4 -frames:v 1 -update 1 end.jpg`.
+   - Compare it with this shot's still.
+   - If they differ, rebuild the still by editing that end frame (`keyframes.md` §Continuity rules), changing only what this shot needs (expression, a new person, food arriving).
+   - Get the still approved, then make the clip.
+3. **One-off angles** borrow from the nearest matching frame (for example the plate from the previous clip that shows it).
+4. **Hidden faces.** If the start frame hides a face (hands or a napkin over it), the model invents one. Use Start + End frames: take a bad take's last frame, correct the face from that angle's previous clip, and set it as the End frame.
+5. **Clip prompt template:**
+   - "locked-off static camera, no camera move";
+   - fixed character traits (for example "SHORT neatly trimmed beard");
+   - the list of props to keep exactly as in the start frame;
+   - "no other people/tables, no text, no music".
+6. **Length.** Pick the model length at or above the planned shot length (3 s or 5 s). Assemble trims to the plan.
+7. **After download:** strip the audio (`-an -c:v copy`). Build a 4–6 frame contact strip and check it against the start frame. Flag any readable text (menus, signs) when asking for approval.
+
 ## When a clip is still running: `collect`
 
 A paid job is saved as soon as it is submitted. If `step` ends with "still running" (the provider has not finished, or reading or downloading the result failed for now), the money is reserved and nothing is lost: run `collect --job <id>` (the id is in the message; it is safe to repeat) until it finishes, then tell the person the clips are ready for review. Do not run `step` again for it. If `collect` keeps failing with the same message, stop and tell the person what it says.
