@@ -634,6 +634,22 @@ describe('approval is a person\'s, through a conformed view', () => {
     assert.deepEqual(checkIntegrity(p), []);
   });
 
+  it('sent back, then a file ingested into the job that made the old frame: it replaces the frame in place, with no stray asset', async () => {
+    const { r, s } = await produced();
+    const oldUri = asset(r.host.peek(), U).file!.uri;
+    r.host.set(fold(r.host.peek(), [decision('request-changes', U, 'keyframes', { text: 'Warmer.' })]).project);
+    const count = r.host.peek().assets.length;
+    await ingestKeyframe(deps(r), r.manual, s.job, U, { ...FILE, data: new Uint8Array([...FILE.data, 7]) });
+    const p = r.host.peek();
+    assert.equal(p.assets.length, count, 'no new asset');
+    assert.ok(!p.assets.some((a) => a.id.startsWith(`${U}-`)), 'no stray <unit>-keyframes asset');
+    assert.equal(asset(p, U).status, 'pending-review');
+    assert.notEqual(asset(p, U).file!.uri, oldUri);
+    assert.ok(r.host.files.has(oldUri), 'the old frame stays stored');
+    assert.ok(asset(p, U).comments.some((c) => c.author === 'agent' && c.text.startsWith('Revised:') && c.text.includes(oldUri)));
+    assert.deepEqual(checkIntegrity(p), []);
+  });
+
   it('asking again before the file is back reuses the same job', async () => {
     const r = rig('manual', planned());
     const a = await generateKeyframes(deps(r), { provider: 'manual' });

@@ -4,6 +4,7 @@
 // Synthetic project and files only (rules/__fixtures__/project.ts).
 
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -276,7 +277,7 @@ describe('ingest into a filled slot (refused unless --new-take)', () => {
     assert.equal(await readFile(join(dir, 'akuko.json'), 'utf8'), raw);
   });
 
-  it('--new-take stores it beside the original as <unit>-<stage>; a sent-back asset takes a new file as before', async () => {
+  it('--new-take stores it beside the original as <unit>-<stage>; a sent-back asset takes the new file in place, the old one kept', async () => {
     const { dir } = await rulesFolder();
     const r = await ingest(dir, portraitJob('job_m1'), { newTake: true });
     assert.equal(r.asset.id, 'KIT_portrait-bible');
@@ -284,6 +285,13 @@ describe('ingest into a filled slot (refused unless --new-take)', () => {
     assert.equal(p.assets.find((a) => a.id === 'KIT_portrait')!.file?.uri, FILES.kitGenerated.path, 'the original is untouched');
     const { dir: d2 } = await rulesFolder((q) => { q.assets.find((a) => a.id === 'KIT_portrait')!.status = 'needs-rework'; });
     const back = await ingest(d2, portraitJob('job_m2'));
-    assert.equal(back.asset.id, 'KIT_portrait-bible');
+    assert.equal(back.asset.id, 'KIT_portrait', 'no stray KIT_portrait-bible asset beside the sent-back one');
+    const q = await read(d2);
+    assert.ok(!q.assets.some((a) => a.id === 'KIT_portrait-bible'));
+    const kit = q.assets.find((a) => a.id === 'KIT_portrait')!;
+    assert.equal(kit.status, 'pending-review');
+    assert.notEqual(kit.file?.uri, FILES.kitGenerated.path);
+    assert.ok(existsSync(join(d2, ...FILES.kitGenerated.path.split('/'))), 'the old file stays stored');
+    assert.ok(kit.comments.some((c) => c.author === 'agent' && c.text.startsWith('Revised:') && c.text.includes(FILES.kitGenerated.path)));
   });
 });

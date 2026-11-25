@@ -19,8 +19,11 @@
  *             --key-source pasted-this-chat --phase reserve|send|release
  *                           host A only (lib/spend.md §Host A): a paid direct API runs with a key the
  *                           person pasted into this chat, reserved first and sent second
- *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>] [--via <service>] [--new-take]
- *           record a clip the person made for a manual job
+ *   ingest  --job <id> --unit <clip id> --file <path> [--actual <n>] [--model <id>] [--via <service>] [--new-take] [--no-keep-audio]
+ *           record a clip the person made for a manual job. A clip sent back (needs-rework) is replaced in place (its
+ *           old file stays stored); one with a file that was not sent back is refused. The clip's length is checked
+ *           against the shot (an agent comment when they differ; never refused). A clip with sound also has its sound
+ *           copied to sound-incoming/clip-audio/<shot>_clip-audio.wav when ffmpeg is there (--no-keep-audio: not)
  *   collect --job <id>        poll a paid job submitted earlier and record its clips
  *   treat   --shot <id>[,<id>...] --as still|still-move|video|lipsync
  *                             record a shot's treatment. Free. Only on the person's words: paid treatments are opt-in
@@ -287,8 +290,9 @@ export async function run(argv: string[], now: () => Date = () => new Date()): P
         ...(model !== undefined ? { model } : {}),
         ...(str(opt.get('via')) !== undefined ? { via: str(opt.get('via'))!, projectDir: dir } : {}),
         ...(opt.get('new-take') === true ? { newTake: true } : {}),
+        ...(opt.get('no-keep-audio') === true ? {} : { keepAudio: { projectDir: dir, source: path } }),
       });
-      return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings].join(NL) };
+      return { code: 0, out: [`Recorded ${r.asset}; it is waiting for the person's review.`, ...r.warnings, ...r.notes].join(NL) };
     }
 
     return { code: 2, out: 'akuko: command must be plan, status, parts, treat, moves, step, ingest, collect or sync.' };

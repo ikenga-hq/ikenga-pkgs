@@ -7,6 +7,12 @@
  *   ingest    takes the file the person brings back, stores it via
  *             host.storeAsset() and records it in akuko.json (asset added,
  *             unit → pending-review, any spend they report → ledger).
+ *             A planned asset that a person sent back (`needs-rework`) and
+ *             still holds its old file takes the new file in place: the old
+ *             file stays stored, a "Revised:" comment says where. One that
+ *             has a file and was not sent back is refused (or, with
+ *             `newTake`, gets a separate take). Ingest never leaves a stray
+ *             `<unit>-<stage>` asset beside a sent-back unit.
  *             With `via: <service>` the file was made by a connected
  *             allowance tool (Canva): it is accepted only when the ledger has
  *             a done allowance entry of that service for the unit, which is
@@ -66,7 +72,9 @@ export interface IngestInput {
   projectDir?: string;
   /**
    * Store the file as a new take beside an asset unit that already has a file (`<unit>-<stage>`, `-2`…). Without it,
-   * an ingest for an asset that already has a file and was not sent back is refused (`planAssetId` `filled: 'refuse'`).
+   * an ingest for an asset that already has a file and was not sent back is refused (`planAssetId` `filled: 'refuse'`),
+   * and one that was sent back (`needs-rework`) takes the new file in place (its old file stays stored).
+   * The separate take is its own review unit: the stage waits for a person to decide on it too.
    */
   newTake?: boolean;
 }
@@ -161,11 +169,22 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
     const before = await host.readState();
     const ref = findUnit(before, unit);
     if (!ref) throw new ManualIngestError(`unknown unit "${unit}"`);
+    // A planned asset the person sent back that still holds its old file (they ingest without running step again,
+    // or into the job that made the old take): the new file replaces it in place, as the stage's own redo would.
+    // Before this, it became a separate `<unit>-<stage>` asset that waited for review and held the stage open while
+    // the unit kept its old file. The old file is never deleted; the "Revised:" comment says where it stays.
+    const replacing = !input.newTake && ref.kind === 'asset' && ref.unit.file !== undefined && ref.unit.status === 'needs-rework'
+      ? ref.unit.file.uri
+      : undefined;
     let planned: { id: string; inPlace: boolean };
-    try {
-      planned = planAssetId(before, unit, job.stage, { filled: input.newTake ? 'sibling' : 'refuse' });
-    } catch (err) {
-      throw new ManualIngestError(err instanceof Error ? err.message : String(err));
+    if (replacing !== undefined) {
+      planned = { id: unit, inPlace: true };
+    } else {
+      try {
+        planned = planAssetId(before, unit, job.stage, { filled: input.newTake ? 'sibling' : 'refuse' });
+      } catch (err) {
+        throw new ManualIngestError(err instanceof Error ? err.message : String(err));
+      }
     }
 
     // --via <service>: the generation must already be in the ledger (lib/spend.md §Allowance).
@@ -184,9 +203,16 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
     const kind = planned.inPlace && ref.kind === 'asset' ? ref.unit.kind : item.output;
     const ext = EXT_BY_MIME[file.mime] ?? file.filename.split('.').pop() ?? 'bin';
 
+    // A replacement never reuses the old file's name, so no host can write over the old take.
+    const taken = new Set(before.assets.map((a) => a.file?.uri.split('/').pop()).filter((n): n is string => n !== undefined));
+    let filename = expectedFilename(unit, job.stage, ext);
+    if (replacing !== undefined) {
+      for (let n = 2; taken.has(filename); n++) filename = `${unit}-${job.stage}-${n}.${ext}`;
+    }
+
     const stored = await host.storeAsset({
       kind,
-      filename: expectedFilename(unit, job.stage, ext),
+      filename,
       mime: file.mime,
       data: file.data,
       id: planned.id,
@@ -200,7 +226,16 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
     const withHash = via !== undefined && stored.file && stored.file.hash !== sha ? { ...stored, file: { ...stored.file, hash: sha } } : stored;
 
     const ts = now();
-    let p = recordOutput(await host.readState(), {
+    let current = await host.readState();
+    if (replacing !== undefined) {
+      current = {
+        ...current,
+        assets: current.assets.map((a) => (a.id === unit
+          ? { ...a, comments: [...a.comments, { ts, stage: job.stage, author: 'agent', text: `Revised: replaced by a file brought back after the requested changes; the previous take stays at ${replacing}` }] }
+          : a)),
+      };
+    }
+    let p = recordOutput(current, {
       asset: withHash,
       unit,
       stage: job.stage,
