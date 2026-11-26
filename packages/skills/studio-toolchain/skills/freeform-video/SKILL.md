@@ -133,7 +133,7 @@ A beat with `status: "needs-rework"` AND comments means the human left feedback.
 ## File Layout
 
 ```
-royalti-video-engine/
+<video-engine>/
 ├── compositions/{slug}/
 │   ├── storyboard.json          ← single source of truth (read + write)
 │   └── stills/

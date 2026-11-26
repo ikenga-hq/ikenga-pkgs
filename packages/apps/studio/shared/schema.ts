@@ -8,7 +8,7 @@
  *
  * LIFT PROVENANCE (prose only — no live imports back to these paths):
  *   pkgs/_review/studio/src/ui/video/lib/storyboard-schema.ts
- *   (byte-identical with royalti-video-engine/src/lib/storyboard-schema.ts —
+ *   (byte-identical with a retired in-house video engine's src/lib/storyboard-schema.ts —
  *    that engine was retired and deleted on 2026-09-08, WP-16; the path is kept
  *    here as provenance, not as somewhere to go looking)
  *

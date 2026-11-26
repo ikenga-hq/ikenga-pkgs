@@ -38,7 +38,7 @@ The storyboard sits between script creation and asset generation. All beats must
 Create the template storyboard with empty frames for all beats.
 
 ```bash
-cd royalti-video-engine
+cd <video-engine>   # the video-engine repo that holds scripts/ and input/
 npx tsx scripts/generate-storyboard-scaffold.ts --script input/scripts/<slug>-script.yaml
 ```
 
