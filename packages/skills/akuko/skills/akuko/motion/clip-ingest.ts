@@ -55,7 +55,9 @@ export function clipLengthText(clipS: number, shotS: number): string | undefined
 export function annotateClipLength(project: AkukoProject, clipId: string, clipS: number | undefined, ts: string): { project: AkukoProject; note?: string } {
   const a = project.assets.find((x) => x.id === clipId);
   if (!a) return { project };
-  const shot = project.shots.find((s) => s.id === a.owner);
+  // An extra take (`ingest --new-take`) is owned by the clip it was made for; its shot is that clip's owner.
+  const shotId = project.assets.find((x) => x.id === a.owner)?.owner ?? a.owner;
+  const shot = project.shots.find((s) => s.id === shotId);
   const want = shot?.duration_s;
   const text = clipS !== undefined && want !== undefined && want > 0 ? clipLengthText(clipS, want) : undefined;
   const mine = (c: Asset['comments'][number]): boolean => c.author === 'agent' && c.text.startsWith(CLIP_LENGTH_PREFIX);

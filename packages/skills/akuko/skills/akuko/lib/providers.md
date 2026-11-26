@@ -172,9 +172,12 @@ This is the no-key path. It is lifted in shape from Studio's
   the file the person brings back. It checks the unit is in the job and the
   file type fits the job's kind, then stores the file with
   `host.storeAsset()`. Then it records the asset: a planned asset unit with
-  no file yet (a portrait, a plate) is filled in place, and anything else gets
-  a new asset `<unit>-<stage>`, then `-2`, and so on for later takes. The
-  unit moves to `pending-review`. If the person reports what it cost them
+  no file yet (a portrait, a plate) is filled in place, and so is one a
+  person sent back (the old file stays stored); one with a file that was not
+  sent back is refused. A unit that is not an asset (a shot) gets a new
+  asset `<unit>-<stage>`, `-2`… The unit moves to `pending-review`. With `newTake`
+  (on the person's word) the file is an extra take `<unit>-<stage>`, `-2`…
+  that leaves the unit alone (`state.md` §Status transitions). If the person reports what it cost them
   and a budget exists, that amount goes into the ledger.
 - **poll / fetch**: a job is done when every unit has an ingested file
   tagged `job:<id>`. The state lives in `akuko.json`, so this works across

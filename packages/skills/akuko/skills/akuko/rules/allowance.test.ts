@@ -277,12 +277,16 @@ describe('ingest into a filled slot (refused unless --new-take)', () => {
     assert.equal(await readFile(join(dir, 'akuko.json'), 'utf8'), raw);
   });
 
-  it('--new-take stores it beside the original as <unit>-<stage>; a sent-back asset takes the new file in place, the old one kept', async () => {
+  it('--new-take stores it beside the original as an extra take <unit>-<stage>; a sent-back asset takes the new file in place, the old one kept', async () => {
     const { dir } = await rulesFolder();
+    const original = (await read(dir)).assets.find((a) => a.id === 'KIT_portrait')!;
     const r = await ingest(dir, portraitJob('job_m1'), { newTake: true });
     assert.equal(r.asset.id, 'KIT_portrait-bible');
+    assert.ok(r.asset.tags.includes('extra-take'));
+    assert.equal(r.asset.status, 'pending-review');
     const p = await read(dir);
     assert.equal(p.assets.find((a) => a.id === 'KIT_portrait')!.file?.uri, FILES.kitGenerated.path, 'the original is untouched');
+    assert.deepEqual(p.assets.find((a) => a.id === 'KIT_portrait'), original, 'its status, comments and by_stage too');
     const { dir: d2 } = await rulesFolder((q) => { q.assets.find((a) => a.id === 'KIT_portrait')!.status = 'needs-rework'; });
     const back = await ingest(d2, portraitJob('job_m2'));
     assert.equal(back.asset.id, 'KIT_portrait', 'no stray KIT_portrait-bible asset beside the sent-back one');

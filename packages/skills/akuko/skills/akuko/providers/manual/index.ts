@@ -11,8 +11,10 @@
  *             still holds its old file takes the new file in place: the old
  *             file stays stored, a "Revised:" comment says where. One that
  *             has a file and was not sent back is refused (or, with
- *             `newTake`, gets a separate take). Ingest never leaves a stray
- *             `<unit>-<stage>` asset beside a sent-back unit.
+ *             `newTake`, on the person's word, is kept as an extra take:
+ *             its own `<unit>-<stage>` asset, tag `extra-take`, waiting
+ *             for review, while the unit stays exactly as it was). Ingest
+ *             never leaves a stray asset beside a sent-back unit.
  *             With `via: <service>` the file was made by a connected
  *             allowance tool (Canva): it is accepted only when the ledger has
  *             a done allowance entry of that service for the unit, which is
@@ -32,7 +34,7 @@ import type { Job, JobHandle, JobStatus, Provider, WaveOneHost } from '../contra
 import { jobProblems } from '../contract.ts';
 import type { AkukoProviderConfig } from '../config.ts';
 import { estimateFromConfig, loadProviderConfig } from '../config.ts';
-import { assertValidProject, jobTag, planAssetId, recordOutput } from '../outputs.ts';
+import { EXTRA_TAKE_TAG, assertValidProject, jobTag, planAssetId, recordOutput } from '../outputs.ts';
 import { MANUAL_PROVIDER_ID, MANUAL_SEAL, SETUP_POINTER, sealProvider } from '../../spend/gate.ts';
 import { recordDone } from '../../spend/ledger.ts';
 import { allowanceEntryFor, linkAllowance } from '../../spend/allowance.ts';
@@ -71,10 +73,12 @@ export interface IngestInput {
   /** Folder relative ref uris are read from, to check the job's refs (with `via`). */
   projectDir?: string;
   /**
-   * Store the file as a new take beside an asset unit that already has a file (`<unit>-<stage>`, `-2`…). Without it,
-   * an ingest for an asset that already has a file and was not sent back is refused (`planAssetId` `filled: 'refuse'`),
-   * and one that was sent back (`needs-rework`) takes the new file in place (its old file stays stored).
-   * The separate take is its own review unit: the stage waits for a person to decide on it too.
+   * On the person's word only: keep the file as an extra take beside a unit that already has a file (`<unit>-<stage>`,
+   * `-2`…, tag `extra-take`, `pending-review`). The unit itself is left alone: file, status, `by_stage`, comments.
+   * The take is reviewed like any asset, never holds its stage open, and approving it does not replace the unit
+   * (lib/state.md §Status transitions). A unit with no file yet is filled in place as usual (with a warning).
+   * Without it, an ingest for an asset that already has a file and was not sent back is refused (`planAssetId`
+   * `filled: 'refuse'`), and one that was sent back (`needs-rework`) takes the new file in place (its old file stays stored).
    */
   newTake?: boolean;
 }
@@ -200,13 +204,15 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
       const ext = await externalRefs(before, item.refs ?? [], { ...(input.projectDir !== undefined ? { projectDir: input.projectDir } : {}) });
       viaTags = [allowanceTag(via), ...(ext.length ? [REFS_EXTERNAL_TAG] : [])];
     }
+    // An extra take: a separate asset the person asked for; the unit it was made for is not touched.
+    const extraTake = input.newTake === true && !planned.inPlace && (ref.kind === 'asset' || ref.unit.by_stage?.[job.stage]?.output !== undefined);
     const kind = planned.inPlace && ref.kind === 'asset' ? ref.unit.kind : item.output;
     const ext = EXT_BY_MIME[file.mime] ?? file.filename.split('.').pop() ?? 'bin';
 
-    // A replacement never reuses the old file's name, so no host can write over the old take.
+    // A replacement or an extra take never reuses a recorded file's name, so no host can write over the unit's file.
     const taken = new Set(before.assets.map((a) => a.file?.uri.split('/').pop()).filter((n): n is string => n !== undefined));
     let filename = expectedFilename(unit, job.stage, ext);
-    if (replacing !== undefined) {
+    if (replacing !== undefined || extraTake) {
       for (let n = 2; taken.has(filename); n++) filename = `${unit}-${job.stage}-${n}.${ext}`;
     }
 
@@ -217,7 +223,7 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
       data: file.data,
       id: planned.id,
       provider: via ?? MANUAL_PROVIDER_ID,
-      tags: [jobTag(job.id), 'manual', ...viaTags],
+      tags: [jobTag(job.id), 'manual', ...viaTags, ...(extraTake ? [EXTRA_TAKE_TAG] : [])],
       ...(planned.inPlace ? {} : { owner: unit }),
       ...(input.model !== undefined ? { model: input.model } : {}),
     });
@@ -245,9 +251,19 @@ export function createManualProvider(host: WaveOneHost, opts: ManualOptions = {}
       ...(input.model !== undefined ? { model: input.model } : {}),
     });
 
+    if (extraTake) {
+      p = {
+        ...p,
+        assets: p.assets.map((a) => (a.id === stored.id
+          ? { ...a, comments: [...a.comments, { ts, stage: job.stage, author: 'agent', text: `Extra take of ${unit}, kept on the person's word (--new-take). ${unit} is unchanged. Approving this take does not replace ${unit} and it does not hold the stage open; to use this file for ${unit}, send ${unit} back (Request changes) and ingest the file again.` }] }
+          : a)),
+      };
+    }
+
     if (via !== undefined) p = linkAllowance(p, viaEntry, job.id);
 
     const warnings: string[] = [];
+    if (input.newTake === true && !extraTake) warnings.push(`--new-take: ${unit} had no file yet, so this file filled it (no extra take).`);
     if (input.actual !== undefined && input.actual > 0) {
       if (p.budget) {
         p = recordDone(p, {

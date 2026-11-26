@@ -8,6 +8,7 @@ import { checkIntegrity } from '../../schema/integrity.ts';
 import type { Job } from '../contract.ts';
 import { createSpendGate } from '../../spend/gate.ts';
 import { PNG, createFakeHost, tinyProject } from '../__fixtures__/fake-host.ts';
+import { EXTRA_TAKE_TAG } from '../outputs.ts';
 import { ManualIngestError, createManualProvider } from './index.ts';
 import type { PromptPackage } from './package.ts';
 import { buildPromptPackage, renderPromptPackage } from './package.ts';
@@ -153,9 +154,47 @@ describe('manual provider: ingest', () => {
     const files = host.files.size;
     await assert.rejects(manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p3.png', mime: 'image/png', data: PNG } }), /"char_n_portrait" already has a file .*pending-review\)\. Nothing was stored\./);
     assert.equal(host.files.size, files);
-    // --new-take, on the person's word, still keeps a separate take.
+    // --new-take, on the person's word, keeps an extra take and leaves the portrait as it is.
+    const unitBefore = host.peek().assets.find((a) => a.id === 'char_n_portrait');
     const take = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p4.png', mime: 'image/png', data: PNG }, newTake: true });
     assert.equal(take.asset.id, 'char_n_portrait-bible');
+    assert.deepEqual(host.peek().assets.find((a) => a.id === 'char_n_portrait'), unitBefore);
+  });
+
+  it('--new-take keeps an extra take as its own asset and leaves the planned unit alone (file, status, comments); a later collect does not move it either', async () => {
+    const { manual, host, gate } = setup();
+    const job: Job = { id: 'job_portrait', stage: 'bible', kind: 'image', provider: 'manual', label: 'Portrait', items: [{ unit: 'char_n_portrait', prompt: 'Portrait of the narrator', output: 'portrait' }] };
+    const r = await gate.run(job);
+    if (r.status !== 'submitted') return assert.fail(JSON.stringify(r));
+
+    // A unit with no file yet has nothing to sit beside: the file fills it, as without the flag, and the output says so.
+    const first = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p.png', mime: 'image/png', data: PNG }, newTake: true });
+    assert.equal(first.asset.id, 'char_n_portrait');
+    assert.ok(!first.asset.tags.includes(EXTRA_TAKE_TAG));
+    assert.match(first.warnings[0] ?? '', /^--new-take: char_n_portrait had no file yet, so this file filled it/);
+    const before = host.peek().assets.find((a) => a.id === 'char_n_portrait')!;
+    assert.equal(before.status, 'pending-review');
+
+    const second = new Uint8Array([...PNG, 1]);
+    const take = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p2.png', mime: 'image/png', data: second }, newTake: true });
+    assert.deepEqual(take.warnings, []);
+    assert.equal(take.asset.id, 'char_n_portrait-bible');
+    assert.equal(take.asset.owner, 'char_n_portrait');
+    assert.equal(take.asset.stage, 'bible');
+    assert.equal(take.asset.status, 'pending-review', 'waiting for a person, never approved by code');
+    assert.ok(take.asset.tags.includes(EXTRA_TAKE_TAG));
+    assert.deepEqual(host.files.get(take.asset.file!.uri), second);
+    assert.ok(take.asset.comments.some((c) => c.author === 'agent' && c.text.startsWith('Extra take of char_n_portrait') && /does not replace char_n_portrait/.test(c.text)));
+    assert.deepEqual(host.peek().assets.find((a) => a.id === 'char_n_portrait'), before, 'the planned unit is untouched');
+
+    // The provider hands the take back with the job's files; recording them leaves the unit as it was.
+    await gate.collect(r.handle);
+    assert.deepEqual(host.peek().assets.find((a) => a.id === 'char_n_portrait'), before, 'collect leaves the unit alone too');
+
+    const third = await manual.ingest({ job, unit: 'char_n_portrait', file: { filename: 'p3.png', mime: 'image/png', data: PNG }, newTake: true });
+    assert.equal(third.asset.id, 'char_n_portrait-bible-2');
+    assert.deepEqual(host.peek().assets.find((a) => a.id === 'char_n_portrait'), before);
+    assert.deepEqual(checkIntegrity(host.peek()), []);
   });
 
   it('a second take gets its own asset and sends the unit back for review', async () => {
