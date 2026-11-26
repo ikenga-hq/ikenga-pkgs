@@ -1,5 +1,11 @@
 # @ikenga/skill-akuko
 
+## 0.5.1
+
+### Patch Changes
+
+- [#239](https://github.com/ikenga-hq/ikenga-pkgs/pull/239) [`4bed1fb`](https://github.com/ikenga-hq/ikenga-pkgs/commit/4bed1fb27523b9bbcdde1e48511398065e6f481a) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: the claude.ai zip fits again. `build:claudeai` now leaves out `engines/hyperframes/g01/` (the G-01 gate's evidence screenshots and test composition, never read at run time), taking the zip from 207 files to 191, under claude.ai's 200-file limit. The mirror and the npm package are unchanged.
+
 ## 0.5.0
 
 ### Minor Changes
