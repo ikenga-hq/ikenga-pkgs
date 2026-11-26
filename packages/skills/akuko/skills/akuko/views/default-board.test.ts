@@ -1124,7 +1124,13 @@ describe('default board: confirmed batch approval (@0.7)', { timeout: 600_000 },
     click(p, `[data-akuko-batch-undo="${bid}"]`);
     await p.tick();
     const undos = JSON.parse(JSON.stringify((p.w.akukoDecisions.all() as Decision[]).slice(ds.length))) as Decision[];
-    assert.deepEqual(undos.map((d) => [d.action, d.unit, (d as { undoes?: string }).undoes]), plain.map((d) => ['undo', d.unit, d.id]));
+    // One undo per approval. The order they are written in is not part of the contract (views/contract.md §4),
+    // and approvals written in the same millisecond can come back in either order, so compare them sorted.
+    const byUnit = (a: unknown[], b: unknown[]) => String(a[1]).localeCompare(String(b[1]));
+    assert.deepEqual(
+      undos.map((d) => [d.action, d.unit, (d as { undoes?: string }).undoes]).sort(byUnit),
+      plain.map((d) => ['undo', d.unit, d.id]).sort(byUnit),
+    );
     assert.ok(undos.every((d) => BATCH.exec(d.text ?? '')?.[1] === bid));
     for (const id of waiting) assert.equal(statusOf(p, id), 'pending-review');
     assert.equal(p.num('waiting-shots'), before);
