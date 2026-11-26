@@ -21,7 +21,9 @@
  * top-level `akuko/` folder with only the files the skill needs at run time.
  * claude.ai rejects a skill zip with more than 200 files; the build fails if the
  * count goes over. Excluded: tests, `__fixtures__/`, `fixtures/`, `evals/`,
- * `blocks/` (HyperFrames compositions, which cannot render on claude.ai), and
+ * `blocks/` (HyperFrames compositions, which cannot render on claude.ai),
+ * `engines/hyperframes/g01/` (the G-01 gate's evidence screenshots and test
+ * composition, a record of a one-off check, never read at run time), and
  * the two JSON Schema generators (build-time tools that need the dev-only
  * zod-to-json-schema; their output files ship). Three
  * fixture files are put back because a runtime path reads them (see CLAUDEAI_KEEP).
@@ -88,6 +90,9 @@ const CLAUDEAI_DROP_ANYWHERE = new Set(['__fixtures__']);
 const CLAUDEAI_DROP_TOP = new Set(['fixtures', 'evals', 'blocks']);
 // ...build-time generators (they import the dev dependency zod-to-json-schema; the .json they write ships):
 const CLAUDEAI_DROP_FILES = new Set(['schema/export-json-schema.ts', 'decisions/export-decision-schema.ts']);
+// ...and folders that are a record, not runtime: the G-01 gate's evidence (screenshots,
+// checksums, results) and its test composition. Only the gate's own scripts read them.
+const CLAUDEAI_DROP_PREFIXES = ['engines/hyperframes/g01/'];
 // ...and the fixture files a runtime path reads, put back:
 //  - scripts/check-view/check.mjs: DEFAULT_PROJECT is fixtures/the-beating/akuko.json
 //    (check-view without --project), and reservedViews() hashes the two fixture views
@@ -186,6 +191,7 @@ function claudeAiKeeps(rel) {
   if (rel.endsWith('.test.ts')) return false;
   if (CLAUDEAI_DROP_FILES.has(rel)) return false;
   if (CLAUDEAI_DROP_TOP.has(parts[0])) return false;
+  if (CLAUDEAI_DROP_PREFIXES.some((p) => rel.startsWith(p))) return false;
   if (parts.slice(0, -1).some((p) => CLAUDEAI_DROP_ANYWHERE.has(p))) return false;
   return true;
 }

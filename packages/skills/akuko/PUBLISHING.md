@@ -23,7 +23,7 @@ Both run `scripts/build-mirror.mjs`.
    `npm install` in the installed skill folder then makes every action runnable. `scripts/doctor.sh` prints that command when packages are missing.
 4. **Output.**
    - `build:mirror` → `dist-mirror/`: `package.json` (private), `README.md` (this package's README with a "generated mirror" banner), `install.sh` (from `scripts/install.sh`), `LICENSE`, `.gitignore`, `.gitattributes`, `skills/akuko/` (the whole source tree plus the runtime files).
-   - `build:claudeai` → `dist-claudeai/akuko.zip` (one top-level `akuko/` folder) and `files.txt`. Only runtime files: no `*.test.ts`, `__fixtures__/`, `fixtures/`, `evals/` or `blocks/` (HyperFrames compositions cannot render on claude.ai). Three fixture files are kept because `scripts/check-view` reads them at run time: `fixtures/the-beating/akuko.json` (its default project) and `views/__fixtures__/tiny-board.html` and `board-b-instrumented.html` (their ids are reserved by hash). **The build fails if the zip would hold more than 200 files**, claude.ai's limit.
+   - `build:claudeai` → `dist-claudeai/akuko.zip` (one top-level `akuko/` folder) and `files.txt`. Only runtime files: no `*.test.ts`, `__fixtures__/`, `fixtures/`, `evals/`, `blocks/` (HyperFrames compositions cannot render on claude.ai) or `engines/hyperframes/g01/` (the G-01 gate's evidence and test composition, a record never read at run time). Three fixture files are kept because `scripts/check-view` reads them at run time: `fixtures/the-beating/akuko.json` (its default project) and `views/__fixtures__/tiny-board.html` and `board-b-instrumented.html` (their ids are reserved by hash). **The build fails if the zip would hold more than 200 files**, claude.ai's limit.
 
 Neither build pushes or uploads anything.
 
