@@ -30,7 +30,7 @@ Three parts; the first two are built:
 | Route | What | Built |
 |---|---|---|
 | `assemble preview` | An animatic preview from the approved key frames, timed to the shots, silent | **Yes** (below) |
-| `assemble rough` | A rough cut: approved clips, else key frames, conformed to the shots, with the approved voice-over and any music, room tone and effects the person points at | **Yes** (below). A by-product, not a review unit. |
+| `assemble rough` | A rough cut: approved clips, else key frames, conformed to the shots, with the approved voice-over, the project's approved music and effects where they are placed, and any music, room tone or effects the person points at | **Yes** (below). A by-product, not a review unit. |
 | picture lock | The cut's review and the locked cut (WP-13 · WP-15) | **Stub (WP-02).** Not built: tell the person so, offer `assemble rough` to watch the cut and `/akuko export` (the DaVinci Resolve handoff) to edit it, and stop. Do not improvise a review gate or a locked cut. |
 
 ## `assemble preview` — free animatic preview
@@ -54,24 +54,30 @@ What it makes: every live shot in film order, each exactly the shot's `duration_
 
 - **Picture**, per shot: the **approved** clip (`<shot>_clip`) when there is one. A clip longer than the shot plays from its start and is cut at the shot's end; a shorter one holds its last frame for the rest. Else the approved key frame, held, with the same gentle move as the preview. Else **black** for its length, with the reason. Same frame as the preview (1280 x 720 for 16:9), 24 fps unless `project.fps` or `--fps` says otherwise. An approved lip-sync clip is not cut in (the export places it); the plan says so.
 - **Voice**: each approved voice-over take at its shot's start plus 0.1 s, normalised to -16 LUFS. A take that runs past its shot is kept whole, with a warning. With no approved take, the single `audio.narration` track from the start.
-- **Beds** the person points at with flags (they are not stage units here, and approved music or effect assets in the project are not laid unless named with a flag; the plan lists them):
-  - `--music <file> [--music-offset <s>]`: from the start of the film, starting `<s>` seconds into the file, at -24 LUFS, ducked under the voice (a compressor keyed from the voice bus), faded out over the last 2 s;
+- **The project's own beds**: every **approved** `music` and `sfx` asset (the files the person supplied with `sound add-music` / `add-sfx`, licence recorded) is laid without any flag, where its `placement:` tag says:
+  - `shot:<id>` (`--shot`): from that shot's start, trimmed to the shot;
+  - `scene:<id>` (`--scene`): from the scene's first shot in the cut to the end of its last, trimmed to that span;
+  - `film` (the default): from the start of the film to the end.
+  Music is at -24 LUFS, ducked under the voice like `--music`, faded out over its last 2 s (half its length for a cue under 4 s); two music beds at the same time are both laid and the plan warns. Effects are at -24 LUFS like `--sfx`, with a short fade at the end. An asset that is **not approved** is never laid: the plan lists it as "not laid: <id> (<status>)". So is an approved one whose file is missing, that records no placement, or whose shot or scene is not in the cut; none of these stops the render. Room tone has no asset of its own (no field marks a music or sfx asset as room tone), so it comes only from `--room-tone`.
+- **Flags** the person gives override the project's beds for this render (nothing is saved):
+  - `--music <file> [--music-offset <s>]` **replaces all the project's music** (each is listed "not laid: <id> (approved; replaced by --music for this render)"): from the start of the film, starting `<s>` seconds into the file, at -24 LUFS, ducked under the voice (a compressor keyed from the voice bus), faded out over the last 2 s;
+  - `--sfx <file>@<shot id>` (repeat it) **adds** to the project's effects: at that shot's start, trimmed to the shot, at -24 LUFS;
   - `--room-tone <file>`: low under everything (about -36 LUFS), looped to the film's length;
-  - `--sfx <file>@<shot id>` (repeat it): at that shot's start, trimmed to the shot, at -24 LUFS.
+  - `--no-project-beds`: lay none of the project's music or effects (each is listed); the other flags still work.
 - **Mix**: everything mixed, cut to the film's length, then a limiter. After the render the integrated loudness is measured and printed (the recipe came out near -16 LUFS).
-- **A project with `audio.master`** (locked audio that sets the timing) is cut on that clock instead: each shot at its `film` time, black where no shot is, as long as the master. The master is laid whole and untouched (no loudness change, no limiter when it is alone). Voice-over takes and the narration track are not laid, because the master covers them; beds can still go on top. A shot with no film time is left out and listed.
+- **A project with `audio.master`** (locked audio that sets the timing) is cut on that clock instead: each shot at its `film` time, black where no shot is, as long as the master. The master is laid whole and untouched (no loudness change, no limiter when it is alone). Voice-over takes, the narration track and the project's music and effects are not laid, because the master covers them (the same rule as the export's master timeline; each bed is listed "not laid: <id> (approved; covered by the master audio, which is laid whole)"); beds given by flags can still go on top. A shot with no film time is left out and listed.
 
 **It is a by-product, not stage output.** It is never a review unit: no unit, asset, decision or ledger entry is made, nothing in `akuko.json` changes, and no stage moves (`stages.assemble` stays as it is). Say that to the person in those words every time, along with which shots were black and why, which clips were cut or held, and what was left out.
 
 Steps:
 
 0. **Fold decisions first** (`../decisions/cli.ts fold`), as for the preview. Tell the person what the fold reported.
-1. **Ask for beds**: music, room tone or effects they want under the cut, and which shot each effect belongs to. They are optional.
-2. **Dry run**: `node --experimental-strip-types ../assemble/cli.ts rough --project <folder> --dry-run [--music <file> --music-offset <s>] [--room-tone <file>] [--sfx <file>@<shot id> ...]`. It prints one line per shot (length; clip with what was cut or held, key frame and move, or black and why), one line per sound (where it starts, its level), anything left out, warnings, and the notice. An effect on a shot that does not exist, or a missing master, is a "cannot render" line (exit 2): fix it first. Show the person the plan before rendering.
+1. **Beds**: the project's approved music and effects go in by themselves. Ask whether they want anything else for this cut: other music instead (`--music`, which replaces the project's), room tone, extra effects and which shot each belongs to, or none of the project's beds (`--no-project-beds`). All optional.
+2. **Dry run**: `node --experimental-strip-types ../assemble/cli.ts rough --project <folder> --dry-run [--music <file> --music-offset <s>] [--room-tone <file>] [--sfx <file>@<shot id> ...] [--no-project-beds]`. It prints one line per shot (length; clip with what was cut or held, key frame and move, or black and why), one line per sound (where it starts, its level; for a bed, where it came from: the project asset id and its file, or the flag, with its placement and trim), anything left out, every "not laid: <id> (<why>)", warnings, and the notice. An effect on a shot that does not exist, or a missing master, is a "cannot render" line (exit 2): fix it first. Show the person the plan before rendering.
 3. **Render**: the same without `--dry-run` writes `<project>/cut/rough/rough-cut.mp4` (`--out <file>` to put it elsewhere). Without ffmpeg it writes nothing and says so; the plan is still the answer. The command passes the mix to ffmpeg as a file, `-/filter_complex` on FFmpeg 7 and later, `-filter_complex_script` on older builds, and tries the other if the first is refused.
 4. **Hand it over** with the notice and the measured loudness. You cannot hear it: say the person must listen for levels, the ducking and anything that clashes. Picture lock is not built yet; offer `/akuko export` for an editable timeline.
 
-**Host A (claude.ai).** As for the preview: save the project to a file, download each approved clip, key frame and voice-over take into one folder named `<asset id>.<ext>` (or its file name), and run `../assemble/cli.ts rough --state <file> --media <folder> [--out <file>]` with any bed flags. Hand the MP4 over as a download; do not store it with `storeAsset()` and do not add it to the project.
+**Host A (claude.ai).** As for the preview: save the project to a file, download each approved clip, key frame, voice-over take, music and effect into one folder named `<asset id>.<ext>` (or its file name), and run `../assemble/cli.ts rough --state <file> --media <folder> [--out <file>]` with any bed flags. Hand the MP4 over as a download; do not store it with `storeAsset()` and do not add it to the project.
 
 ## Rules it inherits
 

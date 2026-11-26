@@ -4,7 +4,7 @@
  *   node --experimental-strip-types assemble/cli.ts preview --project <folder> [--out <file.mp4>] [--fps 24] [--dry-run]
  *   node --experimental-strip-types assemble/cli.ts preview --state <akuko.json> --media <folder> [--out <file.mp4>] ...
  *   node --experimental-strip-types assemble/cli.ts rough --project <folder> [--out <file.mp4>] [--fps 24] [--dry-run]
- *        [--music <file> [--music-offset <s>]] [--room-tone <file>] [--sfx <file>@<shot id>]...
+ *        [--music <file> [--music-offset <s>]] [--room-tone <file>] [--sfx <file>@<shot id>]... [--no-project-beds]
  *
  *   preview   an animatic preview: each approved key frame held for its shot's length, in film order, with a
  *             gentle move only where the shot asks for one; black where a key frame is not approved yet. Writes
@@ -14,8 +14,10 @@
  *             a folder holding the downloaded key frames, each named `<asset id>.<ext>` or by its file name.
  *   rough     a rough cut with sound: each shot's approved clip (conformed to the shot: cut if longer, last frame
  *             held if shorter), else its approved key frame (held, with its gentle move), else black; approved
- *             voice-over takes at each shot's start + 0.1 s; optional music (ducked under the voice), room tone and
- *             effects the person points at. Default `<project>/cut/rough/rough-cut.mp4`. Never a review unit.
+ *             voice-over takes at each shot's start + 0.1 s; the project's approved music (ducked under the voice)
+ *             and effects where their placement says. Flags override: --music replaces the project's music, --sfx
+ *             adds effects, --room-tone adds room tone, --no-project-beds lays none of the project's. Default
+ *             `<project>/cut/rough/rough-cut.mp4`. Never a review unit.
  *   --dry-run  print the plan only.
  */
 
@@ -153,6 +155,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<CliRes
       lengthOf: (uri) => lengths.get(uri),
       ...(master ? { masterExists: onDisk(master.uri) } : {}),
       ...beds,
+      ...(opt.has('no-project-beds') ? { projectBeds: false } : {}),
     });
     const text = describeRough(plan);
     if (opt.has('dry-run')) return { code: plan.problems.length > 0 ? 2 : 0, out: text };

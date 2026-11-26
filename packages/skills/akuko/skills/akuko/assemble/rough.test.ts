@@ -153,10 +153,123 @@ describe('assemble rough: the sound plan', () => {
     assert.equal(quiet.audio[0]!.skipS, undefined);
   });
 
-  it('names approved music or effects in the project, which are not laid without a flag', () => {
+});
+
+/** A music or sfx asset as `sound add-music` / `add-sfx` records it: tags supplied, licence, placement; a shot placement sets owner. */
+const bed = (id: string, kind: 'music' | 'sfx', placement: string, status: Asset['status'] = 'approved'): Asset =>
+  ({
+    id, stage: 'sound', status, comments: [], kind, tags: ['supplied', 'licence:own recording', `placement:${placement}`],
+    ...(placement.startsWith('shot:') ? { owner: placement.slice(5) } : {}),
+    file: { uri: `audio/${kind}/${id}.wav`, mime: 'audio/wav' },
+  }) as Asset;
+const withBeds = (...beds: Asset[]): AkukoProject => { const p = material(); p.assets.push(...beds); return AkukoProjectSchema.parse(p); };
+
+describe('assemble rough: the project\'s own music and effects', () => {
+  it('a film-wide music bed runs from the start to the end, ducked under the voice like --music', () => {
+    const plan = planRough(withBeds(bed('film_music_1', 'music', 'film')), { fps: FPS, lengthOf });
+    const m = plan.audio.filter((a) => a.role === 'music');
+    assert.deepEqual(m.map((a) => [a.asset, a.src, a.origin, a.atS, a.maxS, a.lufs, a.ducked]), [['film_music_1', 'audio/music/film_music_1.wav', 'project', 0, 70, -24, true]]);
+    assert.deepEqual(plan.notLaid, []);
+    assert.match(describeRough(plan), /music film_music_1 \(project asset, audio\/music\/film_music_1\.wav\) film-wide from 0 s to the end \(70 s\), -24 LUFS, ducked under the voice, fades out over its last 2 s/);
+    assert.ok(audioGraph(plan)!.includes('[a2][vosc]sidechaincompress'), 'keyed from the voice bus');
+  });
+
+  it('a scene-placed bed spans the scene\'s shots in the cut, trimmed to them', () => {
+    const plan = planRough(withBeds(bed('sc2_music_1', 'music', 'scene:sc2'), bed('sc1_sfx_1', 'sfx', 'scene:sc1')), { fps: FPS, lengthOf });
+    const m = plan.audio.find((a) => a.asset === 'sc2_music_1')!;
+    assert.deepEqual([m.atS, m.maxS, m.placement], [16, 22, { scene: 'sc2', first: 'sc2_sh1', last: 'sc2_sh4' }]);
+    const fx = plan.audio.find((a) => a.asset === 'sc1_sfx_1')!;
+    assert.deepEqual([fx.role, fx.atS, fx.maxS, fx.lufs], ['sfx', 0, 16, -24]);
+    const text = describeRough(plan);
+    assert.match(text, /music sc2_music_1 \(project asset, [^)]*\) on scene sc2 from 16 s, trimmed to 22 s \(sc2_sh1 to sc2_sh4\)/);
+    assert.match(text, /effect sc1_sfx_1 \(project asset, [^)]*\) on scene sc1 from 0 s, trimmed to 16 s \(sc1_sh1 to sc1_sh3\), -24 LUFS/);
+    const lines = audioGraph(plan)!.trim().split(';\n');
+    assert.ok(lines.includes('[3]aformat=channel_layouts=stereo,aresample=48000,loudnorm=I=-24:TP=-4,atrim=0:22,afade=t=out:st=20:d=2,adelay=delays=16000:all=1[a2]'), lines.join('\n'));
+  });
+
+  it('a shot-placed effect starts at its shot and is trimmed to it, like --sfx; a short music cue fades over half its length', () => {
+    const plan = planRough(withBeds(bed('sc2_sh1_sfx_1', 'sfx', 'shot:sc2_sh1'), bed('sc1_sh2_music_1', 'music', 'shot:sc1_sh2')), { fps: FPS, lengthOf });
+    const fx = plan.audio.find((a) => a.asset === 'sc2_sh1_sfx_1')!;
+    assert.deepEqual([fx.shot, fx.atS, fx.maxS, fx.lufs], ['sc2_sh1', 16, 7, -24]);
+    assert.match(describeRough(plan), /effect sc2_sh1_sfx_1 \(project asset, [^)]*\) on shot sc2_sh1 from 16 s, trimmed to 7 s \(the shot\), -24 LUFS/);
+    const cue = plan.audio.find((a) => a.asset === 'sc1_sh2_music_1')!;
+    assert.deepEqual([cue.atS, cue.maxS], [6, 4]);
+    assert.ok(audioGraph(plan)!.includes('atrim=0:4,afade=t=out:st=2:d=2,adelay=delays=6000:all=1'), 'a 4 s cue fades over 2 s');
+  });
+
+  it('two music beds at once are both laid (one bus, ducked together), with a warning', () => {
+    const plan = planRough(withBeds(bed('film_music_1', 'music', 'film'), bed('sc2_music_1', 'music', 'scene:sc2')), { fps: FPS, lengthOf });
+    assert.equal(plan.audio.filter((a) => a.role === 'music').length, 2);
+    assert.match(plan.warnings.join(' '), /Music film_music_1 and sc2_music_1 play together from 16 s to 38 s/);
+    const g = audioGraph(plan)!;
+    assert.ok(g.includes('[a2][a3]amix=inputs=2:normalize=0[musbus]'));
+    assert.ok(g.includes('[musbus][vosc]sidechaincompress'));
+  });
+
+  it('--music replaces all the project\'s music for this render; --sfx adds to its effects', () => {
+    const p = withBeds(bed('film_music_1', 'music', 'film'), bed('sc2_music_1', 'music', 'scene:sc2'), bed('sc2_sh1_sfx_1', 'sfx', 'shot:sc2_sh1'));
+    const plan = planRough(p, { fps: FPS, lengthOf, music: { file: 'm.wav' }, sfx: [{ file: 'door.wav', shot: 'sc1_sh1' }] });
+    assert.deepEqual(plan.audio.filter((a) => a.role === 'music').map((a) => [a.src, a.origin]), [['m.wav', 'flag']]);
+    assert.deepEqual(plan.audio.filter((a) => a.role === 'sfx').map((a) => [a.asset ?? a.src, a.origin]), [['door.wav', 'flag'], ['sc2_sh1_sfx_1', 'project']]);
+    assert.deepEqual(plan.notLaid, [
+      { asset: 'film_music_1', why: 'approved; replaced by --music for this render' },
+      { asset: 'sc2_music_1', why: 'approved; replaced by --music for this render' },
+    ]);
+    const text = describeRough(plan);
+    assert.match(text, /music m\.wav \(--music\) film-wide from 0 s/);
+    assert.match(text, /effect door\.wav \(--sfx\) on shot sc1_sh1 from 0 s, trimmed to 6 s/);
+    assert.match(text, /not laid: film_music_1 \(approved; replaced by --music for this render\)/);
+  });
+
+  it('--no-project-beds lays none of them; flags still work', () => {
+    const p = withBeds(bed('film_music_1', 'music', 'film'), bed('sc2_sh1_sfx_1', 'sfx', 'shot:sc2_sh1'));
+    const plan = planRough(p, { fps: FPS, lengthOf, projectBeds: false, sfx: [{ file: 'door.wav', shot: 'sc1_sh1' }] });
+    assert.deepEqual(plan.audio.map((a) => a.role), ['vo', 'vo', 'sfx']);
+    assert.deepEqual(plan.notLaid.map((n) => n.why), ['approved; --no-project-beds', 'approved; --no-project-beds']);
+  });
+
+  it('assets not approved are listed with their status and never laid; a removed one is not mentioned', () => {
     const p = material();
-    p.assets.push(asset('music_theme', 'music', 'sc1_sh1', 'approved', 'audio/music/theme.wav', 'sound', ['supplied', 'placement:film']));
-    assert.match(planRough(AkukoProjectSchema.parse(p), { fps: FPS }).warnings.join(' '), /not laid automatically \(music_theme\)/);
+    p.assets.push(bed('film_music_1', 'music', 'film', 'pending-review'), bed('sc1_sfx_1', 'sfx', 'scene:sc1', 'needs-rework'), bed('sc4_sh1_sfx_1', 'sfx', 'shot:sc4_sh1'));
+    p.shots.find((s) => s.id === 'sc4_sh1')!.source = { kind: 'sheet', id: 'x', removed_at: '2026-11-01T00:00:00Z' } as never;
+    const plan = planRough(AkukoProjectSchema.parse(p), { fps: FPS, lengthOf });
+    assert.equal(plan.audio.filter((a) => a.role === 'music' || a.role === 'sfx').length, 0);
+    assert.deepEqual(plan.notLaid, [{ asset: 'film_music_1', why: 'pending-review' }, { asset: 'sc1_sfx_1', why: 'needs-rework' }], 'the effect on a removed shot is gone with it');
+    assert.match(describeRough(plan), /not laid: film_music_1 \(pending-review\)/);
+  });
+
+  it('a missing file, no placement, an unknown or untimed place: not laid, with the reason; the render is not stopped', () => {
+    const p = material();
+    const noTag = bed('loose_music_1', 'music', 'film');
+    noTag.tags = ['supplied', 'licence:own recording'];
+    p.assets.push(bed('film_music_1', 'music', 'film'), noTag, bed('sc1_sh1_sfx_1', 'sfx', 'shot:sc1_sh1'), bed('sc3_sfx_1', 'sfx', 'scene:sc3'));
+    delete p.shots.find((s) => s.id === 'sc1_sh1')!.duration_s;
+    delete p.shots.find((s) => s.id === 'sc3_sh1')!.duration_s;
+    const plan = planRough(AkukoProjectSchema.parse(p), { fps: FPS, lengthOf, exists: (u) => u !== 'audio/music/film_music_1.wav' });
+    assert.deepEqual(plan.notLaid, [
+      { asset: 'film_music_1', why: 'approved, but its file is missing (audio/music/film_music_1.wav)' },
+      { asset: 'loose_music_1', why: 'approved, but it records no placement (placement:film|scene:<id>|shot:<id>)' },
+      { asset: 'sc1_sh1_sfx_1', why: 'approved, but its shot sc1_sh1 is not in the cut (no duration, or removed)' },
+      { asset: 'sc3_sfx_1', why: 'approved, but its scene sc3 has no shot in the cut' },
+    ]);
+    assert.deepEqual(plan.problems, []);
+    assert.equal(plan.audio.filter((a) => a.origin === 'project').length, 0);
+  });
+
+  it('on the master clock the project\'s beds are covered by the master (as in the export); flags still go on top', () => {
+    const p = material();
+    p.audio.master = { uri: '../master.wav', duration_s: 10, sample_rate: 48000, start_tc: '00:00:00:00' };
+    p.shots = p.shots.slice(0, 2);
+    p.shots[0]!.film = { in_s: 0, out_s: 5 };
+    p.shots[1]!.film = { in_s: 5, out_s: 10 };
+    p.assets.push(bed('film_music_1', 'music', 'film'), bed('sc1_sh1_sfx_1', 'sfx', 'shot:sc1_sh1'), bed('sc1_sfx_1', 'sfx', 'scene:sc1', 'pending-review'));
+    const plan = planRough(AkukoProjectSchema.parse(p), { fps: FPS, sfx: [{ file: 'door.wav', shot: 'sc1_sh2' }] });
+    assert.deepEqual(plan.audio.map((a) => [a.role, a.origin ?? '']), [['master', ''], ['sfx', 'flag']]);
+    assert.deepEqual(plan.notLaid.map((n) => [n.asset, n.why]), [
+      ['film_music_1', 'approved; covered by the master audio, which is laid whole'],
+      ['sc1_sh1_sfx_1', 'approved; covered by the master audio, which is laid whole'],
+      ['sc1_sfx_1', 'pending-review'],
+    ]);
   });
 });
 
@@ -317,6 +430,35 @@ describe('assemble rough: rendering and the command line', () => {
     assert.equal(fake.calls.length, 15, 'a dry run renders nothing');
     assert.match(dry.out, /^Rough cut: 12 shot\(s\), 70 s at 24 fps, 1280 x 720\./);
     assert.match(dry.out, /voice-over sc1_sh1_vo at 0\.1 s \(start of sc1_sh1 \+ 0\.1 s\), -16 LUFS/);
+  });
+
+  it('lays the project\'s approved music and effects from their files with no flags; --no-project-beds lays none; akuko.json is byte-identical', async () => {
+    const { dir } = await projectOnDisk();
+    const p = AkukoProjectSchema.parse(JSON.parse(readFileSync(join(dir, 'akuko.json'), 'utf8')));
+    p.assets.push(bed('film_music_1', 'music', 'film'), bed('sc2_sh1_sfx_1', 'sfx', 'shot:sc2_sh1'), bed('sc1_sfx_1', 'sfx', 'scene:sc1', 'pending-review'));
+    for (const id of ['film_music_1', 'sc2_sh1_sfx_1']) {
+      const kind = id.includes('music') ? 'music' : 'sfx';
+      await mkdir(join(dir, 'audio', kind), { recursive: true });
+      await writeFile(join(dir, 'audio', kind, `${id}.wav`), 'x');
+    }
+    const json = serializeProject(p);
+    await writeFile(join(dir, 'akuko.json'), json);
+    const fake = fakeRun();
+    const r = await run(['rough', '--project', dir], { rough: { available: true, run: fake.run, versionText: 'ffmpeg version 9.0' } });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /music film_music_1 \(project asset, audio\/music\/film_music_1\.wav\) film-wide/);
+    assert.match(r.out, /effect sc2_sh1_sfx_1 \(project asset, [^)]*\) on shot sc2_sh1 from 16 s, trimmed to 7 s/);
+    assert.match(r.out, /not laid: sc1_sfx_1 \(pending-review\)/);
+    const mix = fake.calls.find((a) => a.includes('[mix]'))!;
+    const inputs = mix.filter((_, i) => mix[i - 1] === '-i');
+    assert.ok(inputs.includes(join(dir, 'audio', 'music', 'film_music_1.wav')), 'the project file is read from the project folder');
+    assert.ok(inputs.includes(join(dir, 'audio', 'sfx', 'sc2_sh1_sfx_1.wav')));
+    assert.equal(readFileSync(join(dir, 'akuko.json'), 'utf8'), json, 'akuko.json is untouched');
+    const none = await run(['rough', '--project', dir, '--dry-run', '--no-project-beds']);
+    assert.equal(none.code, 0, none.out);
+    assert.doesNotMatch(none.out, /project asset/);
+    assert.match(none.out, /not laid: film_music_1 \(approved; --no-project-beds\)/);
+    assert.equal(readFileSync(join(dir, 'akuko.json'), 'utf8'), json);
   });
 
   it('retries the mix with -filter_complex_script when ffmpeg refuses -/filter_complex', async () => {
