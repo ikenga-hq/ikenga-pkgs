@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/video-script-structure",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Pure schema/convention doc for video script structure. Engine-agnostic, zero deps — a reusable authoring convention any agent can adopt.",
   "keywords": [
     "claude",

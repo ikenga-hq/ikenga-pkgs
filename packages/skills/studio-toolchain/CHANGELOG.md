@@ -1,5 +1,11 @@
 # @ikenga/studio-toolchain
 
+## 0.2.2
+
+### Patch Changes
+
+- [#242](https://github.com/ikenga-hq/ikenga-pkgs/pull/242) [`569e751`](https://github.com/ikenga-hq/ikenga-pkgs/commit/569e751d51ccee5c964ba2f038acad1a86d1f647) Thanks [@nedjamez](https://github.com/nedjamez)! - Docs: drop the retired in-house video engine's repository name. The studio-schema provenance comment now says "a retired in-house video engine", and the three skills' commands and file-layout diagrams use a `<video-engine>` placeholder.
+
 ## 0.2.1
 
 ### Patch Changes

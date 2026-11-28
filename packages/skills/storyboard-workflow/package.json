@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/storyboard-workflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Engine-agnostic 3-pass storyboard workflow. The only Studio-coupled fragment is an optional --mode personal block that stays inert elsewhere.",
   "keywords": [
     "claude",
