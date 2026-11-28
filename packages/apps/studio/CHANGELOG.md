@@ -1,5 +1,12 @@
 # @ikenga/pkg-studio
 
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies [[`569e751`](https://github.com/ikenga-hq/ikenga-pkgs/commit/569e751d51ccee5c964ba2f038acad1a86d1f647)]:
+  - @ikenga/studio-schema@0.2.1
+
 ## 0.9.0
 
 ### Minor Changes

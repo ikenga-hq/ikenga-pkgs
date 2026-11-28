@@ -1,5 +1,18 @@
 # @ikenga/skill-akuko
 
+## 0.6.0
+
+### Minor Changes
+
+- [#244](https://github.com/ikenga-hq/ikenga-pkgs/pull/244) [`9642058`](https://github.com/ikenga-hq/ikenga-pkgs/commit/9642058d1c4258b2ec4da33db34121327e6dde7e) Thanks [@nedjamez](https://github.com/nedjamez)! - `assemble rough` now lays the project's own approved music and sound-effect assets without flags, where each records its placement (a shot, a scene's shots, or the whole film), music ducked under the voice and effects at -24 LUFS. `--music` replaces the project's music for that render, `--sfx` adds effects, and the new `--no-project-beds` lays none of them. Assets not approved, or with a missing file or no place in the cut, are listed in the plan as "not laid" and never used. On a master-clock project they stay covered by the master, as in the export. Nothing is written to akuko.json.
+
+### Patch Changes
+
+- [#243](https://github.com/ikenga-hq/ikenga-pkgs/pull/243) [`d9acfce`](https://github.com/ikenga-hq/ikenga-pkgs/commit/d9acfcef03641e4310ce60f0837b5ce71c61156f) Thanks [@nedjamez](https://github.com/nedjamez)! - akuko: a manual `ingest --new-take` now leaves the planned unit alone (its file, status and comments) and keeps the file as an extra take of its own (`<unit>-<stage>`, `-2`…, tag `extra-take`) waiting for review. An extra take is reviewed like any asset but never holds its stage open, and approving it does not replace the unit. It is also stored under a file name of its own, so it can no longer land on the unit's file.
+
+- Updated dependencies [[`569e751`](https://github.com/ikenga-hq/ikenga-pkgs/commit/569e751d51ccee5c964ba2f038acad1a86d1f647)]:
+  - @ikenga/studio-schema@0.2.1
+
 ## 0.5.1
 
 ### Patch Changes

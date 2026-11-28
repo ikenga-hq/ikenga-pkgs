@@ -1,6 +1,6 @@
 {
   "name": "@ikenga/studio-toolchain",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Studio toolchain suite — the interview/instantiate/render/author loop (init, oneshot, watch, archetype-build, block-author, generate-narration, freeform-video) that drives the Studio MCP surface (archetype.* / block.* / render.*).",
   "keywords": [
     "claude",
