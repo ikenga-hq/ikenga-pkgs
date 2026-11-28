@@ -17,15 +17,21 @@
  * Sound:
  *   - each approved voice-over take at its shot's start plus 0.1 s, loudness-normalised to -16 LUFS; with no
  *     approved take, the single `audio.narration` track from the start;
- *   - optional beds the person points at (they are not stage units): music (`--music`, `--music-offset`) ducked
- *     under the voice by a compressor keyed from the voice bus, room tone (`--room-tone`) low under everything (about
- *     -36 LUFS, looped), effects (`--sfx <file>@<shot>`) at -24 LUFS, trimmed to their shot;
+ *   - beds. The project's **approved** `music` and `sfx` assets (person-supplied with `sound add-music` /
+ *     `add-sfx`) are laid without flags, where their `placement:` tag says: `shot:<id>` from that shot's start,
+ *     trimmed to the shot; `scene:<id>` across the scene's shots in the cut, trimmed to them; `film` from the start
+ *     to the end. Any other status, a missing file, an unknown or untimed place is listed "not laid: <id> (<why>)".
+ *     Flags the person gives override: `--music` (`--music-offset`) replaces all the project's music for this
+ *     render, `--sfx <file>@<shot>` adds to the project's effects, `--no-project-beds` lays none of them. Music is
+ *     ducked under the voice by a compressor keyed from the voice bus, effects sit at -24 LUFS, room tone
+ *     (`--room-tone`, flag only: no asset field marks room tone) low under everything (about -36 LUFS, looped);
  *   - mixed with `amix` and `alimiter`; the integrated loudness is measured afterwards (`ebur128`).
  *
  * A project with `audio.master` (locked audio that sets the film's timing) is cut on that clock instead: each shot sits at
  * its `film` time, gaps between shots are black, the film is as long as the master, and the master is laid whole and
  * untouched from the first frame. Voice-over takes and the narration track are then not laid (the master covers
- * them). Beds can still be added on top.
+ * them), and so are the project's music and effects (as in the export's master plan); beds given by flags can still go
+ * on top.
  *
  * The planning here is pure; the ffmpeg calls are thin.
  */
@@ -40,6 +46,7 @@ import { removedAt } from '../schema/akuko-project.ts';
 import { started, whyNot } from '../handoff/plan-shared.ts';
 import { framesAvailable, framesFor, type Fps } from '../handoff/timecode.ts';
 import { isVo } from '../sound/plan.ts';
+import { placementOf } from '../handoff/plan.ts';
 import { previewMove, previewSize, segmentArgs } from './preview.ts';
 
 /** Every rough cut says this, so nobody mistakes it for a stage output. */
@@ -54,6 +61,8 @@ export const MUSIC_LUFS = -24;
 export const ROOM_TONE_LUFS = -36;
 /** The music fades out over the film's last seconds; room tone too. */
 const MUSIC_FADE_S = 2;
+/** A music bed fades over its last 2 s, or over half of it when it is shorter than 4 s (a cue on a short shot). */
+const musicFade = (len: number): number => Math.min(MUSIC_FADE_S, len / 2);
 const ROOM_FADE_S = 1.5;
 const SFX_FADE_S = 0.15;
 
@@ -91,10 +100,14 @@ export type RoughAudioRole = 'vo' | 'narration' | 'master' | 'music' | 'room-ton
 
 export interface RoughAudio {
   role: RoughAudioRole;
-  /** A project file's uri (vo, narration, master) or the path the person gave (music, room tone, effect). */
+  /** A project file's uri (vo, narration, master, a project music or sfx asset) or the path the person gave (a flag). */
   src: string;
   asset?: string;
   shot?: string;
+  /** A bed's origin: the project's own approved asset (`asset` is set), or a flag the person gave. */
+  origin?: 'project' | 'flag';
+  /** A bed's placement: the whole film, one scene (its first and last shot in the cut) or one shot. */
+  placement?: { film: true } | { scene: string; first: string; last: string } | { shot: string };
   /** Where it starts in the film, in seconds. */
   atS: number;
   /** Seconds skipped at the start of the file (the music offset). */
@@ -122,6 +135,8 @@ export interface RoughPlan {
   audio: RoughAudio[];
   /** Shots and sound that are not in the cut, and why. */
   leftOut: { what: string; why: string }[];
+  /** The project's music and sfx assets that are not laid, and why (their status, a missing file, a flag). */
+  notLaid: { asset: string; why: string }[];
   /** Worth knowing; the cut is still made. */
   warnings: string[];
   /** Stop a render (the dry run still prints them): a missing master, an effect on a shot that does not exist. */
@@ -136,9 +151,13 @@ export interface RoughOptions {
   lengthOf?: (uri: string) => number | undefined;
   /** Is the master audio on disk? Default: yes. */
   masterExists?: boolean;
+  /** Replaces every music asset of the project for this render. */
   music?: { file: string; offsetS?: number };
   roomTone?: { file: string };
+  /** Added to the project's effects. */
   sfx?: { file: string; shot: string }[];
+  /** Lay the project's approved music and sfx assets. Default: yes (`--no-project-beds` sets false). */
+  projectBeds?: boolean;
 }
 
 const fmt = (n: number): string => String(Number(n.toFixed(3)));
@@ -174,6 +193,72 @@ function picture(p: AkukoProject, shot: Shot, frames: number, o: RoughOptions): 
   }
   const black = kf ? `its key frame file (${kf.file!.uri}) was not found` : clip ? 'its clip file is missing and no key frame is approved' : 'no approved clip or key frame yet';
   return { source: 'black', black, notes };
+}
+
+interface BedContext {
+  master: boolean;
+  filmS: number;
+  fps: Fps;
+  segments: RoughSegment[];
+  byShot: Map<string, RoughSegment>;
+  exists: (uri: string) => boolean;
+  voiced: boolean;
+  notLaid: RoughPlan['notLaid'];
+}
+
+/**
+ * The project's own music and sfx assets (stage sound, person-supplied), placed where their `placement:` tag says.
+ * Only `approved` ones with a file on disk are laid; every other live one goes to `notLaid` with the reason. Pure.
+ */
+function projectBeds(p: AkukoProject, o: RoughOptions, c: BedContext): RoughAudio[] {
+  const out: RoughAudio[] = [];
+  const { fps } = c;
+  for (const a of p.assets) {
+    if (a.stage !== 'sound' || (a.kind !== 'music' && a.kind !== 'sfx') || !live(p, a)) continue;
+    const no = (why: string): void => { c.notLaid.push({ asset: a.id, why }); };
+    if (a.status !== 'approved') { no(a.status); continue; }
+    if (o.projectBeds === false) { no('approved; --no-project-beds'); continue; }
+    if (c.master) { no('approved; covered by the master audio, which is laid whole'); continue; }
+    if (a.kind === 'music' && o.music) { no('approved; replaced by --music for this render'); continue; }
+    if (!a.file) { no('approved, but it has no file'); continue; }
+    if (!c.exists(a.file.uri)) { no(`approved, but its file is missing (${a.file.uri})`); continue; }
+    const where = placementOf(a);
+    let atS: number;
+    let maxS: number;
+    let placement: NonNullable<RoughAudio['placement']>;
+    let shot: string | undefined;
+    if (!where) { no('approved, but it records no placement (placement:film|scene:<id>|shot:<id>)'); continue; }
+    if ('film' in where) {
+      atS = 0;
+      maxS = c.filmS;
+      placement = { film: true };
+    } else if ('shot' in where) {
+      const seg = c.byShot.get(where.shot);
+      if (!seg) {
+        no(p.shots.some((s) => s.id === where.shot) ? `approved, but its shot ${where.shot} is not in the cut (no duration, or removed)` : `approved, but its shot ${where.shot} is not in this project`);
+        continue;
+      }
+      atS = secs(seg.at, fps);
+      maxS = seg.seconds;
+      placement = { shot: where.shot };
+      shot = where.shot;
+    } else {
+      const inScene = c.segments.filter((s) => s.shot && p.shots.find((x) => x.id === s.shot)?.scene === where.scene);
+      if (inScene.length === 0) {
+        no(p.scenes.some((s) => s.id === where.scene) ? `approved, but its scene ${where.scene} has no shot in the cut` : `approved, but its scene ${where.scene} is not in this project`);
+        continue;
+      }
+      const first = inScene[0]!;
+      const last = inScene[inScene.length - 1]!;
+      atS = secs(first.at, fps);
+      maxS = secs(last.at + last.frames - first.at, fps);
+      placement = { scene: where.scene, first: first.shot, last: last.shot };
+    }
+    out.push(a.kind === 'music'
+      ? { role: 'music', src: a.file.uri, asset: a.id, origin: 'project', placement, ...(shot ? { shot } : {}), atS, maxS, lufs: MUSIC_LUFS, ducked: c.voiced }
+      : { role: 'sfx', src: a.file.uri, asset: a.id, origin: 'project', placement, ...(shot ? { shot } : {}), atS, maxS, lufs: SFX_LUFS });
+  }
+  return out;
 }
 
 /** The rough cut: picture segments and audio placements. Pure; reads the project only. */
@@ -274,23 +359,48 @@ export function planRough(p: AkukoProject, o: RoughOptions): RoughPlan {
   }
   const voiced = audio.length > 0;
 
-  // ── beds the person pointed at ────────────────────────────────────────
+  // ── beds: the project's approved music and effects, and the flags ──────
+  const notLaid: RoughPlan['notLaid'] = [];
+  const project = projectBeds(p, o, { master: master !== undefined, filmS, fps, segments, byShot, exists, voiced, notLaid });
   if (o.music) {
     const skip = o.music.offsetS ?? 0;
-    audio.push({ role: 'music', src: o.music.file, atS: 0, ...(skip > 0 ? { skipS: skip } : {}), maxS: filmS, lufs: MUSIC_LUFS, ducked: voiced });
+    audio.push({ role: 'music', src: o.music.file, origin: 'flag', placement: { film: true }, atS: 0, ...(skip > 0 ? { skipS: skip } : {}), maxS: filmS, lufs: MUSIC_LUFS, ducked: voiced });
   }
-  if (o.roomTone) audio.push({ role: 'room-tone', src: o.roomTone.file, atS: 0, maxS: filmS, loop: true, lufs: ROOM_TONE_LUFS });
+  audio.push(...project.filter((a) => a.role === 'music'));
+  if (o.roomTone) audio.push({ role: 'room-tone', src: o.roomTone.file, origin: 'flag', atS: 0, maxS: filmS, loop: true, lufs: ROOM_TONE_LUFS });
   for (const fx of o.sfx ?? []) {
     const seg = byShot.get(fx.shot);
-    if (seg) { audio.push({ role: 'sfx', src: fx.file, shot: fx.shot, atS: secs(seg.at, fps), maxS: seg.seconds, lufs: SFX_LUFS }); continue; }
+    if (seg) { audio.push({ role: 'sfx', src: fx.file, origin: 'flag', placement: { shot: fx.shot }, shot: fx.shot, atS: secs(seg.at, fps), maxS: seg.seconds, lufs: SFX_LUFS }); continue; }
     const s = p.shots.find((x) => x.id === fx.shot);
     if (s) leftOut.push({ what: `effect ${fx.file}`, why: `its shot ${fx.shot} is not in the cut (no duration or film time, or removed)` });
     else problems.push(`--sfx ${fx.file}@${fx.shot}: there is no shot ${fx.shot} in this project.`);
   }
-  const beds = p.assets.filter((a) => a.stage === 'sound' && (a.kind === 'music' || a.kind === 'sfx') && a.status === 'approved' && live(p, a));
-  if (beds.length > 0) warnings.push(`Approved music or effects in the project are not laid automatically (${beds.map((a) => a.id).join(', ')}): point at their files with --music or --sfx <file>@<shot>.`);
+  audio.push(...project.filter((a) => a.role === 'sfx'));
 
-  return { mode, fps, width, height, totalFrames, seconds: filmS, segments, audio, leftOut, warnings, problems };
+  // Two music beds at the same time are both laid (a film bed under a scene's cue, say); say so, the person listens.
+  const music = audio.filter((a) => a.role === 'music');
+  for (let i = 0; i < music.length; i++) {
+    for (let j = i + 1; j < music.length; j++) {
+      const [a, b] = [music[i]!, music[j]!];
+      const from = Math.max(a.atS, b.atS);
+      const to = Math.min(a.atS + (a.maxS ?? filmS), b.atS + (b.maxS ?? filmS));
+      if (to - from > 1e-3) warnings.push(`Music ${a.asset ?? a.src} and ${b.asset ?? b.src} play together from ${fmt(from)} s to ${fmt(to)} s; both are laid (listen for a clash).`);
+    }
+  }
+
+  return { mode, fps, width, height, totalFrames, seconds: filmS, segments, audio, leftOut, notLaid, warnings, problems };
+}
+
+/** A bed's name and where it came from: `film_music_1 (project asset, audio/music/x.wav)` or `m.wav (--music)`. */
+const bedName = (a: RoughAudio, flag: string): string => (a.origin === 'project' ? `${a.asset} (project asset, ${a.src})` : `${a.src} (${flag})`);
+
+/** A bed's placement and trim, in words. */
+function where(a: RoughAudio): string {
+  const span = `from ${fmt(a.atS)} s, trimmed to ${fmt(a.maxS!)} s`;
+  const pl = a.placement;
+  if (!pl || 'film' in pl) return `film-wide from ${fmt(a.atS)} s to the end (${fmt(a.maxS!)} s)`;
+  if ('shot' in pl) return `on shot ${pl.shot} ${span} (the shot)`;
+  return `on scene ${pl.scene} ${span} (${pl.first === pl.last ? pl.first : `${pl.first} to ${pl.last}`})`;
 }
 
 /** One line per segment and per sound, plus the notice: what the person is told, with or without ffmpeg. */
@@ -317,20 +427,21 @@ export function describeRough(plan: RoughPlan): string {
     for (const n of s.notes) L.push(`         note: ${n}`);
   }
   L.push('Sound:');
-  if (plan.audio.length === 0) L.push('  none: the cut is silent (no approved voice-over, no beds given)');
+  if (plan.audio.length === 0) L.push('  none: the cut is silent (no approved voice-over, no beds laid)');
   for (const a of plan.audio) {
     const lufs = a.lufs !== undefined ? `, ${a.lufs} LUFS` : '';
     switch (a.role) {
       case 'vo': L.push(`  voice-over ${a.asset} at ${fmt(a.atS)} s (start of ${a.shot} + ${VO_DELAY_S} s)${lufs}`); break;
       case 'narration': L.push(`  narration track ${a.src} from 0 s${lufs}: ${a.note}`); break;
       case 'master': L.push(`  master ${a.src} from 0 s: ${a.note}`); break;
-      case 'music': L.push(`  music ${a.src} from 0 s${a.skipS ? `, starting ${fmt(a.skipS)} s into the file` : ''}${lufs}${a.ducked ? ', ducked under the voice' : ''}, fades out over the last ${MUSIC_FADE_S} s`); break;
-      case 'room-tone': L.push(`  room tone ${a.src} under everything, looped${lufs}`); break;
-      case 'sfx': L.push(`  effect ${a.src} on ${a.shot} at ${fmt(a.atS)} s, trimmed to ${fmt(a.maxS!)} s${lufs}`); break;
+      case 'music': L.push(`  music ${bedName(a, '--music')} ${where(a)}${a.skipS ? `, starting ${fmt(a.skipS)} s into the file` : ''}${lufs}${a.ducked ? ', ducked under the voice' : ''}, fades out over its last ${fmt(musicFade(a.maxS ?? plan.seconds))} s`); break;
+      case 'room-tone': L.push(`  room tone ${a.src} (--room-tone) under everything, looped${lufs}`); break;
+      case 'sfx': L.push(`  effect ${bedName(a, '--sfx')} ${where(a)}${lufs}`); break;
     }
   }
   if (plan.audio.length > 0) L.push(plan.audio.length === 1 && plan.audio[0]!.role === 'master' ? '  mix: the master alone, untouched' : '  mix: amix, then alimiter; loudness measured after the render');
   for (const l of plan.leftOut) L.push(`  left out ${l.what}: ${l.why}`);
+  for (const n of plan.notLaid) L.push(`  not laid: ${n.asset} (${n.why})`);
   for (const w of plan.warnings) L.push(`  warning: ${w}`);
   for (const p of plan.problems) L.push(`  cannot render: ${p}`);
   L.push(ROUGH_NOTICE);
@@ -356,7 +467,7 @@ export function audioGraph(plan: RoughPlan, firstInput = 1): string | undefined 
   const lines: string[] = [];
   const voice: string[] = [];
   const sfx: string[] = [];
-  let music: string | undefined;
+  const musicL: string[] = [];
   let room: string | undefined;
   plan.audio.forEach((a, k) => {
     const f: string[] = [];
@@ -365,7 +476,11 @@ export function audioGraph(plan: RoughPlan, firstInput = 1): string | undefined 
     f.push('aformat=channel_layouts=stereo', 'aresample=48000');
     if (a.lufs !== undefined) f.push(`loudnorm=I=${a.lufs}:TP=${TP[a.role] ?? -2}${a.role === 'vo' || a.role === 'narration' ? ':LRA=7' : ''}`);
     if (a.role === 'sfx') f.push(`afade=t=out:st=${fmt(Math.max(0, a.maxS! - SFX_FADE_S))}:d=${SFX_FADE_S}`);
-    if (a.role === 'music') f.push(`atrim=0:${film}`, `afade=t=out:st=${fmt(Math.max(0, plan.seconds - MUSIC_FADE_S))}:d=${MUSIC_FADE_S}`);
+    if (a.role === 'music') {
+      const len = a.maxS ?? plan.seconds;
+      const d = musicFade(len);
+      f.push(`atrim=0:${fmt(len)}`, `afade=t=out:st=${fmt(Math.max(0, len - d))}:d=${fmt(d)}`);
+    }
     if (a.role === 'room-tone') f.push(`afade=t=out:st=${fmt(Math.max(0, plan.seconds - ROOM_FADE_S))}:d=${ROOM_FADE_S}`);
     const ms = Math.round(a.atS * 1000);
     if (ms > 0) f.push(`adelay=delays=${ms}:all=1`);
@@ -373,7 +488,7 @@ export function audioGraph(plan: RoughPlan, firstInput = 1): string | undefined 
     lines.push(`[${firstInput + k}]${f.join(',')}[${label}]`);
     if (VOICE_ROLES.has(a.role)) voice.push(label);
     else if (a.role === 'sfx') sfx.push(label);
-    else if (a.role === 'music') music = label;
+    else if (a.role === 'music') musicL.push(label);
     else room = label;
   });
   const bus = (labels: string[], name: string): string | undefined => {
@@ -384,7 +499,8 @@ export function audioGraph(plan: RoughPlan, firstInput = 1): string | undefined 
   };
   let vo = bus(voice, 'vobus');
   const fx = bus(sfx, 'sfxbus');
-  if (music && plan.audio.find((a) => a.role === 'music')!.ducked && vo) {
+  let music = bus(musicL, 'musbus');
+  if (music && plan.audio.some((a) => a.role === 'music' && a.ducked) && vo) {
     lines.push(`[${vo}]asplit=2[vo1][vosc]`);
     lines.push(`[${music}][vosc]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=400[musd]`);
     vo = 'vo1';
@@ -531,7 +647,8 @@ export async function renderRough(plan: RoughPlan, o: RenderRoughOptions): Promi
     await writeFile(graphFile, graph);
     const inputs: string[] = [];
     for (const a of plan.audio) {
-      const file = a.role === 'vo' || a.role === 'narration' || a.role === 'master' ? need(a.src, `${a.role === 'vo' ? `voice-over ${a.asset}` : a.role}`) : a.src;
+      const file = a.role === 'vo' || a.role === 'narration' || a.role === 'master' ? need(a.src, `${a.role === 'vo' ? `voice-over ${a.asset}` : a.role}`)
+        : a.origin === 'project' ? need(a.src, `${a.role === 'music' ? 'music' : 'effect'} ${a.asset}`) : a.src;
       if (a.loop) inputs.push('-stream_loop', '-1');
       inputs.push('-i', file);
     }
