@@ -50,6 +50,7 @@ import {
 } from '../schema/akuko-project.ts';
 import { CHAT_VIEW, conformedViewIds, type ConformedInput } from './conformed.ts';
 import { isIdleMotionUnit, motionRollup, refreshMotionStage } from '../motion/stage.ts';
+import { isExtraTake } from '../providers/outputs.ts';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Vocabulary
@@ -641,12 +642,14 @@ export function foldDecisions(project: AkukoProject, incoming: Iterable<Decision
 }
 
 /**
- * A unit that never holds its stage back: one removed from the shot list (WP-29), or an idle motion unit, kept
+ * A unit that never holds its stage back: one removed from the shot list (WP-29), an idle motion unit, kept
  * although its shot no longer asks for it (a clip of a shot that is not a video shot, a lip-sync or line cut of a
- * shot that no longer wants one: `motion/stage.ts#isIdleMotionUnit`, WP-32). Both are kept and shown, never deleted.
+ * shot that no longer wants one: `motion/stage.ts#isIdleMotionUnit`, WP-32), or an extra take kept on the person's
+ * word (manual `ingest --new-take`, `providers/outputs.ts#isExtraTake`): it is reviewed like any asset, but the stage
+ * is its planned units. All are kept and shown, never deleted.
  */
 const outOfRollup = (p: AkukoProject, u: Unit): boolean =>
-  removedAt(p, u) !== undefined || ('kind' in u && 'tags' in u && isIdleMotionUnit(p, u as Asset));
+  removedAt(p, u) !== undefined || isExtraTake(u) || ('kind' in u && 'tags' in u && isIdleMotionUnit(p, u as Asset));
 
 /** Approve or re-open one stage from its counted units. A stage with nothing counted is left as it is. */
 function rollStage(p: AkukoProject, units: Unit[], s: StageId): void {

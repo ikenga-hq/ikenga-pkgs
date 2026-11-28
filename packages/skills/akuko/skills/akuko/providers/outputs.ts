@@ -10,6 +10,13 @@
  *     approves (schema design rule).
  * Recording the same file twice changes nothing, so a person's approval is
  * never undone by a second `collect()`.
+ *
+ * An extra take (tag `extra-take`, kept on the person's word by a manual
+ * `ingest --new-take`) is recorded as its own asset at `pending-review` and
+ * leaves the unit it was made for exactly as it was: no status, file,
+ * `by_stage` or comment change. It never holds its stage open (folding
+ * leaves it out of the roll-up: decisions/fold.ts), and approving it does not
+ * replace the unit (lib/state.md §Status transitions).
  */
 
 import type {
@@ -30,6 +37,15 @@ export class OutputError extends Error {
 /** Tag every output carries so a job's files can be found again: `job:<id>`. */
 export const jobTag = (jobId: string): string => `job:${jobId}`;
 
+/** Tag on an extra take: a file kept beside a planned unit on the person's word (manual `ingest --new-take`). */
+export const EXTRA_TAKE_TAG = 'extra-take';
+
+/** Is this unit an extra take? Reviewed like any asset, but it never holds its stage open and never replaces its unit. */
+export const isExtraTake = (u: object): boolean => {
+  const tags = (u as { tags?: unknown }).tags;
+  return Array.isArray(tags) && tags.includes(EXTRA_TAKE_TAG);
+};
+
 /**
  * The asset id an output should be stored under. An asset unit that has no
  * file yet (a planned portrait, plate…) is filled in place; anything else
@@ -41,13 +57,14 @@ export const jobTag = (jobId: string): string => `job:${jobId}`;
  * sibling. A take that replaces a sent-back asset is filled in place: the
  * stage's redo (`step --units`) clears the slot first, and a manual ingest
  * into a sent-back asset replaces it in place itself (providers/manual).
+ * `filled: 'sibling'` (`--new-take`) names the extra take.
  */
 export function planAssetId(p: AkukoProject, unit: string, stage: StageId, opts: { filled?: 'sibling' | 'refuse' } = {}): { id: string; inPlace: boolean } {
   const ref = findUnit(p, unit);
   if (!ref) throw new OutputError(`unknown unit "${unit}"`);
   if (ref.kind === 'asset' && !ref.unit.file) return { id: unit, inPlace: true };
   if (opts.filled === 'refuse' && ref.kind === 'asset' && ref.unit.status !== 'needs-rework') {
-    throw new OutputError(`"${unit}" already has a file (${ref.unit.file?.uri ?? 'recorded'}, ${ref.unit.status}). Nothing was stored. To replace it, the person sends it back first (Request changes on the board); then ingest the file again (it replaces the old one in place, and the old file stays stored), or run step --units ${unit} for a new job and ingest into that. To keep both as a separate take, ingest again with --new-take (that take is a unit of its own: a person reviews it too before the stage can close).`);
+    throw new OutputError(`"${unit}" already has a file (${ref.unit.file?.uri ?? 'recorded'}, ${ref.unit.status}). Nothing was stored. To replace it, the person sends it back first (Request changes on the board); then ingest the file again (it replaces the old one in place, and the old file stays stored), or run step --units ${unit} for a new job and ingest into that. To keep it as well, only if the person asks, ingest again with --new-take: it is stored as an extra take beside ${unit}, which stays as it is.`);
   }
   const taken = new Set(p.assets.map((a) => a.id));
   const base = `${unit}-${stage}`;
@@ -93,13 +110,14 @@ export interface RecordOutputArgs {
   ts: string;
 }
 
-/** Upsert one output asset and move its unit to pending-review. Pure. */
+/** Upsert one output asset and move its unit to pending-review (an extra take leaves its unit alone). Pure. */
 export function recordOutput(p: AkukoProject, a: RecordOutputArgs): AkukoProject {
   if (!findUnit(p, a.unit) && a.asset.id !== a.unit) throw new OutputError(`unknown unit "${a.unit}"`);
   const file = a.asset.file;
   const tags = [...new Set([...(a.asset.tags ?? []), jobTag(a.job)])];
   const existing = p.assets.find((x) => x.id === a.asset.id);
   const inPlace = a.asset.id === a.unit;
+  const extra = isExtraTake(a.asset) || (existing !== undefined && isExtraTake(existing));
 
   let next: AkukoProject;
   if (existing) {
@@ -132,7 +150,7 @@ export function recordOutput(p: AkukoProject, a: RecordOutputArgs): AkukoProject
     next = { ...p, assets: [...p.assets, asset] };
   }
 
-  if (!inPlace) {
+  if (!inPlace && !extra) {
     const ref = findUnit(next, a.unit);
     if (ref && !alreadyShows(ref.unit, a.stage, file)) {
       next = updateUnit(next, a.unit, (u) => markProduced(u, a.stage, file, a.ts));

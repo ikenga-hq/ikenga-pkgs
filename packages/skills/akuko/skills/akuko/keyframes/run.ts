@@ -222,12 +222,15 @@ export async function ingestKeyframe(
   const warnings = [...r.warnings];
   if (steps) {
     let p = await deps.host.readState();
-    const shot = p.shots.find((s) => s.id === r.asset.owner);
+    // The key frame's shot (an extra take from `--new-take` is owned by the key frame, not the shot).
+    const shotId = p.assets.find((a) => a.id === unit)?.owner ?? r.asset.owner;
+    const shot = p.shots.find((s) => s.id === shotId);
     if (stepFiles?.length && shot?.layout) {
       const recorded: LayoutStep[] = [];
       for (const [k, f] of stepFiles.entries()) {
         const ext = f.mime === 'image/jpeg' ? 'jpg' : f.mime === 'image/webp' ? 'webp' : 'png';
-        const stored = await deps.host.storeAsset({ kind: 'keyframe', filename: `${unit}-step${k + 1}.${ext}`, mime: f.mime, data: f.data, owner: unit, name: `${unit} step ${k + 1} (${steps[k]!.name})`, tags: ['layout-step', jobTag(job.id)] });
+        const take = r.asset.id; // the key frame itself, or an extra take beside it (whose step files must not land on the key frame's names)
+        const stored = await deps.host.storeAsset({ kind: 'keyframe', filename: `${take}-step${k + 1}.${ext}`, mime: f.mime, data: f.data, owner: take, name: `${take} step ${k + 1} (${steps[k]!.name})`, tags: ['layout-step', jobTag(job.id)] });
         const charRef = steps[k]!.refs?.find((x) => x.role === 'character');
         const owner = charRef ? p.assets.find((a) => a.id === charRef.id)?.owner : undefined;
         recorded.push({

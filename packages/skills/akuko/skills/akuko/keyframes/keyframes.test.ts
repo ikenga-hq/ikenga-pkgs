@@ -18,6 +18,7 @@ import { listUnits, type AkukoProject } from '../schema/akuko-project.ts';
 import { loadProviderConfig } from '../providers/config.ts';
 import type { Provider, WaveOneHost } from '../providers/contract.ts';
 import { createManualProvider } from '../providers/manual/index.ts';
+import { EXTRA_TAKE_TAG } from '../providers/outputs.ts';
 import { createGeminiImageProvider } from '../providers/gemini-image/index.ts';
 import { createFalImageProvider } from '../providers/fal/index.ts';
 import { PNG_BYTES, mockFal, mockGemini, type MockNet } from '../providers/gemini-image/__fixtures__/mock-net.ts';
@@ -647,6 +648,42 @@ describe('approval is a person\'s, through a conformed view', () => {
     assert.notEqual(asset(p, U).file!.uri, oldUri);
     assert.ok(r.host.files.has(oldUri), 'the old frame stays stored');
     assert.ok(asset(p, U).comments.some((c) => c.author === 'agent' && c.text.startsWith('Revised:') && c.text.includes(oldUri)));
+    assert.deepEqual(checkIntegrity(p), []);
+  });
+
+  it('--new-take beside an approved key frame: its own asset waiting for review; the frame and the stage are untouched, and deciding on the take never blocks', async () => {
+    const r = rig('manual', planned());
+    let jobU: Parameters<typeof ingestKeyframe>[2] | undefined;
+    for (let guard = 0; r.host.peek().stages.keyframes.state !== 'approved' && guard < 40; guard++) {
+      const { step } = await stepOnce(r);
+      if (step.status === 'handoff' && step.handle.units.includes(U)) jobU = step.job;
+      await personReviews(r, step);
+    }
+    assert.equal(r.host.peek().stages.keyframes.state, 'approved');
+    const before = asset(r.host.peek(), U);
+    const motionBefore = r.host.peek().stages.motion.state;
+
+    const ing = await ingestKeyframe(deps(r), r.manual, jobU!, U, { ...FILE, data: new Uint8Array([...FILE.data, 5]) }, { newTake: true });
+    let p = r.host.peek();
+    assert.equal(ing.asset, `${U}-keyframes`);
+    assert.deepEqual(asset(p, U), before, 'the key frame is untouched: file, status, comments');
+    const take = asset(p, ing.asset);
+    assert.equal(take.status, 'pending-review');
+    assert.equal(take.owner, U);
+    assert.ok(take.tags.includes(EXTRA_TAKE_TAG));
+    assert.ok(!keyframeAssets(p).some((a) => a.id === ing.asset), 'not one of the stage\'s key frames');
+    assert.equal(p.stages.keyframes.state, 'approved');
+    assert.deepEqual(checkIntegrity(p), []);
+
+    p = fold(p, [decision('request-changes', ing.asset, 'keyframes', { text: 'No.' })]).project;
+    assert.equal(asset(p, ing.asset).status, 'needs-rework');
+    assert.equal(p.stages.keyframes.state, 'approved', 'a take sent back does not reopen the stage');
+    assert.equal(p.stages.motion.state, motionBefore, 'nor lock what opened after it');
+
+    p = approve(p, [ing.asset], 'keyframes').project;
+    assert.equal(asset(p, ing.asset).status, 'approved');
+    assert.equal(asset(p, U).file!.uri, before.file!.uri, 'approving the take does not replace the key frame');
+    assert.equal(asset(p, U).status, 'approved');
     assert.deepEqual(checkIntegrity(p), []);
   });
 

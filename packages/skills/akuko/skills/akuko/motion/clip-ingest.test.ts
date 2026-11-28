@@ -15,6 +15,7 @@ import { checkIntegrity } from '../schema/integrity.ts';
 import { listUnits, type AkukoProject } from '../schema/akuko-project.ts';
 import type { Job } from '../providers/contract.ts';
 import { createManualProvider, ManualIngestError } from '../providers/manual/index.ts';
+import { EXTRA_TAKE_TAG } from '../providers/outputs.ts';
 import { createFakeHost, type FakeHost } from '../providers/__fixtures__/fake-host.ts';
 import { createLocalHost, serializeProject } from '../hosts/local.ts';
 import { createSpendGate } from '../spend/gate.ts';
@@ -138,6 +139,78 @@ describe('ingest into a clip that already has a file (lesson: the stray <unit>-m
     assert.ok(existsSync(join(dir, ...old.split('/'))), 'the old take is still on disk');
     assert.deepEqual(readFileSync(join(dir, ...now.split('/'))), await readFile(file2), 'the new take is stored byte for byte');
     assert.deepEqual(checkIntegrity(p), []);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('--new-take: an extra take beside a clip, on the person\'s word only', () => {
+  /** Make every clip and bring each back; with `approveAll`, a person approves them and the stage closes. */
+  async function allClips(r: ReturnType<typeof rig>, approveAll: boolean): Promise<Map<string, Job>> {
+    const jobOf = new Map<string, Job>();
+    for (let guard = 0; guard < 40; guard++) {
+      if (approveAll ? r.host.peek().stages.motion.state === 'approved' : clipAssets(r.host.peek()).every((a) => a.file)) break;
+      const job = await step(r);
+      for (const it of job.items) { await ingestClip(r.deps, r.manual, job, it.unit, mp4(6)); jobOf.set(it.unit, job); }
+      if (approveAll) {
+        const waiting = clipAssets(r.host.peek()).filter((a) => a.status === 'pending-review').map((a) => a.id);
+        r.host.set(approve(r.host.peek(), waiting, 'motion').project);
+        await finalizeMotion(r.deps);
+      }
+    }
+    return jobOf;
+  }
+
+  it('leaves the clip alone (file, status, comments), is its own asset waiting for review, and never holds the approved stage open', async () => {
+    const r = rig();
+    const jobOf = await allClips(r, true);
+    assert.equal(r.host.peek().stages.motion.state, 'approved');
+    const before = asset(r.host.peek(), CLIP1);
+    const bytes = miniMp4(3);
+    const ing = await ingestClip(r.deps, r.manual, jobOf.get(CLIP1)!, CLIP1, { filename: 'other.mp4', mime: 'video/mp4', data: bytes }, { newTake: true });
+
+    let p = r.host.peek();
+    assert.equal(ing.asset, `${CLIP1}-motion`, 'named as takes are: <unit>-<stage>');
+    assert.deepEqual(asset(p, CLIP1), before, 'the planned clip is untouched');
+    const take = asset(p, ing.asset);
+    assert.equal(take.status, 'pending-review');
+    assert.equal(take.owner, CLIP1);
+    assert.ok(take.tags.includes(EXTRA_TAKE_TAG));
+    assert.deepEqual(r.host.files.get(take.file!.uri), bytes);
+    assert.ok(ing.warnings.some((w) => w.startsWith(`${CLIP1}-motion: Clip runs 3 s; the shot is 6 s`)), 'its length is checked against the clip\'s shot');
+    assert.equal(p.stages.motion.state, 'approved', 'a take waiting for review does not reopen the stage');
+    assert.deepEqual(checkIntegrity(p), []);
+
+    // The person sends the take back: nothing blocks.
+    p = fold(p, [decision('request-changes', ing.asset, 'motion', { text: 'Not this one.' })]).project;
+    assert.equal(asset(p, ing.asset).status, 'needs-rework');
+    assert.equal(p.stages.motion.state, 'approved');
+    r.host.set(p);
+    await finalizeMotion(r.deps);
+    assert.equal(r.host.peek().stages.motion.state, 'approved');
+
+    // Or approves it: the take is approved, and the clip is still the one the person approved before.
+    p = approve(r.host.peek(), [ing.asset], 'motion').project;
+    assert.equal(asset(p, ing.asset).status, 'approved');
+    assert.equal(asset(p, CLIP1).status, 'approved');
+    assert.equal(asset(p, CLIP1).file!.uri, before.file!.uri, 'approving a take does not replace the clip');
+    assert.equal(p.stages.motion.state, 'approved');
+    assert.deepEqual(checkIntegrity(p), []);
+  });
+
+  it('a take still waiting for review does not stop the stage closing once a person approves every clip', async () => {
+    const r = rig();
+    const jobOf = await allClips(r, false);
+    const ing = await ingestClip(r.deps, r.manual, jobOf.get(CLIP1)!, CLIP1, mp4(6), { newTake: true });
+    const takeUri = asset(r.host.peek(), ing.asset).file!.uri;
+    assert.notEqual(asset(r.host.peek(), CLIP1).file!.uri, takeUri);
+    assert.notEqual(asset(r.host.peek(), CLIP1).by_stage?.motion?.output?.uri, takeUri, 'the clip does not point at the take');
+    const clips = clipAssets(r.host.peek()).map((a) => a.id);
+    assert.ok(!clips.includes(ing.asset), 'the take is not one of the stage\'s clips');
+    r.host.set(approve(r.host.peek(), clips, 'motion').project);
+    await finalizeMotion(r.deps);
+    const p = r.host.peek();
+    assert.equal(p.stages.motion.state, 'approved');
+    assert.equal(asset(p, ing.asset).status, 'pending-review', 'the take still waits for the person; nothing decided it for them');
   });
 });
 
