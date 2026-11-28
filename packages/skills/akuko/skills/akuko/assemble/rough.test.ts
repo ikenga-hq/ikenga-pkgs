@@ -171,7 +171,7 @@ describe('assemble rough: the project\'s own music and effects', () => {
     assert.deepEqual(m.map((a) => [a.asset, a.src, a.origin, a.atS, a.maxS, a.lufs, a.ducked]), [['film_music_1', 'audio/music/film_music_1.wav', 'project', 0, 70, -24, true]]);
     assert.deepEqual(plan.notLaid, []);
     assert.match(describeRough(plan), /music film_music_1 \(project asset, audio\/music\/film_music_1\.wav\) film-wide from 0 s to the end \(70 s\), -24 LUFS, ducked under the voice, fades out over its last 2 s/);
-    assert.ok(audioGraph(plan)!.includes('[a2][vosc]sidechaincompress'), 'keyed from the voice bus');
+    assert.ok(audioGraph(plan)!.includes('[a2][vokey]sidechaincompress'), 'keyed from the voice bus');
   });
 
   it('a scene-placed bed spans the scene\'s shots in the cut, trimmed to them', () => {
@@ -203,7 +203,7 @@ describe('assemble rough: the project\'s own music and effects', () => {
     assert.match(plan.warnings.join(' '), /Music film_music_1 and sc2_music_1 play together from 16 s to 38 s/);
     const g = audioGraph(plan)!;
     assert.ok(g.includes('[a2][a3]amix=inputs=2:normalize=0[musbus]'));
-    assert.ok(g.includes('[musbus][vosc]sidechaincompress'));
+    assert.ok(g.includes('[musbus][vokey]sidechaincompress'));
   });
 
   it('--music replaces all the project\'s music for this render; --sfx adds to its effects', () => {
@@ -314,7 +314,8 @@ describe('assemble rough: the mix filtergraph', () => {
     assert.ok(lines.includes('[a0][a1]amix=inputs=2:normalize=0[vobus]'));
     assert.ok(lines.includes('[a4][a5]amix=inputs=2:normalize=0[sfxbus]'));
     assert.ok(lines.includes('[vobus]asplit=2[vo1][vosc]'));
-    assert.ok(lines.includes('[a2][vosc]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=400[musd]'), 'music ducked, keyed from the voice bus');
+    assert.ok(lines.some((l) => /^\[vosc\]apad=whole_dur=\S+\[vokey\]$/.test(l)), 'the key is padded to the film');
+    assert.ok(lines.includes('[a2][vokey]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=400[musd]'), 'music ducked, keyed from the voice bus');
     assert.equal(lines.at(-1), '[vo1][musd][a3][sfxbus]amix=inputs=4:normalize=0:duration=longest,apad,atrim=0:70,alimiter=limit=0.89[mix]');
   });
 
@@ -497,15 +498,20 @@ describe('assemble rough: a real render (when ffmpeg is on PATH)', { skip: !ffmp
     ff(['-f', 'lavfi', '-i', 'testsrc=s=320x240:r=30:d=0.5', '-pix_fmt', 'yuv420p', join(dir, 'motion', 'b.mp4')]); // shorter: held
     ff(['-f', 'lavfi', '-i', 'color=c=red:s=64x36', '-frames:v', '1', join(dir, 'keyframes', 'c.png')]);
     ff(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.6', '-c:a', 'pcm_s16le', join(dir, 'audio', 'vo.wav')]);
+    ff(['-f', 'lavfi', '-i', 'sine=frequency=220:duration=5', '-c:a', 'pcm_s16le', join(dir, 'audio', 'music.wav')]);
     p.assets.push(asset(`${p.shots[0]!.id}_clip`, 'clip', p.shots[0]!.id, 'approved', 'motion/a.mp4', 'motion'));
     p.assets.push(asset(`${p.shots[1]!.id}_clip`, 'clip', p.shots[1]!.id, 'approved', 'motion/b.mp4', 'motion'));
     p.assets.push(asset(`${p.shots[2]!.id}_keyframe`, 'keyframe', p.shots[2]!.id, 'approved', 'keyframes/c.png'));
     p.assets.push(asset(`${p.shots[1]!.id}_vo`, 'vo', p.shots[1]!.id, 'approved', 'audio/vo.wav', 'sound', ['vo']));
     await writeFile(join(dir, 'akuko.json'), serializeProject(AkukoProjectSchema.parse(p)));
     const out = join(dir, 'rough.mp4');
-    const r = await run(['rough', '--project', dir, '--out', out]);
+    const r = await run(['rough', '--project', dir, '--out', out, '--music', join(dir, 'audio', 'music.wav')]);
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /holds its last frame/);
+    // The voice ends at 1.7 s. The ducked music must carry on past it, not stop with the key.
+    const after = spawnSync('ffmpeg', ['-hide_banner', '-ss', '2.1', '-t', '0.5', '-i', out, '-vn', '-af', 'bandpass=f=220:width_type=q:w=30,volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
+    const mean = Number(/mean_volume: (-?[\d.]+) dB/.exec(after.stderr)?.[1]);
+    assert.ok(mean > -70, `music after the last line: ${mean} dB`);
     const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,width,height:format=duration', '-of', 'json', out], { encoding: 'utf8' });
     if (probe.status === 0) {
       const info = JSON.parse(probe.stdout) as { streams: Array<{ codec_type: string; width?: number }>; format: { duration: string } };

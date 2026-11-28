@@ -502,7 +502,9 @@ export function audioGraph(plan: RoughPlan, firstInput = 1): string | undefined 
   let music = bus(musicL, 'musbus');
   if (music && plan.audio.some((a) => a.role === 'music' && a.ducked) && vo) {
     lines.push(`[${vo}]asplit=2[vo1][vosc]`);
-    lines.push(`[${music}][vosc]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=400[musd]`);
+    // sidechaincompress ends when either input ends: pad the key to the film, or the music stops after the last line.
+    lines.push(`[vosc]apad=whole_dur=${film}[vokey]`);
+    lines.push(`[${music}][vokey]sidechaincompress=threshold=0.05:ratio=4:attack=20:release=400[musd]`);
     vo = 'vo1';
     music = 'musd';
   }
